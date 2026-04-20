@@ -43,6 +43,48 @@ Minimum viable loop:
 3. Use one correctness check when regressions are possible.
 4. Run a baseline, try one change, log keep/discard with ASI, then repeat.
 
+## Local Plugin Iteration
+
+When improving this plugin itself, use the repo-local plugin before any globally installed or marketplace-cache copy. From `plugins/codex-autoresearch`, run the local CLI directly:
+
+```bash
+node scripts/autoresearch.mjs doctor --cwd . --check-benchmark
+node scripts/autoresearch.mjs next --cwd .
+node scripts/autoresearch.mjs export --cwd .
+```
+
+For MCP, the local `.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local script explicitly or use `plugins/codex-autoresearch` as `<plugin-root>` in command docs until the local run is finished.
+
+The plugin self-check is:
+
+```bash
+node scripts/perfection-benchmark.mjs --fail-on-gap
+```
+
+It reports `METRIC quality_gap=<n>`, where zero means the local plugin has the current guidance, prompts, tests, and session hygiene expected for Codex autoresearch work.
+
+## Codex + GPT-5.4 Operating Profile
+
+GPT-5.4 is useful for long, tool-heavy professional work because it has a 1.05M context window, supports reasoning effort, and supports tools such as MCP, shell, apply patch, skills, tool search, web search, and file search through the Responses API. That power is best used with narrow, durable loop state instead of one giant conversation.
+
+For Codex + GPT-5.4, treat autoresearch as the operating rail:
+
+- Keep the measured target explicit: `quality_gap`, runtime, cost, failures, Lighthouse score, or another primary metric.
+- Use `next_experiment` or `/autoresearch next` for one preflight, benchmark, decision, and ASI packet at a time.
+- Store qualitative findings in `autoresearch.md`, `autoresearch.ideas.md`, and ASI instead of relying on context memory.
+- Use [$deep-research-orchestration](C:\Users\alber\.codex\skills\deep-research-orchestration\SKILL.md) for broad project-study prompts, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
+- Stop only when the benchmark reaches `quality_gap=0`, checks pass, and the latest synthesis has no remaining high-impact product gaps.
+
+Research-heavy prompts can still be measured. For example:
+
+```text
+Study my project and write a paragraph describing the essence of what it strives to do.
+Then do deep-research-orchestration and suggest high impact changes that would make the project delightful.
+You may also suggest small qol changes or bug fixes in separate sections.
+```
+
+Turn that into an autoresearch loop by defining a qualitative gap rubric: project essence is accurate, research scratchpad exists, sources are logged, high-impact delight changes are implemented or explicitly rejected, small QoL fixes are separated, checks pass, and the final dashboard tells the story. The metric is the count of unmet rubric items.
+
 For direct CLI use from this plugin folder:
 
 ```bash

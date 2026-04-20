@@ -8,6 +8,8 @@ Interpret `$ARGUMENTS` as a subcommand or session goal.
 
 ## Dispatch
 
+When this repository is the target, use the local plugin over any globally installed copy. Treat `plugins/codex-autoresearch` as `<plugin-root>` and prefer `node <plugin-root>/scripts/autoresearch.mjs ...` until the current iteration is complete.
+
 - Empty or `help`: summarize available actions.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
 - `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
@@ -28,5 +30,7 @@ Before logging a kept result in a dirty tree, prefer scoped commit paths from th
 Before logging a discard/crash/checks-failed result, use configured `commitPaths`/`revertPaths`. Do not pass `--allow-dirty-revert` unless the user explicitly accepts broad cleanup.
 
 When calling MCP tools with custom shell commands, pass `allow_unsafe_command: true` only after confirming the command and target directory.
+
+For qualitative research loops, prefer a primary `quality_gap` metric. The benchmark should print the count of unmet rubric items, so the loop can continue until high-impact findings are implemented, intentionally rejected with evidence, or no longer relevant.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.

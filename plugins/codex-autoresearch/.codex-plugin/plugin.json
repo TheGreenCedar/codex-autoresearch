@@ -39,6 +39,7 @@
       "Run an autoresearch doctor check before the next experiment.",
       "Run /autoresearch next to produce one preflight, benchmark, decision, and ASI packet.",
       "Run the next autoresearch iteration and log the result with ASI.",
+      "Use deep-research-orchestration to Study my project, identify delightful high-impact changes, convert the findings into a quality_gap benchmark, and iterate until the gaps are closed.",
       "Export the autoresearch dashboard and summarize baseline, best metric, kept runs, and confidence.",
       "Draft finalization groups from autoresearch history, then review before creating branches.",
       "Finalize this autoresearch branch into clean review branches from the kept experiments."

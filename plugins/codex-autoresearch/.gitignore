@@ -3,3 +3,11 @@ node_modules/
 *.log
 autoresearch-dashboard.html
 tmp/
+/autoresearch.md
+/autoresearch.jsonl
+/autoresearch.ideas.md
+/autoresearch.config.json
+/autoresearch.sh
+/autoresearch.ps1
+/autoresearch.checks.sh
+/autoresearch.checks.ps1

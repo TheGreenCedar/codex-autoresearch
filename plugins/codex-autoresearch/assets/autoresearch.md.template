@@ -19,5 +19,20 @@
 ## Constraints
 - <Correctness, compatibility, dependency, or budget constraints>
 
+## Decision Rules
+- Keep when the primary metric improves or a baseline is needed and checks pass.
+- Discard when the metric is equal or worse, unless the run only establishes the baseline.
+- Log crashes and failed checks with a concrete rollback reason.
+- Put next-step guidance in ASI so another Codex session can continue.
+
+## Stop Conditions
+- Stop when the target metric reaches the agreed threshold.
+- For qualitative loops, stop when `quality_gap=0`, checks pass, and no high-impact open finding remains.
+- Stop when maxIterations is reached or the user interrupts.
+
+## Research Notes
+- Source-backed facts, contradictions, and open questions go here or in linked scratchpad files.
+- For deep research loops, link the scratchpad folder and summarize the current synthesis.
+
 ## What's Been Tried
 - Baseline: <initial metric and notes>
