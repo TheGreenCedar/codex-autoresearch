@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Autoresearch Runboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23194b45'/%3E%3Cpath d='M14 39h9l5-14 7 22 6-17h9' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 :root {
   color-scheme: light;
@@ -111,7 +112,7 @@ h1 {
   padding: 14px;
   min-height: 88px;
 }
-.score label {
+.score-label {
   display: block;
   color: var(--muted);
   font-size: 11px;
@@ -173,7 +174,7 @@ h1 {
   padding-top: 12px;
   min-width: 0;
 }
-.readout-card label,
+.readout-label,
 .asi-list dt {
   display: block;
   color: var(--muted);
@@ -318,11 +319,11 @@ th {
   </header>
 
   <section class="score-strip" aria-label="Session summary">
-    <div class="score"><label>Baseline</label><output id="baseline-value">-</output></div>
-    <div class="score"><label>Best</label><output id="best-value" class="good">-</output></div>
-    <div class="score"><label>Improvement</label><output id="improvement-value">-</output></div>
-    <div class="score"><label>Confidence</label><output id="confidence-value">-</output></div>
-    <div class="score"><label>Kept / runs</label><output id="kept-value">-</output></div>
+    <div class="score"><span class="score-label">Baseline</span><output id="baseline-value">-</output></div>
+    <div class="score"><span class="score-label">Best</span><output id="best-value" class="good">-</output></div>
+    <div class="score"><span class="score-label">Improvement</span><output id="improvement-value">-</output></div>
+    <div class="score"><span class="score-label">Confidence</span><output id="confidence-value">-</output></div>
+    <div class="score"><span class="score-label">Kept / runs</span><output id="kept-value">-</output></div>
   </section>
 
   <section class="control-strip" aria-label="Dashboard controls">
@@ -339,27 +340,27 @@ th {
     </div>
     <div class="readout-grid">
       <article class="readout-card">
-        <label>Best kept change</label>
+        <span class="readout-label">Best kept change</span>
         <strong id="best-kept-title">-</strong>
         <p id="best-kept-detail">-</p>
       </article>
       <article class="readout-card">
-        <label>Recent failures</label>
+        <span class="readout-label">Recent failures</span>
         <strong id="failure-title">-</strong>
         <p id="failure-detail">-</p>
       </article>
       <article class="readout-card">
-        <label>Next action</label>
+        <span class="readout-label">Next action</span>
         <strong id="next-action-title">-</strong>
         <p id="next-action-detail">-</p>
       </article>
       <article class="readout-card">
-        <label>Confidence read</label>
+        <span class="readout-label">Confidence read</span>
         <strong id="confidence-title">-</strong>
         <p id="confidence-detail">-</p>
       </article>
       <article class="readout-card">
-        <label>Ready to finalize</label>
+        <span class="readout-label">Ready to finalize</span>
         <strong id="finalize-title">-</strong>
         <p id="finalize-detail">-</p>
       </article>

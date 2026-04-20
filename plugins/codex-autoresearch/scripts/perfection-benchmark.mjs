@@ -210,6 +210,36 @@ const checks = [
       }
     },
   },
+  {
+    id: "dashboard-semantic-labels",
+    file: "assets/template.html",
+    description: "The dashboard uses real labels only for form controls, not decorative microcopy.",
+    run: async () => {
+      const template = await readText("assets/template.html");
+      const labelCount = (template.match(/<label\b/g) || []).length;
+      if (
+        labelCount === 1
+        && template.includes('<label for="segment-select">')
+        && template.includes("score-label")
+        && template.includes("readout-label")
+        && !template.includes("<label>Best kept change</label>")
+      ) {
+        return pass();
+      }
+      return fail(`Expected one real form label; found ${labelCount}.`);
+    },
+  },
+  {
+    id: "dashboard-embedded-favicon",
+    file: "assets/template.html",
+    description: "The static dashboard embeds a favicon to avoid a noisy local-server 404.",
+    run: async () => {
+      const template = await readText("assets/template.html");
+      return template.includes('<link rel="icon" href="data:image/svg+xml,')
+        ? pass()
+        : fail("Missing embedded data-URL favicon.");
+    },
+  },
 ];
 
 const results = [];
