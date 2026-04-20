@@ -72,7 +72,7 @@ For Codex + GPT-5.4, treat autoresearch as the operating rail:
 - Keep the measured target explicit: `quality_gap`, runtime, cost, failures, Lighthouse score, or another primary metric.
 - Use `next_experiment` or `/autoresearch next` for one preflight, benchmark, decision, and ASI packet at a time.
 - Store qualitative findings in `autoresearch.md`, `autoresearch.ideas.md`, and ASI instead of relying on context memory.
-- Use [$deep-research-orchestration](C:\Users\alber\.codex\skills\deep-research-orchestration\SKILL.md) for broad project-study prompts, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
+- Use `$deep-research-orchestration` for broad project-study prompts when that skill is available, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
 - Stop only when the benchmark reaches `quality_gap=0`, checks pass, and the latest synthesis has no remaining high-impact product gaps.
 
 Research-heavy prompts can still be measured. For example:
