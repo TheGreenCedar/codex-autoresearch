@@ -4,7 +4,9 @@ $ErrorActionPreference = "Stop"
 # Print one METRIC line for the primary metric and any secondary metrics.
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
+$global:LASTEXITCODE = 0
 <benchmark command>
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $sw.Stop()
-Write-Output ("METRIC elapsed_ms={0}" -f [Math]::Round($sw.Elapsed.TotalMilliseconds, 3))
+Write-Output ("METRIC <metric name>={0}" -f [Math]::Round($sw.Elapsed.TotalMilliseconds, 3))

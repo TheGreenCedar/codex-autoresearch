@@ -24,7 +24,7 @@ node scripts/autoresearch.mjs export --cwd /absolute/project/path
 node scripts/autoresearch.mjs state --cwd /absolute/project/path
 ```
 
-Then summarize baseline, best metric, run count, kept count, and confidence if available.
+Then summarize baseline, best metric, run count, status counts, confidence, and remaining iteration limit if available.
 
 ## Notes
 

@@ -31,11 +31,13 @@ function usage() {
   return `Codex Autoresearch
 
 Usage:
+  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs log --cwd <project> --metric <n> --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>]
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>]
+  node scripts/autoresearch.mjs clear --cwd <project> --yes
   node scripts/autoresearch.mjs --mcp
 
 Benchmark output format:
@@ -80,6 +82,21 @@ function numberOption(value, fallback) {
   return parsed;
 }
 
+function boolOption(value, fallback = false) {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "y"].includes(String(value).toLowerCase());
+}
+
+function listOption(value) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (value == null || value === "") return [];
+  return String(value)
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 async function pathExists(filePath) {
   try {
     await fsp.access(filePath);
@@ -109,6 +126,83 @@ function resolveWorkDir(cwdArg) {
 
 function jsonlPath(workDir) {
   return path.join(workDir, "autoresearch.jsonl");
+}
+
+function assetPath(fileName) {
+  return path.join(PLUGIN_ROOT, "assets", fileName);
+}
+
+function readAssetTemplate(fileName) {
+  return fs.readFileSync(assetPath(fileName), "utf8");
+}
+
+function replaceAllText(text, replacements) {
+  let out = text;
+  for (const [from, to] of Object.entries(replacements)) {
+    out = out.split(from).join(String(to));
+  }
+  return out;
+}
+
+function shellKindFromArgs(args) {
+  const requested = String(args.shell || args.script || "").toLowerCase();
+  if (["bash", "sh", "posix"].includes(requested)) return "bash";
+  if (["powershell", "pwsh", "ps1", "windows"].includes(requested)) return "powershell";
+  return process.platform === "win32" ? "powershell" : "bash";
+}
+
+function markdownList(items, emptyText) {
+  if (!items.length) return `- ${emptyText}`;
+  return items.map((item) => `- ${item}`).join("\n");
+}
+
+function renderSessionDocument(args) {
+  const scope = listOption(args.files_in_scope ?? args.filesInScope ?? args.scope);
+  const offLimits = listOption(args.off_limits ?? args.offLimits);
+  const constraints = listOption(args.constraints);
+  const secondary = listOption(args.secondary_metrics ?? args.secondaryMetrics);
+  const benchmarkCommand = args.benchmark_command || args.benchmarkCommand || "./autoresearch.sh";
+  const metricUnit = args.metric_unit ?? args.metricUnit ?? "";
+  const direction = args.direction === "higher" ? "higher" : "lower";
+  return replaceAllText(readAssetTemplate("autoresearch.md.template"), {
+    "<goal>": args.name,
+    "<Specific description of what is being optimized and the workload.>": args.goal || args.name,
+    "- Primary: <name> (<unit>, lower/higher is better)": `- Primary: ${args.metric_name || args.metricName} (${metricUnit || "unitless"}, ${direction} is better)`,
+    "- Secondary: <name>, <name>": secondary.length ? `- Secondary: ${secondary.join(", ")}` : "- Secondary: none yet",
+    "`<benchmark command>` prints `METRIC name=value` lines.": `\`${benchmarkCommand}\` prints \`METRIC name=value\` lines.`,
+    "- `<path>`: <why it matters>": markdownList(scope, "TBD: add files after initial inspection"),
+    "- `<path or behavior>`: <reason>": markdownList(offLimits, "TBD: add off-limits files or behaviors if needed"),
+    "- <Correctness, compatibility, dependency, or budget constraints>": markdownList(constraints, "TBD: add correctness and compatibility constraints"),
+    "- Baseline: <initial metric and notes>": "- Baseline: pending",
+  });
+}
+
+function renderBenchmarkScript(args, shellKind) {
+  const command = args.benchmark_command || args.benchmarkCommand || "# TODO: replace with the real workload";
+  const metricName = args.metric_name || args.metricName || "elapsed_ms";
+  const templateName = shellKind === "bash" ? "autoresearch.sh.template" : "autoresearch.ps1.template";
+  return replaceAllText(readAssetTemplate(templateName), {
+    "<benchmark command>": command,
+    "<metric name>": metricName,
+  });
+}
+
+function renderChecksScript(args, shellKind) {
+  const command = args.checks_command || args.checksCommand || "# TODO: add correctness checks";
+  const templateName = shellKind === "bash" ? "autoresearch.checks.sh.template" : "autoresearch.checks.ps1.template";
+  return replaceAllText(readAssetTemplate(templateName), {
+    "<check command>": command,
+  });
+}
+
+async function writeSessionFile(filePath, content, options = {}) {
+  const exists = await pathExists(filePath);
+  if (exists && !options.overwrite) return { path: filePath, action: "kept" };
+  await fsp.writeFile(filePath, content.endsWith("\n") ? content : `${content}\n`, "utf8");
+  if (options.executable) {
+    await fsp.chmod(filePath, 0o755).catch(() => {});
+  }
+  return { path: filePath, action: exists ? "overwritten" : "created" };
 }
 
 function appendJsonl(workDir, entry) {
@@ -161,6 +255,24 @@ function currentState(workDir) {
   const best = bestMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };
+}
+
+function iterationLimitInfo(state, runtimeConfig) {
+  const maxIterations = Number(runtimeConfig.maxIterations);
+  if (!Number.isFinite(maxIterations) || maxIterations <= 0) {
+    return {
+      maxIterations: null,
+      remainingIterations: null,
+      limitReached: false,
+    };
+  }
+  const max = Math.floor(maxIterations);
+  const remaining = Math.max(0, max - state.current.length);
+  return {
+    maxIterations: max,
+    remainingIterations: remaining,
+    limitReached: state.current.length >= max,
+  };
 }
 
 function bestMetric(runs, direction) {
@@ -370,6 +482,67 @@ async function revertExceptSessionFiles(workDir) {
   return "Git: reverted non-session changes; autoresearch files preserved.";
 }
 
+async function setupSession(args) {
+  const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  if (!args.name) throw new Error("name is required");
+  if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
+  const overwrite = boolOption(args.overwrite, false);
+  const shellKind = shellKindFromArgs(args);
+  const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
+  const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
+  const files = [];
+
+  files.push(await writeSessionFile(
+    path.join(workDir, "autoresearch.md"),
+    renderSessionDocument(args),
+    { overwrite },
+  ));
+  files.push(await writeSessionFile(
+    path.join(workDir, benchmarkFile),
+    renderBenchmarkScript(args, shellKind),
+    { overwrite, executable: shellKind === "bash" },
+  ));
+  files.push(await writeSessionFile(
+    path.join(workDir, "autoresearch.ideas.md"),
+    `# Autoresearch Ideas: ${args.name}\n\n- Add promising ideas here when they are not tried immediately.\n`,
+    { overwrite },
+  ));
+
+  if (args.checks_command || args.checksCommand || boolOption(args.create_checks ?? args.createChecks, false)) {
+    files.push(await writeSessionFile(
+      path.join(workDir, checksFile),
+      renderChecksScript(args, shellKind),
+      { overwrite, executable: shellKind === "bash" },
+    ));
+  }
+
+  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
+  if (maxIterations != null) {
+    const configPath = path.join(sessionCwd, "autoresearch.config.json");
+    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+    const nextConfig = { ...existing, maxIterations: Math.floor(maxIterations) };
+    files.push(await writeSessionFile(
+      configPath,
+      JSON.stringify(nextConfig, null, 2),
+      { overwrite: true },
+    ));
+  }
+
+  let init = null;
+  if (!boolOption(args.skip_init ?? args.skipInit, false)) {
+    init = await initExperiment(args);
+  }
+
+  return {
+    ok: true,
+    workDir,
+    sessionCwd,
+    shell: shellKind,
+    files,
+    init,
+  };
+}
+
 async function initExperiment(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
@@ -393,8 +566,12 @@ async function initExperiment(args) {
 }
 
 async function runExperiment(args) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
+  const limit = iterationLimitInfo(state, config);
+  if (limit.limitReached) {
+    throw new Error(`maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`);
+  }
   const command = args.command || await defaultBenchmarkCommand(workDir);
   const benchmark = await runShell(command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS));
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
@@ -432,11 +609,12 @@ async function runExperiment(args) {
       metrics: Object.fromEntries(Object.entries(parsedMetrics).filter(([key]) => key !== state.config.metricName)),
       status: passed ? "keep_or_discard" : (benchmarkPassed ? "checks_failed" : "crash"),
     },
+    limit,
   };
 }
 
 async function logExperiment(args) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const metric = numberOption(args.metric, null);
   if (metric == null) throw new Error("metric is required");
   if (!STATUS_VALUES.has(args.status)) throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
@@ -495,6 +673,7 @@ async function logExperiment(args) {
   }
 
   const stateAfter = currentState(workDir);
+  const limit = iterationLimitInfo(stateAfter, config);
   return {
     ok: true,
     workDir,
@@ -502,6 +681,7 @@ async function logExperiment(args) {
     baseline: stateAfter.baseline,
     best: stateAfter.best,
     confidence: stateAfter.confidence,
+    limit,
     git: gitMessage,
     revert: revertMessage,
   };
@@ -517,6 +697,35 @@ async function exportDashboard(args) {
   return { ok: true, workDir, output };
 }
 
+async function clearSession(args) {
+  if (!boolOption(args.confirm ?? args.yes, false)) {
+    throw new Error("clear requires confirm=true for MCP or --yes for CLI");
+  }
+  const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const targets = new Set([
+    ...SESSION_FILES.map((file) => path.join(workDir, file)),
+    path.join(workDir, "autoresearch-dashboard.html"),
+    path.join(sessionCwd, "autoresearch.config.json"),
+  ]);
+  const deleted = [];
+  const missing = [];
+  for (const filePath of [...targets].sort()) {
+    if (await pathExists(filePath)) {
+      await fsp.rm(filePath, { recursive: true, force: true });
+      deleted.push(filePath);
+    } else {
+      missing.push(filePath);
+    }
+  }
+  return {
+    ok: true,
+    workDir,
+    sessionCwd,
+    deleted,
+    missing,
+  };
+}
+
 function dashboardHtml(entries) {
   const data = JSON.stringify(entries).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
@@ -527,8 +736,12 @@ function dashboardHtml(entries) {
 }
 
 function publicState(args) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
+  const statusCounts = Object.fromEntries([...STATUS_VALUES].map((status) => [
+    status,
+    state.current.filter((run) => run.status === status).length,
+  ]));
   return {
     ok: true,
     workDir,
@@ -536,13 +749,19 @@ function publicState(args) {
     segment: state.segment,
     runs: state.current.length,
     totalRuns: state.results.length,
+    kept: statusCounts.keep,
+    discarded: statusCounts.discard,
+    crashed: statusCounts.crash,
+    checksFailed: statusCounts.checks_failed,
     baseline: state.baseline,
     best: state.best,
     confidence: state.confidence,
+    limit: iterationLimitInfo(state, config),
   };
 }
 
 async function callTool(name, args) {
+  if (name === "setup_session") return await setupSession(args);
   if (name === "init_experiment") return await initExperiment(args);
   if (name === "run_experiment") return await runExperiment(args);
   if (name === "log_experiment") return await logExperiment({
@@ -551,11 +770,39 @@ async function callTool(name, args) {
     asi: parseJsonOption(args.asi, {}),
   });
   if (name === "export_dashboard") return await exportDashboard(args);
+  if (name === "clear_session") return await clearSession(args);
   if (name === "read_state") return publicState(args);
   throw new Error(`Unknown tool: ${name}`);
 }
 
 const toolSchemas = [
+  {
+    name: "setup_session",
+    description: "Create autoresearch session files from templates and append an initial config header.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        name: { type: "string" },
+        goal: { type: "string" },
+        metric_name: { type: "string" },
+        metric_unit: { type: "string" },
+        direction: { type: "string", enum: ["lower", "higher"] },
+        benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
+        shell: { type: "string", enum: ["bash", "powershell"] },
+        files_in_scope: { type: "array", items: { type: "string" } },
+        off_limits: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        secondary_metrics: { type: "array", items: { type: "string" } },
+        max_iterations: { type: "number" },
+        overwrite: { type: "boolean" },
+        create_checks: { type: "boolean" },
+        skip_init: { type: "boolean" },
+      },
+      required: ["working_dir", "name", "metric_name"],
+    },
+  },
   {
     name: "init_experiment",
     description: "Append an autoresearch config header to autoresearch.jsonl.",
@@ -624,6 +871,18 @@ const toolSchemas = [
       required: ["working_dir"],
     },
   },
+  {
+    name: "clear_session",
+    description: "Delete autoresearch runtime artifacts after explicit confirmation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        confirm: { type: "boolean" },
+      },
+      required: ["working_dir", "confirm"],
+    },
+  },
 ];
 
 function startMcpServer() {
@@ -659,7 +918,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.1" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.2" },
       },
     });
     return;
@@ -713,7 +972,27 @@ async function main() {
     return;
   }
   let result;
-  if (command === "init") {
+  if (command === "setup") {
+    result = await setupSession({
+      cwd: args.cwd,
+      name: args.name,
+      goal: args.goal,
+      metricName: args.metricName,
+      metricUnit: args.metricUnit,
+      direction: args.direction,
+      benchmarkCommand: args.benchmarkCommand,
+      checksCommand: args.checksCommand,
+      shell: args.shell,
+      filesInScope: args.filesInScope,
+      offLimits: args.offLimits,
+      constraints: args.constraints,
+      secondaryMetrics: args.secondaryMetrics,
+      maxIterations: args.maxIterations,
+      overwrite: args.overwrite,
+      createChecks: args.createChecks,
+      skipInit: args.skipInit,
+    });
+  } else if (command === "init") {
     result = await initExperiment({
       cwd: args.cwd,
       name: args.name,
@@ -743,6 +1022,8 @@ async function main() {
     result = publicState({ cwd: args.cwd });
   } else if (command === "export") {
     result = await exportDashboard({ cwd: args.cwd, output: args.output });
+  } else if (command === "clear") {
+    result = await clearSession({ cwd: args.cwd, yes: args.yes, confirm: args.confirm });
   } else {
     throw new Error(`Unknown command: ${command}`);
   }

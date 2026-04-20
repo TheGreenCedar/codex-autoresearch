@@ -35,28 +35,30 @@ Starter templates live in the plugin `assets/` directory:
 2. Require a clean git worktree before the first experiment. If the repo is not under git, still run the loop but say commits/reverts will be unavailable.
 3. Create a branch named `autoresearch/<short-goal>-<date>`.
 4. Read the files in scope before editing. Understand the workload before trying changes.
-5. Write `autoresearch.md` with objective, metrics, run command, files in scope, off-limits files, constraints, and what has been tried.
-6. Write `autoresearch.sh` on POSIX projects or `autoresearch.ps1` on Windows-first projects. The script must print the primary metric as `METRIC <name>=<number>`.
-7. Create a checks script only when correctness constraints require it.
-8. Initialize the session with the MCP tool if available:
+5. Create the session with MCP `setup_session` when available:
 
 ```json
 {
   "working_dir": "/absolute/project/path",
   "name": "short session name",
+  "goal": "what is being optimized",
   "metric_name": "seconds",
   "metric_unit": "s",
-  "direction": "lower"
+  "direction": "lower",
+  "benchmark_command": "command that prints or can be wrapped into METRIC output",
+  "checks_command": "optional correctness command",
+  "max_iterations": 50
 }
 ```
 
 If MCP tools are not loaded, use the CLI from the plugin root:
 
 ```bash
-node scripts/autoresearch.mjs init --cwd /absolute/project/path --name "short session name" --metric-name seconds --metric-unit s --direction lower
+node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --max-iterations 50
 ```
 
-9. Run the baseline immediately.
+6. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
+7. Run the baseline immediately.
 
 ## Loop Workflow
 
@@ -74,7 +76,7 @@ node scripts/autoresearch.mjs log --cwd /absolute/project/path --metric 12.3 --s
 
 Rules:
 
-- Primary metric decides keep/discard. Lower or higher depends on `init_experiment`.
+- Primary metric decides keep/discard. Lower or higher depends on the active session config.
 - Keep improvements, especially simple improvements.
 - Discard worse or equal results.
 - Log benchmark failures as `crash`.
@@ -82,6 +84,7 @@ Rules:
 - Always include ASI. At minimum use `hypothesis`; for discard/crash also include `rollback_reason` and `next_action_hint`.
 - Update `autoresearch.md` after meaningful results so future agents do not repeat stale ideas.
 - Append deferred ideas to `autoresearch.ideas.md`.
+- Stop when `read_state` or `run_experiment` reports `limit.limitReached`.
 
 ## Benchmark Script Guidance
 

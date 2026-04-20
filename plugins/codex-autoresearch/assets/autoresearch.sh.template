@@ -9,4 +9,4 @@ start_ms=$(date +%s%3N)
 
 end_ms=$(date +%s%3N)
 elapsed_ms=$((end_ms - start_ms))
-printf 'METRIC elapsed_ms=%s\n' "$elapsed_ms"
+printf 'METRIC <metric name>=%s\n' "$elapsed_ms"

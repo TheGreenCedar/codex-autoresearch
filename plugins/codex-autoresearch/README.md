@@ -26,7 +26,7 @@ Codex will create the session files, initialize the run log, take a baseline, an
 For direct CLI use from this plugin folder:
 
 ```bash
-node scripts/autoresearch.mjs init --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower
+node scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
 node scripts/autoresearch.mjs run --cwd /path/to/project
 node scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool"
 node scripts/autoresearch.mjs export --cwd /path/to/project
@@ -36,7 +36,7 @@ node scripts/autoresearch.mjs export --cwd /path/to/project
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `init_experiment`, `run_experiment`, `log_experiment`, `read_state`, `export_dashboard` |
+| MCP tools | `setup_session`, `init_experiment`, `run_experiment`, `log_experiment`, `read_state`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
 | Dashboard | Static HTML report generated from `autoresearch.jsonl` |
@@ -46,11 +46,13 @@ node scripts/autoresearch.mjs export --cwd /path/to/project
 
 | Tool | Description |
 | --- | --- |
+| `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional max-iteration config, and the initial JSONL config header |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
 | `run_experiment` | Runs the benchmark command, times it, captures output, and parses `METRIC name=value` lines |
 | `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes while preserving session files |
-| `read_state` | Summarizes the current baseline, best metric, run count, and confidence score |
+| `read_state` | Summarizes the current baseline, best metric, run count, status counts, confidence score, and iteration limit |
 | `export_dashboard` | Writes `autoresearch-dashboard.html` from the run log |
+| `clear_session` | Deletes session artifacts after explicit confirmation |
 
 ## Commands
 
@@ -59,6 +61,7 @@ node scripts/autoresearch.mjs export --cwd /path/to/project
 | `/autoresearch <text>` | Start or resume an autoresearch loop using `<text>` as context |
 | `/autoresearch status` | Summarize the current run log |
 | `/autoresearch export` | Generate the dashboard |
+| `/autoresearch off` | Stop continuing the loop in the current conversation without deleting session data |
 | `/autoresearch clear` | Clear session artifacts after confirmation |
 | `/autoresearch-finalize` | Split kept experiments into reviewable branches |
 
@@ -91,6 +94,8 @@ Then it creates:
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |
 | `autoresearch.ideas.md` | Optional backlog for promising ideas |
+
+The deterministic setup path is available as MCP `setup_session` and CLI `setup`. It is the fastest way to create a fresh, resumable Codex session without hand-copying templates.
 
 ### 2. Run the Loop
 
@@ -170,11 +175,14 @@ Codex skills
   interpret the result
 
 MCP/CLI helpers
+  create session files from templates
   run timed commands
   parse METRIC lines
   append JSONL records
   commit or revert changes
+  enforce maxIterations when configured
   export dashboard HTML
+  clear session artifacts after confirmation
   finalize review branches
 ```
 
@@ -198,7 +206,7 @@ Optional `autoresearch.config.json` in the project can set:
 }
 ```
 
-`workingDir` lets a wrapper workspace point the loop at a nested project. `maxIterations` gives the loop a hard stop.
+`workingDir` lets a wrapper workspace point the loop at a nested project. `maxIterations` gives helper-run benchmarks a hard stop before the next iteration starts.
 
 ## License
 

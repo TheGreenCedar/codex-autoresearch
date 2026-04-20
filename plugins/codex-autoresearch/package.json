@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "private": true,
   "description": "Codex plugin for autonomous benchmark and optimization loops.",
@@ -16,6 +16,6 @@
   },
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
   "scripts": {
-    "check": "node scripts/autoresearch.mjs --help && node scripts/finalize-autoresearch.mjs --help"
+    "check": "node --check scripts/autoresearch.mjs && node --check scripts/finalize-autoresearch.mjs && node scripts/autoresearch.mjs --help && node scripts/finalize-autoresearch.mjs --help"
   }
 }
