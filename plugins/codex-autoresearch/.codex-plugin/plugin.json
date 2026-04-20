@@ -1,0 +1,47 @@
+{
+  "name": "codex-autoresearch",
+  "version": "0.1.0",
+  "description": "Autonomous experiment loops for Codex: set up a benchmark, run iterations, log results, export dashboards, and finalize kept changes.",
+  "author": {
+    "name": "Albert Najjar",
+    "email": "albertnajjar@outlook.com",
+    "url": "https://github.com/TheGreenCedar"
+  },
+  "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
+  "repository": "https://github.com/TheGreenCedar/codex-autoresearch",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "autoresearch",
+    "experiments",
+    "benchmark",
+    "optimization",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex Autoresearch",
+    "shortDescription": "Run autonomous benchmark loops and keep measured wins",
+    "longDescription": "Codex Autoresearch adapts pi-autoresearch for Codex. It provides skills and local MCP/CLI helpers for setting up autoresearch.md and benchmark scripts, running timed experiments that parse METRIC lines, logging keep/discard/crash results to autoresearch.jsonl, exporting a static dashboard, and splitting kept experiments into clean review branches.",
+    "developerName": "Albert Najjar",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/TheGreenCedar/codex-autoresearch",
+    "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch",
+    "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch",
+    "defaultPrompt": [
+      "Start autoresearch for this benchmark.",
+      "Export the autoresearch dashboard.",
+      "Finalize this autoresearch branch."
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg",
+    "screenshots": []
+  }
+}

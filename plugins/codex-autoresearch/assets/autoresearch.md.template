@@ -1,0 +1,23 @@
+# Autoresearch: <goal>
+
+## Objective
+<Specific description of what is being optimized and the workload.>
+
+## Metrics
+- Primary: <name> (<unit>, lower/higher is better)
+- Secondary: <name>, <name>
+
+## How to Run
+`<benchmark command>` prints `METRIC name=value` lines.
+
+## Files in Scope
+- `<path>`: <why it matters>
+
+## Off Limits
+- `<path or behavior>`: <reason>
+
+## Constraints
+- <Correctness, compatibility, dependency, or budget constraints>
+
+## What's Been Tried
+- Baseline: <initial metric and notes>

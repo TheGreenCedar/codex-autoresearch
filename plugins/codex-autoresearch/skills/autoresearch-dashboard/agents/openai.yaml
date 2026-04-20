@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autoresearch Dashboard"
+  short_description: "Export an autoresearch.jsonl dashboard"
+  default_prompt: "Show me the autoresearch dashboard."

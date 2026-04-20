@@ -1,0 +1,10 @@
+$ErrorActionPreference = "Stop"
+
+# Replace this command with the real workload.
+# Print one METRIC line for the primary metric and any secondary metrics.
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+<benchmark command>
+
+$sw.Stop()
+Write-Output ("METRIC elapsed_ms={0}" -f [Math]::Round($sw.Elapsed.TotalMilliseconds, 3))

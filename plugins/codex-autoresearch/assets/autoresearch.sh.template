@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Replace this command with the real workload.
+# Print one METRIC line for the primary metric and any secondary metrics.
+start_ms=$(date +%s%3N)
+
+<benchmark command>
+
+end_ms=$(date +%s%3N)
+elapsed_ms=$((end_ms - start_ms))
+printf 'METRIC elapsed_ms=%s\n' "$elapsed_ms"

@@ -1,0 +1,4 @@
+$ErrorActionPreference = "Stop"
+
+# Add correctness checks here. Keep success output quiet and failures actionable.
+<check command>

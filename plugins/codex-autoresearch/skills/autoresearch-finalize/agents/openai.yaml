@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autoresearch Finalize"
+  short_description: "Split kept experiments into reviewable branches"
+  default_prompt: "Finalize this autoresearch branch."

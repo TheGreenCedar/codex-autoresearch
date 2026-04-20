@@ -1,0 +1,21 @@
+{
+  "name": "codex-autoresearch",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Codex plugin for autonomous benchmark and optimization loops.",
+  "license": "MIT",
+  "author": {
+    "name": "Albert Najjar",
+    "email": "albertnajjar@outlook.com",
+    "url": "https://github.com/TheGreenCedar"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheGreenCedar/codex-autoresearch.git"
+  },
+  "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
+  "scripts": {
+    "check": "node scripts/autoresearch.mjs --help && node scripts/finalize-autoresearch.mjs --help"
+  }
+}

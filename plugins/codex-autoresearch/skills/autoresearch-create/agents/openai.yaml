@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autoresearch Create"
+  short_description: "Set up and run autonomous optimization loops"
+  default_prompt: "Start autoresearch on this project."

@@ -1,0 +1,5 @@
+node_modules/
+.plugin-eval/
+*.log
+autoresearch-dashboard.html
+tmp/

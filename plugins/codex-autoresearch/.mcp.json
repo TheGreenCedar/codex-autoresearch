@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex-autoresearch": {
+      "command": "node",
+      "args": [
+        "./scripts/autoresearch.mjs",
+        "--mcp"
+      ],
+      "note": "Local no-dependency MCP server exposing init_experiment, run_experiment, log_experiment, export_dashboard, and read_state tools for Codex autoresearch loops."
+    }
+  }
+}

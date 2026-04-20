@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autoresearch Runboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f5f7fb;
+  --surface: #ffffff;
+  --ink: #15201c;
+  --muted: #65706b;
+  --line: #d7ded9;
+  --soft-line: #ebefec;
+  --teal: #0f9f8f;
+  --indigo: #4f46e5;
+  --rose: #be3455;
+  --amber: #b7791f;
+  --graph: #194b45;
+  --shadow: 0 18px 46px rgba(21, 32, 28, .08);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1260px; margin: 0 auto; padding: 30px; }
+.masthead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  padding: 6px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+h1 {
+  margin: 0;
+  max-width: 860px;
+  font-size: 34px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+.metric-tag {
+  justify-self: end;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 210px;
+  box-shadow: var(--shadow);
+}
+.metric-tag span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.metric-tag strong {
+  display: block;
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 18px;
+  word-break: break-word;
+}
+.score-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 22px 0;
+}
+.score {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  min-height: 88px;
+}
+.score label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.score output {
+  display: block;
+  margin-top: 9px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 23px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.good { color: var(--teal); }
+.bad { color: var(--rose); }
+.warn { color: var(--amber); }
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(300px, .9fr);
+  gap: 18px;
+  align-items: stretch;
+}
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  padding: 16px 18px 0;
+}
+.panel-title {
+  margin: 0;
+  font-size: 16px;
+}
+.panel-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+.chart-box { padding: 12px 18px 18px; }
+svg { display: block; width: 100%; height: 360px; }
+.axis { stroke: var(--soft-line); stroke-width: 1; }
+.trend-line { fill: none; stroke: var(--graph); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.baseline-line { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 8 8; }
+.run-dot { stroke: #fff; stroke-width: 2; }
+.run-dot.keep { fill: var(--teal); }
+.run-dot.discard { fill: var(--rose); }
+.run-dot.crash, .run-dot.checks_failed { fill: var(--amber); }
+.best-ring { fill: none; stroke: var(--indigo); stroke-width: 3; }
+.axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.rail { padding: 16px 18px 18px; }
+.rail-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.rail-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 10px;
+}
+.run-num {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 36px;
+}
+.run-desc {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.status-pill.keep { color: #fff; background: var(--teal); }
+.status-pill.discard { color: #fff; background: var(--rose); }
+.status-pill.crash, .status-pill.checks_failed { color: #211500; background: #f0c36b; }
+.ledger {
+  margin-top: 18px;
+  overflow: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+th, td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--soft-line);
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  background: #f9fafb;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.muted { color: var(--muted); }
+.best-row { background: rgba(79, 70, 229, .06); }
+.empty {
+  padding: 42px;
+  color: var(--muted);
+  text-align: center;
+}
+@media (max-width: 940px) {
+  .wrap { padding: 18px; }
+  .masthead, .layout { grid-template-columns: 1fr; }
+  .metric-tag { justify-self: stretch; }
+  .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+  svg { height: 280px; }
+}
+@media (max-width: 540px) {
+  .score-strip { grid-template-columns: 1fr; }
+  h1 { font-size: 28px; }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Autoresearch runboard</p>
+      <h1 id="session-title">Autoresearch</h1>
+    </div>
+    <aside class="metric-tag">
+      <span>Primary metric</span>
+      <strong id="metric-signature">metric</strong>
+    </aside>
+  </header>
+
+  <section class="score-strip" aria-label="Session summary">
+    <div class="score"><label>Baseline</label><output id="baseline-value">-</output></div>
+    <div class="score"><label>Best</label><output id="best-value" class="good">-</output></div>
+    <div class="score"><label>Improvement</label><output id="improvement-value">-</output></div>
+    <div class="score"><label>Confidence</label><output id="confidence-value">-</output></div>
+    <div class="score"><label>Kept / runs</label><output id="kept-value">-</output></div>
+  </section>
+
+  <section class="layout">
+    <article class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Metric trajectory</h2>
+        <span class="panel-note" id="chart-note">-</span>
+      </div>
+      <div class="chart-box">
+        <svg id="trend-chart" viewBox="0 0 1000 360" preserveAspectRatio="none" role="img" aria-label="Experiment metric trend"></svg>
+      </div>
+    </article>
+
+    <aside class="panel rail">
+      <div class="panel-head">
+        <h2 class="panel-title">Recent decisions</h2>
+        <span class="panel-note" id="decision-note">-</span>
+      </div>
+      <div class="rail-list" id="decision-rail"></div>
+    </aside>
+  </section>
+
+  <section class="panel ledger" aria-label="Experiment ledger">
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Status</th>
+          <th id="metric-heading">Metric</th>
+          <th>Delta</th>
+          <th>Confidence</th>
+          <th>Commit</th>
+          <th>Description</th>
+          <th>ASI</th>
+        </tr>
+      </thead>
+      <tbody id="ledger-body"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const entries = __AUTORESEARCH_DATA__;
+const validStatuses = new Set(["keep", "discard", "crash", "checks_failed"]);
+const palette = {
+  line: "#d7ded9",
+  soft: "#ebefec",
+  text: "#15201c",
+  muted: "#65706b",
+  trend: "#194b45",
+  baseline: "#b7791f",
+  keep: "#0f9f8f",
+  discard: "#be3455",
+  crash: "#b7791f",
+  best: "#4f46e5"
+};
+
+function normalize() {
+  let config = { name: "Autoresearch", metricName: "metric", metricUnit: "", bestDirection: "lower" };
+  let segment = 0;
+  const allRuns = [];
+  for (const entry of entries) {
+    if (entry.type === "config") {
+      if (allRuns.length) segment += 1;
+      config = {
+        name: entry.name || config.name,
+        metricName: entry.metricName || config.metricName,
+        metricUnit: entry.metricUnit || "",
+        bestDirection: entry.bestDirection === "higher" ? "higher" : "lower"
+      };
+    } else if (entry.run != null) {
+      allRuns.push({
+        run: Number(entry.run) || allRuns.length + 1,
+        metric: Number(entry.metric),
+        metrics: entry.metrics || {},
+        status: validStatuses.has(entry.status) ? entry.status : "discard",
+        commit: entry.commit || "",
+        description: entry.description || "",
+        confidence: entry.confidence,
+        asi: entry.asi || {},
+        segment: entry.segment == null ? segment : entry.segment
+      });
+    }
+  }
+  return { config, runs: allRuns.filter((run) => run.segment === segment) };
+}
+
+const session = normalize();
+const metricValues = session.runs.map((run) => run.metric).filter((value) => Number.isFinite(value) && value > 0);
+const baseline = metricValues.length ? metricValues[0] : null;
+const best = findBestRun(session.runs, session.config.bestDirection);
+
+render();
+
+function render() {
+  document.getElementById("session-title").textContent = session.config.name || "Autoresearch";
+  document.getElementById("metric-signature").textContent = session.config.metricName + " / " + session.config.bestDirection;
+  document.getElementById("metric-heading").textContent = session.config.metricName;
+  document.getElementById("baseline-value").textContent = formatMetric(baseline);
+  document.getElementById("best-value").textContent = formatMetric(best ? best.metric : null);
+  document.getElementById("improvement-value").textContent = formatImprovement();
+  document.getElementById("improvement-value").className = improvementClass();
+  document.getElementById("confidence-value").textContent = formatConfidence(latestConfidence());
+  document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
+  document.getElementById("chart-note").textContent = session.runs.length + " recorded runs";
+  document.getElementById("decision-note").textContent = countKept() + " kept";
+  renderChart();
+  renderRail();
+  renderLedger();
+}
+
+function findBestRun(runs, direction) {
+  let bestRun = null;
+  runs.forEach((run, index) => {
+    if (!Number.isFinite(run.metric) || run.metric <= 0) return;
+    if (!bestRun || isBetter(run.metric, bestRun.metric, direction)) bestRun = { ...run, index };
+  });
+  return bestRun;
+}
+
+function isBetter(next, current, direction) {
+  return direction === "higher" ? next > current : next < current;
+}
+
+function countKept() {
+  return session.runs.filter((run) => run.status === "keep").length;
+}
+
+function latestConfidence() {
+  for (let i = session.runs.length - 1; i >= 0; i -= 1) {
+    if (typeof session.runs[i].confidence === "number") return session.runs[i].confidence;
+  }
+  return null;
+}
+
+function formatMetric(value) {
+  if (!Number.isFinite(value)) return "-";
+  const rounded = Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
+  return rounded.replace(/\.?0+$/, "") + (session.config.metricUnit || "");
+}
+
+function improvementPercent() {
+  if (!baseline || !best) return null;
+  return session.config.bestDirection === "higher"
+    ? ((best.metric - baseline) / baseline) * 100
+    : ((baseline - best.metric) / baseline) * 100;
+}
+
+function formatImprovement() {
+  const value = improvementPercent();
+  if (value == null) return "-";
+  return (value > 0 ? "+" : "") + value.toFixed(1) + "%";
+}
+
+function improvementClass() {
+  const value = improvementPercent();
+  if (value == null || Math.abs(value) < .05) return "";
+  return value > 0 ? "good" : "bad";
+}
+
+function deltaFor(value) {
+  if (!baseline || !Number.isFinite(value) || value <= 0) return null;
+  return ((value - baseline) / baseline) * 100;
+}
+
+function usefulDelta(delta) {
+  if (delta == null || Math.abs(delta) < .05) return "";
+  return session.config.bestDirection === "higher"
+    ? (delta > 0 ? "good" : "bad")
+    : (delta < 0 ? "good" : "bad");
+}
+
+function formatDelta(delta) {
+  if (delta == null) return "-";
+  if (Math.abs(delta) < .05) return "0%";
+  return (delta > 0 ? "+" : "") + delta.toFixed(1) + "%";
+}
+
+function formatConfidence(value) {
+  return typeof value === "number" ? value.toFixed(1) + "x" : "-";
+}
+
+function statusClass(status) {
+  return status === "keep" || status === "discard" ? status : "crash";
+}
+
+function renderChart() {
+  const svg = document.getElementById("trend-chart");
+  if (!metricValues.length) {
+    svg.innerHTML = '<text x="500" y="180" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
+    return;
+  }
+
+  const width = 1000;
+  const height = 360;
+  const pad = { left: 70, right: 32, top: 30, bottom: 48 };
+  const min = Math.min(...metricValues);
+  const max = Math.max(...metricValues);
+  const spread = max - min || Math.max(1, max * .1);
+  const low = Math.max(0, min - spread * .16);
+  const high = max + spread * .16;
+  const range = Math.max(1, high - low);
+  const usableW = width - pad.left - pad.right;
+  const usableH = height - pad.top - pad.bottom;
+
+  const xFor = (index) => session.runs.length <= 1
+    ? pad.left + usableW / 2
+    : pad.left + (index / (session.runs.length - 1)) * usableW;
+  const yFor = (value) => pad.top + usableH - ((value - low) / range) * usableH;
+
+  const points = session.runs.map((run, index) => {
+    if (!Number.isFinite(run.metric) || run.metric <= 0) return null;
+    return { run, index, x: xFor(index), y: yFor(run.metric) };
+  }).filter(Boolean);
+
+  const grid = [0, .25, .5, .75, 1].map((part) => {
+    const y = pad.top + usableH * part;
+    const value = high - range * part;
+    return '<line class="axis" x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '"></line>' +
+      '<text class="axis-label" x="' + (pad.left - 12) + '" y="' + (y + 4) + '" text-anchor="end">' + escapeHtml(formatMetric(value)) + '</text>';
+  }).join("");
+
+  const path = points.length
+    ? "M " + points.map((point) => point.x.toFixed(1) + " " + point.y.toFixed(1)).join(" L ")
+    : "";
+  const baselineY = baseline == null ? null : yFor(baseline);
+  const baselineLine = baselineY == null ? "" : '<line class="baseline-line" x1="' + pad.left + '" y1="' + baselineY + '" x2="' + (width - pad.right) + '" y2="' + baselineY + '"></line>';
+  const circles = points.map((point) => {
+    const label = "#" + point.run.run + " " + formatMetric(point.run.metric) + " " + point.run.status;
+    const ring = best && point.index === best.index ? '<circle class="best-ring" cx="' + point.x + '" cy="' + point.y + '" r="11"></circle>' : "";
+    return ring + '<circle class="run-dot ' + statusClass(point.run.status) + '" cx="' + point.x + '" cy="' + point.y + '" r="6"><title>' + escapeHtml(label) + '</title></circle>';
+  }).join("");
+
+  svg.innerHTML = grid + baselineLine + '<path class="trend-line" d="' + path + '"></path>' + circles +
+    '<text class="axis-label" x="' + pad.left + '" y="' + (height - 14) + '">first</text>' +
+    '<text class="axis-label" x="' + (width - pad.right) + '" y="' + (height - 14) + '" text-anchor="end">latest</text>';
+}
+
+function renderRail() {
+  const rail = document.getElementById("decision-rail");
+  const recent = session.runs.slice(-6).reverse();
+  if (!recent.length) {
+    rail.innerHTML = '<div class="empty">No decisions yet</div>';
+    return;
+  }
+  rail.innerHTML = recent.map((run) => {
+    return '<div class="rail-item">' +
+      '<div class="run-num">#' + run.run + '</div>' +
+      '<div class="run-desc"><strong>' + escapeHtml(formatMetric(run.metric)) + '</strong><br><span class="muted">' + escapeHtml(run.description || "No description") + '</span></div>' +
+      '<div class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</div>' +
+      '</div>';
+  }).join("");
+}
+
+function renderLedger() {
+  const body = document.getElementById("ledger-body");
+  if (!session.runs.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">No runs logged yet</td></tr>';
+    return;
+  }
+  body.innerHTML = session.runs.map((run, index) => {
+    const delta = deltaFor(run.metric);
+    const asi = Object.keys(run.asi || {}).length ? JSON.stringify(run.asi) : "";
+    const rowClass = best && index === best.index ? ' class="best-row"' : "";
+    return '<tr' + rowClass + '>' +
+      '<td class="mono">#' + run.run + '</td>' +
+      '<td><span class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</span></td>' +
+      '<td class="mono">' + escapeHtml(formatMetric(run.metric)) + '</td>' +
+      '<td class="' + usefulDelta(delta) + '">' + escapeHtml(formatDelta(delta)) + '</td>' +
+      '<td class="mono">' + escapeHtml(formatConfidence(run.confidence)) + '</td>' +
+      '<td class="mono muted">' + escapeHtml(run.commit) + '</td>' +
+      '<td>' + escapeHtml(run.description) + '</td>' +
+      '<td class="mono muted">' + escapeHtml(asi) + '</td>' +
+      '</tr>';
+  }).join("");
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+</script>
+</body>
+</html>

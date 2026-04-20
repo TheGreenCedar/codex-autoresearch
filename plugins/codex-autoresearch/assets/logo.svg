@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" role="img" aria-label="Codex Autoresearch logo">
+  <rect width="360" height="96" rx="18" fill="#0f172a"/>
+  <g transform="translate(18 16)">
+    <rect width="64" height="64" rx="14" fill="#111827" stroke="#334155"/>
+    <path d="M18 40.5c8.8-1.2 12.4-18 20.7-18 3.8 0 6.3 2.3 7.3 6.8" fill="none" stroke="#60a5fa" stroke-width="5" stroke-linecap="round"/>
+    <path d="M18 42h30" fill="none" stroke="#34d399" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="39" cy="22.5" r="5" fill="#f59e0b"/>
+    <circle cx="18" cy="42" r="4" fill="#34d399"/>
+    <circle cx="48" cy="42" r="4" fill="#34d399"/>
+  </g>
+  <text x="100" y="42" fill="#f8fafc" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Codex Autoresearch</text>
+  <text x="100" y="66" fill="#94a3b8" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="14">measure, keep, discard, repeat</text>
+</svg>
