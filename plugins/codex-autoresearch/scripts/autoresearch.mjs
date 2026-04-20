@@ -798,6 +798,18 @@ async function cleanupDiscardChanges(workDir, args, config) {
   throw new Error("Refusing broad discard cleanup in a dirty Git tree without scoped revert paths. Configure commitPaths/revertPaths or pass --allow-dirty-revert.");
 }
 
+async function appendRuntimeConfigFile(files, sessionCwd, updates) {
+  if (Object.keys(updates).length === 0) return;
+  const configPath = path.join(sessionCwd, "autoresearch.config.json");
+  const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+  const nextConfig = { ...existing, ...updates };
+  files.push(await writeSessionFile(
+    configPath,
+    JSON.stringify(nextConfig, null, 2),
+    { overwrite: true },
+  ));
+}
+
 async function setupSession(args) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
@@ -835,25 +847,11 @@ async function setupSession(args) {
 
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
   if (maxIterations != null) {
-    const configPath = path.join(sessionCwd, "autoresearch.config.json");
-    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-    const nextConfig = { ...existing, maxIterations: Math.floor(maxIterations) };
-    files.push(await writeSessionFile(
-      configPath,
-      JSON.stringify(nextConfig, null, 2),
-      { overwrite: true },
-    ));
+    await appendRuntimeConfigFile(files, sessionCwd, { maxIterations: Math.floor(maxIterations) });
   }
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (commitPaths.length > 0) {
-    const configPath = path.join(sessionCwd, "autoresearch.config.json");
-    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-    const nextConfig = { ...existing, commitPaths };
-    files.push(await writeSessionFile(
-      configPath,
-      JSON.stringify(nextConfig, null, 2),
-      { overwrite: true },
-    ));
+    await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
   }
 
   let init = null;
@@ -940,12 +938,10 @@ async function setupResearchSession(args) {
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (maxIterations != null || commitPaths.length > 0) {
-    const configPath = path.join(sessionCwd, "autoresearch.config.json");
-    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-    const nextConfig = { ...existing };
+    const nextConfig = {};
     if (maxIterations != null) nextConfig.maxIterations = Math.floor(maxIterations);
     if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
-    files.push(await writeSessionFile(configPath, JSON.stringify(nextConfig, null, 2), { overwrite: true }));
+    await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
   }
 
   let init = null;
