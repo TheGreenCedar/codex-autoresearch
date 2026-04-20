@@ -1,5 +1,5 @@
 <div align="center">
-<img height="120" alt="Codex Autoresearch" src="assets/logo.svg" />
+<img height="120" alt="Codex Autoresearch" src="plugins/codex-autoresearch/assets/logo.svg" />
 
 # Codex Autoresearch
 ### Autonomous experiment loops for Codex
@@ -45,20 +45,20 @@ Minimum viable loop:
 
 ## Local Plugin Iteration
 
-When improving this plugin itself, use the repo-local plugin before any globally installed or marketplace-cache copy. From `plugins/codex-autoresearch`, run the local CLI directly:
+When improving this plugin itself, use the repo-local plugin before any globally installed or marketplace-cache copy:
 
 ```bash
-node scripts/autoresearch.mjs doctor --cwd . --check-benchmark
-node scripts/autoresearch.mjs next --cwd .
-node scripts/autoresearch.mjs export --cwd .
+node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
+node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
 ```
 
-For MCP, the local `.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local script explicitly or use `plugins/codex-autoresearch` as `<plugin-root>` in command docs until the local run is finished.
+For MCP, the local `plugins/codex-autoresearch/.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local script explicitly or use `plugins/codex-autoresearch` as `<plugin-root>` in command docs until the local run is finished.
 
 The plugin self-check is:
 
 ```bash
-node scripts/perfection-benchmark.mjs --fail-on-gap
+node plugins/codex-autoresearch/scripts/perfection-benchmark.mjs --fail-on-gap
 ```
 
 It reports `METRIC quality_gap=<n>`, where zero means the local plugin has the current guidance, prompts, tests, and session hygiene expected for Codex autoresearch work.
@@ -85,14 +85,14 @@ You may also suggest small qol changes or bug fixes in separate sections.
 
 Turn that into an autoresearch loop by defining a qualitative gap rubric: project essence is accurate, research scratchpad exists, sources are logged, high-impact delight changes are implemented or explicitly rejected, small QoL fixes are separated, checks pass, and the final dashboard tells the story. The metric is the count of unmet rubric items.
 
-For direct CLI use from this plugin folder:
+For direct CLI use from the repository root:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
-node scripts/autoresearch.mjs doctor --cwd /path/to/project --check-benchmark
-node scripts/autoresearch.mjs next --cwd /path/to/project
-node scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool" --commit-paths "src,test"
-node scripts/autoresearch.mjs export --cwd /path/to/project
+node plugins/codex-autoresearch/scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
+node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd /path/to/project --check-benchmark
+node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd /path/to/project
+node plugins/codex-autoresearch/scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool" --commit-paths "src,test"
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd /path/to/project
 ```
 
 Tiny worked story:
@@ -235,7 +235,7 @@ The finalizer verifies that the union of review branches matches the autoresearc
 To draft the grouping file first:
 
 ```bash
-node scripts/finalize-autoresearch.mjs plan --output groups.json --goal short-goal
+node plugins/codex-autoresearch/scripts/finalize-autoresearch.mjs plan --output groups.json --goal short-goal
 ```
 
 Finalization writes a local review packet under `.git/autoresearch-finalize/` with branch stats, suggested PR titles/bodies, review commands, verification status, and cleanup notes.
@@ -245,7 +245,7 @@ Finalization writes a local review packet under `.git/autoresearch-finalize/` wi
 Generate a static dashboard with:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd /path/to/project
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd /path/to/project
 ```
 
 The output is:
@@ -268,7 +268,7 @@ The dashboard shows:
 The template lives at:
 
 ```text
-assets/template.html
+plugins/codex-autoresearch/assets/template.html
 ```
 
 ## Demo
@@ -276,16 +276,16 @@ assets/template.html
 A tiny static demo lives in:
 
 ```text
-examples/demo-session/
+plugins/codex-autoresearch/examples/demo-session/
 ```
 
 Regenerate it with:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch/examples/demo-session
 ```
 
-The plugin manifest uses `assets/demo-dashboard.svg` as the marketplace preview image.
+The plugin manifest uses `plugins/codex-autoresearch/assets/demo-dashboard.svg` as the marketplace preview image.
 
 ## How It Works
 
