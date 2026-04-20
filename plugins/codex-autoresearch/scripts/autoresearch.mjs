@@ -297,11 +297,12 @@ function renderResearchBenchmarkScript(slug, shellKind) {
   ].join("\n");
 }
 
-function renderResearchFile(fileName, args, slug) {
-  const goal = args.goal || args.name || slug;
-  const title = goal.replace(/\s+/g, " ").trim();
-  if (fileName === "brief.md") {
-    return `# Research Brief: ${title}
+function researchTitle(value) {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function renderResearchBrief({ title, goal, args }) {
+  return `# Research Brief: ${title}
 
 ## Request
 ${goal}
@@ -321,9 +322,10 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## Known Unknowns
 - TBD: add unresolved questions before delegating or implementing.
 `;
-  }
-  if (fileName === "plan.md") {
-    return `# Research Plan: ${title}
+}
+
+function renderResearchPlan({ title }) {
+  return `# Research Plan: ${title}
 
 ## Workstreams
 - Project essence and audience
@@ -337,9 +339,10 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 - Convert actionable findings into \`quality-gaps.md\`.
 - Iterate with \`/autoresearch next\` until \`quality_gap=0\`.
 `;
-  }
-  if (fileName === "tasks.md") {
-    return `# Research Tasks: ${title}
+}
+
+function renderResearchTasks({ title }) {
+  return `# Research Tasks: ${title}
 
 ## queued
 - Capture project essence from repo evidence.
@@ -355,17 +358,19 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## blockers
 - None.
 `;
-  }
-  if (fileName === "sources.md") {
-    return `# Research Sources: ${title}
+}
+
+function renderResearchSources({ title }) {
+  return `# Research Sources: ${title}
 
 | Source | Date Checked | Claim Supported | Confidence |
 | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD |
 `;
-  }
-  if (fileName === "synthesis.md") {
-    return `# Research Synthesis: ${title}
+}
+
+function renderResearchSynthesis({ title }) {
+  return `# Research Synthesis: ${title}
 
 ## Project Essence
 - TBD: summarize what the project is trying to become.
@@ -379,9 +384,10 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## Confidence And Gaps
 - TBD: record confidence, contradictions, and unresolved questions.
 `;
-  }
-  if (fileName === "quality-gaps.md") {
-    return `# Quality Gaps: ${title}
+}
+
+function renderResearchQualityGaps({ title }) {
+  return `# Quality Gaps: ${title}
 
 - [ ] Project essence is accurate and source-backed.
 - [ ] Sources are logged with dates, claims, and confidence.
@@ -390,7 +396,21 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 - [ ] Correctness checks pass after kept changes.
 - [ ] Final handoff includes dashboard or state evidence.
 `;
-  }
+}
+
+const RESEARCH_FILE_RENDERERS = {
+  "brief.md": renderResearchBrief,
+  "plan.md": renderResearchPlan,
+  "tasks.md": renderResearchTasks,
+  "sources.md": renderResearchSources,
+  "synthesis.md": renderResearchSynthesis,
+  "quality-gaps.md": renderResearchQualityGaps,
+};
+
+function renderResearchFile(fileName, args, slug) {
+  const goal = args.goal || args.name || slug;
+  const renderer = RESEARCH_FILE_RENDERERS[fileName];
+  if (renderer) return renderer({ title: researchTitle(goal), goal, args });
   throw new Error(`Unknown research file template: ${fileName}`);
 }
 
