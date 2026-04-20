@@ -184,8 +184,13 @@ async function readKeptRuns(cwd) {
 function runEvidenceForCommit(keptRuns, hash) {
   return keptRuns.find((run) => {
     const commit = String(run.commit || "");
-    return commit && (hash.startsWith(commit) || commit.startsWith(hash.slice(0, 12)));
+    return commitMatchesHash(commit, hash);
   });
+}
+
+function commitMatchesHash(commit, hash) {
+  if (!commit) return false;
+  return hash.startsWith(commit) || commit.startsWith(hash.slice(0, 12));
 }
 
 function draftBodyForCommit(run) {
