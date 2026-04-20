@@ -66,6 +66,17 @@ async function git(cwd, args) {
   return result.stdout.trim();
 }
 
+const createDashboardElement = (id) => ({ id, textContent: "", innerHTML: "", className: "", onchange: null });
+
+const createDashboardDocument = (elements) => ({
+  getElementById(id) {
+    if (!elements.has(id)) {
+      elements.set(id, createDashboardElement(id));
+    }
+    return elements.get(id);
+  },
+});
+
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "missing metric", "--metric-name", "seconds"]);
@@ -225,14 +236,7 @@ test("dashboard script renders zero and negative metric points", async () => {
     assert.ok(script);
 
     const elements = new Map();
-    const document = {
-      getElementById(id) {
-        if (!elements.has(id)) {
-          elements.set(id, { id, textContent: "", innerHTML: "", className: "", onchange: null });
-        }
-        return elements.get(id);
-      },
-    };
+    const document = createDashboardDocument(elements);
     vm.runInNewContext(script, { document, console });
 
     const chart = elements.get("trend-chart").innerHTML;
