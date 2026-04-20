@@ -659,7 +659,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.0" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.1" },
       },
     });
     return;
