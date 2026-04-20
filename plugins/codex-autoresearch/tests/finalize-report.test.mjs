@@ -19,7 +19,8 @@ async function run(command, args, cwd, allowFailure = false) {
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
   if (!allowFailure && result.code !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
+    const commandLine = command + " " + args.join(" ");
+    throw new Error(commandLine + " failed:\n" + result.stdout + result.stderr);
   }
   return result;
 }
