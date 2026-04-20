@@ -224,6 +224,8 @@ function renderSessionDocument(args) {
   const scope = listOption(args.files_in_scope ?? args.filesInScope ?? args.scope);
   const offLimits = listOption(args.off_limits ?? args.offLimits);
   const constraints = listOption(args.constraints);
+  const constraintsPlaceholder = "- <Correctness, compatibility, dependency,"
+    + " or budget constraints>";
   const secondary = listOption(args.secondary_metrics ?? args.secondaryMetrics);
   const benchmarkCommand = args.benchmark_command || args.benchmarkCommand || "./autoresearch.sh";
   const metricUnit = args.metric_unit ?? args.metricUnit ?? "";
@@ -237,7 +239,7 @@ function renderSessionDocument(args) {
     "`<benchmark command>` prints `METRIC name=value` lines.": `\`${benchmarkCommand}\` prints \`METRIC name=value\` lines.`,
     "- `<path>`: <why it matters>": markdownList(scope, "TBD: add files after initial inspection"),
     "- `<path or behavior>`: <reason>": markdownList(offLimits, "TBD: add off-limits files or behaviors if needed"),
-    "- <Correctness, compatibility, dependency, or budget constraints>": markdownList(constraints, "TBD: add correctness and compatibility constraints"),
+    [constraintsPlaceholder]: markdownList(constraints, "TBD: add correctness and compatibility constraints"),
     "- Baseline: <initial metric and notes>": "- Baseline: pending",
   });
 }
@@ -643,7 +645,7 @@ async function defaultBenchmarkCommand(workDir) {
   if (await pathExists(path.join(workDir, "autoresearch.sh"))) {
     return "bash ./autoresearch.sh";
   }
-  throw new Error("No command provided and no autoresearch.ps1 or autoresearch.sh exists.");
+  throw new Error("No command provided; expected autoresearch.ps1 or autoresearch.sh in the work directory.");
 }
 
 async function defaultChecksCommand(workDir) {
@@ -1045,7 +1047,8 @@ async function runExperiment(args) {
   const metricError = benchmarkPassed && !primaryPresent
     ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
     : null;
-  const passed = benchmarkPassed && primaryPresent && (checksPassed === null || checksPassed);
+  const checksPassedOrSkipped = checksPassed === null || checksPassed;
+  const passed = benchmarkPassed && primaryPresent && checksPassedOrSkipped;
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
   const allowedStatuses = passed ? ["keep", "discard"] : [failedStatus];
   return {
@@ -1490,7 +1493,7 @@ const toolSchemas = [
   },
   {
     name: "log_experiment",
-    description: "Append an experiment result and keep/commit or discard/revert changes.",
+    description: "Append an experiment result, then keep/commit or discard/revert changes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1660,6 +1663,10 @@ async function handleMcpMessage(message) {
   }
 }
 
+function isObjectArgument(value) {
+  return typeof value === "object" && !Array.isArray(value);
+}
+
 function validateToolArguments(name, args) {
   const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
   if (!schema) throw new Error(`Unknown tool: ${name}`);
@@ -1670,7 +1677,7 @@ function validateToolArguments(name, args) {
     const property = schema.properties?.[key];
     if (!property || value == null) continue;
     if (property.type === "array" && !Array.isArray(value)) throw new Error(`Argument ${key} must be an array.`);
-    if (property.type === "object" && (typeof value !== "object" || Array.isArray(value))) throw new Error(`Argument ${key} must be an object.`);
+    if (property.type === "object" && !isObjectArgument(value)) throw new Error(`Argument ${key} must be an object.`);
     if (property.type === "number" && typeof value !== "number") throw new Error(`Argument ${key} must be a number.`);
     if (property.type === "boolean" && typeof value !== "boolean") throw new Error(`Argument ${key} must be a boolean.`);
     if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
