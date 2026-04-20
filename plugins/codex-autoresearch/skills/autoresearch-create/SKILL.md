@@ -19,6 +19,7 @@ Use this skill to run a measured optimization loop:
 - `autoresearch.sh` or `autoresearch.ps1`: benchmark entrypoint.
 - `autoresearch.checks.sh` or `autoresearch.checks.ps1`: optional correctness checks.
 - `autoresearch.jsonl`: append-only run log.
+- last-run packet: latest `next` packet for fast keep/discard logging; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`.
 - `autoresearch.ideas.md`: optional backlog for promising ideas not tried yet.
 
 Starter templates live in the plugin `assets/` directory:
@@ -48,14 +49,18 @@ Starter templates live in the plugin `assets/` directory:
   "benchmark_command": "command that prints or can be wrapped into METRIC output",
   "checks_command": "optional correctness command",
   "commit_paths": ["src", "tests"],
-  "max_iterations": 50
+  "max_iterations": 50,
+  "autonomy_mode": "owner-autonomous",
+  "checks_policy": "on-improvement",
+  "keep_policy": "primary-or-risk-reduction",
+  "dashboard_refresh_seconds": 5
 }
 ```
 
 If MCP tools are not loaded, use the CLI from the plugin root:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --commit-paths "src,tests" --max-iterations 50
+node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --commit-paths "src,tests" --max-iterations 50 --autonomy-mode owner-autonomous --checks-policy on-improvement --keep-policy primary-or-risk-reduction
 ```
 
 6. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
@@ -86,6 +91,12 @@ Then log the result every time with MCP `log_experiment` or:
 node scripts/autoresearch.mjs log --cwd /absolute/project/path --metric 12.3 --status keep --description "Short description" --metrics "{}" --asi "{\"hypothesis\":\"what changed\"}"
 ```
 
+After `next`, prefer `--from-last` so the metric, secondary metrics, and ASI template are reused from the last-run packet:
+
+```bash
+node scripts/autoresearch.mjs log --cwd /absolute/project/path --from-last --status keep --description "Short description"
+```
+
 Rules:
 
 - Primary metric decides keep/discard. Lower or higher depends on the active session config.
@@ -99,6 +110,19 @@ Rules:
 - Update `autoresearch.md` after meaningful results so future agents do not repeat stale ideas.
 - Append deferred ideas to `autoresearch.ideas.md`.
 - Stop when `read_state` or `run_experiment` reports `limit.limitReached`.
+
+## Autonomy and Runtime Config
+
+Use `config` to tune a live session without rewriting the JSONL history:
+
+```bash
+node scripts/autoresearch.mjs config --cwd /absolute/project/path --autonomy-mode owner-autonomous --checks-policy on-improvement --keep-policy primary-or-risk-reduction --extend 10
+```
+
+- `autonomy_mode=guarded` is the default; use `owner-autonomous` when the owner explicitly asks Codex to keep iterating independently.
+- `checks_policy=always` runs checks after successful metrics; `on-improvement` runs checks for improving runs; `manual` only runs checks when explicitly passed.
+- `keep_policy=primary-only` keeps decisions tied to the primary metric; `primary-or-risk-reduction` allows a kept result when primary movement is neutral but ASI documents reduced risk or operational quality.
+- `--extend N` increases `maxIterations` from the current progress, useful when a session is productive but capped.
 
 ## Benchmark Script Guidance
 

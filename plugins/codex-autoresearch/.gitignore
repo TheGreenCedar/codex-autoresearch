@@ -8,6 +8,7 @@ tmp/
 /autoresearch.ideas.md
 /autoresearch.research/
 /autoresearch.config.json
+/autoresearch.last-run.json
 /autoresearch.sh
 /autoresearch.ps1
 /autoresearch.checks.sh

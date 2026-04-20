@@ -5,7 +5,7 @@ description: Export and inspect a Codex autoresearch dashboard from autoresearch
 
 # Autoresearch Dashboard
 
-Use this skill to turn `autoresearch.jsonl` into a self-contained HTML dashboard.
+Use this skill to turn `autoresearch.jsonl` into an HTML dashboard with embedded snapshot data, optional live refresh from disk, and copyable operator commands.
 
 ## Workflow
 
@@ -18,7 +18,8 @@ node scripts/autoresearch.mjs export --cwd /absolute/project/path
 ```
 
 4. Report the generated `autoresearch-dashboard.html` path.
-5. If the user asked for a summary, also run:
+5. If the user has the dashboard open, re-export after meaningful new runs so the embedded command metadata stays current.
+6. If the user asked for a summary, also run:
 
 ```bash
 node scripts/autoresearch.mjs state --cwd /absolute/project/path
@@ -36,8 +37,14 @@ Use this review readout pattern when summarizing:
 - Which segment is active when multiple segments exist.
 - Whether the dashboard says the branch is ready to finalize.
 
+## Live Dashboard Behavior
+
+The dashboard can be opened directly from disk and does not require a dev server. It embeds the current JSONL snapshot, then the `Refresh` and `Live on` controls try to refetch `autoresearch.jsonl` next to the HTML file. If the browser blocks local `fetch` for `file://`, the embedded snapshot remains usable and the status strip reports that live refresh is unavailable.
+
+The command panel includes copyable commands for doctor, next run, keep/discard last packet, dashboard export, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
+
 ## Notes
 
-The dashboard is static and self-contained. It can be opened directly from disk and does not require a dev server. The operator readout, segment selector, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
+The operator readout, segment selector, command panel, live status strip, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
 
 If no `autoresearch.jsonl` exists, say that there is no session to export yet and point the user to `autoresearch-create`.

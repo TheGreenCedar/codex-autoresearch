@@ -13,6 +13,7 @@ When this repository is the target, use the local plugin over any globally insta
 - Empty or `help`: summarize available actions.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
 - `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
+- `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
 - `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
@@ -27,6 +28,8 @@ Before `clear`, show the absolute files that will be deleted and ask for confirm
 Before starting a new loop, check git status. If the worktree is dirty, ask whether to branch from the current state, commit first, or stop.
 
 Before logging a kept result in a dirty tree, prefer scoped commit paths from the session scope or ask the user to confirm broad staging.
+
+After `next`, prefer `log --from-last` so Codex does not retype parsed metrics from the previous packet. Still choose `keep` or `discard` deliberately based on the metric and ASI.
 
 Before logging a discard/crash/checks-failed result, use configured `commitPaths`/`revertPaths`. Do not pass `--allow-dirty-revert` unless the user explicitly accepts broad cleanup.
 

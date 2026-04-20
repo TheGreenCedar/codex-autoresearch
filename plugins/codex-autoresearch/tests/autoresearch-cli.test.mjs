@@ -11,43 +11,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 
-function quoteForShell(value) {
+const quoteForShell = (value) => {
   return `"${String(value).replace(/"/g, '\\"')}"`;
-}
+};
 
-function runCli(args, options = {}) {
+const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
+
+const runProcess = (command, args, cwd) => {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], {
-      cwd: options.cwd || pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("close", (code) => {
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-async function withTempDir(name, fn) {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-async function git(cwd, args) {
-  const result = await new Promise((resolve) => {
-    const child = spawn("git", args, {
+    const child = spawn(command, args, {
       cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -60,11 +32,55 @@ async function git(cwd, args) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
   });
+};
+
+const runCli = (args, options = {}) => {
+  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
+};
+
+const withTempDir = async (name, fn) => {
+  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+const git = async (cwd, args) => {
+  const result = await runProcess("git", args, cwd);
   assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
   return result.stdout.trim();
-}
+};
+
+const createDashboardElement = (id) => ({
+  id,
+  textContent: "",
+  innerHTML: "",
+  className: "",
+  onchange: null,
+  onclick: null,
+  dataset: {},
+  setAttribute(name, value) {
+    this[name] = value;
+  },
+  querySelectorAll() {
+    return [];
+  },
+});
+
+const getDashboardElement = (elements, id) => {
+  if (!elements.has(id)) {
+    elements.set(id, createDashboardElement(id));
+  }
+  return elements.get(id);
+};
+
+const createDashboardDocument = (elements) => ({
+  getElementById: (id) => getDashboardElement(elements, id),
+});
 
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
@@ -207,8 +223,129 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
 
     assert.match(dashboard, /id="segment-select"/);
+    assert.match(dashboard, /id="live-toggle"/);
+    assert.match(dashboard, /id="command-grid"/);
+    assert.match(dashboard, /const meta = \{/);
+    assert.match(dashboard, /!clipboard\?\.writeText/);
     assert.match(dashboard, /Ready to finalize/);
     assert.match(dashboard, /renderSegmentSelector/);
+  });
+});
+
+test("config persists operator settings and extends iteration limits", async () => {
+  await withTempDir("operator-config", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "operator config", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "5", "--status", "keep", "--description", "Baseline"]);
+
+    const result = await runCli([
+      "config",
+      "--cwd", dir,
+      "--autonomy-mode", "owner-autonomous",
+      "--checks-policy", "on-improvement",
+      "--keep-policy", "primary-or-risk-reduction",
+      "--dashboard-refresh-seconds", "2",
+      "--extend", "4",
+      "--commit-paths", "src,tests",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.config.autonomyMode, "owner-autonomous");
+    assert.equal(payload.config.checksPolicy, "on-improvement");
+    assert.equal(payload.config.keepPolicy, "primary-or-risk-reduction");
+    assert.equal(payload.config.dashboardRefreshSeconds, 2);
+    assert.equal(payload.config.maxIterations, 5);
+    assert.deepEqual(payload.config.commitPaths, ["src", "tests"]);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.settings.autonomyMode, "owner-autonomous");
+    assert.equal(statePayload.limit.remainingIterations, 4);
+    assert.match(statePayload.commands[0].command, /autoresearch\.mjs/);
+    assert.match(statePayload.commands[0].command, /--cwd/);
+  });
+});
+
+test("next writes a reusable last-run packet and log can consume it", async () => {
+  await withTempDir("last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "last run", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('METRIC cache_hits=8')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.decision.metric, 3);
+    assert.equal(packet.decision.metrics.cache_hits, 8);
+
+    const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
+    assert.equal(lastRun.decision.metric, 3);
+
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "discard",
+      "--description", "Discard cached packet",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.experiment.metric, 3);
+    assert.equal(payload.experiment.metrics.cache_hits, 8);
+  });
+});
+
+test("last-run packet does not dirty git worktrees before discard logging", async () => {
+  await withTempDir("git-last-run", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "git last run", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.doesNotMatch(packet.lastRunPath, /autoresearch\.last-run\.json$/);
+
+    const statusBeforeLog = await git(dir, ["status", "--short"]);
+    assert.equal(statusBeforeLog, "");
+
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "discard",
+      "--description", "Discard clean packet",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.experiment.metric, 3);
+  });
+});
+
+test("config extend is based on the active segment run count", async () => {
+  await withTempDir("segment-extend", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "5", "--status", "keep", "--description", "Baseline"]);
+    await runCli(["init", "--cwd", dir, "--name", "second segment", "--metric-name", "seconds"]);
+
+    const result = await runCli(["config", "--cwd", dir, "--extend", "4"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.config.maxIterations, 4);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.limit.maxIterations, 4);
+    assert.equal(statePayload.limit.remainingIterations, 4);
   });
 });
 
@@ -225,14 +362,7 @@ test("dashboard script renders zero and negative metric points", async () => {
     assert.ok(script);
 
     const elements = new Map();
-    const document = {
-      getElementById(id) {
-        if (!elements.has(id)) {
-          elements.set(id, { id, textContent: "", innerHTML: "", className: "", onchange: null });
-        }
-        return elements.get(id);
-      },
-    };
+    const document = createDashboardDocument(elements);
     vm.runInNewContext(script, { document, console });
 
     const chart = elements.get("trend-chart").innerHTML;

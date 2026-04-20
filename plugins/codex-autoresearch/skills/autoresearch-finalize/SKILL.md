@@ -33,13 +33,14 @@ Prefer the draft planner first, then inspect and tighten the result:
 node /absolute/path/to/codex-autoresearch/scripts/finalize-autoresearch.mjs plan --output /absolute/path/to/groups.json --goal short-goal
 ```
 
+- Add `--collapse-overlap` when the user wants an owner-autonomous cleanup and overlapping draft groups should become one review branch instead of causing a manual regrouping loop.
 - Preserve application order.
 - No two groups may touch the same file. If groups overlap, merge them.
 - If one group depends on another, merge them or explicitly flag that they must be reviewed together.
 - Keep groups focused on one idea.
 - Do not force a fixed number of groups.
 
-Present the groups to the user and wait for approval before creating branches.
+Present the groups to the user and wait for approval before creating branches, unless the user has already explicitly approved independent finalization or asked you to keep iterating to completion.
 
 Example:
 
@@ -80,7 +81,8 @@ Rules:
 
 - `last_commit` must be a full hash.
 - `goal` and `slug` should be short; the script sanitizes branch names before creating branches.
-- Root session files such as `autoresearch.jsonl`, `autoresearch.md`, and benchmark/check scripts are excluded from review branches.
+- Root session files such as `autoresearch.jsonl`, `autoresearch.md`, fallback `autoresearch.last-run.json`, and benchmark/check scripts are excluded from review branches.
+- Parent directories for `--output` are created automatically by the draft planner.
 
 ## Step 4: Run
 

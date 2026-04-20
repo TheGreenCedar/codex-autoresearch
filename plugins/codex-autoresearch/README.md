@@ -110,7 +110,7 @@ For direct CLI use from this plugin folder:
 node scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
 node scripts/autoresearch.mjs doctor --cwd /path/to/project --check-benchmark
 node scripts/autoresearch.mjs next --cwd /path/to/project
-node scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool" --commit-paths "src,test"
+node scripts/autoresearch.mjs log --cwd /path/to/project --from-last --status keep --description "Use worker pool" --commit-paths "src,test"
 node scripts/autoresearch.mjs export --cwd /path/to/project
 ```
 
@@ -131,10 +131,10 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `setup_session`, `setup_research_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `doctor_session`, `export_dashboard`, `clear_session` |
+| MCP tools | `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `doctor_session`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | Static HTML report generated from `autoresearch.jsonl` |
+| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, live refresh, and copyable commands |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
 
 ## MCP Tools
@@ -143,6 +143,7 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | --- | --- |
 | `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional max-iteration config, and the initial JSONL config header |
 | `setup_research_session` | Creates `autoresearch.research/<slug>/`, initializes a `quality_gap` session, and writes a benchmark script that measures open gaps |
+| `configure_session` | Updates runtime config such as autonomy mode, checks policy, keep policy, dashboard refresh, scoped paths, and max iterations |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
 | `run_experiment` | Runs the benchmark command, times it, captures output, and parses `METRIC name=value` lines |
 | `next_experiment` | Runs preflight and benchmark in one packet, then returns allowed log decisions and a next-run notes template |
@@ -199,6 +200,7 @@ Then it creates:
 | `autoresearch.sh` or `autoresearch.ps1` | Benchmark script that prints `METRIC name=value` lines |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |
+| last-run packet | Latest `next` packet for quick keep/discard logging with `--from-last`; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json` |
 | `autoresearch.ideas.md` | Optional backlog for promising ideas |
 
 The deterministic setup path is available as MCP `setup_session` and CLI `setup`. It is the fastest way to create a fresh, resumable Codex session without hand-copying templates.
@@ -216,6 +218,12 @@ Kept results are committed. If Git cannot add or commit the kept change, logging
 For tighter keep commits and safer discard cleanup, pass `--commit-paths "src,test"` or configure `commitPaths` through setup. Discarded, crashed, or checks-failed results use those paths as the cleanup boundary. Without scoped paths, the helper refuses broad discard cleanup in a dirty Git tree unless `--allow-dirty-revert` is passed explicitly.
 
 Every run should include next-run notes, stored as ASI (actionable side information). This is structured context for the next session: what was tried, what failed, what surprised Codex, and what to try next.
+
+After `next`, the helper persists a last-run packet. Use `log --from-last` to reuse the parsed primary metric, secondary metrics, and ASI template instead of retyping them:
+
+```bash
+node scripts/autoresearch.mjs log --cwd /path/to/project --from-last --status keep --description "Use worker pool"
+```
 
 Minimum useful ASI is one compact JSON object:
 
@@ -262,11 +270,13 @@ To draft the grouping file first:
 node scripts/finalize-autoresearch.mjs plan --output groups.json --goal short-goal
 ```
 
+Use `--collapse-overlap` when overlapping draft groups should become one review branch automatically.
+
 Finalization writes a local review packet under `.git/autoresearch-finalize/` with branch stats, suggested PR titles/bodies, review commands, verification status, and cleanup notes.
 
 ## Dashboard
 
-Generate a static dashboard with:
+Generate the dashboard with:
 
 ```bash
 node scripts/autoresearch.mjs export --cwd /path/to/project
@@ -283,6 +293,8 @@ The dashboard shows:
 - baseline vs. best
 - improvement percentage
 - kept run count
+- live refresh status plus `Refresh` and `Live on` controls that try to read the adjacent `autoresearch.jsonl`
+- copyable operator commands for doctor, next, keep/discard last packet, export, and extend
 - operator readout with best kept change, recent failures, next action, and confidence explanation
 - segment selector for multi-phase sessions
 - ready-to-finalize readout
