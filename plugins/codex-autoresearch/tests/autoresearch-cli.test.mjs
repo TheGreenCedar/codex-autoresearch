@@ -11,43 +11,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 
-function quoteForShell(value) {
+const quoteForShell = (value) => {
   return `"${String(value).replace(/"/g, '\\"')}"`;
-}
+};
 
-function runCli(args, options = {}) {
+const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
+
+const runProcess = (command, args, cwd) => {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], {
-      cwd: options.cwd || pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("close", (code) => {
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-async function withTempDir(name, fn) {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-async function git(cwd, args) {
-  const result = await new Promise((resolve) => {
-    const child = spawn("git", args, {
+    const child = spawn(command, args, {
       cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -60,21 +32,40 @@ async function git(cwd, args) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
   });
+};
+
+const runCli = (args, options = {}) => {
+  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
+};
+
+const withTempDir = async (name, fn) => {
+  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+const git = async (cwd, args) => {
+  const result = await runProcess("git", args, cwd);
   assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
   return result.stdout.trim();
-}
+};
 
 const createDashboardElement = (id) => ({ id, textContent: "", innerHTML: "", className: "", onchange: null });
 
+const getDashboardElement = (elements, id) => {
+  if (!elements.has(id)) {
+    elements.set(id, createDashboardElement(id));
+  }
+  return elements.get(id);
+};
+
 const createDashboardDocument = (elements) => ({
-  getElementById(id) {
-    if (!elements.has(id)) {
-      elements.set(id, createDashboardElement(id));
-    }
-    return elements.get(id);
-  },
+  getElementById: (id) => getDashboardElement(elements, id),
 });
 
 test("run reports missing primary metric as a failed experiment", async () => {
