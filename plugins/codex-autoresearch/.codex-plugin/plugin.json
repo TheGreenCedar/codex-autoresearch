@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Autonomous experiment loops for Codex: set up a benchmark, run iterations, log results, export dashboards, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -35,13 +35,19 @@
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "defaultPrompt": [
-      "Start autoresearch for this benchmark.",
-      "Export the autoresearch dashboard.",
-      "Finalize this autoresearch branch."
+      "Start autoresearch for this project. Ask only for the missing benchmark, metric, direction, scope, and checks, then take a baseline.",
+      "Run an autoresearch doctor check before the next experiment.",
+      "Run /autoresearch next to produce one preflight, benchmark, decision, and ASI packet.",
+      "Run the next autoresearch iteration and log the result with ASI.",
+      "Export the autoresearch dashboard and summarize baseline, best metric, kept runs, and confidence.",
+      "Draft finalization groups from autoresearch history, then review before creating branches.",
+      "Finalize this autoresearch branch into clean review branches from the kept experiments."
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/logo.svg",
-    "screenshots": []
+    "screenshots": [
+      "./assets/demo-dashboard.svg"
+    ]
   }
 }

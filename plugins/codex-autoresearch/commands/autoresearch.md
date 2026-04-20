@@ -1,5 +1,5 @@
 ---
-description: Start, resume, inspect, export, stop, or clear a Codex Autoresearch session. Arguments: start text, status, export, off, clear, or help.
+description: Start, resume, inspect, run next, export, stop, or clear a Codex Autoresearch session. Arguments: start text, next, status, export, off, clear, or help.
 ---
 
 # Autoresearch
@@ -9,6 +9,8 @@ Interpret `$ARGUMENTS` as a subcommand or session goal.
 ## Dispatch
 
 - Empty or `help`: summarize available actions.
+- `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
+- `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
 - `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
@@ -17,8 +19,14 @@ Interpret `$ARGUMENTS` as a subcommand or session goal.
 
 ## Safety
 
-Before `clear`, show the absolute files that will be deleted and ask for confirmation. `clear_session` and CLI `clear --yes` are the only destructive paths.
+Before `clear`, show the absolute files that will be deleted and ask for confirmation. `clear_session` and CLI `clear --yes` are the only session-deletion paths.
 
 Before starting a new loop, check git status. If the worktree is dirty, ask whether to branch from the current state, commit first, or stop.
+
+Before logging a kept result in a dirty tree, prefer scoped commit paths from the session scope or ask the user to confirm broad staging.
+
+Before logging a discard/crash/checks-failed result, use configured `commitPaths`/`revertPaths`. Do not pass `--allow-dirty-revert` unless the user explicitly accepts broad cleanup.
+
+When calling MCP tools with custom shell commands, pass `allow_unsafe_command: true` only after confirming the command and target directory.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.

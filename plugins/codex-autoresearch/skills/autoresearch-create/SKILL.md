@@ -47,6 +47,7 @@ Starter templates live in the plugin `assets/` directory:
   "direction": "lower",
   "benchmark_command": "command that prints or can be wrapped into METRIC output",
   "checks_command": "optional correctness command",
+  "commit_paths": ["src", "tests"],
   "max_iterations": 50
 }
 ```
@@ -54,18 +55,19 @@ Starter templates live in the plugin `assets/` directory:
 If MCP tools are not loaded, use the CLI from the plugin root:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --max-iterations 50
+node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --commit-paths "src,tests" --max-iterations 50
 ```
 
 6. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
-7. Run the baseline immediately.
+7. Run `node scripts/autoresearch.mjs doctor --cwd /absolute/project/path --check-benchmark` or MCP `doctor_session` to catch missing metric output before the loop starts.
+8. Run the baseline immediately.
 
 ## Loop Workflow
 
-Use the MCP `run_experiment` tool when available. Otherwise run:
+Use MCP `next_experiment` when available because it returns preflight, benchmark, allowed log decisions, and a next-run notes template in one packet. If passing a custom shell command through MCP, include `allow_unsafe_command: true`; otherwise prefer the configured autoresearch script. If MCP is not available, run:
 
 ```bash
-node scripts/autoresearch.mjs run --cwd /absolute/project/path
+node scripts/autoresearch.mjs next --cwd /absolute/project/path
 ```
 
 Then log the result every time with MCP `log_experiment` or:
@@ -78,10 +80,12 @@ Rules:
 
 - Primary metric decides keep/discard. Lower or higher depends on the active session config.
 - Keep improvements, especially simple improvements.
+- Use scoped `commit_paths` for kept commits when a narrow experiment surface is known; otherwise inspect staged files carefully before trusting broad staging.
+- Use scoped `commit_paths` or `revert_paths` for discard/crash/checks-failed cleanup. Do not use broad dirty-tree cleanup unless the user explicitly accepts it.
 - Discard worse or equal results.
 - Log benchmark failures as `crash`.
 - Log failed correctness checks as `checks_failed`.
-- Always include ASI. At minimum use `hypothesis`; for discard/crash also include `rollback_reason` and `next_action_hint`.
+- Always include next-run notes as ASI. At minimum use `hypothesis`; for discard/crash also include `rollback_reason` and `next_action_hint`.
 - Update `autoresearch.md` after meaningful results so future agents do not repeat stale ideas.
 - Append deferred ideas to `autoresearch.ideas.md`.
 - Stop when `read_state` or `run_experiment` reports `limit.limitReached`.

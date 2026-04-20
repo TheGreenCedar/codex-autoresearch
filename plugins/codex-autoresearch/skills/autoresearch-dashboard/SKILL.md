@@ -26,8 +26,18 @@ node scripts/autoresearch.mjs state --cwd /absolute/project/path
 
 Then summarize baseline, best metric, run count, status counts, confidence, and remaining iteration limit if available.
 
+Use this review readout pattern when summarizing:
+
+- Best kept run and why it appears best.
+- Recent regressions, crashes, or checks failures.
+- Confidence caveat: explain whether the signal is strong or still noisy.
+- Top ASI next action, especially `next_action_hint`.
+- Whether the iteration limit is reached and whether finalization looks timely.
+- Which segment is active when multiple segments exist.
+- Whether the dashboard says the branch is ready to finalize.
+
 ## Notes
 
-The dashboard is static and self-contained. It can be opened directly from disk and does not require a dev server.
+The dashboard is static and self-contained. It can be opened directly from disk and does not require a dev server. The operator readout, segment selector, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
 
 If no `autoresearch.jsonl` exists, say that there is no session to export yet and point the user to `autoresearch-create`.

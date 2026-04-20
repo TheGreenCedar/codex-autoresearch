@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Replace this command with the real workload.
 # Print one METRIC line for the primary metric and any secondary metrics.
-start_ms=$(date +%s%3N)
+start_ns=$(date +%s%N)
 
 <benchmark command>
 
-end_ms=$(date +%s%3N)
-elapsed_ms=$((end_ms - start_ms))
-printf 'METRIC <metric name>=%s\n' "$elapsed_ms"
+end_ns=$(date +%s%N)
+elapsed_seconds=$(awk "BEGIN { printf \"%.3f\", ($end_ns - $start_ns) / 1000000000 }")
+printf 'METRIC <metric name>=%s\n' "$elapsed_seconds"

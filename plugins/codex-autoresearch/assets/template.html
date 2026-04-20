@@ -80,6 +80,30 @@ h1 {
   gap: 10px;
   margin: 22px 0;
 }
+.control-strip {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin: 18px 0;
+}
+.control-strip label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.control-strip select {
+  min-width: 230px;
+  margin-left: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+}
 .score {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -134,6 +158,40 @@ h1 {
 .panel-note {
   color: var(--muted);
   font-size: 13px;
+}
+.readout {
+  margin: 0 0 18px;
+}
+.readout-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+.readout-card {
+  border-top: 1px solid var(--soft-line);
+  padding-top: 12px;
+  min-width: 0;
+}
+.readout-card label,
+.asi-list dt {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.readout-card strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 15px;
+}
+.readout-card p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 .chart-box { padding: 12px 18px 18px; }
 svg { display: block; width: 100%; height: 360px; }
@@ -216,6 +274,16 @@ th {
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .muted { color: var(--muted); }
 .best-row { background: rgba(79, 70, 229, .06); }
+.asi-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.asi-list dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  line-height: 1.35;
+}
 .empty {
   padding: 42px;
   color: var(--muted);
@@ -224,12 +292,14 @@ th {
 @media (max-width: 940px) {
   .wrap { padding: 18px; }
   .masthead, .layout { grid-template-columns: 1fr; }
+  .readout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .control-strip { align-items: stretch; flex-direction: column; }
   .metric-tag { justify-self: stretch; }
   .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   svg { height: 280px; }
 }
 @media (max-width: 540px) {
-  .score-strip { grid-template-columns: 1fr; }
+  .score-strip, .readout-grid { grid-template-columns: 1fr; }
   h1 { font-size: 28px; }
 }
 </style>
@@ -253,6 +323,47 @@ th {
     <div class="score"><label>Improvement</label><output id="improvement-value">-</output></div>
     <div class="score"><label>Confidence</label><output id="confidence-value">-</output></div>
     <div class="score"><label>Kept / runs</label><output id="kept-value">-</output></div>
+  </section>
+
+  <section class="control-strip" aria-label="Dashboard controls">
+    <label for="segment-select">Segment
+      <select id="segment-select"></select>
+    </label>
+    <span class="panel-note" id="segment-note">Latest segment</span>
+  </section>
+
+  <section class="panel readout" aria-label="Operator readout">
+    <div class="panel-head">
+      <h2 class="panel-title">Operator readout</h2>
+      <span class="panel-note" id="readout-note">lower is better</span>
+    </div>
+    <div class="readout-grid">
+      <article class="readout-card">
+        <label>Best kept change</label>
+        <strong id="best-kept-title">-</strong>
+        <p id="best-kept-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <label>Recent failures</label>
+        <strong id="failure-title">-</strong>
+        <p id="failure-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <label>Next action</label>
+        <strong id="next-action-title">-</strong>
+        <p id="next-action-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <label>Confidence read</label>
+        <strong id="confidence-title">-</strong>
+        <p id="confidence-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <label>Ready to finalize</label>
+        <strong id="finalize-title">-</strong>
+        <p id="finalize-detail">-</p>
+      </article>
+    </div>
   </section>
 
   <section class="layout">
@@ -313,19 +424,28 @@ const palette = {
 function normalize() {
   let config = { name: "Autoresearch", metricName: "metric", metricUnit: "", bestDirection: "lower" };
   let segment = 0;
-  const allRuns = [];
+  const segments = [];
+  const ensureSegment = (index) => {
+    if (!segments[index]) segments[index] = { segment: index, config: { ...config }, runs: [] };
+    segments[index].config = { ...segments[index].config, ...config };
+    return segments[index];
+  };
+  ensureSegment(segment);
   for (const entry of entries) {
     if (entry.type === "config") {
-      if (allRuns.length) segment += 1;
+      if (segments[segment] && segments[segment].runs.length) segment += 1;
       config = {
         name: entry.name || config.name,
         metricName: entry.metricName || config.metricName,
         metricUnit: entry.metricUnit || "",
         bestDirection: entry.bestDirection === "higher" ? "higher" : "lower"
       };
+      ensureSegment(segment);
     } else if (entry.run != null) {
-      allRuns.push({
-        run: Number(entry.run) || allRuns.length + 1,
+      const runSegment = entry.segment == null ? segment : Number(entry.segment);
+      if (!segments[runSegment]) segments[runSegment] = { segment: runSegment, config: { ...config }, runs: [] };
+      segments[runSegment].runs.push({
+        run: Number(entry.run) || segments[runSegment].runs.length + 1,
         metric: Number(entry.metric),
         metrics: entry.metrics || {},
         status: validStatuses.has(entry.status) ? entry.status : "discard",
@@ -333,23 +453,43 @@ function normalize() {
         description: entry.description || "",
         confidence: entry.confidence,
         asi: entry.asi || {},
-        segment: entry.segment == null ? segment : entry.segment
+        segment: runSegment
       });
     }
   }
-  return { config, runs: allRuns.filter((run) => run.segment === segment) };
+  const available = segments.filter(Boolean);
+  return {
+    segments: available,
+    latestSegment: available.length ? available[available.length - 1].segment : 0
+  };
 }
 
-const session = normalize();
-const metricValues = session.runs.map((run) => run.metric).filter((value) => Number.isFinite(value) && value > 0);
-const baseline = metricValues.length ? metricValues[0] : null;
-const best = findBestRun(session.runs, session.config.bestDirection);
+const normalized = normalize();
+let activeSegment = normalized.latestSegment;
+let session = selectSegment(activeSegment);
+let metricValues = [];
+let baseline = null;
+let best = null;
 
 render();
 
+function selectSegment(segment) {
+  return normalized.segments.find((item) => item.segment === Number(segment))
+    || normalized.segments.at(-1)
+    || { segment: 0, config: { name: "Autoresearch", metricName: "metric", metricUnit: "", bestDirection: "lower" }, runs: [] };
+}
+
+function refreshDerived() {
+  session = selectSegment(activeSegment);
+  metricValues = session.runs.map((run) => run.metric).filter((value) => Number.isFinite(value));
+  baseline = metricValues.length ? metricValues[0] : null;
+  best = findBestRun(session.runs, session.config.bestDirection);
+}
+
 function render() {
+  refreshDerived();
   document.getElementById("session-title").textContent = session.config.name || "Autoresearch";
-  document.getElementById("metric-signature").textContent = session.config.metricName + " / " + session.config.bestDirection;
+  document.getElementById("metric-signature").textContent = metricSignature();
   document.getElementById("metric-heading").textContent = session.config.metricName;
   document.getElementById("baseline-value").textContent = formatMetric(baseline);
   document.getElementById("best-value").textContent = formatMetric(best ? best.metric : null);
@@ -359,15 +499,34 @@ function render() {
   document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
   document.getElementById("chart-note").textContent = session.runs.length + " recorded runs";
   document.getElementById("decision-note").textContent = countKept() + " kept";
+  document.getElementById("readout-note").textContent = metricSignature();
+  renderSegmentSelector();
+  renderReadout();
   renderChart();
   renderRail();
   renderLedger();
 }
 
+function renderSegmentSelector() {
+  const select = document.getElementById("segment-select");
+  const note = document.getElementById("segment-note");
+  select.innerHTML = normalized.segments.map((item) => {
+    const label = "Segment " + (item.segment + 1) + " - " + (item.config.name || "Autoresearch") + " (" + item.runs.length + " runs)";
+    return '<option value="' + item.segment + '"' + (item.segment === session.segment ? " selected" : "") + '>' + escapeHtml(label) + '</option>';
+  }).join("");
+  select.onchange = () => {
+    activeSegment = Number(select.value);
+    render();
+  };
+  note.textContent = normalized.segments.length > 1
+    ? "Showing segment " + (session.segment + 1) + " of " + normalized.segments.length
+    : "Single segment";
+}
+
 function findBestRun(runs, direction) {
   let bestRun = null;
   runs.forEach((run, index) => {
-    if (!Number.isFinite(run.metric) || run.metric <= 0) return;
+    if (!Number.isFinite(run.metric)) return;
     if (!bestRun || isBetter(run.metric, bestRun.metric, direction)) bestRun = { ...run, index };
   });
   return bestRun;
@@ -394,11 +553,17 @@ function formatMetric(value) {
   return rounded.replace(/\.?0+$/, "") + (session.config.metricUnit || "");
 }
 
+function metricSignature() {
+  return session.config.metricName + ", " + session.config.bestDirection + " is better";
+}
+
 function improvementPercent() {
-  if (!baseline || !best) return null;
+  if (!Number.isFinite(baseline) || !best) return null;
+  if (baseline === 0) return best.metric === 0 ? 0 : null;
+  const denominator = Math.abs(baseline);
   return session.config.bestDirection === "higher"
-    ? ((best.metric - baseline) / baseline) * 100
-    : ((baseline - best.metric) / baseline) * 100;
+    ? ((best.metric - baseline) / denominator) * 100
+    : ((baseline - best.metric) / denominator) * 100;
 }
 
 function formatImprovement() {
@@ -414,8 +579,9 @@ function improvementClass() {
 }
 
 function deltaFor(value) {
-  if (!baseline || !Number.isFinite(value) || value <= 0) return null;
-  return ((value - baseline) / baseline) * 100;
+  if (!Number.isFinite(baseline) || !Number.isFinite(value)) return null;
+  if (baseline === 0) return value === 0 ? 0 : null;
+  return ((value - baseline) / Math.abs(baseline)) * 100;
 }
 
 function usefulDelta(delta) {
@@ -435,6 +601,58 @@ function formatConfidence(value) {
   return typeof value === "number" ? value.toFixed(1) + "x" : "-";
 }
 
+function keptRuns() {
+  return session.runs.filter((run) => run.status === "keep");
+}
+
+function failedRuns() {
+  return session.runs.filter((run) => run.status === "discard" || run.status === "crash" || run.status === "checks_failed");
+}
+
+function bestKeptRun() {
+  return findBestRun(keptRuns(), session.config.bestDirection);
+}
+
+function asiText(run, keys, fallback) {
+  if (!run || !run.asi) return fallback;
+  for (const key of keys) {
+    if (run.asi[key]) return String(run.asi[key]);
+  }
+  return fallback;
+}
+
+function renderReadout() {
+  const keptBest = bestKeptRun();
+  const recentFailure = failedRuns().at(-1);
+  const nextAction = [...session.runs].reverse().map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], "")).find(Boolean);
+  const confidence = latestConfidence();
+
+  document.getElementById("best-kept-title").textContent = keptBest ? "#" + keptBest.run + " " + formatMetric(keptBest.metric) : "No kept changes yet";
+  document.getElementById("best-kept-detail").textContent = keptBest
+    ? (keptBest.description || asiText(keptBest, ["hypothesis"], "Kept experiment"))
+    : "Run and log a baseline, then keep measured wins.";
+
+  document.getElementById("failure-title").textContent = recentFailure ? "#" + recentFailure.run + " " + recentFailure.status : "No recent failures";
+  document.getElementById("failure-detail").textContent = recentFailure
+    ? asiText(recentFailure, ["rollback_reason", "failure", "evidence"], recentFailure.description || "Review the ledger for details.")
+    : "Discarded and crashed runs will appear here with rollback context.";
+
+  document.getElementById("next-action-title").textContent = nextAction ? "Next action" : "Choose next hypothesis";
+  document.getElementById("next-action-detail").textContent = nextAction || "Add ASI next_action_hint to make the next session obvious.";
+
+  document.getElementById("confidence-title").textContent = formatConfidence(confidence);
+  document.getElementById("confidence-detail").textContent = confidence == null
+    ? "Confidence needs at least three finite metric runs and enough signal over noise."
+    : "Confidence compares the best movement against median absolute deviation; higher means clearer signal.";
+
+  const kept = countKept();
+  const ready = kept > 0 && session.runs.length >= 2;
+  document.getElementById("finalize-title").textContent = ready ? "Ready to finalize" : "Keep more evidence";
+  document.getElementById("finalize-detail").textContent = ready
+    ? "Review kept runs and use /autoresearch-finalize when the branch is done."
+    : "A review packet needs at least one kept change and enough context to explain it.";
+}
+
 function statusClass(status) {
   return status === "keep" || status === "discard" ? status : "crash";
 }
@@ -452,7 +670,7 @@ function renderChart() {
   const min = Math.min(...metricValues);
   const max = Math.max(...metricValues);
   const spread = max - min || Math.max(1, max * .1);
-  const low = Math.max(0, min - spread * .16);
+  const low = min < 0 ? min - spread * .16 : Math.max(0, min - spread * .16);
   const high = max + spread * .16;
   const range = Math.max(1, high - low);
   const usableW = width - pad.left - pad.right;
@@ -464,7 +682,7 @@ function renderChart() {
   const yFor = (value) => pad.top + usableH - ((value - low) / range) * usableH;
 
   const points = session.runs.map((run, index) => {
-    if (!Number.isFinite(run.metric) || run.metric <= 0) return null;
+    if (!Number.isFinite(run.metric)) return null;
     return { run, index, x: xFor(index), y: yFor(run.metric) };
   }).filter(Boolean);
 
@@ -493,7 +711,13 @@ function renderChart() {
 
 function renderRail() {
   const rail = document.getElementById("decision-rail");
-  const recent = session.runs.slice(-6).reverse();
+  const pinned = [bestKeptRun(), ...failedRuns().slice(-3).reverse(), ...session.runs.slice(-3).reverse()];
+  const seen = new Set();
+  const recent = pinned.filter((run) => {
+    if (!run || seen.has(run.run)) return false;
+    seen.add(run.run);
+    return true;
+  }).slice(0, 6);
   if (!recent.length) {
     rail.innerHTML = '<div class="empty">No decisions yet</div>';
     return;
@@ -515,7 +739,6 @@ function renderLedger() {
   }
   body.innerHTML = session.runs.map((run, index) => {
     const delta = deltaFor(run.metric);
-    const asi = Object.keys(run.asi || {}).length ? JSON.stringify(run.asi) : "";
     const rowClass = best && index === best.index ? ' class="best-row"' : "";
     return '<tr' + rowClass + '>' +
       '<td class="mono">#' + run.run + '</td>' +
@@ -525,9 +748,34 @@ function renderLedger() {
       '<td class="mono">' + escapeHtml(formatConfidence(run.confidence)) + '</td>' +
       '<td class="mono muted">' + escapeHtml(run.commit) + '</td>' +
       '<td>' + escapeHtml(run.description) + '</td>' +
-      '<td class="mono muted">' + escapeHtml(asi) + '</td>' +
+      '<td>' + renderAsi(run.asi) + '</td>' +
       '</tr>';
   }).join("");
+}
+
+function renderAsi(asi) {
+  const entries = Object.entries(asi || {});
+  if (!entries.length) return '<span class="muted">-</span>';
+  const preferred = [
+    ["hypothesis", "Hypothesis"],
+    ["evidence", "Evidence"],
+    ["rollback_reason", "Rollback"],
+    ["next_action_hint", "Next action"],
+    ["surprise", "Surprise"],
+  ];
+  const rendered = [];
+  const used = new Set();
+  for (const [key, label] of preferred) {
+    if (asi[key]) {
+      rendered.push('<div><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(asi[key]) + '</dd></div>');
+      used.add(key);
+    }
+  }
+  for (const [key, value] of entries) {
+    if (used.has(key)) continue;
+    rendered.push('<div><dt>' + escapeHtml(key.replaceAll("_", " ")) + '</dt><dd>' + escapeHtml(typeof value === "object" ? JSON.stringify(value) : value) + '</dd></div>');
+  }
+  return '<dl class="asi-list">' + rendered.join("") + '</dl>';
 }
 
 function escapeHtml(value) {

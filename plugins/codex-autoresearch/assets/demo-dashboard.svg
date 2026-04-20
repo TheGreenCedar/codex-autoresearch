@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Codex Autoresearch dashboard preview">
+  <rect width="1280" height="720" fill="#f5f7fb"/>
+  <rect x="72" y="58" width="1136" height="604" rx="8" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="112" y="118" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">AUTORESEARCH RUNBOARD</text>
+  <text x="112" y="166" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800">demo: reduce test runtime</text>
+  <rect x="112" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
+  <rect x="322" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
+  <rect x="532" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
+  <rect x="742" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
+  <rect x="952" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
+  <text x="132" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BASELINE</text>
+  <text x="132" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">10s</text>
+  <text x="342" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BEST</text>
+  <text x="342" y="276" fill="#0f9f8f" font-family="Consolas, monospace" font-size="30" font-weight="800">7.2s</text>
+  <text x="552" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">IMPROVEMENT</text>
+  <text x="552" y="276" fill="#0f9f8f" font-family="Consolas, monospace" font-size="30" font-weight="800">+28%</text>
+  <text x="762" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">CONFIDENCE</text>
+  <text x="762" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">1.4x</text>
+  <text x="972" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">KEPT / RUNS</text>
+  <text x="972" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">2 / 3</text>
+  <rect x="112" y="328" width="690" height="250" rx="8" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="140" y="370" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Metric trajectory</text>
+  <line x1="160" y1="525" x2="750" y2="525" stroke="#ebefec"/>
+  <line x1="160" y1="460" x2="750" y2="460" stroke="#ebefec"/>
+  <line x1="160" y1="395" x2="750" y2="395" stroke="#ebefec"/>
+  <polyline points="182,430 450,485 720,380" fill="none" stroke="#194b45" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="182" cy="430" r="11" fill="#0f9f8f" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="450" cy="485" r="11" fill="#0f9f8f" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="720" cy="380" r="11" fill="#be3455" stroke="#ffffff" stroke-width="4"/>
+  <rect x="832" y="328" width="310" height="250" rx="8" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="860" y="370" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Operator readout</text>
+  <text x="860" y="420" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BEST KEPT CHANGE</text>
+  <text x="860" y="450" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800">#2 7.2s</text>
+  <text x="860" y="500" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">NEXT ACTION</text>
+  <text x="860" y="530" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">Try shared fixture setup</text>
+</svg>

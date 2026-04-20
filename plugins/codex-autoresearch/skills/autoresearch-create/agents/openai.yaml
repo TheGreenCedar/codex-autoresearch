@@ -1,4 +1,4 @@
 interface:
   display_name: "Autoresearch Create"
   short_description: "Set up and run autonomous optimization loops"
-  default_prompt: "Start autoresearch on this project."
+  default_prompt: "Start autoresearch on this project. Ask only for missing essentials, create the session, run doctor, then use /autoresearch next packets for measured iterations with scoped cleanup."

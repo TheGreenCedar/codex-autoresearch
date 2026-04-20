@@ -27,6 +27,12 @@ git rev-parse HEAD
 
 Group kept commits into reviewable changesets.
 
+Prefer the draft planner first, then inspect and tighten the result:
+
+```bash
+node /absolute/path/to/codex-autoresearch/scripts/finalize-autoresearch.mjs plan --output /absolute/path/to/groups.json --goal short-goal
+```
+
 - Preserve application order.
 - No two groups may touch the same file. If groups overlap, merge them.
 - If one group depends on another, merge them or explicitly flag that they must be reviewed together.
@@ -73,8 +79,8 @@ After approval, write a JSON file like:
 Rules:
 
 - `last_commit` must be a full hash.
-- `goal` and `slug` must be short branch-safe slugs.
-- Session files named `autoresearch.*` are excluded from review branches.
+- `goal` and `slug` should be short; the script sanitizes branch names before creating branches.
+- Root session files such as `autoresearch.jsonl`, `autoresearch.md`, and benchmark/check scripts are excluded from review branches.
 
 ## Step 4: Run
 
@@ -91,6 +97,9 @@ The script:
 - applies only the files for that group
 - verifies the union matches the autoresearch branch, excluding session files
 - verifies no session artifacts landed in review branches
+- prints phase-specific failure messages so the user can tell whether the problem is configuration, preflight, grouping, branch creation, union verification, or session artifact verification
+- writes a generated Markdown review summary under `.git/autoresearch-finalize/` after branch creation; this path is durable locally but does not dirty the worktree
+- includes suggested PR titles/bodies, branch stats, review commands, verification status, and cleanup notes in the generated summary
 
 ## Step 5: Report
 
@@ -98,7 +107,8 @@ Report:
 
 - branches created
 - files in each branch
+- generated review summary path
 - overall metric improvement
 - cleanup commands printed by the script
 
-If verification fails, do not delete the created branches unless the user asks. Explain which files differ and what to inspect.
+If verification fails, do not delete the created branches unless the user asks. Explain which phase failed, point to the generated review summary, and list which files differ or what to inspect.

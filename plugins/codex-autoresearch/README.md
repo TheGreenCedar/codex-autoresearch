@@ -4,7 +4,7 @@
 # Codex Autoresearch
 ### Autonomous experiment loops for Codex
 
-**[Quick start](#quick-start)** - **[Usage](#usage)** - **[How it works](#how-it-works)** - **[Dashboard](#dashboard)**
+**[Quick start](#quick-start)** - **[Usage](#usage)** - **[Dashboard](#dashboard)** - **[Demo](#demo)**
 </div>
 
 Try an idea, measure it, keep what works, discard what does not, and leave a trail another Codex session can resume from.
@@ -15,28 +15,62 @@ It is adapted from [pi-autoresearch](https://github.com/davebcn87/pi-autoresearc
 
 ## Quick Start
 
+Install or refresh the plugin, then verify the MCP server before the first loop:
+
+```bash
+codex marketplace add TheGreenCedar/codex-autoresearch
+codex mcp get codex-autoresearch
+```
+
+Marketplace installs are versioned. If Codex still shows an older version, bump or refresh the installed plugin cache before testing new tools.
+
 Ask Codex:
 
 ```text
-Start autoresearch to optimize unit test runtime. Keep correctness checks passing.
+Start autoresearch to reduce unit test runtime.
+Benchmark: npm test -- --runInBand
+Metric: seconds, lower is better
+Checks: npm test
+Scope: test runner config and test helpers only
 ```
 
 Codex will create the session files, initialize the run log, take a baseline, and start trying measured changes.
+
+Minimum viable loop:
+
+1. Choose one primary metric.
+2. Use one benchmark command that prints `METRIC name=value`.
+3. Use one correctness check when regressions are possible.
+4. Run a baseline, try one change, log keep/discard with ASI, then repeat.
 
 For direct CLI use from this plugin folder:
 
 ```bash
 node scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
-node scripts/autoresearch.mjs run --cwd /path/to/project
-node scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool"
+node scripts/autoresearch.mjs doctor --cwd /path/to/project --check-benchmark
+node scripts/autoresearch.mjs next --cwd /path/to/project
+node scripts/autoresearch.mjs log --cwd /path/to/project --metric 12.3 --status keep --description "Use worker pool" --commit-paths "src,test"
 node scripts/autoresearch.mjs export --cwd /path/to/project
+```
+
+Tiny worked story:
+
+```text
+setup   Create autoresearch.md for "reduce unit test runtime"; metric seconds, direction lower.
+doctor  Confirm the benchmark emits METRIC seconds=<number> and the worktree is ready.
+next    Run preflight + benchmark and return allowed log decisions plus a next-run notes template.
+log     Record baseline with status keep.
+next    Try reusing a test database fixture; benchmark prints METRIC seconds=13.7; checks pass.
+log     Record status keep with ASI: {"hypothesis":"fixture reuse removes setup cost","next_action_hint":"measure worker count next"}.
+export  Generate autoresearch-dashboard.html for the run history.
+finalize Split the kept fixture change into a review branch when the noisy loop is done.
 ```
 
 ## What Is Included
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `setup_session`, `init_experiment`, `run_experiment`, `log_experiment`, `read_state`, `export_dashboard`, `clear_session` |
+| MCP tools | `setup_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `doctor_session`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
 | Dashboard | Static HTML report generated from `autoresearch.jsonl` |
@@ -49,10 +83,14 @@ node scripts/autoresearch.mjs export --cwd /path/to/project
 | `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional max-iteration config, and the initial JSONL config header |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
 | `run_experiment` | Runs the benchmark command, times it, captures output, and parses `METRIC name=value` lines |
-| `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes while preserving session files |
+| `next_experiment` | Runs preflight and benchmark in one packet, then returns allowed log decisions and a next-run notes template |
+| `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes with scoped cleanup when paths are configured |
 | `read_state` | Summarizes the current baseline, best metric, run count, status counts, confidence score, and iteration limit |
+| `doctor_session` | Checks session readiness, Git state, and optionally whether the benchmark emits the configured primary metric |
 | `export_dashboard` | Writes `autoresearch-dashboard.html` from the run log |
 | `clear_session` | Deletes session artifacts after explicit confirmation |
+
+For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefer configured `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
 
 ## Commands
 
@@ -60,6 +98,8 @@ node scripts/autoresearch.mjs export --cwd /path/to/project
 | --- | --- |
 | `/autoresearch <text>` | Start or resume an autoresearch loop using `<text>` as context |
 | `/autoresearch status` | Summarize the current run log |
+| `/autoresearch doctor` | Run the preflight/operator readout before the next experiment |
+| `/autoresearch next` | Run preflight + benchmark and prepare the keep/discard decision packet |
 | `/autoresearch export` | Generate the dashboard |
 | `/autoresearch off` | Stop continuing the loop in the current conversation without deleting session data |
 | `/autoresearch clear` | Clear session artifacts after confirmation |
@@ -105,9 +145,24 @@ Each iteration follows the same rhythm:
 edit -> run benchmark -> parse metrics -> keep or discard -> log what happened
 ```
 
-Kept results are committed. Discarded, crashed, or checks-failed results are logged and then reverted, while the autoresearch session files stay intact.
+Kept results are committed. If Git cannot add or commit the kept change, logging fails instead of recording a false win.
 
-Every run should include ASI, short for actionable side information. This is structured context for the next session: what was tried, what failed, what surprised Codex, and what to try next.
+For tighter keep commits and safer discard cleanup, pass `--commit-paths "src,test"` or configure `commitPaths` through setup. Discarded, crashed, or checks-failed results use those paths as the cleanup boundary. Without scoped paths, the helper refuses broad discard cleanup in a dirty Git tree unless `--allow-dirty-revert` is passed explicitly.
+
+Every run should include next-run notes, stored as ASI (actionable side information). This is structured context for the next session: what was tried, what failed, what surprised Codex, and what to try next.
+
+Minimum useful ASI is one compact JSON object:
+
+```json
+{
+  "hypothesis": "Memoizing package metadata avoids repeated filesystem scans",
+  "evidence": "seconds improved from 11.8 to 9.6 and checks passed",
+  "rollback_reason": "",
+  "next_action_hint": "Try caching parsed manifests, but watch memory"
+}
+```
+
+For discarded or crashed runs, fill `rollback_reason` and make `next_action_hint` specific enough that the next Codex session avoids the same dead end.
 
 ### 3. Resume Later
 
@@ -135,6 +190,14 @@ autoresearch-review/<goal>/<number>-<slug>
 
 The finalizer verifies that the union of review branches matches the autoresearch branch, excluding session artifacts.
 
+To draft the grouping file first:
+
+```bash
+node scripts/finalize-autoresearch.mjs plan --output groups.json --goal short-goal
+```
+
+Finalization writes a local review packet under `.git/autoresearch-finalize/` with branch stats, suggested PR titles/bodies, review commands, verification status, and cleanup notes.
+
 ## Dashboard
 
 Generate a static dashboard with:
@@ -154,6 +217,9 @@ The dashboard shows:
 - baseline vs. best
 - improvement percentage
 - kept run count
+- operator readout with best kept change, recent failures, next action, and confidence explanation
+- segment selector for multi-phase sessions
+- ready-to-finalize readout
 - metric chart
 - run table with status, commit, description, confidence, and ASI
 
@@ -162,6 +228,22 @@ The template lives at:
 ```text
 assets/template.html
 ```
+
+## Demo
+
+A tiny static demo lives in:
+
+```text
+examples/demo-session/
+```
+
+Regenerate it with:
+
+```bash
+node scripts/autoresearch.mjs export --cwd examples/demo-session
+```
+
+The plugin manifest uses `assets/demo-dashboard.svg` as the marketplace preview image.
 
 ## How It Works
 
@@ -178,10 +260,12 @@ MCP/CLI helpers
   create session files from templates
   run timed commands
   parse METRIC lines
+  prepare /next decision packets
   append JSONL records
-  commit or revert changes
+  commit kept changes or scoped-revert discarded ones
   enforce maxIterations when configured
   export dashboard HTML
+  draft finalization groups
   clear session artifacts after confirmation
   finalize review branches
 ```
@@ -202,11 +286,12 @@ Optional `autoresearch.config.json` in the project can set:
 ```json
 {
   "workingDir": "relative/or/absolute/project/path",
-  "maxIterations": 50
+  "maxIterations": 50,
+  "commitPaths": ["src", "tests"]
 }
 ```
 
-`workingDir` lets a wrapper workspace point the loop at a nested project. `maxIterations` gives helper-run benchmarks a hard stop before the next iteration starts.
+`workingDir` lets a wrapper workspace point the loop at a nested project. `maxIterations` gives helper-run benchmarks a hard stop before the next iteration starts. `commitPaths` narrows keep commits to the experiment surface.
 
 ## License
 

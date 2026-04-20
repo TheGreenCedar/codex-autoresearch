@@ -18,10 +18,14 @@ const SESSION_FILES = [
 ];
 
 const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
+const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
+const OUTPUT_CAPTURE_BYTES = 16384;
+const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
@@ -34,8 +38,10 @@ Usage:
   node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs log --cwd <project> --metric <n> --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>]
+  node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs log --cwd <project> --metric <n> --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project>
+  node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>]
   node scripts/autoresearch.mjs clear --cwd <project> --yes
   node scripts/autoresearch.mjs --mcp
@@ -95,6 +101,47 @@ function listOption(value) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function validateMetricName(name) {
+  if (!METRIC_NAME_PATTERN.test(String(name || "")) || DENIED_METRIC_NAMES.has(String(name))) {
+    throw new Error(`Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${name}`);
+  }
+  return String(name);
+}
+
+function finiteMetric(value) {
+  if (value == null || value === "") return null;
+  const metric = Number(value);
+  return Number.isFinite(metric) ? metric : null;
+}
+
+function normalizeRelativePaths(paths, optionName = "paths") {
+  return listOption(paths).map((item) => {
+    const normalized = item.replace(/\\/g, "/").replace(/\/+/g, "/");
+    if (
+      !normalized ||
+      normalized === "." ||
+      path.isAbsolute(normalized) ||
+      normalized.startsWith("../") ||
+      normalized.includes("/../") ||
+      normalized === ".." ||
+      normalized.startsWith(".git/") ||
+      normalized === ".git"
+    ) {
+      throw new Error(`${optionName} must contain project-relative paths that do not escape the working directory: ${item}`);
+    }
+    return normalized.replace(/\/$/, "");
+  });
+}
+
+function resolveOutputInside(workDir, output) {
+  const target = path.resolve(workDir, output || "autoresearch-dashboard.html");
+  const relative = path.relative(workDir, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Dashboard output is outside the working directory: ${target}`);
+  }
+  return target;
 }
 
 async function pathExists(filePath) {
@@ -164,10 +211,11 @@ function renderSessionDocument(args) {
   const benchmarkCommand = args.benchmark_command || args.benchmarkCommand || "./autoresearch.sh";
   const metricUnit = args.metric_unit ?? args.metricUnit ?? "";
   const direction = args.direction === "higher" ? "higher" : "lower";
+  const primaryMetric = validateMetricName(args.metric_name || args.metricName);
   return replaceAllText(readAssetTemplate("autoresearch.md.template"), {
     "<goal>": args.name,
     "<Specific description of what is being optimized and the workload.>": args.goal || args.name,
-    "- Primary: <name> (<unit>, lower/higher is better)": `- Primary: ${args.metric_name || args.metricName} (${metricUnit || "unitless"}, ${direction} is better)`,
+    "- Primary: <name> (<unit>, lower/higher is better)": `- Primary: ${primaryMetric} (${metricUnit || "unitless"}, ${direction} is better)`,
     "- Secondary: <name>, <name>": secondary.length ? `- Secondary: ${secondary.join(", ")}` : "- Secondary: none yet",
     "`<benchmark command>` prints `METRIC name=value` lines.": `\`${benchmarkCommand}\` prints \`METRIC name=value\` lines.`,
     "- `<path>`: <why it matters>": markdownList(scope, "TBD: add files after initial inspection"),
@@ -179,7 +227,7 @@ function renderSessionDocument(args) {
 
 function renderBenchmarkScript(args, shellKind) {
   const command = args.benchmark_command || args.benchmarkCommand || "# TODO: replace with the real workload";
-  const metricName = args.metric_name || args.metricName || "elapsed_ms";
+  const metricName = validateMetricName(args.metric_name || args.metricName || "elapsed_seconds");
   const templateName = shellKind === "bash" ? "autoresearch.sh.template" : "autoresearch.ps1.template";
   return replaceAllText(readAssetTemplate(templateName), {
     "<benchmark command>": command,
@@ -251,7 +299,7 @@ function currentState(workDir) {
     }
   }
   const current = results.filter((run) => run.segment === segment);
-  const baseline = current.find((run) => Number(run.metric) > 0)?.metric ?? null;
+  const baseline = finiteMetric(current.find((run) => finiteMetric(run.metric) != null)?.metric);
   const best = bestMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };
@@ -278,8 +326,8 @@ function iterationLimitInfo(state, runtimeConfig) {
 function bestMetric(runs, direction) {
   let best = null;
   for (const run of runs) {
-    const metric = Number(run.metric);
-    if (!Number.isFinite(metric) || metric <= 0) continue;
+    const metric = finiteMetric(run.metric);
+    if (metric == null) continue;
     if (best == null || isBetter(metric, best, direction)) best = metric;
   }
   return best;
@@ -297,7 +345,7 @@ function median(values) {
 }
 
 function computeConfidence(runs, direction) {
-  const values = runs.map((run) => Number(run.metric)).filter((value) => Number.isFinite(value) && value > 0);
+  const values = runs.map((run) => finiteMetric(run.metric)).filter((value) => value != null);
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestMetric(runs, direction);
@@ -310,12 +358,11 @@ function computeConfidence(runs, direction) {
 
 function parseMetricLines(output) {
   const metrics = {};
-  const denied = new Set(["__proto__", "constructor", "prototype"]);
   const regex = /^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/gim;
   let match;
   while ((match = regex.exec(output)) !== null) {
     const name = match[1];
-    if (denied.has(name)) continue;
+    if (DENIED_METRIC_NAMES.has(name)) continue;
     const value = Number(match[2]);
     if (Number.isFinite(value)) metrics[name] = value;
   }
@@ -339,20 +386,30 @@ async function runShell(command, cwd, timeoutSeconds) {
     const child = spawn(command, {
       cwd,
       shell: true,
+      detached: process.platform !== "win32",
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let outputTruncated = false;
     let timedOut = false;
+    const appendOutput = (text) => {
+      output += text;
+      if (Buffer.byteLength(output, "utf8") > OUTPUT_CAPTURE_BYTES) {
+        const buf = Buffer.from(output, "utf8");
+        output = buf.subarray(Math.max(0, buf.length - OUTPUT_CAPTURE_BYTES)).toString("utf8");
+        outputTruncated = true;
+      }
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
       killProcess(child.pid);
     }, Math.max(1, timeoutSeconds) * 1000);
     child.stdout.on("data", (chunk) => {
-      output += chunk.toString("utf8");
+      appendOutput(chunk.toString("utf8"));
     });
     child.stderr.on("data", (chunk) => {
-      output += chunk.toString("utf8");
+      appendOutput(chunk.toString("utf8"));
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
@@ -362,6 +419,7 @@ async function runShell(command, cwd, timeoutSeconds) {
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
         output: String(error.stack || error.message || error),
+        outputTruncated,
       });
     });
     child.on("close", (code) => {
@@ -372,6 +430,7 @@ async function runShell(command, cwd, timeoutSeconds) {
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
         output,
+        outputTruncated,
       });
     });
   });
@@ -441,6 +500,10 @@ async function git(args, cwd) {
   return await runProcess("git", args, cwd);
 }
 
+function gitOutput(result, fallback) {
+  return (result.stderr || result.stdout || fallback || "").trim();
+}
+
 async function insideGitRepo(cwd) {
   const result = await git(["rev-parse", "--is-inside-work-tree"], cwd);
   return result.code === 0 && result.stdout.trim() === "true";
@@ -454,6 +517,19 @@ async function shortHead(cwd) {
 async function hasStagedChanges(cwd) {
   const result = await git(["diff", "--cached", "--quiet"], cwd);
   return result.code === 1;
+}
+
+async function isGitClean(cwd) {
+  if (!(await insideGitRepo(cwd))) return null;
+  const result = await git(["status", "--porcelain"], cwd);
+  if (result.code !== 0) return false;
+  return result.stdout.trim() === "";
+}
+
+async function gitStatusShort(cwd) {
+  const result = await git(["status", "--porcelain"], cwd);
+  if (result.code !== 0) throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
+  return result.stdout.trim();
 }
 
 async function preserveSessionFiles(workDir) {
@@ -476,16 +552,59 @@ async function restoreSessionFiles(workDir, saved) {
 async function revertExceptSessionFiles(workDir) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const saved = await preserveSessionFiles(workDir);
-  await git(["restore", "--worktree", "--staged", "--", "."], workDir);
-  await git(["clean", "-fd"], workDir);
+  const restore = await git(["restore", "--worktree", "--staged", "--", "."], workDir);
+  if (restore.code !== 0) {
+    await restoreSessionFiles(workDir, saved);
+    throw new Error(`Git restore failed during discard cleanup: ${gitOutput(restore, "unknown error")}`);
+  }
+  const clean = await git(["clean", "-fd"], workDir);
+  if (clean.code !== 0) {
+    await restoreSessionFiles(workDir, saved);
+    throw new Error(`Git clean failed during discard cleanup: ${gitOutput(clean, "unknown error")}`);
+  }
   await restoreSessionFiles(workDir, saved);
   return "Git: reverted non-session changes; autoresearch files preserved.";
+}
+
+async function revertScopedPathsExceptSessionFiles(workDir, paths) {
+  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
+  const safePaths = normalizeRelativePaths(paths, "revertPaths");
+  if (!safePaths.length) throw new Error("No scoped paths were provided for discard cleanup.");
+  const saved = await preserveSessionFiles(workDir);
+  const restore = await git(["restore", "--worktree", "--staged", "--", ...safePaths], workDir);
+  if (restore.code !== 0) {
+    await restoreSessionFiles(workDir, saved);
+    throw new Error(`Git scoped restore failed during discard cleanup: ${gitOutput(restore, "unknown error")}`);
+  }
+  const clean = await git(["clean", "-fd", "--", ...safePaths], workDir);
+  if (clean.code !== 0) {
+    await restoreSessionFiles(workDir, saved);
+    throw new Error(`Git scoped clean failed during discard cleanup: ${gitOutput(clean, "unknown error")}`);
+  }
+  await restoreSessionFiles(workDir, saved);
+  return `Git: reverted scoped experiment paths (${safePaths.join(", ")}); autoresearch files preserved.`;
+}
+
+async function cleanupDiscardChanges(workDir, args, config) {
+  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
+  const scopedPaths = normalizeRelativePaths(
+    args.revert_paths ?? args.revertPaths ?? args.commit_paths ?? args.commitPaths ?? config.commitPaths,
+    "revertPaths",
+  );
+  if (scopedPaths.length > 0) return await revertScopedPathsExceptSessionFiles(workDir, scopedPaths);
+  const dirty = await gitStatusShort(workDir);
+  if (!dirty) return "Git: clean tree, no discard cleanup needed.";
+  if (boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false)) {
+    return await revertExceptSessionFiles(workDir);
+  }
+  throw new Error("Refusing broad discard cleanup in a dirty Git tree without scoped revert paths. Configure commitPaths/revertPaths or pass --allow-dirty-revert.");
 }
 
 async function setupSession(args) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
   if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
+  validateMetricName(args.metric_name || args.metricName);
   const overwrite = boolOption(args.overwrite, false);
   const shellKind = shellKindFromArgs(args);
   const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
@@ -527,6 +646,17 @@ async function setupSession(args) {
       { overwrite: true },
     ));
   }
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  if (commitPaths.length > 0) {
+    const configPath = path.join(sessionCwd, "autoresearch.config.json");
+    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+    const nextConfig = { ...existing, commitPaths };
+    files.push(await writeSessionFile(
+      configPath,
+      JSON.stringify(nextConfig, null, 2),
+      { overwrite: true },
+    ));
+  }
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -547,7 +677,7 @@ async function initExperiment(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
   if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
-  const metricName = args.metric_name || args.metricName;
+  const metricName = validateMetricName(args.metric_name || args.metricName);
   const direction = args.direction === "higher" ? "higher" : "lower";
   const entry = {
     type: "config",
@@ -577,13 +707,19 @@ async function runExperiment(args) {
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
   const parsedMetrics = parseMetricLines(benchmark.output);
   const primary = parsedMetrics[state.config.metricName] ?? null;
+  const primaryPresent = finiteMetric(primary) != null;
   let checks = null;
   const checksCommand = args.checks_command || args.checksCommand || await defaultChecksCommand(workDir);
-  if (benchmarkPassed && checksCommand) {
+  if (benchmarkPassed && primaryPresent && checksCommand) {
     checks = await runShell(checksCommand, workDir, numberOption(args.checks_timeout_seconds ?? args.checksTimeoutSeconds, DEFAULT_CHECKS_TIMEOUT_SECONDS));
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
-  const passed = benchmarkPassed && (checksPassed === null || checksPassed);
+  const metricError = benchmarkPassed && !primaryPresent
+    ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
+    : null;
+  const passed = benchmarkPassed && primaryPresent && (checksPassed === null || checksPassed);
+  const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
+  const allowedStatuses = passed ? ["keep", "discard"] : [failedStatus];
   return {
     ok: passed,
     workDir,
@@ -593,6 +729,8 @@ async function runExperiment(args) {
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
     parsedPrimary: primary,
+    metricError,
+    outputTruncated: Boolean(benchmark.outputTruncated || checks?.outputTruncated),
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
     checks: checks ? {
@@ -607,7 +745,9 @@ async function runExperiment(args) {
     logHint: {
       metric: primary,
       metrics: Object.fromEntries(Object.entries(parsedMetrics).filter(([key]) => key !== state.config.metricName)),
-      status: passed ? "keep_or_discard" : (benchmarkPassed ? "checks_failed" : "crash"),
+      status: passed ? null : failedStatus,
+      needsDecision: passed,
+      allowedStatuses,
     },
     limit,
   };
@@ -624,6 +764,7 @@ async function logExperiment(args) {
   const inGit = await insideGitRepo(workDir);
   let commit = args.commit || (inGit ? await shortHead(workDir) : "");
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
+  let revertMessage = "";
 
   if (args.status === "keep" && inGit) {
     const resultData = {
@@ -631,7 +772,16 @@ async function logExperiment(args) {
       [stateBefore.config.metricName || "metric"]: metric,
       ...(args.metrics || {}),
     };
-    await git(["add", "-A"], workDir);
+    const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths ?? config.commitPaths, "commitPaths");
+    let addResult;
+    if (commitPaths.length > 0) {
+      addResult = await git(["add", "--", ...commitPaths], workDir);
+    } else {
+      addResult = await git(["add", "-A"], workDir);
+    }
+    if (addResult.code !== 0) {
+      throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
+    }
     if (await hasStagedChanges(workDir)) {
       const commitResult = await git([
         "commit",
@@ -644,11 +794,13 @@ async function logExperiment(args) {
         commit = await shortHead(workDir);
         gitMessage = `Git: committed ${commit}.`;
       } else {
-        gitMessage = `Git: commit failed: ${(commitResult.stderr || commitResult.stdout).trim()}`;
+        throw new Error(`Git commit failed: ${gitOutput(commitResult, "unknown error")}`);
       }
     } else {
       gitMessage = "Git: nothing to commit.";
     }
+  } else if (args.status !== "keep") {
+    revertMessage = await cleanupDiscardChanges(workDir, args, config);
   }
 
   const currentRuns = stateBefore.current;
@@ -666,11 +818,6 @@ async function logExperiment(args) {
   if (args.asi && Object.keys(args.asi).length > 0) experiment.asi = args.asi;
   experiment.confidence = computeConfidence([...currentRuns, experiment], stateBefore.config.bestDirection);
   appendJsonl(workDir, experiment);
-
-  let revertMessage = "";
-  if (args.status !== "keep") {
-    revertMessage = await revertExceptSessionFiles(workDir);
-  }
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
@@ -691,7 +838,7 @@ async function exportDashboard(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const entries = readJsonl(workDir);
   if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
-  const output = path.resolve(workDir, args.output || "autoresearch-dashboard.html");
+  const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
   const html = dashboardHtml(entries);
   await fsp.writeFile(output, html, "utf8");
   return { ok: true, workDir, output };
@@ -760,10 +907,135 @@ function publicState(args) {
   };
 }
 
+async function doctorSession(args) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = publicState(args);
+  const issues = [];
+  const warnings = [];
+  const inGit = await insideGitRepo(workDir);
+  const clean = await isGitClean(workDir);
+
+  if (!state.config.metricName) issues.push("No primary metric is configured.");
+  if (state.runs === 0) warnings.push("No runs are logged yet. Run a baseline before experimenting.");
+  if (inGit && clean === false) warnings.push("Git worktree is dirty; review unrelated changes before logging a keep result.");
+  if (!inGit) warnings.push("Working directory is not a Git repository; keep commits and discard reverts are unavailable.");
+
+  const benchmark = {
+    checked: false,
+    command: args.command || "",
+    emitsPrimary: null,
+    parsedMetrics: {},
+    exitCode: null,
+    timedOut: false,
+    metricError: null,
+  };
+
+  if (boolOption(args.check_benchmark ?? args.checkBenchmark, false)) {
+    benchmark.checked = true;
+    benchmark.command = args.command || await defaultBenchmarkCommand(workDir);
+    if (!benchmark.command) {
+      benchmark.metricError = "No benchmark command was provided and no autoresearch script was found.";
+      issues.push(benchmark.metricError);
+    } else {
+      const run = await runShell(benchmark.command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
+      benchmark.exitCode = run.exitCode;
+      benchmark.timedOut = run.timedOut;
+      benchmark.parsedMetrics = parseMetricLines(run.output);
+      benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
+      if (run.exitCode !== 0 || run.timedOut) {
+        issues.push(`Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`);
+      } else if (!benchmark.emitsPrimary) {
+        benchmark.metricError = `Benchmark did not emit primary metric METRIC ${state.config.metricName}=<number>.`;
+        issues.push(benchmark.metricError);
+      }
+    }
+  }
+
+  let nextAction = "Run the next experiment, then log keep or discard with ASI.";
+  if (issues.some((issue) => /primary metric|Benchmark/.test(issue))) {
+    nextAction = "Fix the benchmark command so it emits the configured primary metric before continuing.";
+  } else if (state.runs === 0) {
+    nextAction = "Run and log a baseline before trying optimizations.";
+  } else if (state.limit.limitReached) {
+    nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
+  } else if (warnings.some((warning) => /dirty/.test(warning))) {
+    nextAction = "Review the dirty Git state before logging a kept result.";
+  }
+
+  return {
+    ok: issues.length === 0,
+    workDir,
+    config: state.config,
+    state,
+    git: {
+      inside: inGit,
+      clean,
+    },
+    benchmark,
+    issues,
+    warnings,
+    nextAction,
+  };
+}
+
+async function nextExperiment(args) {
+  const doctor = await doctorSession({
+    ...args,
+    check_benchmark: false,
+    checkBenchmark: false,
+  });
+  if (!doctor.ok) {
+    return {
+      ok: false,
+      workDir: doctor.workDir,
+      doctor,
+      run: null,
+      decision: null,
+      nextAction: doctor.nextAction,
+    };
+  }
+  const run = await runExperiment(args);
+  const decision = {
+    metric: run.parsedPrimary,
+    metrics: run.logHint.metrics,
+    allowedStatuses: run.logHint.allowedStatuses,
+    suggestedStatus: run.logHint.status,
+    needsDecision: run.logHint.needsDecision,
+    asiTemplate: run.ok
+      ? {
+          hypothesis: "",
+          evidence: `${run.metricName}=${run.parsedPrimary}${run.metricUnit || ""}`,
+          next_action_hint: "",
+        }
+      : {
+          evidence: run.metricError || `Benchmark exit ${run.exitCode ?? "none"}`,
+          rollback_reason: "",
+          next_action_hint: "",
+        },
+  };
+  return {
+    ok: doctor.ok && run.ok,
+    workDir: run.workDir,
+    doctor,
+    run,
+    decision,
+    nextAction: run.ok
+      ? "Log this run with status keep or discard, include ASI, then continue with the next hypothesis."
+      : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
+  };
+}
+
 async function callTool(name, args) {
   if (name === "setup_session") return await setupSession(args);
   if (name === "init_experiment") return await initExperiment(args);
-  if (name === "run_experiment") return await runExperiment(args);
+  if (name === "run_experiment") {
+    requireUnsafeCommandGate(name, args);
+    return await runExperiment(args);
+  }
+  if (name === "next_experiment") {
+    requireUnsafeCommandGate(name, args);
+    return await nextExperiment(args);
+  }
   if (name === "log_experiment") return await logExperiment({
     ...args,
     metrics: parseJsonOption(args.metrics, {}),
@@ -772,7 +1044,18 @@ async function callTool(name, args) {
   if (name === "export_dashboard") return await exportDashboard(args);
   if (name === "clear_session") return await clearSession(args);
   if (name === "read_state") return publicState(args);
+  if (name === "doctor_session") {
+    requireUnsafeCommandGate(name, args);
+    return await doctorSession(args);
+  }
   throw new Error(`Unknown tool: ${name}`);
+}
+
+function requireUnsafeCommandGate(toolName, args) {
+  const hasCustomCommand = Boolean(args.command || args.checks_command || args.checksCommand);
+  if (hasCustomCommand && !boolOption(args.allow_unsafe_command ?? args.allowUnsafeCommand, false)) {
+    throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
+  }
 }
 
 const toolSchemas = [
@@ -795,6 +1078,7 @@ const toolSchemas = [
         off_limits: { type: "array", items: { type: "string" } },
         constraints: { type: "array", items: { type: "string" } },
         secondary_metrics: { type: "array", items: { type: "string" } },
+        commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "number" },
         overwrite: { type: "boolean" },
         create_checks: { type: "boolean" },
@@ -829,6 +1113,23 @@ const toolSchemas = [
         timeout_seconds: { type: "number" },
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "next_experiment",
+    description: "Run a preflight readout and benchmark in one packet, then return allowed log decisions and an ASI template.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        command: { type: "string" },
+        timeout_seconds: { type: "number" },
+        checks_command: { type: "string" },
+        checks_timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -846,6 +1147,9 @@ const toolSchemas = [
         description: { type: "string" },
         metrics: { type: "object" },
         asi: { type: "object" },
+        commit_paths: { type: "array", items: { type: "string" } },
+        revert_paths: { type: "array", items: { type: "string" } },
+        allow_dirty_revert: { type: "boolean" },
       },
       required: ["working_dir", "metric", "status", "description"],
     },
@@ -872,6 +1176,21 @@ const toolSchemas = [
     },
   },
   {
+    name: "doctor_session",
+    description: "Run a preflight readout for an autoresearch session and optionally verify benchmark metric output.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        command: { type: "string" },
+        check_benchmark: { type: "boolean" },
+        timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "clear_session",
     description: "Delete autoresearch runtime artifacts after explicit confirmation.",
     inputSchema: {
@@ -889,6 +1208,11 @@ function startMcpServer() {
   let buffer = Buffer.alloc(0);
   process.stdin.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
+    if (buffer.length > MAX_MCP_FRAME_BYTES + 1024 && buffer.indexOf("\r\n\r\n") < 0) {
+      buffer = Buffer.alloc(0);
+      sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Request too large." } });
+      return;
+    }
     for (;;) {
       const headerEnd = buffer.indexOf("\r\n\r\n");
       if (headerEnd < 0) return;
@@ -900,10 +1224,24 @@ function startMcpServer() {
       }
       const length = Number(match[1]);
       const bodyStart = headerEnd + 4;
+      if (!Number.isFinite(length) || length < 0 || length > MAX_MCP_FRAME_BYTES) {
+        sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: `Request too large. Max frame size is ${MAX_MCP_FRAME_BYTES} bytes.` } });
+        buffer = buffer.length >= bodyStart + Math.max(0, length)
+          ? buffer.subarray(bodyStart + Math.max(0, length))
+          : Buffer.alloc(0);
+        continue;
+      }
       if (buffer.length < bodyStart + length) return;
       const body = buffer.subarray(bodyStart, bodyStart + length).toString("utf8");
       buffer = buffer.subarray(bodyStart + length);
-      handleMcpMessage(JSON.parse(body)).catch((error) => {
+      let message;
+      try {
+        message = JSON.parse(body);
+      } catch (error) {
+        sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: ${error.message}` } });
+        continue;
+      }
+      handleMcpMessage(message).catch((error) => {
         sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: error.message } });
       });
     }
@@ -918,7 +1256,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.2" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.3" },
       },
     });
     return;
@@ -930,6 +1268,7 @@ async function handleMcpMessage(message) {
   }
   if (message.method === "tools/call") {
     try {
+      validateToolArguments(message.params?.name, message.params?.arguments || {});
       const result = await callTool(message.params.name, message.params.arguments || {});
       sendMcp({
         jsonrpc: "2.0",
@@ -952,6 +1291,24 @@ async function handleMcpMessage(message) {
   }
   if (message.id != null) {
     sendMcp({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `Unknown method: ${message.method}` } });
+  }
+}
+
+function validateToolArguments(name, args) {
+  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  if (!schema) throw new Error(`Unknown tool: ${name}`);
+  for (const required of schema.required || []) {
+    if (args[required] == null || args[required] === "") throw new Error(`Missing required argument: ${required}`);
+  }
+  for (const [key, value] of Object.entries(args)) {
+    const property = schema.properties?.[key];
+    if (!property || value == null) continue;
+    if (property.type === "array" && !Array.isArray(value)) throw new Error(`Argument ${key} must be an array.`);
+    if (property.type === "object" && (typeof value !== "object" || Array.isArray(value))) throw new Error(`Argument ${key} must be an object.`);
+    if (property.type === "number" && typeof value !== "number") throw new Error(`Argument ${key} must be a number.`);
+    if (property.type === "boolean" && typeof value !== "boolean") throw new Error(`Argument ${key} must be a boolean.`);
+    if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
+    if (property.enum && !property.enum.includes(value)) throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
   }
 }
 
@@ -987,6 +1344,7 @@ async function main() {
       offLimits: args.offLimits,
       constraints: args.constraints,
       secondaryMetrics: args.secondaryMetrics,
+      commitPaths: args.commitPaths,
       maxIterations: args.maxIterations,
       overwrite: args.overwrite,
       createChecks: args.createChecks,
@@ -1008,6 +1366,14 @@ async function main() {
       checksCommand: args.checksCommand,
       checksTimeoutSeconds: args.checksTimeoutSeconds,
     });
+  } else if (command === "next") {
+    result = await nextExperiment({
+      cwd: args.cwd,
+      command: args.command,
+      timeoutSeconds: args.timeoutSeconds,
+      checksCommand: args.checksCommand,
+      checksTimeoutSeconds: args.checksTimeoutSeconds,
+    });
   } else if (command === "log") {
     result = await logExperiment({
       cwd: args.cwd,
@@ -1017,9 +1383,19 @@ async function main() {
       description: args.description,
       metrics: parseJsonOption(args.metrics, {}),
       asi: parseJsonOption(args.asi, {}),
+      commitPaths: args.commitPaths,
+      revertPaths: args.revertPaths,
+      allowDirtyRevert: args.allowDirtyRevert,
     });
   } else if (command === "state") {
     result = publicState({ cwd: args.cwd });
+  } else if (command === "doctor") {
+    result = await doctorSession({
+      cwd: args.cwd,
+      command: args.command,
+      checkBenchmark: args.checkBenchmark,
+      timeoutSeconds: args.timeoutSeconds,
+    });
   } else if (command === "export") {
     result = await exportDashboard({ cwd: args.cwd, output: args.output });
   } else if (command === "clear") {
