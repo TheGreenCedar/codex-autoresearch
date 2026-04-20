@@ -7,7 +7,7 @@ function usage() {
   return `Finalize an autoresearch branch into independent review branches.
 
 Usage:
-  node scripts/finalize-autoresearch.mjs plan --output groups.json [--goal short-slug] [--trunk main]
+  node scripts/finalize-autoresearch.mjs plan --output groups.json [--goal short-slug] [--trunk main] [--collapse-overlap]
   node scripts/finalize-autoresearch.mjs groups.json
 
 groups.json:
@@ -33,6 +33,7 @@ const SESSION_FILES = new Set([
   "autoresearch.md",
   "autoresearch.ideas.md",
   "autoresearch.config.json",
+  "autoresearch.last-run.json",
   "autoresearch.sh",
   "autoresearch.ps1",
   "autoresearch.checks.sh",
@@ -423,9 +424,45 @@ async function draftGroupsPlan(args, cwd) {
   };
 }
 
+async function collapseOverlappingDraftGroups(plan, cwd) {
+  if (plan.groups.length <= 1) return plan;
+  let prev = plan.base;
+  const seen = new Set();
+  const overlapping = new Set();
+  for (const group of plan.groups) {
+    const last = await fullHash(group.last_commit, cwd);
+    const files = await changedFiles(prev, last, cwd);
+    for (const file of files) {
+      if (seen.has(file)) overlapping.add(file);
+      seen.add(file);
+    }
+    prev = last;
+  }
+  if (overlapping.size === 0) return plan;
+  const lastGroup = plan.groups.at(-1);
+  const overlapList = [...overlapping].sort().slice(0, 12);
+  return {
+    ...plan,
+    groups: [{
+      title: `Consolidated ${plan.goal} changes`,
+      body: [
+        "Autoresearch kept changes were collapsed into one review branch because multiple draft groups touched the same files.",
+        "",
+        `Overlapping files: ${overlapList.join(", ")}${overlapping.size > overlapList.length ? ", ..." : ""}`,
+      ].join("\n"),
+      last_commit: lastGroup.last_commit,
+      slug: safeSlug(`${plan.goal}-changes`),
+    }],
+  };
+}
+
 async function writeDraftPlan(args, cwd) {
-  const plan = await draftGroupsPlan(args, cwd);
+  let plan = await draftGroupsPlan(args, cwd);
+  if (args.collapseOverlap) {
+    plan = await collapseOverlappingDraftGroups(plan, cwd);
+  }
   const output = args.output ? path.resolve(args.output) : path.resolve(cwd, "autoresearch.groups.json");
+  await fsp.mkdir(path.dirname(output), { recursive: true });
   await fsp.writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   console.log(`Wrote draft groups: ${output}`);
   console.log(`Groups: ${plan.groups.length}`);

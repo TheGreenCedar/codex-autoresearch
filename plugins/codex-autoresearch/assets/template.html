@@ -105,6 +105,44 @@ h1 {
   padding: 8px 10px;
   font: inherit;
 }
+.live-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin: 18px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.live-status {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.live-status strong {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+}
+.tool-button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fafb;
+  color: var(--ink);
+  min-height: 38px;
+  padding: 8px 11px;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+.tool-button:hover { border-color: var(--graph); }
+.tool-button[aria-pressed="true"] {
+  background: var(--graph);
+  color: #fff;
+  border-color: var(--graph);
+}
 .score {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -290,11 +328,37 @@ th {
   color: var(--muted);
   text-align: center;
 }
+.command-grid {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px 18px;
+}
+.command-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 8px;
+}
+.command-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.command-code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
 @media (max-width: 940px) {
   .wrap { padding: 18px; }
   .masthead, .layout { grid-template-columns: 1fr; }
   .readout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-strip { align-items: stretch; flex-direction: column; }
+  .live-strip, .command-row { grid-template-columns: 1fr; }
   .metric-tag { justify-self: stretch; }
   .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   svg { height: 280px; }
@@ -331,6 +395,15 @@ th {
       <select id="segment-select"></select>
     </label>
     <span class="panel-note" id="segment-note">Latest segment</span>
+  </section>
+
+  <section class="live-strip" aria-label="Live dashboard controls">
+    <div class="live-status">
+      <strong id="live-title">Snapshot loaded</strong>
+      <span id="live-detail">Static export</span>
+    </div>
+    <button class="tool-button" id="refresh-now" type="button">Refresh</button>
+    <button class="tool-button" id="live-toggle" type="button" aria-pressed="false">Live off</button>
   </section>
 
   <section class="panel readout" aria-label="Operator readout">
@@ -387,6 +460,14 @@ th {
     </aside>
   </section>
 
+  <section class="panel" aria-label="Command shortcuts">
+    <div class="panel-head">
+      <h2 class="panel-title">Commands</h2>
+      <span class="panel-note" id="command-note">Copy and run from a terminal</span>
+    </div>
+    <div class="command-grid" id="command-grid"></div>
+  </section>
+
   <section class="panel ledger" aria-label="Experiment ledger">
     <table>
       <thead>
@@ -407,7 +488,8 @@ th {
 </main>
 
 <script>
-const entries = __AUTORESEARCH_DATA__;
+let entries = __AUTORESEARCH_DATA__;
+const meta = __AUTORESEARCH_META__;
 const validStatuses = new Set(["keep", "discard", "crash", "checks_failed"]);
 const palette = {
   line: "#d7ded9",
@@ -465,14 +547,17 @@ function normalize() {
   };
 }
 
-const normalized = normalize();
+let normalized = normalize();
 let activeSegment = normalized.latestSegment;
 let session = selectSegment(activeSegment);
 let metricValues = [];
 let baseline = null;
 let best = null;
+let liveEnabled = false;
+let liveTimer = null;
 
 render();
+initLiveControls();
 
 function selectSegment(segment) {
   return normalized.segments.find((item) => item.segment === Number(segment))
@@ -505,7 +590,64 @@ function render() {
   renderReadout();
   renderChart();
   renderRail();
+  renderCommands();
   renderLedger();
+}
+
+function initLiveControls() {
+  updateLiveStatus("Snapshot loaded", meta.generatedAt ? "Generated " + meta.generatedAt : "Static export");
+  const refreshButton = document.getElementById("refresh-now");
+  const liveButton = document.getElementById("live-toggle");
+  if (refreshButton) refreshButton.onclick = () => refreshEntries();
+  if (liveButton) {
+    liveButton.onclick = () => {
+      liveEnabled = !liveEnabled;
+      liveButton.setAttribute("aria-pressed", liveEnabled ? "true" : "false");
+      liveButton.textContent = liveEnabled ? "Live on" : "Live off";
+      if (liveEnabled) {
+        refreshEntries();
+        if (typeof setInterval === "function" && !liveTimer) {
+          liveTimer = setInterval(refreshEntries, Number(meta.refreshMs || 5000));
+        }
+      } else if (typeof clearInterval === "function" && liveTimer) {
+        clearInterval(liveTimer);
+        liveTimer = null;
+      }
+    };
+  }
+}
+
+function updateLiveStatus(title, detail) {
+  const titleEl = document.getElementById("live-title");
+  const detailEl = document.getElementById("live-detail");
+  if (titleEl) titleEl.textContent = title;
+  if (detailEl) detailEl.textContent = detail;
+}
+
+function parseJsonl(text) {
+  return text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+async function refreshEntries() {
+  if (typeof fetch !== "function") {
+    updateLiveStatus("Live refresh unavailable", "This browser context does not expose fetch.");
+    return;
+  }
+  try {
+    const response = await fetch((meta.jsonlName || "autoresearch.jsonl") + "?t=" + Date.now(), { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const nextEntries = parseJsonl(await response.text());
+    entries = nextEntries;
+    normalized = normalize();
+    if (!selectSegment(activeSegment).runs.length) activeSegment = normalized.latestSegment;
+    render();
+    updateLiveStatus("Live data refreshed", new Date().toLocaleTimeString());
+  } catch (error) {
+    updateLiveStatus("Live refresh failed", error.message || String(error));
+  }
 }
 
 function renderSegmentSelector() {
@@ -730,6 +872,42 @@ function renderRail() {
       '<div class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</div>' +
       '</div>';
   }).join("");
+}
+
+function renderCommands() {
+  const grid = document.getElementById("command-grid");
+  const commands = Array.isArray(meta.commands) ? meta.commands : [];
+  if (!grid) return;
+  if (!commands.length) {
+    grid.innerHTML = '<div class="empty">No command shortcuts were embedded in this export.</div>';
+    return;
+  }
+  grid.innerHTML = commands.map((item, index) => {
+    return '<div class="command-row">' +
+      '<span class="command-label">' + escapeHtml(item.label || "Command") + '</span>' +
+      '<code class="command-code" title="' + escapeHtml(item.command || "") + '">' + escapeHtml(item.command || "") + '</code>' +
+      '<button class="tool-button copy-command" type="button" data-command-index="' + index + '">Copy</button>' +
+      '</div>';
+  }).join("");
+  for (const button of grid.querySelectorAll ? grid.querySelectorAll(".copy-command") : []) {
+    button.onclick = async () => {
+      const command = commands[Number(button.dataset.commandIndex)]?.command || "";
+      try {
+        const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+        if (!clipboard?.writeText) {
+          button.textContent = "Select";
+          return;
+        }
+        await clipboard.writeText(command);
+        button.textContent = "Copied";
+        if (typeof setTimeout === "function") {
+          setTimeout(() => { button.textContent = "Copy"; }, 1200);
+        }
+      } catch {
+        button.textContent = "Select";
+      }
+    };
+  }
 }
 
 function renderLedger() {

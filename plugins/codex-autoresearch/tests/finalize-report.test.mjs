@@ -128,6 +128,44 @@ test("finalizer plan writes draft groups from autoresearch history", async () =>
   assert.ok(plan.groups[0].last_commit);
 });
 
+test("finalizer plan can create nested output paths and collapse overlapping groups", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-plan-collapse-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-overlap"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "first\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "first value change"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "second\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "second value change"], repo);
+
+  const output = path.join(root, "plans", "nested", "groups.json");
+  const result = await run(process.execPath, [
+    finalizer,
+    "plan",
+    "--output", output,
+    "--goal", "overlap-loop",
+    "--collapse-overlap",
+  ], repo);
+  assert.match(result.stdout, /Groups: 1/);
+
+  const plan = JSON.parse(await fsp.readFile(output, "utf8"));
+  assert.equal(plan.groups.length, 1);
+  assert.match(plan.groups[0].title, /Consolidated overlap-loop changes/);
+  assert.match(plan.groups[0].body, /src\/value\.txt/);
+});
+
 test("finalizer removes empty skipped branches and sanitizes branch names", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-empty-"));
   const repo = path.join(root, "repo");

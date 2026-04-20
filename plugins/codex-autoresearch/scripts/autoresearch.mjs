@@ -15,10 +15,14 @@ const SESSION_FILES = [
   "autoresearch.checks.sh",
   "autoresearch.checks.ps1",
   "autoresearch.config.json",
+  "autoresearch.last-run.json",
 ];
 const RESEARCH_DIR = "autoresearch.research";
 
 const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
+const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
+const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
+const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
@@ -40,9 +44,10 @@ Usage:
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
-  node scripts/autoresearch.mjs log --cwd <project> --metric <n> --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>]
@@ -95,6 +100,15 @@ function boolOption(value, fallback = false) {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
   return ["1", "true", "yes", "y"].includes(String(value).toLowerCase());
+}
+
+function enumOption(value, allowed, fallback, optionName) {
+  if (value == null || value === "") return fallback;
+  const normalized = String(value).toLowerCase();
+  if (!allowed.has(normalized)) {
+    throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
+  }
+  return normalized;
 }
 
 function listOption(value) {
@@ -174,6 +188,10 @@ function readConfig(sessionCwd) {
   const configPath = path.join(sessionCwd, "autoresearch.config.json");
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+function runtimeConfigPath(sessionCwd) {
+  return path.join(sessionCwd, "autoresearch.config.json");
 }
 
 function resolveWorkDir(cwdArg) {
@@ -658,6 +676,17 @@ async function defaultChecksCommand(workDir) {
   return null;
 }
 
+function checksPolicyFromArgs(args, config) {
+  return enumOption(args.checks_policy ?? args.checksPolicy ?? config.checksPolicy, CHECKS_POLICIES, "always", "checksPolicy");
+}
+
+function shouldRunChecks(policy, context) {
+  if (!context.benchmarkPassed || !context.primaryPresent || !context.checksCommand) return false;
+  if (policy === "always") return true;
+  if (policy === "on-improvement") return context.improvesPrimary || context.explicitChecksCommand;
+  return context.explicitChecksCommand;
+}
+
 async function runProcess(command, args, cwd, options = {}) {
   return await new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -692,6 +721,13 @@ function gitOutput(result, fallback) {
 async function insideGitRepo(cwd) {
   const result = await git(["rev-parse", "--is-inside-work-tree"], cwd);
   return result.code === 0 && result.stdout.trim() === "true";
+}
+
+async function gitPrivatePath(cwd, relativePath) {
+  const result = await git(["rev-parse", "--git-path", relativePath], cwd);
+  if (result.code !== 0) throw new Error(`Git path lookup failed: ${gitOutput(result, "unknown error")}`);
+  const filePath = result.stdout.trim();
+  return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
 }
 
 async function shortHead(cwd) {
@@ -749,6 +785,20 @@ async function restoreSessionFiles(workDir, saved) {
   }
 }
 
+async function appendSessionRunNote(workDir, experiment, state, messages = {}) {
+  const filePath = path.join(workDir, "autoresearch.md");
+  if (!(await pathExists(filePath))) return;
+  const parts = [
+    `- Run ${experiment.run} ${experiment.status}: ${experiment.description}`,
+    `metric=${experiment.metric}`,
+    `best=${state.best ?? "unknown"}`,
+  ];
+  if (experiment.commit) parts.push(`commit=${experiment.commit}`);
+  if (messages.revertMessage) parts.push(messages.revertMessage);
+  if (messages.gitMessage && experiment.status === "keep") parts.push(messages.gitMessage);
+  await fsp.appendFile(filePath, `\n${parts.join("; ")}.\n`, "utf8");
+}
+
 async function revertExceptSessionFiles(workDir) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const saved = await preserveSessionFiles(workDir);
@@ -802,7 +852,7 @@ async function cleanupDiscardChanges(workDir, args, config) {
 
 async function appendRuntimeConfigFile(files, sessionCwd, updates) {
   if (Object.keys(updates).length === 0) return;
-  const configPath = path.join(sessionCwd, "autoresearch.config.json");
+  const configPath = runtimeConfigPath(sessionCwd);
   const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
   const nextConfig = { ...existing, ...updates };
   files.push(await writeSessionFile(
@@ -810,6 +860,28 @@ async function appendRuntimeConfigFile(files, sessionCwd, updates) {
     JSON.stringify(nextConfig, null, 2),
     { overwrite: true },
   ));
+}
+
+async function writeRuntimeConfig(sessionCwd, updates) {
+  if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
+  const configPath = runtimeConfigPath(sessionCwd);
+  const existing = readConfig(sessionCwd);
+  const nextConfig = { ...existing, ...updates };
+  await fsp.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  return nextConfig;
+}
+
+function runtimeConfigUpdatesFromArgs(args) {
+  const updates = {};
+  const autonomyMode = enumOption(args.autonomy_mode ?? args.autonomyMode, AUTONOMY_MODES, null, "autonomyMode");
+  const checksPolicy = enumOption(args.checks_policy ?? args.checksPolicy, CHECKS_POLICIES, null, "checksPolicy");
+  const keepPolicy = enumOption(args.keep_policy ?? args.keepPolicy, KEEP_POLICIES, null, "keepPolicy");
+  const dashboardRefreshSeconds = numberOption(args.dashboard_refresh_seconds ?? args.dashboardRefreshSeconds, null);
+  if (autonomyMode) updates.autonomyMode = autonomyMode;
+  if (checksPolicy) updates.checksPolicy = checksPolicy;
+  if (keepPolicy) updates.keepPolicy = keepPolicy;
+  if (dashboardRefreshSeconds != null) updates.dashboardRefreshSeconds = Math.max(1, Math.floor(dashboardRefreshSeconds));
+  return updates;
 }
 
 async function setupSession(args) {
@@ -854,6 +926,10 @@ async function setupSession(args) {
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (commitPaths.length > 0) {
     await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
+  }
+  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
+  if (Object.keys(runtimeUpdates).length > 0) {
+    await appendRuntimeConfigFile(files, sessionCwd, runtimeUpdates);
   }
 
   let init = null;
@@ -939,8 +1015,9 @@ async function setupResearchSession(args) {
 
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  if (maxIterations != null || commitPaths.length > 0) {
-    const nextConfig = {};
+  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
+  if (maxIterations != null || commitPaths.length > 0 || Object.keys(runtimeUpdates).length > 0) {
+    const nextConfig = { ...runtimeUpdates };
     if (maxIterations != null) nextConfig.maxIterations = Math.floor(maxIterations);
     if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
     await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
@@ -1003,6 +1080,30 @@ async function measureQualityGap(args) {
   };
 }
 
+async function configureSession(args) {
+  const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const updates = runtimeConfigUpdatesFromArgs(args);
+  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
+  const extend = numberOption(args.extend ?? args.extendLimit, null);
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  if (maxIterations != null) updates.maxIterations = Math.floor(maxIterations);
+  if (extend != null) {
+    const state = currentState(workDir);
+    const activeRuns = state.current.length;
+    const currentMax = Number.isFinite(Number(config.maxIterations)) ? Math.floor(Number(config.maxIterations)) : activeRuns;
+    updates.maxIterations = Math.max(currentMax, activeRuns) + Math.floor(extend);
+  }
+  if (commitPaths.length > 0) updates.commitPaths = commitPaths;
+  const nextConfig = await writeRuntimeConfig(sessionCwd, updates);
+  return {
+    ok: true,
+    workDir,
+    sessionCwd,
+    config: nextConfig,
+    updates,
+  };
+}
+
 async function initExperiment(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
@@ -1038,9 +1139,13 @@ async function runExperiment(args) {
   const parsedMetrics = parseMetricLines(benchmark.output);
   const primary = parsedMetrics[state.config.metricName] ?? null;
   const primaryPresent = finiteMetric(primary) != null;
+  const primaryMetric = finiteMetric(primary);
+  const improvesPrimary = primaryMetric != null && (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
   let checks = null;
   const checksCommand = args.checks_command || args.checksCommand || await defaultChecksCommand(workDir);
-  if (benchmarkPassed && primaryPresent && checksCommand) {
+  const checksPolicy = checksPolicyFromArgs(args, config);
+  const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
+  if (shouldRunChecks(checksPolicy, { benchmarkPassed, primaryPresent, checksCommand, improvesPrimary, explicitChecksCommand })) {
     checks = await runShell(checksCommand, workDir, numberOption(args.checks_timeout_seconds ?? args.checksTimeoutSeconds, DEFAULT_CHECKS_TIMEOUT_SECONDS));
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
@@ -1061,6 +1166,8 @@ async function runExperiment(args) {
     parsedMetrics,
     parsedPrimary: primary,
     metricError,
+    checksPolicy,
+    improvesPrimary,
     outputTruncated: Boolean(benchmark.outputTruncated || checks?.outputTruncated),
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
@@ -1086,10 +1193,15 @@ async function runExperiment(args) {
 
 async function logExperiment(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const metric = numberOption(args.metric, null);
+  const lastPacket = boolOption(args.from_last ?? args.fromLast, false) ? await readLastRunPacket(workDir) : null;
+  const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
   if (metric == null) throw new Error("metric is required");
-  if (!STATUS_VALUES.has(args.status)) throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
-  if (!args.description) throw new Error("description is required");
+  const status = args.status || lastPacket?.decision?.suggestedStatus;
+  if (!STATUS_VALUES.has(status)) throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
+  const description = args.description || lastPacket?.run?.description || "";
+  if (!description) throw new Error("description is required");
+  const metrics = args.metrics ?? lastPacket?.decision?.metrics ?? {};
+  const asi = args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
@@ -1097,11 +1209,11 @@ async function logExperiment(args) {
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
   let revertMessage = "";
 
-  if (args.status === "keep" && inGit) {
+  if (status === "keep" && inGit) {
     const resultData = {
-      status: args.status,
+      status,
       [stateBefore.config.metricName || "metric"]: metric,
-      ...(args.metrics || {}),
+      ...metrics,
     };
     const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths ?? config.commitPaths, "commitPaths");
     let addResult;
@@ -1117,7 +1229,7 @@ async function logExperiment(args) {
       const commitResult = await git([
         "commit",
         "-m",
-        args.description,
+        description,
         "-m",
         `Result: ${JSON.stringify(resultData)}`,
       ], workDir);
@@ -1130,7 +1242,7 @@ async function logExperiment(args) {
     } else {
       gitMessage = "Git: nothing to commit.";
     }
-  } else if (args.status !== "keep") {
+  } else if (status !== "keep") {
     revertMessage = await cleanupDiscardChanges(workDir, args, config);
   }
 
@@ -1139,19 +1251,20 @@ async function logExperiment(args) {
     run: stateBefore.results.length + 1,
     commit: String(commit || "").slice(0, 12),
     metric,
-    metrics: args.metrics || {},
-    status: args.status,
-    description: args.description,
+    metrics,
+    status,
+    description,
     timestamp: Date.now(),
     segment: stateBefore.segment,
     confidence: null,
   };
-  if (args.asi && Object.keys(args.asi).length > 0) experiment.asi = args.asi;
+  if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
   experiment.confidence = computeConfidence([...currentRuns, experiment], stateBefore.config.bestDirection);
   appendJsonl(workDir, experiment);
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
+  await appendSessionRunNote(workDir, experiment, stateAfter, { gitMessage, revertMessage });
   return {
     ok: true,
     workDir,
@@ -1166,11 +1279,22 @@ async function logExperiment(args) {
 }
 
 async function exportDashboard(args) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const entries = readJsonl(workDir);
   if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
   const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
-  const html = dashboardHtml(entries);
+  const html = dashboardHtml(entries, {
+    workDir,
+    generatedAt: new Date().toISOString(),
+    jsonlName: "autoresearch.jsonl",
+    refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
+    commands: dashboardCommands(workDir),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+    },
+  });
   await fsp.writeFile(output, html, "utf8");
   return { ok: true, workDir, output };
 }
@@ -1182,6 +1306,7 @@ async function clearSession(args) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const targets = new Set([
     ...SESSION_FILES.map((file) => path.join(workDir, file)),
+    await resolveLastRunPath(workDir),
     path.join(workDir, RESEARCH_DIR),
     path.join(workDir, "autoresearch-dashboard.html"),
     path.join(sessionCwd, "autoresearch.config.json"),
@@ -1205,13 +1330,38 @@ async function clearSession(args) {
   };
 }
 
-function dashboardHtml(entries) {
+function dashboardHtml(entries, meta = {}) {
   const data = JSON.stringify(entries).replace(/</g, "\\u003c");
+  const metaData = JSON.stringify(meta).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
     throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
   }
-  return template.replace(DASHBOARD_DATA_PLACEHOLDER, data);
+  return template
+    .replace(DASHBOARD_DATA_PLACEHOLDER, data)
+    .replace("__AUTORESEARCH_META__", metaData);
+}
+
+async function resolveLastRunPath(workDir) {
+  if (await insideGitRepo(workDir)) {
+    return await gitPrivatePath(workDir, "autoresearch/last-run.json");
+  }
+  return path.join(workDir, "autoresearch.last-run.json");
+}
+
+async function writeLastRunPacket(workDir, packet, filePath = null) {
+  const target = filePath || await resolveLastRunPath(workDir);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+  return target;
+}
+
+async function readLastRunPacket(workDir) {
+  const filePath = await resolveLastRunPath(workDir);
+  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
+  if (!fs.existsSync(readablePath)) throw new Error(`No last-run packet found for ${workDir}. Run next before using --from-last.`);
+  return JSON.parse(fs.readFileSync(readablePath, "utf8"));
 }
 
 function publicState(args) {
@@ -1236,7 +1386,28 @@ function publicState(args) {
     best: state.best,
     confidence: state.confidence,
     limit: iterationLimitInfo(state, config),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+      dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
+      commitPaths: config.commitPaths || [],
+    },
+    commands: dashboardCommands(workDir),
   };
+}
+
+function dashboardCommands(workDir) {
+  const cwd = shellQuote(workDir);
+  const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
+  return [
+    { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
+    { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
+    { label: "Keep last", command: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"` },
+    { label: "Discard last", command: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"` },
+    { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
+    { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
+  ];
 }
 
 async function doctorSession(args) {
@@ -1345,9 +1516,11 @@ async function nextExperiment(args) {
           next_action_hint: "",
         },
   };
-  return {
+  const lastRunFile = await resolveLastRunPath(run.workDir);
+  const packet = {
     ok: doctor.ok && run.ok,
     workDir: run.workDir,
+    lastRunPath: lastRunFile,
     doctor,
     run,
     decision,
@@ -1355,11 +1528,14 @@ async function nextExperiment(args) {
       ? "Log this run with status keep or discard, include ASI, then continue with the next hypothesis."
       : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
   };
+  await writeLastRunPacket(run.workDir, packet, lastRunFile);
+  return packet;
 }
 
 async function callTool(name, args) {
   if (name === "setup_session") return await setupSession(args);
   if (name === "setup_research_session") return await setupResearchSession(args);
+  if (name === "configure_session") return await configureSession(args);
   if (name === "init_experiment") return await initExperiment(args);
   if (name === "run_experiment") {
     requireUnsafeCommandGate(name, args);
@@ -1371,8 +1547,8 @@ async function callTool(name, args) {
   }
   if (name === "log_experiment") return await logExperiment({
     ...args,
-    metrics: parseJsonOption(args.metrics, {}),
-    asi: parseJsonOption(args.asi, {}),
+    metrics: parseJsonOption(args.metrics, null),
+    asi: parseJsonOption(args.asi, null),
   });
   if (name === "export_dashboard") return await exportDashboard(args);
   if (name === "clear_session") return await clearSession(args);
@@ -1414,6 +1590,10 @@ const toolSchemas = [
         secondary_metrics: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "number" },
+        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
+        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
+        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
+        dashboard_refresh_seconds: { type: "number" },
         overwrite: { type: "boolean" },
         create_checks: { type: "boolean" },
         skip_init: { type: "boolean" },
@@ -1437,11 +1617,33 @@ const toolSchemas = [
         constraints: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "number" },
+        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
+        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
+        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
+        dashboard_refresh_seconds: { type: "number" },
         overwrite: { type: "boolean" },
         create_checks: { type: "boolean" },
         skip_init: { type: "boolean" },
       },
       required: ["working_dir", "slug", "goal"],
+    },
+  },
+  {
+    name: "configure_session",
+    description: "Update runtime settings such as autonomy mode, checks policy, keep policy, dashboard refresh, commit paths, or iteration limit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
+        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
+        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
+        dashboard_refresh_seconds: { type: "number" },
+        max_iterations: { type: "number" },
+        extend: { type: "number" },
+        commit_paths: { type: "array", items: { type: "string" } },
+      },
+      required: ["working_dir"],
     },
   },
   {
@@ -1470,6 +1672,7 @@ const toolSchemas = [
         timeout_seconds: { type: "number" },
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
+        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -1486,6 +1689,7 @@ const toolSchemas = [
         timeout_seconds: { type: "number" },
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
+        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -1507,8 +1711,9 @@ const toolSchemas = [
         commit_paths: { type: "array", items: { type: "string" } },
         revert_paths: { type: "array", items: { type: "string" } },
         allow_dirty_revert: { type: "boolean" },
+        from_last: { type: "boolean" },
       },
-      required: ["working_dir", "metric", "status", "description"],
+      required: ["working_dir", "description"],
     },
   },
   {
@@ -1719,6 +1924,10 @@ async function main() {
       secondaryMetrics: args.secondaryMetrics,
       commitPaths: args.commitPaths,
       maxIterations: args.maxIterations,
+      autonomyMode: args.autonomyMode,
+      checksPolicy: args.checksPolicy,
+      keepPolicy: args.keepPolicy,
+      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
       overwrite: args.overwrite,
       createChecks: args.createChecks,
       skipInit: args.skipInit,
@@ -1735,9 +1944,24 @@ async function main() {
       constraints: args.constraints,
       commitPaths: args.commitPaths,
       maxIterations: args.maxIterations,
+      autonomyMode: args.autonomyMode,
+      checksPolicy: args.checksPolicy,
+      keepPolicy: args.keepPolicy,
+      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
       overwrite: args.overwrite,
       createChecks: args.createChecks,
       skipInit: args.skipInit,
+    });
+  } else if (command === "config") {
+    result = await configureSession({
+      cwd: args.cwd,
+      autonomyMode: args.autonomyMode,
+      checksPolicy: args.checksPolicy,
+      keepPolicy: args.keepPolicy,
+      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
+      maxIterations: args.maxIterations,
+      extend: args.extend,
+      commitPaths: args.commitPaths,
     });
   } else if (command === "quality-gap") {
     result = await measureQualityGap({
@@ -1762,6 +1986,7 @@ async function main() {
       timeoutSeconds: args.timeoutSeconds,
       checksCommand: args.checksCommand,
       checksTimeoutSeconds: args.checksTimeoutSeconds,
+      checksPolicy: args.checksPolicy,
     });
   } else if (command === "next") {
     result = await nextExperiment({
@@ -1770,6 +1995,7 @@ async function main() {
       timeoutSeconds: args.timeoutSeconds,
       checksCommand: args.checksCommand,
       checksTimeoutSeconds: args.checksTimeoutSeconds,
+      checksPolicy: args.checksPolicy,
     });
   } else if (command === "log") {
     result = await logExperiment({
@@ -1778,11 +2004,12 @@ async function main() {
       metric: args.metric,
       status: args.status,
       description: args.description,
-      metrics: parseJsonOption(args.metrics, {}),
-      asi: parseJsonOption(args.asi, {}),
+      metrics: parseJsonOption(args.metrics, null),
+      asi: parseJsonOption(args.asi, null),
       commitPaths: args.commitPaths,
       revertPaths: args.revertPaths,
       allowDirtyRevert: args.allowDirtyRevert,
+      fromLast: args.fromLast,
     });
   } else if (command === "state") {
     result = publicState({ cwd: args.cwd });
