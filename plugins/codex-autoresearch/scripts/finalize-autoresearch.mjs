@@ -217,7 +217,8 @@ async function reviewSummaryPath(config, cwd) {
   return path.join(dir, `${stamp}-${safeSlug(config.goal)}.md`);
 }
 
-async function writeReviewSummary(file, { config, groups, results, sourceBranch, status, error }) {
+async function writeReviewSummary(file, context) {
+  const { config, groups, results, sourceBranch, status, error } = context;
   const lines = [
     `# Autoresearch Finalize Review Summary`,
     "",
