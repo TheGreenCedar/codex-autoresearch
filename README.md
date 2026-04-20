@@ -72,18 +72,37 @@ For Codex + GPT-5.4, treat autoresearch as the operating rail:
 - Keep the measured target explicit: `quality_gap`, runtime, cost, failures, Lighthouse score, or another primary metric.
 - Use `next_experiment` or `/autoresearch next` for one preflight, benchmark, decision, and ASI packet at a time.
 - Store qualitative findings in `autoresearch.md`, `autoresearch.ideas.md`, and ASI instead of relying on context memory.
-- Use `$deep-research-orchestration` for broad project-study prompts when that skill is available, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
+- Use `autoresearch-deep-research` for broad project-study prompts, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
 - Stop only when the benchmark reaches `quality_gap=0`, checks pass, and the latest synthesis has no remaining high-impact product gaps.
+
+## Deep Research Autoresearch
 
 Research-heavy prompts can still be measured. For example:
 
 ```text
 Study my project and write a paragraph describing the essence of what it strives to do.
-Then do deep-research-orchestration and suggest high impact changes that would make the project delightful.
+Then create a deep-research autoresearch loop and suggest high impact changes that would make the project delightful.
 You may also suggest small qol changes or bug fixes in separate sections.
 ```
 
-Turn that into an autoresearch loop by defining a qualitative gap rubric: project essence is accurate, research scratchpad exists, sources are logged, high-impact delight changes are implemented or explicitly rejected, small QoL fixes are separated, checks pass, and the final dashboard tells the story. The metric is the count of unmet rubric items.
+Start the loop with:
+
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup --cwd /path/to/project --slug project-study --goal "Study the project and turn high-impact recommendations into measurable gaps"
+node plugins/codex-autoresearch/scripts/autoresearch.mjs quality-gap --cwd /path/to/project --research-slug project-study
+```
+
+This creates `autoresearch.research/<slug>/` with `brief.md`, `plan.md`, `tasks.md`, `sources.md`, `synthesis.md`, `quality-gaps.md`, `notes/`, and `deliverables/`. Use `sources.md` as the source ledger with dates, claims, and confidence. Keep `synthesis.md` as the live merged answer, then turn each actionable recommendation into a checklist item in `quality-gaps.md`.
+
+The generic benchmark counts unchecked items:
+
+```text
+METRIC quality_gap=<open>
+METRIC quality_total=<all checklist items>
+METRIC quality_closed=<checked items>
+```
+
+Stop when `quality_gap=0`, checks pass, and high-impact findings are implemented or explicitly rejected with evidence. Small QoL fixes should stay separate from the high-impact gap list unless they are part of the agreed goal.
 
 For direct CLI use from the repository root:
 
@@ -112,8 +131,8 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `setup_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `doctor_session`, `export_dashboard`, `clear_session` |
-| Skills | Create/resume loops, export dashboards, finalize noisy branches |
+| MCP tools | `setup_session`, `setup_research_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `doctor_session`, `export_dashboard`, `clear_session` |
+| Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
 | Dashboard | Static HTML report generated from `autoresearch.jsonl` |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
@@ -123,11 +142,13 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | Tool | Description |
 | --- | --- |
 | `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional max-iteration config, and the initial JSONL config header |
+| `setup_research_session` | Creates `autoresearch.research/<slug>/`, initializes a `quality_gap` session, and writes a benchmark script that measures open gaps |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
 | `run_experiment` | Runs the benchmark command, times it, captures output, and parses `METRIC name=value` lines |
 | `next_experiment` | Runs preflight and benchmark in one packet, then returns allowed log decisions and a next-run notes template |
 | `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes with scoped cleanup when paths are configured |
 | `read_state` | Summarizes the current baseline, best metric, run count, status counts, confidence score, and iteration limit |
+| `measure_quality_gap` | Counts open and closed checklist items in `autoresearch.research/<slug>/quality-gaps.md` |
 | `doctor_session` | Checks session readiness, Git state, and optionally whether the benchmark emits the configured primary metric |
 | `export_dashboard` | Writes `autoresearch-dashboard.html` from the run log |
 | `clear_session` | Deletes session artifacts after explicit confirmation |
@@ -139,6 +160,7 @@ For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefe
 | Command | Description |
 | --- | --- |
 | `/autoresearch <text>` | Start or resume an autoresearch loop using `<text>` as context |
+| `/autoresearch research <text>` | Create a deep-research scratchpad and `quality_gap` loop |
 | `/autoresearch status` | Summarize the current run log |
 | `/autoresearch doctor` | Run the preflight/operator readout before the next experiment |
 | `/autoresearch next` | Run preflight + benchmark and prepare the keep/discard decision packet |
@@ -152,6 +174,7 @@ For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefe
 | Skill | Description |
 | --- | --- |
 | `autoresearch-create` | Sets up `autoresearch.md`, benchmark scripts, checks, baseline, and the loop rules |
+| `autoresearch-deep-research` | Turns broad research into source-backed scratchpads and measurable `quality_gap` loops |
 | `autoresearch-dashboard` | Exports and summarizes `autoresearch.jsonl` |
 | `autoresearch-finalize` | Turns a noisy experiment branch into independent review branches |
 
@@ -172,6 +195,7 @@ Then it creates:
 | File | Purpose |
 | --- | --- |
 | `autoresearch.md` | Living session document: objective, metrics, scope, constraints, and what has been tried |
+| `autoresearch.research/<slug>/` | Optional deep-research scratchpad with sources, synthesis, notes, deliverables, and quality gaps |
 | `autoresearch.sh` or `autoresearch.ps1` | Benchmark script that prints `METRIC name=value` lines |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |

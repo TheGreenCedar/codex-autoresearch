@@ -17,6 +17,7 @@ When this repository is the target, use the local plugin over any globally insta
 - `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
 - `clear`: use MCP `clear_session` or run `node <plugin-root>/scripts/autoresearch.mjs clear --cwd <current-project> --yes` after confirming the target project path.
+- `research <goal>`: use the `autoresearch-deep-research` skill or MCP `setup_research_session` to create `autoresearch.research/<slug>/`, initialize a `quality_gap` session, then measure gaps with `quality-gap`.
 - Any other text: use the `autoresearch-create` skill to start or resume the loop using the text as the goal/context.
 
 ## Safety
@@ -31,6 +32,6 @@ Before logging a discard/crash/checks-failed result, use configured `commitPaths
 
 When calling MCP tools with custom shell commands, pass `allow_unsafe_command: true` only after confirming the command and target directory.
 
-For qualitative research loops, prefer a primary `quality_gap` metric. The benchmark should print the count of unmet rubric items, so the loop can continue until high-impact findings are implemented, intentionally rejected with evidence, or no longer relevant.
+For qualitative research loops, use `autoresearch-deep-research`. Its benchmark counts unchecked items in `autoresearch.research/<slug>/quality-gaps.md`, so the loop can continue until high-impact findings are implemented, intentionally rejected with evidence, or no longer relevant.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.

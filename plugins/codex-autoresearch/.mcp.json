@@ -7,7 +7,7 @@
         "--mcp"
       ],
       "cwd": ".",
-      "note": "Local no-dependency MCP server exposing setup_session, init_experiment, run_experiment, next_experiment, log_experiment, read_state, doctor_session, export_dashboard, and clear_session tools for Codex autoresearch loops."
+      "note": "Local no-dependency MCP server exposing setup_session, setup_research_session, init_experiment, run_experiment, next_experiment, log_experiment, read_state, measure_quality_gap, doctor_session, export_dashboard, and clear_session tools for Codex autoresearch loops."
     }
   }
 }

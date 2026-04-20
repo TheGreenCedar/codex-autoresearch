@@ -32,11 +32,13 @@ const SESSION_FILES = new Set([
   "autoresearch.jsonl",
   "autoresearch.md",
   "autoresearch.ideas.md",
+  "autoresearch.config.json",
   "autoresearch.sh",
   "autoresearch.ps1",
   "autoresearch.checks.sh",
   "autoresearch.checks.ps1",
 ]);
+const RESEARCH_DIR = "autoresearch.research";
 const REPORT_DIRNAME = "autoresearch-finalize";
 
 function parseCliArgs(argv) {
@@ -84,7 +86,8 @@ function cleanLines(text) {
 }
 
 function isSessionFile(file) {
-  return SESSION_FILES.has(file.replace(/\\/g, "/"));
+  const normalized = file.replace(/\\/g, "/");
+  return SESSION_FILES.has(normalized) || normalized === RESEARCH_DIR || normalized.startsWith(`${RESEARCH_DIR}/`);
 }
 
 async function currentBranch(cwd) {
@@ -281,17 +284,17 @@ async function writeReviewSummary(file, { config, groups, results, sourceBranch,
     "## Verification",
     "",
     status === "verified"
-      ? "- Union verification passed: grouped files match the final tree, excluding `autoresearch.*` session files."
+      ? "- Union verification passed: grouped files match the final tree, excluding autoresearch session artifacts."
       : status === "failed"
         ? `- Verification or branch creation failed: ${markdownEscape(error?.message || error || "unknown error")}`
         : "- Verification is pending.",
-    "- Session artifact verification is preserved: review branches must not contain `autoresearch.*` files.",
+    "- Session artifact verification is preserved: review branches must not contain `autoresearch.*` files or `autoresearch.research/` scratchpads.",
     "",
     "## Cleanup After Merge",
     "",
     "```bash",
     `git branch -D ${sourceBranch}`,
-    "rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1",
+    "rm -rf autoresearch.research && rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.config.json autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1",
     "```",
     "",
     `This file is generated under Git metadata (\`${REPORT_DIRNAME}\`) so it does not dirty the worktree. Remove it when no longer needed.`
@@ -510,7 +513,7 @@ async function main() {
   console.log("");
   console.log("Cleanup after merge:");
   console.log(`  git branch -D ${sourceBranch}`);
-  console.log("  rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1");
+  console.log("  rm -rf autoresearch.research && rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.config.json autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1");
 }
 
 main().catch((error) => {

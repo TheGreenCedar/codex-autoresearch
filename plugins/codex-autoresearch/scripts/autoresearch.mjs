@@ -16,6 +16,7 @@ const SESSION_FILES = [
   "autoresearch.checks.ps1",
   "autoresearch.config.json",
 ];
+const RESEARCH_DIR = "autoresearch.research";
 
 const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -39,6 +40,8 @@ Usage:
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
   node scripts/autoresearch.mjs log --cwd <project> --metric <n> --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
@@ -101,6 +104,20 @@ function listOption(value) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function safeSlug(value, fallback = "research") {
+  const slug = String(value || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/g, "");
+  return slug || fallback;
+}
+
+function shellQuote(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
 function validateMetricName(name) {
@@ -241,6 +258,152 @@ function renderChecksScript(args, shellKind) {
   return replaceAllText(readAssetTemplate(templateName), {
     "<check command>": command,
   });
+}
+
+function researchSlugFromArgs(args) {
+  return safeSlug(args.research_slug ?? args.researchSlug ?? args.slug ?? args.name ?? "research");
+}
+
+function researchRelativeDir(slug) {
+  return `${RESEARCH_DIR}/${slug}`;
+}
+
+function researchDirPath(workDir, slug) {
+  return path.join(workDir, RESEARCH_DIR, slug);
+}
+
+function renderQualityGapCommand(slug) {
+  const script = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
+  return `${shellQuote(process.execPath)} ${shellQuote(script)} quality-gap --cwd . --research-slug ${shellQuote(slug)}`;
+}
+
+function renderResearchBenchmarkScript(slug, shellKind) {
+  const script = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
+  if (shellKind === "bash") {
+    return [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "",
+      `${shellQuote(process.execPath)} ${shellQuote(script)} quality-gap --cwd . --research-slug ${shellQuote(slug)}`,
+      "",
+    ].join("\n");
+  }
+  return [
+    "$ErrorActionPreference = \"Stop\"",
+    "",
+    `& ${shellQuote(process.execPath)} ${shellQuote(script)} quality-gap --cwd . --research-slug ${shellQuote(slug)}`,
+    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    "",
+  ].join("\n");
+}
+
+function renderResearchFile(fileName, args, slug) {
+  const goal = args.goal || args.name || slug;
+  const title = goal.replace(/\s+/g, " ").trim();
+  if (fileName === "brief.md") {
+    return `# Research Brief: ${title}
+
+## Request
+${goal}
+
+## Decision To Support
+- Identify source-backed changes worth testing through an autoresearch loop.
+
+## Success Criteria
+- The project essence is accurate.
+- Sources and direct evidence are logged.
+- High-impact findings are converted into quality gaps.
+- Each implemented or rejected gap has evidence.
+
+## Constraints
+${markdownList(listOption(args.constraints), "TBD: add constraints as they are discovered")}
+
+## Known Unknowns
+- TBD: add unresolved questions before delegating or implementing.
+`;
+  }
+  if (fileName === "plan.md") {
+    return `# Research Plan: ${title}
+
+## Workstreams
+- Project essence and audience
+- Current implementation and architecture evidence
+- High-impact improvement candidates
+- Risks, constraints, and validation strategy
+
+## Sequencing
+- Gather evidence first.
+- Synthesize findings into \`synthesis.md\`.
+- Convert actionable findings into \`quality-gaps.md\`.
+- Iterate with \`/autoresearch next\` until \`quality_gap=0\`.
+`;
+  }
+  if (fileName === "tasks.md") {
+    return `# Research Tasks: ${title}
+
+## queued
+- Capture project essence from repo evidence.
+- Log primary sources and direct measurements.
+- Convert recommendations into quality gaps.
+
+## in_progress
+- None.
+
+## done
+- Scratchpad initialized.
+
+## blockers
+- None.
+`;
+  }
+  if (fileName === "sources.md") {
+    return `# Research Sources: ${title}
+
+| Source | Date Checked | Claim Supported | Confidence |
+| --- | --- | --- | --- |
+| TBD | TBD | TBD | TBD |
+`;
+  }
+  if (fileName === "synthesis.md") {
+    return `# Research Synthesis: ${title}
+
+## Project Essence
+- TBD: summarize what the project is trying to become.
+
+## High-Impact Findings
+- TBD: list source-backed findings and why they matter.
+
+## Quality-Gap Translation
+- Keep \`quality-gaps.md\` aligned with the current synthesis.
+
+## Confidence And Gaps
+- TBD: record confidence, contradictions, and unresolved questions.
+`;
+  }
+  if (fileName === "quality-gaps.md") {
+    return `# Quality Gaps: ${title}
+
+- [ ] Project essence is accurate and source-backed.
+- [ ] Sources are logged with dates, claims, and confidence.
+- [ ] Synthesis separates high-impact changes from small QoL fixes.
+- [ ] Each high-impact recommendation is implemented or rejected with evidence.
+- [ ] Correctness checks pass after kept changes.
+- [ ] Final handoff includes dashboard or state evidence.
+`;
+  }
+  throw new Error(`Unknown research file template: ${fileName}`);
+}
+
+function parseQualityGaps(text) {
+  let open = 0;
+  let closed = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s+\S/);
+    if (!match) continue;
+    if (match[1].toLowerCase() === "x") closed += 1;
+    else open += 1;
+  }
+  return { open, closed, total: open + closed };
 }
 
 async function writeSessionFile(filePath, content, options = {}) {
@@ -536,16 +699,31 @@ async function preserveSessionFiles(workDir) {
   const saved = new Map();
   for (const file of SESSION_FILES) {
     const filePath = path.join(workDir, file);
-    if (fs.existsSync(filePath)) saved.set(file, fs.readFileSync(filePath));
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      saved.set(file, { type: "file", bytes: fs.readFileSync(filePath) });
+    }
+  }
+  const researchPath = path.join(workDir, RESEARCH_DIR);
+  if (fs.existsSync(researchPath) && fs.statSync(researchPath).isDirectory()) {
+    const tempPath = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-preserve-"));
+    fs.cpSync(researchPath, tempPath, { recursive: true });
+    saved.set(RESEARCH_DIR, { type: "dir", tempPath });
   }
   return saved;
 }
 
 async function restoreSessionFiles(workDir, saved) {
-  for (const [file, bytes] of saved.entries()) {
+  for (const [file, artifact] of saved.entries()) {
     const filePath = path.join(workDir, file);
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    await fsp.writeFile(filePath, bytes);
+    if (artifact.type === "dir") {
+      await fsp.rm(filePath, { recursive: true, force: true });
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.cp(artifact.tempPath, filePath, { recursive: true });
+      await fsp.rm(artifact.tempPath, { recursive: true, force: true });
+    } else {
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.writeFile(filePath, artifact.bytes);
+    }
   }
 }
 
@@ -670,6 +848,140 @@ async function setupSession(args) {
     shell: shellKind,
     files,
     init,
+  };
+}
+
+async function setupResearchSession(args) {
+  const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const slug = researchSlugFromArgs(args);
+  const goal = args.goal || args.name || slug;
+  const overwrite = boolOption(args.overwrite, false);
+  const shellKind = shellKindFromArgs(args);
+  const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
+  const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
+  const benchmarkCommand = shellKind === "bash"
+    ? "./autoresearch.sh"
+    : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+  const researchDir = researchDirPath(workDir, slug);
+  const files = [];
+
+  await fsp.mkdir(path.join(researchDir, "notes"), { recursive: true });
+  await fsp.mkdir(path.join(researchDir, "deliverables"), { recursive: true });
+  for (const fileName of ["brief.md", "plan.md", "tasks.md", "sources.md", "synthesis.md", "quality-gaps.md"]) {
+    files.push(await writeSessionFile(
+      path.join(researchDir, fileName),
+      renderResearchFile(fileName, args, slug),
+      { overwrite },
+    ));
+  }
+
+  const scopedFiles = [
+    researchRelativeDir(slug),
+    ...listOption(args.files_in_scope ?? args.filesInScope ?? args.scope),
+  ];
+  files.push(await writeSessionFile(
+    path.join(workDir, "autoresearch.md"),
+    renderSessionDocument({
+      ...args,
+      name: args.name || `Deep research: ${goal}`,
+      goal,
+      metricName: "quality_gap",
+      metricUnit: "gaps",
+      direction: "lower",
+      benchmarkCommand,
+      filesInScope: scopedFiles,
+      constraints: [
+        ...listOption(args.constraints),
+        `Keep research notes under ${researchRelativeDir(slug)}.`,
+        "Use source-backed evidence before implementing recommendations.",
+      ],
+    }),
+    { overwrite },
+  ));
+  files.push(await writeSessionFile(
+    path.join(workDir, benchmarkFile),
+    renderResearchBenchmarkScript(slug, shellKind),
+    { overwrite, executable: shellKind === "bash" },
+  ));
+  files.push(await writeSessionFile(
+    path.join(workDir, "autoresearch.ideas.md"),
+    `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
+    { overwrite },
+  ));
+
+  if (args.checks_command || args.checksCommand || boolOption(args.create_checks ?? args.createChecks, false)) {
+    files.push(await writeSessionFile(
+      path.join(workDir, checksFile),
+      renderChecksScript(args, shellKind),
+      { overwrite, executable: shellKind === "bash" },
+    ));
+  }
+
+  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  if (maxIterations != null || commitPaths.length > 0) {
+    const configPath = path.join(sessionCwd, "autoresearch.config.json");
+    const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+    const nextConfig = { ...existing };
+    if (maxIterations != null) nextConfig.maxIterations = Math.floor(maxIterations);
+    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
+    files.push(await writeSessionFile(configPath, JSON.stringify(nextConfig, null, 2), { overwrite: true }));
+  }
+
+  let init = null;
+  if (!boolOption(args.skip_init ?? args.skipInit, false)) {
+    init = await initExperiment({
+      cwd: workDir,
+      name: args.name || `Deep research: ${goal}`,
+      metricName: "quality_gap",
+      metricUnit: "gaps",
+      direction: "lower",
+    });
+  }
+
+  const gap = await measureQualityGap({ cwd: workDir, researchSlug: slug });
+  return {
+    ok: true,
+    workDir,
+    sessionCwd,
+    slug,
+    researchDir,
+    shell: shellKind,
+    files,
+    init,
+    qualityGap: {
+      open: gap.open,
+      closed: gap.closed,
+      total: gap.total,
+    },
+  };
+}
+
+async function measureQualityGap(args) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const slug = researchSlugFromArgs(args);
+  const researchDir = researchDirPath(workDir, slug);
+  const gapsPath = path.join(researchDir, "quality-gaps.md");
+  if (!(await pathExists(gapsPath))) {
+    throw new Error(`No quality-gaps.md found for research slug '${slug}' at ${gapsPath}`);
+  }
+  const text = await fsp.readFile(gapsPath, "utf8");
+  const counts = parseQualityGaps(text);
+  const metricOutput = [
+    `METRIC quality_gap=${counts.open}`,
+    `METRIC quality_total=${counts.total}`,
+    `METRIC quality_closed=${counts.closed}`,
+  ].join("\n");
+  return {
+    ok: true,
+    workDir,
+    slug,
+    researchDir,
+    qualityGapsPath: gapsPath,
+    open: counts.open,
+    closed: counts.closed,
+    total: counts.total,
+    metricOutput,
   };
 }
 
@@ -851,6 +1163,7 @@ async function clearSession(args) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const targets = new Set([
     ...SESSION_FILES.map((file) => path.join(workDir, file)),
+    path.join(workDir, RESEARCH_DIR),
     path.join(workDir, "autoresearch-dashboard.html"),
     path.join(sessionCwd, "autoresearch.config.json"),
   ]);
@@ -1027,6 +1340,7 @@ async function nextExperiment(args) {
 
 async function callTool(name, args) {
   if (name === "setup_session") return await setupSession(args);
+  if (name === "setup_research_session") return await setupResearchSession(args);
   if (name === "init_experiment") return await initExperiment(args);
   if (name === "run_experiment") {
     requireUnsafeCommandGate(name, args);
@@ -1044,6 +1358,7 @@ async function callTool(name, args) {
   if (name === "export_dashboard") return await exportDashboard(args);
   if (name === "clear_session") return await clearSession(args);
   if (name === "read_state") return publicState(args);
+  if (name === "measure_quality_gap") return await measureQualityGap(args);
   if (name === "doctor_session") {
     requireUnsafeCommandGate(name, args);
     return await doctorSession(args);
@@ -1085,6 +1400,29 @@ const toolSchemas = [
         skip_init: { type: "boolean" },
       },
       required: ["working_dir", "name", "metric_name"],
+    },
+  },
+  {
+    name: "setup_research_session",
+    description: "Create a deep-research scratchpad and initialize a quality_gap autoresearch session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        slug: { type: "string" },
+        goal: { type: "string" },
+        name: { type: "string" },
+        checks_command: { type: "string" },
+        shell: { type: "string", enum: ["bash", "powershell"] },
+        files_in_scope: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        commit_paths: { type: "array", items: { type: "string" } },
+        max_iterations: { type: "number" },
+        overwrite: { type: "boolean" },
+        create_checks: { type: "boolean" },
+        skip_init: { type: "boolean" },
+      },
+      required: ["working_dir", "slug", "goal"],
     },
   },
   {
@@ -1161,6 +1499,18 @@ const toolSchemas = [
       type: "object",
       properties: { working_dir: { type: "string" } },
       required: ["working_dir"],
+    },
+  },
+  {
+    name: "measure_quality_gap",
+    description: "Count open and closed checklist items in autoresearch.research/<slug>/quality-gaps.md.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        research_slug: { type: "string" },
+      },
+      required: ["working_dir", "research_slug"],
     },
   },
   {
@@ -1256,7 +1606,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.4" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.5" },
       },
     });
     return;
@@ -1350,6 +1700,30 @@ async function main() {
       createChecks: args.createChecks,
       skipInit: args.skipInit,
     });
+  } else if (command === "research-setup") {
+    result = await setupResearchSession({
+      cwd: args.cwd,
+      slug: args.slug,
+      goal: args.goal,
+      name: args.name,
+      checksCommand: args.checksCommand,
+      shell: args.shell,
+      filesInScope: args.filesInScope,
+      constraints: args.constraints,
+      commitPaths: args.commitPaths,
+      maxIterations: args.maxIterations,
+      overwrite: args.overwrite,
+      createChecks: args.createChecks,
+      skipInit: args.skipInit,
+    });
+  } else if (command === "quality-gap") {
+    result = await measureQualityGap({
+      cwd: args.cwd,
+      researchSlug: args.researchSlug,
+      slug: args.slug,
+    });
+    console.log(result.metricOutput);
+    return;
   } else if (command === "init") {
     result = await initExperiment({
       cwd: args.cwd,

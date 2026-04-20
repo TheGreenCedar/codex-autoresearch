@@ -9,6 +9,10 @@ async function readText(file) {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
+async function readRootText(file) {
+  return await fsp.readFile(path.resolve(pluginRoot, "..", "..", file), "utf8");
+}
+
 async function readJson(file) {
   return JSON.parse(await readText(file));
 }
@@ -52,10 +56,18 @@ const checks = [
       const server = config.mcpServers?.["codex-autoresearch"];
       if (!server) return fail("codex-autoresearch MCP server is missing");
       const args = Array.isArray(server.args) ? server.args.join(" ") : "";
-      if (server.cwd === "." && args.includes("./scripts/autoresearch.mjs") && args.includes("--mcp") && String(server.note || "").includes("next_experiment")) {
+      const note = String(server.note || "");
+      if (
+        server.cwd === "."
+        && args.includes("./scripts/autoresearch.mjs")
+        && args.includes("--mcp")
+        && note.includes("next_experiment")
+        && note.includes("setup_research_session")
+        && note.includes("measure_quality_gap")
+      ) {
         return pass();
       }
-      return fail("MCP config should use cwd='.', the local script, --mcp, and mention next_experiment");
+      return fail("MCP config should use cwd='.', the local script, --mcp, and mention next_experiment plus research tools");
     },
   },
   {
@@ -83,7 +95,7 @@ const checks = [
       return includesAll(readme, [
         "## Codex + GPT-5.4 Operating Profile",
         "quality_gap",
-        "deep-research-orchestration",
+        "autoresearch-deep-research",
         "1.05M context",
       ])
         ? pass()
@@ -97,13 +109,34 @@ const checks = [
     run: async () => {
       const readme = await readText("README.md");
       return includesAll(readme, [
+        "## Deep Research Autoresearch",
         "Research-heavy prompts",
         "Study my project",
         "delightful",
-        "qualitative gap",
+        "autoresearch.research/<slug>/",
+        "METRIC quality_total",
       ])
         ? pass()
         : fail("Missing the qualitative prompt-to-metric loop.");
+    },
+  },
+  {
+    id: "root-readme-research-loop",
+    file: "../../README.md",
+    description: "The repository README mirrors the public deep-research quality_gap workflow.",
+    run: async () => {
+      const readme = await readRootText("README.md");
+      return includesAll(readme, [
+        "## Deep Research Autoresearch",
+        "autoresearch-deep-research",
+        "plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup",
+        "autoresearch.research/<slug>/",
+        "METRIC quality_closed",
+        "setup_research_session",
+        "measure_quality_gap",
+      ])
+        ? pass()
+        : fail("Root README is missing the deep-research quality_gap workflow.");
     },
   },
   {
@@ -115,6 +148,7 @@ const checks = [
       return includesAll(command, [
         "local plugin over any globally installed copy",
         "plugins/codex-autoresearch",
+        "autoresearch-deep-research",
         "quality_gap",
       ])
         ? pass()
@@ -124,17 +158,52 @@ const checks = [
   {
     id: "create-skill-research-loop",
     file: "skills/autoresearch-create/SKILL.md",
-    description: "Create skill explains Codex + GPT-5.4 qualitative research loops.",
+    description: "Create skill routes broad qualitative work to the dedicated research skill.",
     run: async () => {
       const skill = await readText("skills/autoresearch-create/SKILL.md");
       return includesAll(skill, [
-        "Codex + GPT-5.4",
-        "deep-research-orchestration",
+        "## Broad Research Loops",
+        "autoresearch-deep-research",
         "quality_gap",
         "repo-local plugin",
       ])
         ? pass()
-        : fail("Create skill does not cover qualitative research-loop setup.");
+        : fail("Create skill does not route qualitative work to autoresearch-deep-research.");
+    },
+  },
+  {
+    id: "deep-research-skill",
+    file: "skills/autoresearch-deep-research/SKILL.md",
+    description: "Plugin-local deep research skill preserves orchestration ideas and converts them into quality_gap loops.",
+    run: async () => {
+      const skill = await readText("skills/autoresearch-deep-research/SKILL.md");
+      return includesAll(skill, [
+        "autoresearch.research/<slug>/",
+        "sources.md",
+        "synthesis.md",
+        "ASI",
+        "quality_gap",
+        "confidence",
+      ])
+        ? pass()
+        : fail("Deep research skill is missing scratchpad, source, synthesis, ASI, confidence, or quality_gap guidance.");
+    },
+  },
+  {
+    id: "research-cli-and-mcp",
+    file: "scripts/autoresearch.mjs",
+    description: "CLI help and MCP schema expose research setup and quality-gap measurement.",
+    run: async () => {
+      const cli = await readText("scripts/autoresearch.mjs");
+      return includesAll(cli, [
+        "research-setup --cwd <project>",
+        "quality-gap --cwd <project>",
+        "setup_research_session",
+        "measure_quality_gap",
+        "METRIC quality_closed",
+      ])
+        ? pass()
+        : fail("CLI/MCP research commands are not fully exposed.");
     },
   },
   {
@@ -155,17 +224,20 @@ const checks = [
   {
     id: "manifest-research-prompts",
     file: ".codex-plugin/plugin.json",
-    description: "Marketplace default prompts include the deep-research delight workflow.",
+    description: "Marketplace default prompts stay concise and include the deep-research quality_gap workflow.",
     run: async () => {
       const manifest = await readJson(".codex-plugin/plugin.json");
-      const prompts = (manifest.interface?.defaultPrompt || []).join("\n");
-      return includesAll(prompts, [
-        "deep-research-orchestration",
-        "Study my project",
-        "delightful",
-      ])
+      const prompts = manifest.interface?.defaultPrompt || [];
+      const promptText = prompts.join("\n");
+      return prompts.length <= 3
+        && prompts.every((prompt) => prompt.length < 128)
+        && includesAll(promptText, [
+          "Start autoresearch for this project.",
+          "Create a deep-research quality_gap loop.",
+          "Finalize kept experiments into review branches.",
+        ])
         ? pass()
-        : fail("Default prompts do not surface the deep-research delight workflow.");
+        : fail("Default prompts must be three concise starters including the deep-research quality_gap workflow.");
     },
   },
   {
@@ -179,9 +251,25 @@ const checks = [
         "/autoresearch.jsonl",
         "/autoresearch.config.json",
         "/autoresearch.ideas.md",
+        "/autoresearch.research/",
       ])
         ? pass()
         : fail("Root session artifacts are not ignored.");
+    },
+  },
+  {
+    id: "finalizer-excludes-research-artifacts",
+    file: "scripts/finalize-autoresearch.mjs",
+    description: "Finalization excludes deep research scratchpads from review branches.",
+    run: async () => {
+      const finalizer = await readText("scripts/finalize-autoresearch.mjs");
+      return includesAll(finalizer, [
+        "autoresearch.research",
+        "startsWith(`${RESEARCH_DIR}/`)",
+        "session artifact verification",
+      ])
+        ? pass()
+        : fail("Finalizer does not exclude autoresearch.research scratchpads.");
     },
   },
   {

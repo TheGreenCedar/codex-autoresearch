@@ -51,6 +51,7 @@ test("finalizer writes an ignored review summary and preserves verification", as
   await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
   await writeFile(path.join(repo, "scripts", "autoresearch.mjs"), "console.log('legitimate source change');\n");
   await writeFile(path.join(repo, "autoresearch.md"), "# session\n");
+  await writeFile(path.join(repo, "autoresearch.research", "study", "quality-gaps.md"), "- [ ] session scratchpad\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "keep value change"], repo);
   const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
@@ -85,6 +86,9 @@ test("finalizer writes an ignored review summary and preserves verification", as
   assert.match(summary, /scripts\/autoresearch\.mjs/);
   assert.match(summary, /Suggested PR/);
   assert.match(summary, /git show --stat/);
+
+  const branchFiles = (await git(["show", "--name-only", "--format=", "autoresearch-review/ux-test/01-value-change"], repo)).stdout;
+  assert.doesNotMatch(branchFiles, /autoresearch\.research/);
 
   const status = (await git(["status", "--porcelain"], repo)).stdout.trim();
   assert.equal(status, "");

@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Autonomous experiment loops for Codex: set up a benchmark, run iterations, log results, export dashboards, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "Codex Autoresearch",
     "shortDescription": "Run autonomous benchmark loops and keep measured wins",
-    "longDescription": "Codex Autoresearch adapts pi-autoresearch for Codex. It provides skills and local MCP/CLI helpers for setting up autoresearch.md and benchmark scripts, running timed experiments that parse METRIC lines, logging keep/discard/crash results to autoresearch.jsonl, exporting a static dashboard, and splitting kept experiments into clean review branches.",
+    "longDescription": "Codex Autoresearch adapts pi-autoresearch for Codex. It provides skills and local MCP/CLI helpers for setting up measured loops, converting deep research into quality_gap benchmarks, logging keep/discard/crash results to autoresearch.jsonl, exporting a static dashboard, and splitting kept experiments into clean review branches.",
     "developerName": "Albert Najjar",
     "category": "Coding",
     "capabilities": [
@@ -35,14 +35,9 @@
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "defaultPrompt": [
-      "Start autoresearch for this project. Ask only for the missing benchmark, metric, direction, scope, and checks, then take a baseline.",
-      "Run an autoresearch doctor check before the next experiment.",
-      "Run /autoresearch next to produce one preflight, benchmark, decision, and ASI packet.",
-      "Run the next autoresearch iteration and log the result with ASI.",
-      "Use deep-research-orchestration to Study my project, identify delightful high-impact changes, convert the findings into a quality_gap benchmark, and iterate until the gaps are closed.",
-      "Export the autoresearch dashboard and summarize baseline, best metric, kept runs, and confidence.",
-      "Draft finalization groups from autoresearch history, then review before creating branches.",
-      "Finalize this autoresearch branch into clean review branches from the kept experiments."
+      "Start autoresearch for this project.",
+      "Create a deep-research quality_gap loop.",
+      "Finalize kept experiments into review branches."
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.svg",

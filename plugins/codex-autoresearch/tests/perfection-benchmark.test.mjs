@@ -25,6 +25,8 @@ test("perfection benchmark reports zero quality gaps for the local plugin", asyn
   const result = await runBenchmark(["--fail-on-gap"]);
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /METRIC quality_gap=0/);
-  assert.match(result.stdout, /METRIC quality_checks=14/);
-  assert.match(result.stdout, /METRIC quality_passed=14/);
+  const checks = result.stdout.match(/METRIC quality_checks=(\d+)/)?.[1];
+  const passed = result.stdout.match(/METRIC quality_passed=(\d+)/)?.[1];
+  assert.ok(checks, result.stdout);
+  assert.equal(passed, checks);
 });

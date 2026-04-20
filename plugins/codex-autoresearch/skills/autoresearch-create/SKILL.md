@@ -62,19 +62,15 @@ node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short s
 7. Run `node scripts/autoresearch.mjs doctor --cwd /absolute/project/path --check-benchmark` or MCP `doctor_session` to catch missing metric output before the loop starts.
 8. Run the baseline immediately.
 
-## Codex + GPT-5.4 Research Loops
+## Broad Research Loops
 
-For Codex + GPT-5.4, use the repo-local plugin when the user is improving this plugin or explicitly asks for local behavior. Prefer `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...` over a globally installed copy until the local iteration is complete.
+For broad or qualitative work, use `autoresearch-deep-research` instead of hand-rolling a rubric in this skill. It creates `autoresearch.research/<slug>/`, initializes a `quality_gap` session, and turns source-backed findings into checklist gaps that `/autoresearch next` can measure and close.
 
-When the request is broad or qualitative, combine this skill with `deep-research-orchestration`:
+When improving this plugin itself, use the repo-local plugin script before a globally installed or marketplace-cache copy:
 
-1. Create the deep-research scratchpad and capture the project essence, sources, findings, and synthesis.
-2. Convert the research deliverable into a `quality_gap` benchmark: each unmet expectation is one gap.
-3. Run `/autoresearch next` or MCP `next_experiment` to get a single preflight, metric, decision, and ASI packet.
-4. Implement the highest-impact gap, update the research synthesis or session notes, and log the result.
-5. Continue until `quality_gap=0`, correctness checks pass, and no high-impact recommendation remains unhandled.
-
-Good `quality_gap` rubrics include concrete items such as: essence paragraph is accurate, scratchpad files exist, sources are logged, recommendations are separated by impact, chosen delight changes are implemented, QoL fixes are separated, tests pass, and final handoff includes dashboard or state evidence.
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup --cwd . --slug plugin-research --goal "Improve the autoresearch plugin with source-backed gaps"
+```
 
 ## Loop Workflow
 

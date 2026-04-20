@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -80,6 +80,62 @@ test("run reports missing primary metric as a failed experiment", async () => {
     assert.match(payload.metricError, /seconds/);
     assert.equal(payload.logHint.status, "crash");
     assert.deepEqual(payload.logHint.allowedStatuses, ["crash"]);
+  });
+});
+
+test("research-setup creates a quality_gap scratchpad and benchmark", async () => {
+  await withTempDir("research-setup", async (dir) => {
+    const result = await runCli([
+      "research-setup",
+      "--cwd", dir,
+      "--slug", "Project Study",
+      "--goal", "Study the project before improving it",
+      "--max-iterations", "7",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.slug, "project-study");
+    assert.equal(payload.init.config.metricName, "quality_gap");
+    assert.equal(payload.init.config.bestDirection, "lower");
+    assert.equal(payload.qualityGap.open, 6);
+
+    const researchRoot = path.join(dir, "autoresearch.research", "project-study");
+    assert.match(await readFile(path.join(researchRoot, "brief.md"), "utf8"), /Study the project/);
+    assert.match(await readFile(path.join(researchRoot, "sources.md"), "utf8"), /Claim Supported/);
+    assert.match(await readFile(path.join(researchRoot, "synthesis.md"), "utf8"), /Quality-Gap Translation/);
+    assert.match(await readFile(path.join(researchRoot, "quality-gaps.md"), "utf8"), /- \[ \]/);
+
+    const scriptName = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
+    const benchmark = await readFile(path.join(dir, scriptName), "utf8");
+    assert.match(benchmark, /quality-gap/);
+    assert.match(benchmark, /project-study/);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(JSON.parse(state.stdout).config.metricName, "quality_gap");
+  });
+});
+
+test("quality-gap counts checked and unchecked research gaps", async () => {
+  await withTempDir("quality-gap", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "study", "--goal", "Study quality gaps"]);
+    await writeFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), [
+      "# Quality Gaps",
+      "",
+      "- [ ] Open gap",
+      "- [x] Closed gap",
+      "- [X] Rejected with evidence",
+      "- [ ] Another open gap",
+      "- plain note",
+      "",
+    ].join("\n"));
+
+    const result = await runCli(["quality-gap", "--cwd", dir, "--research-slug", "study"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /METRIC quality_gap=2/);
+    assert.match(result.stdout, /METRIC quality_total=4/);
+    assert.match(result.stdout, /METRIC quality_closed=2/);
   });
 });
 
@@ -330,6 +386,47 @@ test("discard without scoped paths refuses to clean a dirty git tree", async () 
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Refusing broad discard cleanup/);
     assert.equal(await readFile(path.join(dir, "scratch.txt"), "utf8"), "unrelated\n");
+  });
+});
+
+test("clear removes deep research scratchpads", async () => {
+  await withTempDir("clear-research", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "cleanup", "--goal", "Cleanup research"]);
+    const researchRoot = path.join(dir, "autoresearch.research");
+    await access(researchRoot);
+
+    const result = await runCli(["clear", "--cwd", dir, "--yes"]);
+    assert.equal(result.code, 0, result.stderr);
+    await assert.rejects(access(researchRoot));
+  });
+});
+
+test("broad discard cleanup preserves deep research scratchpads", async () => {
+  await withTempDir("preserve-research", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["research-setup", "--cwd", dir, "--slug", "study", "--goal", "Preserve research"]);
+    await writeFile(path.join(dir, "tracked.txt"), "experiment\n", "utf8");
+    const gapsPath = path.join(dir, "autoresearch.research", "study", "quality-gaps.md");
+    await writeFile(gapsPath, "- [ ] Preserve this scratchpad\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "1",
+      "--status", "discard",
+      "--description", "Discard broad change",
+      "--allow-dirty-revert",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    assert.equal(await readFile(path.join(dir, "tracked.txt"), "utf8"), "base\n");
+    assert.equal(await readFile(gapsPath, "utf8"), "- [ ] Preserve this scratchpad\n");
   });
 });
 
