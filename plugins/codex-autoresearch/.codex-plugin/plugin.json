@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Autonomous experiment loops for Codex: set up a benchmark, run iterations, log results, export dashboards, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
