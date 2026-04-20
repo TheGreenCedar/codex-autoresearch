@@ -45,15 +45,7 @@ Minimum viable loop:
 
 ## Local Plugin Iteration
 
-When improving this plugin itself, use the repo-local plugin before any globally installed or marketplace-cache copy:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
-node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
-node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
-```
-
-For MCP, the local `plugins/codex-autoresearch/.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local script explicitly or use `plugins/codex-autoresearch` as `<plugin-root>` in command docs until the local run is finished.
+When improving this plugin itself, use the repo-local plugin before any globally installed or marketplace-cache copy. The canonical local routing and CLI walkthrough lives in the [`/autoresearch` command doc](plugins/codex-autoresearch/commands/autoresearch.md#local-plugin-routing).
 
 The plugin self-check is:
 
@@ -104,15 +96,7 @@ METRIC quality_closed=<checked items>
 
 Stop when `quality_gap=0`, checks pass, and high-impact findings are implemented or explicitly rejected with evidence. Small QoL fixes should stay separate from the high-impact gap list unless they are part of the agreed goal.
 
-For direct CLI use from the repository root:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs setup --cwd /path/to/project --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
-node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd /path/to/project --check-benchmark
-node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd /path/to/project
-node plugins/codex-autoresearch/scripts/autoresearch.mjs log --cwd /path/to/project --from-last --status keep --description "Use worker pool" --commit-paths "src,test"
-node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd /path/to/project
-```
+For direct CLI use, follow the canonical [`/autoresearch` command walkthrough](plugins/codex-autoresearch/commands/autoresearch.md#local-plugin-routing). The essential sequence is setup, doctor, next, log with `--from-last`, and export.
 
 Tiny worked story:
 

@@ -64,10 +64,4 @@ Keep iterating until `quality_gap=0`, checks pass, and the synthesis has no unre
 
 ## Local Plugin Routing
 
-When improving this plugin itself, use the repo-local script:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup --cwd . --slug plugin-research --goal "Improve the autoresearch plugin with source-backed gaps"
-```
-
-Use a globally installed or marketplace-cache copy only after the local plugin changes are complete.
+When improving this plugin itself, use the repo-local plugin before a globally installed or marketplace-cache copy. Follow the canonical local routing in the [`/autoresearch` command doc](../../commands/autoresearch.md#local-plugin-routing).

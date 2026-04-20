@@ -321,8 +321,8 @@ function researchTitle(value) {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
-function renderResearchBrief({ title, goal, args }) {
-  return `# Research Brief: ${title}
+const RESEARCH_FILE_TEMPLATES = {
+  "brief.md": ({ title, goal, args }) => `# Research Brief: ${title}
 
 ## Request
 ${goal}
@@ -341,11 +341,8 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 
 ## Known Unknowns
 - TBD: add unresolved questions before delegating or implementing.
-`;
-}
-
-function renderResearchPlan({ title }) {
-  return `# Research Plan: ${title}
+`,
+  "plan.md": ({ title }) => `# Research Plan: ${title}
 
 ## Workstreams
 - Project essence and audience
@@ -358,11 +355,8 @@ function renderResearchPlan({ title }) {
 - Synthesize findings into \`synthesis.md\`.
 - Convert actionable findings into \`quality-gaps.md\`.
 - Iterate with \`/autoresearch next\` until \`quality_gap=0\`.
-`;
-}
-
-function renderResearchTasks({ title }) {
-  return `# Research Tasks: ${title}
+`,
+  "tasks.md": ({ title }) => `# Research Tasks: ${title}
 
 ## queued
 - Capture project essence from repo evidence.
@@ -377,20 +371,14 @@ function renderResearchTasks({ title }) {
 
 ## blockers
 - None.
-`;
-}
-
-function renderResearchSources({ title }) {
-  return `# Research Sources: ${title}
+`,
+  "sources.md": ({ title }) => `# Research Sources: ${title}
 
 | Source | Date Checked | Claim Supported | Confidence |
 | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD |
-`;
-}
-
-function renderResearchSynthesis({ title }) {
-  return `# Research Synthesis: ${title}
+`,
+  "synthesis.md": ({ title }) => `# Research Synthesis: ${title}
 
 ## Project Essence
 - TBD: summarize what the project is trying to become.
@@ -403,11 +391,8 @@ function renderResearchSynthesis({ title }) {
 
 ## Confidence And Gaps
 - TBD: record confidence, contradictions, and unresolved questions.
-`;
-}
-
-function renderResearchQualityGaps({ title }) {
-  return `# Quality Gaps: ${title}
+`,
+  "quality-gaps.md": ({ title }) => `# Quality Gaps: ${title}
 
 - [ ] Project essence is accurate and source-backed.
 - [ ] Sources are logged with dates, claims, and confidence.
@@ -415,21 +400,12 @@ function renderResearchQualityGaps({ title }) {
 - [ ] Each high-impact recommendation is implemented or rejected with evidence.
 - [ ] Correctness checks pass after kept changes.
 - [ ] Final handoff includes dashboard or state evidence.
-`;
-}
-
-const RESEARCH_FILE_RENDERERS = {
-  "brief.md": renderResearchBrief,
-  "plan.md": renderResearchPlan,
-  "tasks.md": renderResearchTasks,
-  "sources.md": renderResearchSources,
-  "synthesis.md": renderResearchSynthesis,
-  "quality-gaps.md": renderResearchQualityGaps,
+`,
 };
 
 function renderResearchFile(fileName, args, slug) {
   const goal = args.goal || args.name || slug;
-  const renderer = RESEARCH_FILE_RENDERERS[fileName];
+  const renderer = RESEARCH_FILE_TEMPLATES[fileName];
   if (renderer) return renderer({ title: researchTitle(goal), goal, args });
   throw new Error(`Unknown research file template: ${fileName}`);
 }
@@ -850,24 +826,31 @@ async function cleanupDiscardChanges(workDir, args, config) {
   throw new Error("Refusing broad discard cleanup in a dirty Git tree without scoped revert paths. Configure commitPaths/revertPaths or pass --allow-dirty-revert.");
 }
 
+function mergeRuntimeConfig(sessionCwd, updates) {
+  const configPath = runtimeConfigPath(sessionCwd);
+  const existing = readConfig(sessionCwd);
+  const nextConfig = { ...existing, ...updates };
+  return {
+    configPath,
+    nextConfig,
+    content: JSON.stringify(nextConfig, null, 2),
+  };
+}
+
 async function appendRuntimeConfigFile(files, sessionCwd, updates) {
   if (Object.keys(updates).length === 0) return;
-  const configPath = runtimeConfigPath(sessionCwd);
-  const existing = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
-  const nextConfig = { ...existing, ...updates };
+  const { configPath, content } = mergeRuntimeConfig(sessionCwd, updates);
   files.push(await writeSessionFile(
     configPath,
-    JSON.stringify(nextConfig, null, 2),
+    content,
     { overwrite: true },
   ));
 }
 
 async function writeRuntimeConfig(sessionCwd, updates) {
   if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
-  const configPath = runtimeConfigPath(sessionCwd);
-  const existing = readConfig(sessionCwd);
-  const nextConfig = { ...existing, ...updates };
-  await fsp.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
+  await fsp.writeFile(configPath, `${content}\n`, "utf8");
   return nextConfig;
 }
 
@@ -884,30 +867,30 @@ function runtimeConfigUpdatesFromArgs(args) {
   return updates;
 }
 
-async function setupSession(args) {
+async function writeSetupBootstrapFiles(args, options) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  if (!args.name) throw new Error("name is required");
-  if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
-  validateMetricName(args.metric_name || args.metricName);
   const overwrite = boolOption(args.overwrite, false);
   const shellKind = shellKindFromArgs(args);
   const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
   const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
   const files = [];
+  const context = { sessionCwd, workDir, overwrite, shellKind, benchmarkFile, checksFile, files };
+
+  if (options.beforeCommonFiles) await options.beforeCommonFiles(context);
 
   files.push(await writeSessionFile(
     path.join(workDir, "autoresearch.md"),
-    renderSessionDocument(args),
+    renderSessionDocument(options.sessionDocumentArgs(context)),
     { overwrite },
   ));
   files.push(await writeSessionFile(
     path.join(workDir, benchmarkFile),
-    renderBenchmarkScript(args, shellKind),
+    options.benchmarkContent(context),
     { overwrite, executable: shellKind === "bash" },
   ));
   files.push(await writeSessionFile(
     path.join(workDir, "autoresearch.ideas.md"),
-    `# Autoresearch Ideas: ${args.name}\n\n- Add promising ideas here when they are not tried immediately.\n`,
+    options.ideasContent(context),
     { overwrite },
   ));
 
@@ -918,6 +901,19 @@ async function setupSession(args) {
       { overwrite, executable: shellKind === "bash" },
     ));
   }
+
+  return context;
+}
+
+async function setupSession(args) {
+  if (!args.name) throw new Error("name is required");
+  if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
+  validateMetricName(args.metric_name || args.metricName);
+  const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
+    sessionDocumentArgs: () => args,
+    benchmarkContent: ({ shellKind: setupShellKind }) => renderBenchmarkScript(args, setupShellKind),
+    ideasContent: () => `# Autoresearch Ideas: ${args.name}\n\n- Add promising ideas here when they are not tried immediately.\n`,
+  });
 
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
   if (maxIterations != null) {
@@ -948,70 +944,49 @@ async function setupSession(args) {
 }
 
 async function setupResearchSession(args) {
-  const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const slug = researchSlugFromArgs(args);
   const goal = args.goal || args.name || slug;
-  const overwrite = boolOption(args.overwrite, false);
-  const shellKind = shellKindFromArgs(args);
-  const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
-  const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
-  const benchmarkCommand = shellKind === "bash"
-    ? "./autoresearch.sh"
-    : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+  const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
+    beforeCommonFiles: async ({ workDir: setupWorkDir, overwrite, files: setupFiles }) => {
+      const researchDir = researchDirPath(setupWorkDir, slug);
+      await fsp.mkdir(path.join(researchDir, "notes"), { recursive: true });
+      await fsp.mkdir(path.join(researchDir, "deliverables"), { recursive: true });
+      for (const fileName of ["brief.md", "plan.md", "tasks.md", "sources.md", "synthesis.md", "quality-gaps.md"]) {
+        setupFiles.push(await writeSessionFile(
+          path.join(researchDir, fileName),
+          renderResearchFile(fileName, args, slug),
+          { overwrite },
+        ));
+      }
+    },
+    sessionDocumentArgs: ({ shellKind: setupShellKind }) => {
+      const benchmarkCommand = setupShellKind === "bash"
+        ? "./autoresearch.sh"
+        : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+      const scopedFiles = [
+        researchRelativeDir(slug),
+        ...listOption(args.files_in_scope ?? args.filesInScope ?? args.scope),
+      ];
+      return {
+        ...args,
+        name: args.name || `Deep research: ${goal}`,
+        goal,
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        direction: "lower",
+        benchmarkCommand,
+        filesInScope: scopedFiles,
+        constraints: [
+          ...listOption(args.constraints),
+          `Keep research notes under ${researchRelativeDir(slug)}.`,
+          "Use source-backed evidence before implementing recommendations.",
+        ],
+      };
+    },
+    benchmarkContent: ({ shellKind: setupShellKind }) => renderResearchBenchmarkScript(slug, setupShellKind),
+    ideasContent: () => `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
+  });
   const researchDir = researchDirPath(workDir, slug);
-  const files = [];
-
-  await fsp.mkdir(path.join(researchDir, "notes"), { recursive: true });
-  await fsp.mkdir(path.join(researchDir, "deliverables"), { recursive: true });
-  for (const fileName of ["brief.md", "plan.md", "tasks.md", "sources.md", "synthesis.md", "quality-gaps.md"]) {
-    files.push(await writeSessionFile(
-      path.join(researchDir, fileName),
-      renderResearchFile(fileName, args, slug),
-      { overwrite },
-    ));
-  }
-
-  const scopedFiles = [
-    researchRelativeDir(slug),
-    ...listOption(args.files_in_scope ?? args.filesInScope ?? args.scope),
-  ];
-  files.push(await writeSessionFile(
-    path.join(workDir, "autoresearch.md"),
-    renderSessionDocument({
-      ...args,
-      name: args.name || `Deep research: ${goal}`,
-      goal,
-      metricName: "quality_gap",
-      metricUnit: "gaps",
-      direction: "lower",
-      benchmarkCommand,
-      filesInScope: scopedFiles,
-      constraints: [
-        ...listOption(args.constraints),
-        `Keep research notes under ${researchRelativeDir(slug)}.`,
-        "Use source-backed evidence before implementing recommendations.",
-      ],
-    }),
-    { overwrite },
-  ));
-  files.push(await writeSessionFile(
-    path.join(workDir, benchmarkFile),
-    renderResearchBenchmarkScript(slug, shellKind),
-    { overwrite, executable: shellKind === "bash" },
-  ));
-  files.push(await writeSessionFile(
-    path.join(workDir, "autoresearch.ideas.md"),
-    `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
-    { overwrite },
-  ));
-
-  if (args.checks_command || args.checksCommand || boolOption(args.create_checks ?? args.createChecks, false)) {
-    files.push(await writeSessionFile(
-      path.join(workDir, checksFile),
-      renderChecksScript(args, shellKind),
-      { overwrite, executable: shellKind === "bash" },
-    ));
-  }
 
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");

@@ -71,11 +71,7 @@ node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short s
 
 For broad or qualitative work, use `autoresearch-deep-research` instead of hand-rolling a rubric in this skill. It creates `autoresearch.research/<slug>/`, initializes a `quality_gap` session, and turns source-backed findings into checklist gaps that `/autoresearch next` can measure and close.
 
-When improving this plugin itself, use the repo-local plugin script before a globally installed or marketplace-cache copy:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup --cwd . --slug plugin-research --goal "Improve the autoresearch plugin with source-backed gaps"
-```
+When improving this plugin itself, use the repo-local plugin before a globally installed or marketplace-cache copy. Follow the canonical local routing in the [`/autoresearch` command doc](../../commands/autoresearch.md#local-plugin-routing).
 
 ## Loop Workflow
 

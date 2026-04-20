@@ -223,12 +223,11 @@ async function reviewSummaryPath(config, cwd) {
   return path.join(dir, `${stamp}-${safeSlug(config.goal)}.md`);
 }
 
-async function writeReviewSummary(file, context) {
-  const { config, groups, results, sourceBranch, status, error } = context;
-  const lines = [
+function renderReviewSummaryHeader({ config, sourceBranch, status, generatedAt }) {
+  return [
     `# Autoresearch Finalize Review Summary`,
     "",
-    `Generated: ${new Date().toISOString()}`,
+    `Generated: ${generatedAt}`,
     `Status: ${status}`,
     `Source branch: \`${sourceBranch}\``,
     `Base: \`${shortHash(config.base)}\``,
@@ -240,19 +239,25 @@ async function writeReviewSummary(file, context) {
     "| # | Branch | Title | Files |",
     "|---:|---|---|---|",
   ];
+}
 
+function renderBranchRows(groups, results) {
+  const lines = [];
   for (let i = 0; i < groups.length; i += 1) {
     const result = results[i];
     const branch = result?.branch || "(not created)";
     const suffix = result?.skipped ? " (skipped empty)" : "";
     lines.push(`| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${markdownEscape(groups[i].title)} | ${markdownEscape(groups[i].files.join(", ") || "(none)")} |`);
   }
+  return lines;
+}
 
-  lines.push(
+function renderSuggestedPrBlocks(config, groups, results) {
+  const lines = [
     "",
     "## Suggested PRs",
     "",
-  );
+  ];
   for (let i = 0; i < groups.length; i += 1) {
     const result = results[i];
     if (!result || result.skipped) continue;
@@ -285,8 +290,11 @@ async function writeReviewSummary(file, context) {
       lines.push("Branch stat:", "", "```text", result.stat, "```", "");
     }
   }
+  return lines;
+}
 
-  lines.push(
+function renderVerificationText(status, error) {
+  return [
     "",
     "## Verification",
     "",
@@ -296,6 +304,11 @@ async function writeReviewSummary(file, context) {
         ? `- Verification or branch creation failed: ${markdownEscape(error?.message || error || "unknown error")}`
         : "- Verification is pending.",
     "- Session artifact verification is preserved: review branches must not contain `autoresearch.*` files or `autoresearch.research/` scratchpads.",
+  ];
+}
+
+function renderCleanupNotes(sourceBranch) {
+  return [
     "",
     "## Cleanup After Merge",
     "",
@@ -305,7 +318,19 @@ async function writeReviewSummary(file, context) {
     "```",
     "",
     `This file is generated under Git metadata (\`${REPORT_DIRNAME}\`) so it does not dirty the worktree. Remove it when no longer needed.`
-  );
+  ];
+}
+
+async function writeReviewSummary(file, context) {
+  const { config, groups, results, sourceBranch, status, error } = context;
+  const generatedAt = new Date().toISOString();
+  const lines = [
+    ...renderReviewSummaryHeader({ config, sourceBranch, status, generatedAt }),
+    ...renderBranchRows(groups, results),
+    ...renderSuggestedPrBlocks(config, groups, results),
+    ...renderVerificationText(status, error),
+    ...renderCleanupNotes(sourceBranch),
+  ];
 
   await fsp.writeFile(file, `${lines.join("\n")}\n`, "utf8");
 }

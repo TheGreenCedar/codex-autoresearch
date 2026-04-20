@@ -6,9 +6,35 @@ description: Start, resume, inspect, run next, export, stop, or clear a Codex Au
 
 Interpret `$ARGUMENTS` as a subcommand or session goal.
 
+## Local Plugin Routing
+
+This command doc is the canonical CLI walkthrough for repo-local autoresearch runs. When this repository is the target, use the local plugin over any globally installed copy, including any marketplace-cache copy. Treat `plugins/codex-autoresearch` as `<plugin-root>` and prefer `node <plugin-root>/scripts/autoresearch.mjs ...` until the current iteration is complete.
+
+From the repository root:
+
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
+node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
+```
+
+From `plugins/codex-autoresearch`, use `node scripts/autoresearch.mjs ...` with the target project passed through `--cwd`.
+
+For MCP, the local `.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local CLI explicitly.
+
+Direct CLI sequence:
+
+```bash
+node <plugin-root>/scripts/autoresearch.mjs setup --cwd <current-project> --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
+node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark
+node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>
+node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status keep --description "Use worker pool" --commit-paths "src,test"
+node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
+```
+
 ## Dispatch
 
-When this repository is the target, use the local plugin over any globally installed copy. Treat `plugins/codex-autoresearch` as `<plugin-root>` and prefer `node <plugin-root>/scripts/autoresearch.mjs ...` until the current iteration is complete.
+Use the local routing above when this repository is the target.
 
 - Empty or `help`: summarize available actions.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
