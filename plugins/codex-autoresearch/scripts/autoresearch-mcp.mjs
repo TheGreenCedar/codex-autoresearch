@@ -9,7 +9,7 @@ const TOOL_TIMEOUT_SECONDS = 15 * 60;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CLI_SCRIPT = path.join(SCRIPT_DIR, "autoresearch.mjs");
-const VERSION = "0.1.10";
+const VERSION = "0.1.11";
 
 let buffer = Buffer.alloc(0);
 

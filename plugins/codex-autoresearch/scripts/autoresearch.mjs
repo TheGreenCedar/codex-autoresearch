@@ -1822,7 +1822,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.10" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.11" },
       },
     });
     return;

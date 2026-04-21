@@ -198,10 +198,13 @@ Then it creates:
 | `autoresearch.sh` or `autoresearch.ps1` | Benchmark script that prints `METRIC name=value` lines |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |
+| `autoresearch-dashboard.html` | Exported operator dashboard that Codex links directly when the workflow starts or resumes |
 | last-run packet | Latest `next` packet for quick keep/discard logging with `--from-last`; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json` |
 | `autoresearch.ideas.md` | Optional backlog for promising ideas |
 
 The deterministic setup path is available as MCP `setup_session` and CLI `setup`. It is the fastest way to create a fresh, resumable Codex session without hand-copying templates.
+
+When Codex starts or resumes a workflow, it exports or refreshes the dashboard and directly provides a clickable `autoresearch-dashboard.html` file link before continuing with experiments or status narration.
 
 ### 2. Run the Loop
 
@@ -245,6 +248,8 @@ The session is designed to survive interruptions and context resets. A fresh Cod
 - `autoresearch.ideas.md`
 
 and continue without rediscovering the same dead ends.
+
+On resume, Codex refreshes `autoresearch-dashboard.html` and links it directly before running the next experiment.
 
 ### 4. Finalize for Review
 

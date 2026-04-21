@@ -19,6 +19,7 @@ Use this skill to run a measured optimization loop:
 - `autoresearch.sh` or `autoresearch.ps1`: benchmark entrypoint.
 - `autoresearch.checks.sh` or `autoresearch.checks.ps1`: optional correctness checks.
 - `autoresearch.jsonl`: append-only run log.
+- `autoresearch-dashboard.html`: exported operator dashboard; refresh it when the workflow starts, resumes, and after meaningful logged runs.
 - last-run packet: latest `next` packet for fast keep/discard logging; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`.
 - `autoresearch.ideas.md`: optional backlog for promising ideas not tried yet.
 
@@ -69,7 +70,9 @@ node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short s
 7. For a terminal-guided first run, use `node scripts/autoresearch.mjs setup --cwd /absolute/project/path --interactive`.
 8. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
 9. Run `node scripts/autoresearch.mjs doctor --cwd /absolute/project/path --check-benchmark` or MCP `doctor_session` to catch missing metric output before the loop starts.
-10. Run the baseline immediately.
+10. Export or refresh the dashboard with MCP `export_dashboard` or `node scripts/autoresearch.mjs export --cwd /absolute/project/path`.
+11. The assistant must directly provide the dashboard file link at session start and resume. Include a clickable Markdown link to the absolute `autoresearch-dashboard.html` path before moving into experiments or status narration, for example `[autoresearch-dashboard.html](/absolute/project/path/autoresearch-dashboard.html)`.
+12. Run the baseline immediately, then refresh the same dashboard link if the baseline changed its data.
 
 ## Broad Research Loops
 
@@ -143,6 +146,8 @@ If `autoresearch.md` and `autoresearch.jsonl` already exist:
 
 1. Read both files.
 2. Run `node scripts/autoresearch.mjs state --cwd /absolute/project/path` or MCP `read_state`.
-3. Continue from the latest kept baseline and avoid repeated dead ends.
+3. Export or refresh `autoresearch-dashboard.html` with MCP `export_dashboard` or `node scripts/autoresearch.mjs export --cwd /absolute/project/path`.
+4. Directly provide the dashboard file link before the first resumed experiment, using a clickable Markdown link to the absolute path.
+5. Continue from the latest kept baseline and avoid repeated dead ends.
 
 Do not ask whether to continue after every run. Continue until the user interrupts, the max iteration limit is reached, or the task is genuinely exhausted.

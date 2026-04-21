@@ -30,10 +30,13 @@ node <plugin-root>/scripts/autoresearch.mjs setup-plan --cwd <current-project>
 node <plugin-root>/scripts/autoresearch.mjs recipes list
 node <plugin-root>/scripts/autoresearch.mjs setup --cwd <current-project> --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
 node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark
+node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
 node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>
 node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status keep --description "Use worker pool" --commit-paths "src,test"
 node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
 ```
+
+After any start or resume path, directly provide the dashboard file link before continuing with experiments or status narration. Use a clickable Markdown link to the absolute `autoresearch-dashboard.html` path, for example `[autoresearch-dashboard.html](/absolute/project/path/autoresearch-dashboard.html)`.
 
 ## Dispatch
 
@@ -54,7 +57,7 @@ Use the local routing above when this repository is the target.
 - `finalize-preview`: run `node <plugin-root>/scripts/autoresearch.mjs finalize-preview --cwd <current-project>` to inspect review-branch readiness without creating branches.
 - `serve`: run `node <plugin-root>/scripts/autoresearch.mjs serve --cwd <current-project>` to start the local live dashboard and safe action endpoints.
 - `integrations ...`: run `node <plugin-root>/scripts/autoresearch.mjs integrations list|doctor|sync-recipes` to inspect additive integration surfaces such as recipe catalogs and model commands.
-- Any other text: use the `autoresearch-create` skill to start or resume the loop using the text as the goal/context.
+- Any other text: use the `autoresearch-create` skill to start or resume the loop using the text as the goal/context, then export or refresh `autoresearch-dashboard.html` and directly provide the dashboard file link.
 
 ## Safety
 

@@ -174,6 +174,22 @@ const checks = [
     },
   },
   {
+    id: "create-skill-dashboard-link",
+    file: "skills/autoresearch-create/SKILL.md, commands/autoresearch.md",
+    description: "Start and resume workflow guidance requires a direct dashboard file link.",
+    run: async () => {
+      const skill = await readText("skills/autoresearch-create/SKILL.md");
+      const command = await readText("commands/autoresearch.md");
+      return includesAll(`${skill}\n${command}`, [
+        "directly provide the dashboard file link",
+        "session start and resume",
+        "autoresearch-dashboard.html",
+      ])
+        ? pass()
+        : fail("Create and command docs must require a direct dashboard link at start and resume.");
+    },
+  },
+  {
     id: "deep-research-skill",
     file: "skills/autoresearch-deep-research/SKILL.md",
     description: "Plugin-local deep research skill preserves orchestration ideas and converts them into quality_gap loops.",
