@@ -315,13 +315,16 @@ const checks = [
   },
   {
     id: "quality-gate-in-checks",
-    file: "package.json",
+    file: "package.json, scripts/check.mjs",
     description: "npm run check fails when the plugin's own quality_gap benchmark regresses.",
     run: async () => {
       const pkg = await readJson("package.json");
-      return String(pkg.scripts?.check || "").includes("perfection-benchmark.mjs --fail-on-gap")
+      const checkScript = await readText("scripts/check.mjs");
+      return String(pkg.scripts?.check || "").includes("scripts/check.mjs")
+        && checkScript.includes("perfection-benchmark.mjs")
+        && checkScript.includes("--fail-on-gap")
         ? pass()
-        : fail("package check does not run perfection-benchmark with --fail-on-gap.");
+        : fail("package check does not run scripts/check.mjs with perfection-benchmark --fail-on-gap.");
     },
   },
   {
@@ -367,6 +370,41 @@ const checks = [
       return template.includes('<link rel="icon" href="data:image/svg+xml,')
         ? pass()
         : fail("Missing embedded data-URL favicon.");
+    },
+  },
+  {
+    id: "dashboard-next-action-and-portfolio",
+    file: "assets/template.html, lib/dashboard-view-model.mjs",
+    description: "The dashboard exposes a next-best-action rail and experiment portfolio guidance.",
+    run: async () => {
+      const template = await readText("assets/template.html");
+      const viewModel = await readText("lib/dashboard-view-model.mjs");
+      return includesAll(`${template}\n${viewModel}`, [
+        "Next best action",
+        "nextBestAction",
+        "Experiment portfolio",
+        "lanePortfolio",
+        "plateau",
+      ])
+        ? pass()
+        : fail("Dashboard is missing next-best-action or portfolio/plateau surfaces.");
+    },
+  },
+  {
+    id: "last-run-packet-safety",
+    file: "scripts/autoresearch.mjs, tests/autoresearch-cli.test.mjs",
+    description: "Last-run packets are cleared after logging and stale packets are rejected.",
+    run: async () => {
+      const cli = await readText("scripts/autoresearch.mjs");
+      const tests = await readText("tests/autoresearch-cli.test.mjs");
+      return includesAll(`${cli}\n${tests}`, [
+        "deleteLastRunPacket",
+        "assertFreshLastRunPacket",
+        "status is required; choose keep or discard explicitly",
+        "stale last-run packets are rejected",
+      ])
+        ? pass()
+        : fail("Last-run packet safety behavior is not implemented and tested.");
     },
   },
   {

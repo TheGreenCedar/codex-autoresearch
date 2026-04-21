@@ -273,10 +273,12 @@ async function setupPlan(args) {
     recommended = await recommendRecipe(workDir);
   }
   const state = currentState(workDir);
+  const hasDefaultBenchmarkCommand = await defaultBenchmarkCommandExists(workDir);
+  const hasBenchmarkInput = Boolean(args.benchmark_command || args.benchmarkCommand);
   const missing = [];
   if (!args.name && !state.config.name && !recommended) missing.push("name");
   if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended) missing.push("metric_name");
-  if (!args.benchmark_command && !args.benchmarkCommand && !(await pathExists(path.join(workDir, "autoresearch.ps1"))) && !(await pathExists(path.join(workDir, "autoresearch.sh")))) {
+  if (state.current.length === 0 && !hasBenchmarkInput && !hasDefaultBenchmarkCommand) {
     missing.push("benchmark_command");
   }
   const planArgs = await withRecipeDefaults({
@@ -314,6 +316,7 @@ async function setupPlan(args) {
     currentMetric: state.config.metricName,
     recommendedRecipe: recommended,
     missing,
+    defaultBenchmarkCommandReady: hasDefaultBenchmarkCommand,
     nextCommand: command,
     guideCommand,
     baselineCommand,
@@ -336,16 +339,26 @@ async function guidedSetup(args) {
   const state = publicState({ cwd: workDir });
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
   const lastRun = await readLastRunPacket(workDir).catch(() => null);
+  const lastRunFreshness = lastRun ? lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunLogStatus = lastRun
+    ? (lastRun.decision?.safeSuggestedStatus
+        || lastRun.decision?.suggestedStatus
+        || (lastRun.decision?.allowedStatuses?.length === 1 ? lastRun.decision.allowedStatuses[0] : "discard"))
+    : "";
+  const replaceLastRunCommand = lastRun ? replacementNextCommandFromLastRun(workDir, lastRun, setup.defaultBenchmarkCommandReady) : "";
   const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} export --cwd ${shellQuote(workDir)}`;
   const baselineCommand = setup.baselineCommand;
   const logCommand = lastRun
-    ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRun.decision?.suggestedStatus || "keep")} --description ${shellQuote("Describe the last packet")}`
+    ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRunLogStatus)} --description ${shellQuote("Describe the last packet")}`
     : setup.guidedFlow.find((step) => step.step === "log")?.command;
   let stage = "ready";
   let nextAction = "Run the next measured packet.";
-  if (setup.missing.length) {
+  if (setup.missing.length && state.runs === 0) {
     stage = "needs-setup";
     nextAction = "Create or complete the session setup before running a baseline.";
+  } else if (lastRun && lastRunFreshness?.fresh === false) {
+    stage = "stale-last-run";
+    nextAction = lastRunFreshness.reason;
   } else if (lastRun) {
     stage = "needs-log-decision";
     nextAction = "Log the last packet with an allowed status before starting another run.";
@@ -355,6 +368,9 @@ async function guidedSetup(args) {
   } else if (state.limit.limitReached) {
     stage = "limit-reached";
     nextAction = "Export the dashboard or extend the iteration limit.";
+  } else if (!setup.defaultBenchmarkCommandReady) {
+    stage = "needs-benchmark-command";
+    nextAction = "Add autoresearch.ps1 or autoresearch.sh, or run setup with a benchmark command before using next.";
   }
   return {
     ok: doctor.issues.length === 0,
@@ -372,19 +388,53 @@ async function guidedSetup(args) {
       ok: lastRun.ok,
       allowedStatuses: lastRun.decision?.allowedStatuses || [],
       suggestedStatus: lastRun.decision?.suggestedStatus || "",
+      rawSuggestedStatus: lastRun.decision?.rawSuggestedStatus || "",
+      safeSuggestedStatus: lastRun.decision?.safeSuggestedStatus || lastRunLogStatus,
+      statusGuidance: lastRun.decision?.statusGuidance || "",
+      diversityGuidance: lastRun.decision?.diversityGuidance || state.memory?.diversityGuidance || null,
+      lanePortfolio: lastRun.decision?.lanePortfolio || state.memory?.lanePortfolio || [],
       metric: lastRun.decision?.metric ?? null,
       path: lastRun.lastRunPath || "",
+      freshness: lastRunFreshness,
     } : null,
     commands: {
       setup: setup.nextCommand,
       doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command,
       baseline: baselineCommand,
       logLast: logCommand,
+      replaceLast: replaceLastRunCommand,
       dashboard: dashboardCommand,
     },
     settings: dashboardSettings(config),
+    diversityGuidance: state.memory?.diversityGuidance || null,
+    lanePortfolio: state.memory?.lanePortfolio || [],
     nextAction,
   };
+}
+
+function replacementNextCommandFromLastRun(workDir, packet, defaultBenchmarkCommandReady) {
+  const parts = [
+    "node",
+    shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
+    "next",
+    "--cwd",
+    shellQuote(workDir),
+  ];
+  const command = packet?.run?.command;
+  if (command) {
+    parts.push("--command", shellQuote(command));
+  } else if (!defaultBenchmarkCommandReady) {
+    return "";
+  }
+  const checksPolicy = packet?.run?.checksPolicy;
+  if (CHECKS_POLICIES.has(checksPolicy)) {
+    parts.push("--checks-policy", shellQuote(checksPolicy));
+  }
+  const checksCommand = packet?.run?.checks?.command;
+  if (checksCommand) {
+    parts.push("--checks-command", shellQuote(checksCommand));
+  }
+  return parts.join(" ");
 }
 
 async function recipeCommand(subcommand, args) {
@@ -900,6 +950,10 @@ async function defaultBenchmarkCommand(workDir) {
   throw new Error("No command provided; expected autoresearch.ps1 or autoresearch.sh in the work directory.");
 }
 
+async function defaultBenchmarkCommandExists(workDir) {
+  return (await pathExists(path.join(workDir, "autoresearch.ps1"))) || (await pathExists(path.join(workDir, "autoresearch.sh")));
+}
+
 async function defaultChecksCommand(workDir) {
   if (await pathExists(path.join(workDir, "autoresearch.checks.ps1"))) {
     return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.checks.ps1";
@@ -1365,7 +1419,11 @@ async function dashboardViewModel(workDir, config) {
       nextAction: "Fix finalization preview errors before relying on review readiness.",
     })),
     recipes: listBuiltInRecipes().map((recipe) => ({ id: recipe.id, title: recipe.title, tags: recipe.tags || [] })),
-    experimentMemory: buildExperimentMemory({ runs: state.current, direction: state.config.bestDirection }),
+    experimentMemory: buildExperimentMemory({
+      runs: state.current,
+      direction: state.config.bestDirection,
+      settings: dashboardSettings(config),
+    }),
     drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({ ok: false, warnings: [error.message] })),
   });
 }
@@ -1431,6 +1489,7 @@ async function runExperiment(args) {
   const primaryPresent = finiteMetric(primary) != null;
   const primaryMetric = finiteMetric(primary);
   const improvesPrimary = primaryMetric != null && (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
+  const isBaseline = state.current.filter((run) => finiteMetric(run.metric) != null).length === 0;
   let checks = null;
   const checksCommand = args.checks_command || args.checksCommand || await defaultChecksCommand(workDir);
   const checksPolicy = checksPolicyFromArgs(args, config);
@@ -1446,6 +1505,18 @@ async function runExperiment(args) {
   const passed = benchmarkPassed && primaryPresent && checksPassedOrSkipped;
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
   const allowedStatuses = passed ? ["keep", "discard"] : [failedStatus];
+  const suggestedStatus = passed
+    ? (isBaseline || improvesPrimary ? "keep" : "discard")
+    : failedStatus;
+  const checksWereVerified = checksPassed === true;
+  const safeSuggestedStatus = passed
+    ? (suggestedStatus === "keep" && !isBaseline && !checksWereVerified ? "discard" : suggestedStatus)
+    : failedStatus;
+  const statusGuidance = passed
+    ? (safeSuggestedStatus === "keep"
+        ? "Safe to consider keep because this is a baseline or a checked improvement; still review ASI before logging."
+        : "Default to discard unless the operator can justify keep with ASI and verification evidence.")
+    : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   return {
     ok: passed,
     workDir,
@@ -1474,6 +1545,9 @@ async function runExperiment(args) {
       metric: primary,
       metrics: Object.fromEntries(Object.entries(parsedMetrics).filter(([key]) => key !== state.config.metricName)),
       status: passed ? null : failedStatus,
+      suggestedStatus,
+      safeSuggestedStatus,
+      statusGuidance,
       needsDecision: passed,
       allowedStatuses,
     },
@@ -1484,9 +1558,12 @@ async function runExperiment(args) {
 async function logExperiment(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false) ? await readLastRunPacket(workDir) : null;
+  if (lastPacket) assertFreshLastRunPacket(workDir, lastPacket);
   const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
   if (metric == null) throw new Error("metric is required");
-  const status = args.status || lastPacket?.decision?.suggestedStatus;
+  const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses) ? lastPacket.decision.allowedStatuses : [];
+  const status = args.status || (packetAllowed.length === 1 ? lastPacket?.decision?.suggestedStatus : null);
+  if (!status) throw new Error("status is required; choose keep or discard explicitly for successful packets.");
   if (!STATUS_VALUES.has(status)) throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
   if (lastPacket?.decision && Array.isArray(lastPacket.decision.allowedStatuses) && !lastPacket.decision.allowedStatuses.includes(status)) {
     throw new Error(`Cannot log status '${status}' for the last run. Allowed statuses: ${lastPacket.decision.allowedStatuses.join(", ")}.`);
@@ -1557,6 +1634,7 @@ async function logExperiment(args) {
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
   experiment.confidence = computeConfidence([...currentRuns, experiment], stateBefore.config.bestDirection);
   appendJsonl(workDir, experiment);
+  if (lastPacket) await deleteLastRunPacket(workDir);
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
@@ -1571,6 +1649,7 @@ async function logExperiment(args) {
     limit,
     git: gitMessage,
     revert: revertMessage,
+    lastRunCleared: Boolean(lastPacket),
     continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
 }
@@ -1660,10 +1739,87 @@ async function readLastRunPacket(workDir) {
   return JSON.parse(fs.readFileSync(readablePath, "utf8"));
 }
 
+function assertFreshLastRunPacket(workDir, packet) {
+  const freshness = lastRunPacketFreshness(workDir, packet);
+  if (!freshness.fresh) throw new Error(freshness.reason);
+}
+
+function lastRunPacketFreshness(workDir, packet) {
+  const expectedNextRun = Number(packet.history?.nextRun);
+  const expectedSegment = Number(packet.history?.segment);
+  if (!Number.isFinite(expectedNextRun)) {
+    return {
+      fresh: false,
+      reason: "Last-run packet is missing history metadata. Run next again before logging.",
+    };
+  }
+  const state = currentState(workDir);
+  const actualNextRun = state.results.length + 1;
+  if (Number.isFinite(expectedSegment) && state.segment !== expectedSegment) {
+    return {
+      fresh: false,
+      expectedSegment,
+      actualSegment: state.segment,
+      reason: `Last-run packet is stale: expected segment #${expectedSegment}, but current segment is #${state.segment}. Run next again before logging.`,
+    };
+  }
+  const expectedConfig = packet.history?.config;
+  if (!expectedConfig || typeof expectedConfig !== "object") {
+    return {
+      fresh: false,
+      reason: "Last-run packet is missing config metadata. Run next again before logging.",
+    };
+  }
+  const actualConfig = lastRunConfigSnapshot(state.config);
+  if (JSON.stringify(expectedConfig) !== JSON.stringify(actualConfig)) {
+    return {
+      fresh: false,
+      expectedConfig,
+      actualConfig,
+      reason: "Last-run packet is stale: session config changed since the packet was created. Run next again before logging.",
+    };
+  }
+  if (actualNextRun !== expectedNextRun) {
+    return {
+      fresh: false,
+      expectedNextRun,
+      actualNextRun,
+      reason: `Last-run packet is stale: expected next log run #${expectedNextRun}, but current history would log #${actualNextRun}. Run next again before logging.`,
+    };
+  }
+  return {
+    fresh: true,
+    expectedNextRun,
+    actualNextRun,
+    reason: "Last-run packet matches the current ledger.",
+  };
+}
+
+function lastRunConfigSnapshot(config = {}) {
+  return {
+    name: config.name || null,
+    metricName: config.metricName || "metric",
+    metricUnit: config.metricUnit ?? "",
+    bestDirection: config.bestDirection === "higher" ? "higher" : "lower",
+  };
+}
+
+async function deleteLastRunPacket(workDir) {
+  const filePath = await resolveLastRunPath(workDir);
+  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  for (const target of new Set([filePath, legacyPath])) {
+    await fsp.rm(target, { force: true }).catch(() => {});
+  }
+}
+
 function publicState(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
-  const memory = buildExperimentMemory({ runs: state.current, direction: state.config.bestDirection });
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
   const statusCounts = Object.fromEntries([...STATUS_VALUES].map((status) => [
     status,
     state.current.filter((run) => run.status === status).length,
@@ -1717,6 +1873,12 @@ function loopContinuation(workDir, state, config = {}, stage = "state", options 
   const mode = config.autonomyMode || "guarded";
   const limit = iterationLimitInfo(state, config);
   const commands = continuationCommands(workDir);
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
+  const topLane = memory.diversityGuidance || memory.lanePortfolio?.[0];
   const stopConditions = [
     "user interrupts or turns the loop off",
     "iteration limit is reached",
@@ -1778,11 +1940,15 @@ function loopContinuation(workDir, state, config = {}, stage = "state", options 
   return {
     mode,
     stage,
+    plateau: memory.plateau,
+    lanePortfolio: memory.lanePortfolio,
     shouldContinue: true,
     shouldAskUser: false,
     forbidFinalAnswer: ownerAutonomous,
     nextAction: ownerAutonomous
-      ? "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to restart the create skill."
+      ? (memory.plateau?.detected
+          ? `Keep the floor: run the ${topLane?.label || "distant scout"} lane next because the current search is plateauing.`
+          : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to restart the create skill.")
       : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
     commands,
     stopConditions,
@@ -1915,21 +2081,38 @@ async function nextExperiment(args) {
     };
   }
   const run = await runExperiment(args);
+  const stateBeforeLog = currentState(run.workDir);
+  const memory = buildExperimentMemory({
+    runs: stateBeforeLog.current,
+    direction: stateBeforeLog.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
   const decision = {
     metric: run.parsedPrimary,
     metrics: run.logHint.metrics,
     allowedStatuses: run.logHint.allowedStatuses,
-    suggestedStatus: run.logHint.status,
+    suggestedStatus: run.logHint.safeSuggestedStatus ?? run.logHint.suggestedStatus ?? run.logHint.status,
+    rawSuggestedStatus: run.logHint.suggestedStatus ?? run.logHint.status,
+    safeSuggestedStatus: run.logHint.safeSuggestedStatus ?? run.logHint.suggestedStatus ?? run.logHint.status,
+    statusGuidance: run.logHint.statusGuidance || "",
+    diversityGuidance: memory.diversityGuidance,
+    lanePortfolio: memory.lanePortfolio,
+    plateau: memory.plateau,
+    novelty: memory.novelty,
     needsDecision: run.logHint.needsDecision,
     asiTemplate: run.ok
       ? {
           hypothesis: "",
           evidence: `${run.metricName}=${run.parsedPrimary}${run.metricUnit || ""}`,
+          lane: memory.diversityGuidance?.id || "",
+          family: "",
           next_action_hint: "",
         }
       : {
           evidence: run.metricError || `Benchmark exit ${run.exitCode ?? "none"}`,
           rollback_reason: "",
+          lane: memory.diversityGuidance?.id || "",
+          family: "",
           next_action_hint: "",
         },
   };
@@ -1938,11 +2121,18 @@ async function nextExperiment(args) {
     ok: doctor.ok && run.ok,
     workDir: run.workDir,
     lastRunPath: lastRunFile,
+    history: {
+      segment: stateBeforeLog.segment,
+      config: lastRunConfigSnapshot(stateBeforeLog.config),
+      currentRuns: stateBeforeLog.current.length,
+      totalRuns: stateBeforeLog.results.length,
+      nextRun: stateBeforeLog.results.length + 1,
+    },
     doctor,
     run,
     decision,
     nextAction: run.ok
-      ? "Log this run with status keep or discard, include ASI, then continue with the next hypothesis."
+      ? `Log this run as ${decision.safeSuggestedStatus || "keep/discard"} unless review evidence says otherwise, include ASI, then continue with the next ${memory.diversityGuidance?.label || "diversity"} lane.`
       : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
     continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", {
       requiredStatus: run.logHint.status,
@@ -2028,7 +2218,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.13" },
+        serverInfo: { name: "codex-autoresearch", version: "0.2.0" },
       },
     });
     return;

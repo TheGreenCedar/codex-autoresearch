@@ -315,9 +315,15 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, 3);
     assert.equal(packet.decision.metrics.cache_hits, 8);
+    assert.equal(packet.decision.safeSuggestedStatus, "keep");
+    assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
+    assert.ok(packet.decision.diversityGuidance);
+    assert.equal(packet.decision.asiTemplate.lane, packet.decision.diversityGuidance.id);
 
     const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
     assert.equal(lastRun.decision.metric, 3);
+    assert.equal(lastRun.history.nextRun, 1);
+    assert.equal(lastRun.history.config.metricName, "seconds");
 
     const log = await runCli([
       "log",
@@ -330,6 +336,90 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.experiment.metric, 3);
     assert.equal(payload.experiment.metrics.cache_hits, 8);
+    assert.equal(payload.lastRunCleared, true);
+    await assert.rejects(access(packet.lastRunPath));
+
+    const duplicate = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "discard",
+      "--description", "Duplicate cached packet",
+    ]);
+    assert.notEqual(duplicate.code, 0);
+    assert.match(duplicate.stderr, /No last-run packet/);
+  });
+});
+
+test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
+  await withTempDir("last-run-suggest-discard", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "suggest discard", "--metric-name", "seconds", "--direction", "lower"]);
+    await runCli(["log", "--cwd", dir, "--metric", "3", "--status", "keep", "--description", "Baseline"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.decision.suggestedStatus, "discard");
+    assert.deepEqual(packet.decision.allowedStatuses, ["keep", "discard"]);
+
+    const missingStatus = await runCli(["log", "--cwd", dir, "--from-last", "--description", "No status"]);
+    assert.notEqual(missingStatus.code, 0);
+    assert.match(missingStatus.stderr, /status is required/);
+
+    const discard = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "discard",
+      "--description", "Discard slower run",
+    ]);
+    assert.equal(discard.code, 0, discard.stderr);
+    assert.equal(JSON.parse(discard.stdout).experiment.status, "discard");
+  });
+});
+
+test("stale last-run packets are rejected when history advances", async () => {
+  await withTempDir("stale-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "stale packet", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+
+    const directLog = await runCli(["log", "--cwd", dir, "--metric", "2", "--status", "keep", "--description", "Manual run"]);
+    assert.equal(directLog.code, 0, directLog.stderr);
+
+    const stale = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Old packet",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /Last-run packet is stale/);
+  });
+});
+
+test("last-run packets are rejected when config changes before logging", async () => {
+  await withTempDir("config-stale-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "first config", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+
+    const secondConfig = await runCli(["init", "--cwd", dir, "--name", "second config", "--metric-name", "points", "--direction", "higher"]);
+    assert.equal(secondConfig.code, 0, secondConfig.stderr);
+
+    const stale = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Old metric packet",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /session config changed/);
   });
 });
 
@@ -879,6 +969,11 @@ test("next command runs preflight and benchmark as one decision packet", async (
     assert.equal(payload.doctor.ok, true);
     assert.equal(payload.run.parsedPrimary, 2);
     assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard"]);
+    assert.equal(payload.decision.suggestedStatus, "keep");
+    assert.equal(payload.decision.safeSuggestedStatus, "keep");
+    assert.match(payload.decision.statusGuidance, /Safe to consider keep/);
+    assert.ok(Array.isArray(payload.decision.lanePortfolio));
+    assert.ok(payload.decision.diversityGuidance);
     assert.match(payload.nextAction, /Log this run/);
   });
 });
@@ -892,7 +987,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
       "--metric", "10",
       "--status", "keep",
       "--description", "Baseline",
-      "--asi", JSON.stringify({ hypothesis: "baseline", next_action_hint: "try caching" }),
+      "--asi", JSON.stringify({ hypothesis: "baseline", family: "baseline", lane: "incumbent-confirmation", next_action_hint: "try caching" }),
     ]);
     await runCli([
       "log",
@@ -902,6 +997,8 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
       "--description", "Cache package metadata",
       "--asi", JSON.stringify({
         hypothesis: "metadata cache removes repeated filesystem scans",
+        family: "metadata cache",
+        lane: "near-neighbor",
         evidence: "seconds improved from 10 to 7",
         next_action_hint: "measure memory impact next",
       }),
@@ -913,20 +1010,83 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
       "--status", "discard",
       "--description", "Inline all parsing",
       "--asi", JSON.stringify({
+        family: "parser inlining",
+        lane: "near-neighbor",
         rollback_reason: "slower and harder to read",
         next_action_hint: "avoid parser inlining",
       }),
     ]);
 
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.ok(statePayload.memory.families.length >= 2);
+    assert.equal(typeof statePayload.memory.plateau.detected, "boolean");
+    assert.equal(typeof statePayload.memory.novelty.score, "number");
+    assert.ok(statePayload.memory.lanePortfolio.some((lane) => lane.id === "measurement-quality"));
+    assert.ok(statePayload.memory.diversityGuidance);
+
     const exportResult = await runCli(["export", "--cwd", dir]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
+    const payload = JSON.parse(exportResult.stdout);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
 
     assert.match(dashboard, /Operator readout/);
     assert.match(dashboard, /Best kept change/);
     assert.match(dashboard, /Recent failures/);
     assert.match(dashboard, /Next action/);
+    assert.match(dashboard, /Next best action/);
+    assert.match(dashboard, /Experiment portfolio/);
     assert.match(dashboard, /lower is better/);
+    assert.ok(payload.viewModel.nextBestAction.detail);
+    assert.ok(payload.viewModel.nextBestAction.command || payload.viewModel.nextBestAction.safeAction);
+    assert.equal(payload.viewModel.experimentMemory.latestNextAction, "avoid parser inlining");
+    assert.equal(payload.viewModel.portfolio.families.length > 0, true);
+    assert.equal(payload.viewModel.portfolio.lanes.some((lane) => lane.id === "measurement-quality"), true);
+    assert.equal(typeof payload.viewModel.portfolio.plateau.detected, "boolean");
+  });
+});
+
+test("dashboard does not recommend next when manual metrics have no benchmark command", async () => {
+  await withTempDir("dashboard-manual-no-command", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "manual metrics", "--metric-name", "seconds"]);
+    const log = await runCli(["log", "--cwd", dir, "--metric", "5", "--status", "keep", "--description", "Manual baseline"]);
+    assert.equal(log.code, 0, log.stderr);
+
+    const exportResult = await runCli(["export", "--cwd", dir]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const payload = JSON.parse(exportResult.stdout);
+
+    assert.equal(payload.viewModel.guidedSetup.stage, "needs-benchmark-command");
+    assert.equal(payload.viewModel.setup.defaultBenchmarkCommandReady, false);
+    assert.equal(payload.viewModel.nextBestAction.kind, "benchmark-command");
+    assert.match(payload.viewModel.nextBestAction.title, /benchmark command/i);
+    assert.doesNotMatch(payload.viewModel.nextBestAction.title, /next measured/i);
+  });
+});
+
+test("dashboard surfaces stale last-run packets before normal next guidance", async () => {
+  await withTempDir("dashboard-stale-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "stale dashboard", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const directLog = await runCli(["log", "--cwd", dir, "--metric", "2", "--status", "keep", "--description", "Manual run"]);
+    assert.equal(directLog.code, 0, directLog.stderr);
+
+    const exportResult = await runCli(["export", "--cwd", dir]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const payload = JSON.parse(exportResult.stdout);
+
+    assert.equal(payload.viewModel.guidedSetup.stage, "stale-last-run");
+    assert.equal(payload.viewModel.lastRun.freshness.fresh, false);
+    assert.equal(payload.viewModel.nextBestAction.kind, "stale-packet");
+    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--command/);
+    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /METRIC seconds=3/);
+    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--checks-policy "manual"/);
+    assert.equal(payload.viewModel.nextBestAction.command, payload.viewModel.guidedSetup.commands.replaceLast);
+    assert.match(payload.viewModel.nextBestAction.detail, /Last-run packet is stale/);
+    assert.match(payload.viewModel.readout.nextAction, /Last-run packet is stale/);
   });
 });
 

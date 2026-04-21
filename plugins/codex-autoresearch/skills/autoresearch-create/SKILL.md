@@ -20,7 +20,7 @@ Use this skill to run a measured optimization loop:
 - `autoresearch.checks.sh` or `autoresearch.checks.ps1`: optional correctness checks.
 - `autoresearch.jsonl`: append-only run log.
 - `autoresearch-dashboard.html`: exported operator dashboard; refresh it when the workflow starts, resumes, and after meaningful logged runs.
-- last-run packet: latest `next` packet for fast keep/discard logging; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`.
+- last-run packet: latest `next` packet for fast keep/discard logging; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`, then cleared after a successful `log --from-last`.
 - `autoresearch.ideas.md`: optional backlog for promising ideas not tried yet.
 
 Starter templates live in the plugin `assets/` directory:
@@ -103,7 +103,7 @@ Then log the result every time with MCP `log_experiment` or:
 node scripts/autoresearch.mjs log --cwd /absolute/project/path --metric 12.3 --status keep --description "Short description" --metrics "{}" --asi "{\"hypothesis\":\"what changed\"}"
 ```
 
-After `next`, prefer `--from-last` so the metric, secondary metrics, and ASI template are reused from the last-run packet:
+After `next`, prefer `--from-last` so the metric, secondary metrics, and ASI template are reused from the last-run packet. Successful packets still require an explicit `--status keep` or `--status discard`; consumed packets are cleared, and stale packets are rejected after history advances:
 
 ```bash
 node scripts/autoresearch.mjs log --cwd /absolute/project/path --from-last --status keep --description "Short description"
