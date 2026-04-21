@@ -18,6 +18,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "node -e \"const {spawnSync}=require('node:child_process'); const c=process.platform==='win32'?'npm.cmd':'npm'; const r=spawnSync(c,['test'],{stdio:'inherit'}); process.exit(r.status ?? 1)\"",
     scope: ["package.json", "tests"],
     caveats: ["Requires an npm test script."],
+    tags: ["runtime", "node", "test"],
   },
   {
     id: "vitest-runtime",
@@ -29,6 +30,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "npx vitest run",
     scope: ["package.json", "src", "tests"],
     caveats: ["Requires Vitest to be available through npx or project dependencies."],
+    tags: ["runtime", "frontend", "test"],
   },
   {
     id: "cargo-test-runtime",
@@ -40,6 +42,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "cargo test",
     scope: ["Cargo.toml", "src", "tests"],
     caveats: ["Requires Rust and Cargo."],
+    tags: ["runtime", "rust", "test"],
   },
   {
     id: "pytest-runtime",
@@ -51,6 +54,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "python -m pytest",
     scope: ["pyproject.toml", "pytest.ini", "tests"],
     caveats: ["Requires pytest in the active Python environment."],
+    tags: ["runtime", "python", "test"],
   },
   {
     id: "lighthouse-score",
@@ -63,6 +67,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "",
     scope: ["package.json", "src", "public"],
     caveats: ["Needs an app URL and Lighthouse CLI wiring before the first run."],
+    tags: ["frontend", "performance", "web"],
   },
   {
     id: "bundle-size",
@@ -75,6 +80,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "npm run build",
     scope: ["package.json", "src", "dist"],
     caveats: ["Set AUTORESEARCH_BUNDLE_PATH when the bundle output is not dist."],
+    tags: ["frontend", "build", "size"],
   },
   {
     id: "typescript-compile-time",
@@ -86,6 +92,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "npx tsc --noEmit",
     scope: ["tsconfig.json", "src"],
     caveats: ["Requires TypeScript in the project or through npx."],
+    tags: ["build", "typescript"],
   },
   {
     id: "command-latency",
@@ -97,6 +104,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "",
     scope: ["scripts", "src"],
     caveats: ["Replace the placeholder command before running doctor."],
+    tags: ["runtime", "custom"],
   },
   {
     id: "memory-usage",
@@ -109,6 +117,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "",
     scope: ["src", "scripts"],
     caveats: ["Replace with the workload process if Node process memory is not the target."],
+    tags: ["memory", "runtime"],
   },
   {
     id: "quality-gap",
@@ -121,6 +130,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "",
     scope: ["autoresearch.research"],
     caveats: ["Prefer research-setup so the slug-specific command is generated automatically."],
+    tags: ["research", "quality-gap"],
   },
   {
     id: "custom",
@@ -133,6 +143,7 @@ const BUILT_IN_RECIPES = [
     checksCommand: "",
     scope: ["src", "tests"],
     caveats: ["Use this when no built-in recipe fits."],
+    tags: ["custom", "safety"],
   },
 ];
 
@@ -251,6 +262,7 @@ function validateExternalRecipe(recipe) {
     checksCommand: String(recipe.checksCommand || ""),
     scope: Array.isArray(recipe.scope) ? recipe.scope.map(String) : [],
     caveats: Array.isArray(recipe.caveats) ? recipe.caveats.map(String) : [],
+    tags: Array.isArray(recipe.tags) ? recipe.tags.map(String) : [],
     source: "catalog",
   };
 }

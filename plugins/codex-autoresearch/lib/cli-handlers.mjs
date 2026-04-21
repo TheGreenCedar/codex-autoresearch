@@ -53,6 +53,17 @@ export function createCliCommandHandlers(deps) {
         benchmarkCommand: args.benchmarkCommand,
       }),
     }),
+    guide: async (args) => ({
+      result: await deps.guidedSetup({
+        cwd: args.cwd,
+        recipe: args.recipe,
+        recipeId: args.recipeId,
+        catalog: args.catalog,
+        name: args.name,
+        metricName: args.metricName,
+        benchmarkCommand: args.benchmarkCommand,
+      }),
+    }),
     recipes: async (args) => ({
       result: await deps.recipeCommand(args._[1] || "list", args),
     }),
@@ -95,7 +106,7 @@ export function createCliCommandHandlers(deps) {
         researchSlug: args.researchSlug,
         slug: args.slug,
       });
-      if (args.list) return { result };
+      if (args.list || args.json) return { result };
       return { text: result.metricOutput };
     },
     "gap-candidates": async (args) => ({
@@ -169,6 +180,7 @@ export function createCliCommandHandlers(deps) {
         cwd: args.cwd,
         command: args.command,
         checkBenchmark: args.checkBenchmark,
+        checkInstalled: args.checkInstalled,
         timeoutSeconds: args.timeoutSeconds,
       }),
     }),

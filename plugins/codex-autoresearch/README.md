@@ -65,6 +65,7 @@ For Codex + GPT-5.4, treat autoresearch as the operating rail:
 
 - Keep the measured target explicit: `quality_gap`, runtime, cost, failures, Lighthouse score, or another primary metric.
 - Use `next_experiment` or `/autoresearch next` for one preflight, benchmark, decision, and ASI packet at a time.
+- Treat the returned `continuation` object as the active-loop contract: after `log_experiment`, keep iterating in the same conversation when `shouldContinue` is true.
 - Store qualitative findings in `autoresearch.md`, `autoresearch.ideas.md`, and ASI instead of relying on context memory.
 - Use `autoresearch-deep-research` for broad project-study prompts, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
 - Stop only when the benchmark reaches `quality_gap=0`, checks pass, and the latest synthesis has no remaining high-impact product gaps.
@@ -135,8 +136,8 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | `configure_session` | Updates runtime config such as autonomy mode, checks policy, keep policy, dashboard refresh, scoped paths, and max iterations |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
 | `run_experiment` | Runs the benchmark command, times it, captures output, and parses `METRIC name=value` lines |
-| `next_experiment` | Runs preflight and benchmark in one packet, then returns allowed log decisions and a next-run notes template |
-| `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes with scoped cleanup when paths are configured |
+| `next_experiment` | Runs preflight and benchmark in one packet, then returns allowed log decisions, a next-run notes template, and a continuation contract |
+| `log_experiment` | Records the result, commits kept changes, reverts discarded/crashed changes with scoped cleanup, and returns whether the active loop should immediately continue |
 | `read_state` | Summarizes the current baseline, best metric, run count, status counts, confidence score, and iteration limit |
 | `measure_quality_gap` | Counts open and closed checklist items in `autoresearch.research/<slug>/quality-gaps.md` |
 | `gap_candidates` | Extracts validated deep-research gap candidates from synthesis and optional model-command JSON; optional apply mode appends checklist items |
@@ -213,6 +214,8 @@ Each iteration follows the same rhythm:
 ```text
 edit -> run benchmark -> parse metrics -> keep or discard -> log what happened
 ```
+
+The CLI and MCP responses include `continuation`. When `continuation.shouldContinue` is true, Codex should keep the loop in the same conversation by choosing the next hypothesis, editing, running `next`, and logging again. When `continuation.forbidFinalAnswer` is true, a completed run is only a checkpoint, not a reason to return control to the user.
 
 Kept results are committed. If Git cannot add or commit the kept change, logging fails instead of recording a false win.
 

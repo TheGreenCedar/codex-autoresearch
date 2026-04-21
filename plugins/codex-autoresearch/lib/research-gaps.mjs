@@ -13,7 +13,8 @@ export async function gapCandidates(args) {
   ];
   const gapsPath = path.join(researchDir, "quality-gaps.md");
   const existingText = await readIfExists(gapsPath);
-  const existing = new Set(existingText.split(/\r?\n/).map(normalizeCandidateText).filter(Boolean));
+  const manualExistingText = stripGeneratedCandidateSection(existingText);
+  const existing = new Set(manualExistingText.split(/\r?\n/).map(normalizeCandidateText).filter(Boolean));
   const deduped = [];
   const seen = new Set(existing);
   for (const candidate of candidates.map(validateCandidate)) {
@@ -124,18 +125,38 @@ function validateCandidate(candidate) {
 }
 
 async function appendCandidates(gapsPath, candidates) {
-  if (!candidates.length) return;
-  const existing = await readIfExists(gapsPath);
-  const lines = [
-    existing.trimEnd(),
-    "",
-    "## Candidate Gaps",
-    "",
-    ...candidates.map((candidate) => `- [ ] ${candidate.text} (source: ${candidate.source || "unknown"}; confidence: ${candidate.confidence}; impact: ${candidate.impact}; validation: ${candidate.validationHint})`),
-    "",
-  ];
+  const existing = stripGeneratedCandidateSection(await readIfExists(gapsPath)).trimEnd();
+  const lines = [];
+  if (existing) lines.push(existing, "");
+  if (candidates.length) {
+    lines.push(
+      "## Candidate Gaps",
+      "<!-- codex-autoresearch:generated-candidates -->",
+      "",
+      ...candidates.map((candidate) => `- [ ] ${candidate.text} (source: ${candidate.source || "unknown"}; confidence: ${candidate.confidence}; impact: ${candidate.impact}; validation: ${candidate.validationHint})`),
+      "",
+      "<!-- /codex-autoresearch:generated-candidates -->",
+      "",
+    );
+  }
   await fsp.mkdir(path.dirname(gapsPath), { recursive: true });
-  await fsp.writeFile(gapsPath, `${lines.filter((line, index) => index !== 0 || line).join("\n")}`, "utf8");
+  const content = lines.join("\n").trimEnd();
+  await fsp.writeFile(gapsPath, content ? `${content}\n` : "", "utf8");
+}
+
+function stripGeneratedCandidateSection(text) {
+  const start = "<!-- codex-autoresearch:generated-candidates -->";
+  const end = "<!-- /codex-autoresearch:generated-candidates -->";
+  if (text.includes(start) && text.includes(end)) {
+    return text.replace(new RegExp(`\\n?## Candidate Gaps\\n${escapeRegex(start)}[\\s\\S]*?${escapeRegex(end)}\\n?`, "g"), "\n");
+  }
+  const legacy = text.match(/\n## Candidate Gaps\n[\s\S]*$/);
+  if (legacy) return text.slice(0, legacy.index).trimEnd() + "\n";
+  return text;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function readIfExists(file) {

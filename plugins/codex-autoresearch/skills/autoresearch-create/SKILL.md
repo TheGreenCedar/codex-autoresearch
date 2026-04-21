@@ -82,6 +82,15 @@ When improving this plugin itself, use the repo-local plugin before a globally i
 
 ## Loop Workflow
 
+### Active Loop Contract
+
+An active autoresearch loop keeps the floor. A run is not done when one benchmark packet is logged; it is done only when the next hypothesis is already underway or a real stop condition is reached.
+
+- After `next_experiment`, immediately log the packet with `log_experiment` or `log --from-last`; do not return to the user for a keep/discard prompt when the metric and checks are enough to decide.
+- After `log_experiment`, read the returned `continuation` object. If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, `autoresearch.ideas.md`, or the session document, make the next scoped edit, and run the next packet.
+- When `continuation.forbidFinalAnswer` is true, do not send a final answer between runs. Use short progress updates while continuing.
+- Stop only when the user interrupts, the iteration limit is reached, benchmark/checks are blocked, the worktree would require unsafe cleanup, or the task is genuinely exhausted.
+
 Use MCP `next_experiment` when available because it returns preflight, benchmark, allowed log decisions, and a next-run notes template in one packet. If passing a custom shell command through MCP, include `allow_unsafe_command: true`; otherwise prefer the configured autoresearch script. If MCP is not available, run:
 
 ```bash

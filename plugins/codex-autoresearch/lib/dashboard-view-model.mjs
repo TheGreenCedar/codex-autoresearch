@@ -1,6 +1,17 @@
 import { STATUS_VALUES, finiteMetric } from "./session-core.mjs";
 
-export function buildDashboardViewModel({ state, settings = {}, commands = [], setupPlan = null, qualityGap = null, finalizePreview = null, recipes = [] }) {
+export function buildDashboardViewModel({
+  state,
+  settings = {},
+  commands = [],
+  setupPlan = null,
+  guidedSetup = null,
+  qualityGap = null,
+  finalizePreview = null,
+  recipes = [],
+  experimentMemory = null,
+  drift = null,
+}) {
   const current = state.current || [];
   const kept = current.filter((run) => run.status === "keep");
   const failures = current.filter((run) => ["discard", "crash", "checks_failed"].includes(run.status));
@@ -11,9 +22,12 @@ export function buildDashboardViewModel({ state, settings = {}, commands = [], s
     .find(Boolean) || (current.length ? "Choose the next measured hypothesis." : "Run and log a baseline.");
   return {
     setup: setupPlan,
+    guidedSetup,
     qualityGap,
     finalizePreview,
     recipes,
+    experimentMemory,
+    drift,
     summary: {
       name: state.config.name || "Autoresearch",
       metricName: state.config.metricName,

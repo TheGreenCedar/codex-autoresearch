@@ -9,6 +9,8 @@ import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.mjs";
+import { buildDriftReport } from "../lib/drift-doctor.mjs";
+import { buildExperimentMemory } from "../lib/experiment-memory.mjs";
 import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview.mjs";
 import { integrationsCommand } from "../lib/integrations.mjs";
 import { createMcpInterface } from "../lib/mcp-interface.mjs";
@@ -53,13 +55,14 @@ Usage:
   node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
   node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>]
+  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs recipes list|show [recipe-id] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug> [--list]
+  node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
@@ -259,8 +262,16 @@ async function withRecipeDefaults(args) {
 async function setupPlan(args) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
-  const recommended = requestedRecipe ? await findRecipe(requestedRecipe, args.catalog) : await recommendRecipe(workDir);
-  if (requestedRecipe && !recommended) throw new Error(`Unknown recipe: ${requestedRecipe}`);
+  const storedRecipe = config?.recipeId;
+  let recommended = null;
+  if (requestedRecipe) {
+    recommended = await findRecipe(requestedRecipe, args.catalog);
+    if (!recommended) throw new Error(`Unknown recipe: ${requestedRecipe}`);
+  } else if (storedRecipe) {
+    recommended = await findRecipe(storedRecipe, args.catalog) || await recommendRecipe(workDir);
+  } else {
+    recommended = await recommendRecipe(workDir);
+  }
   const state = currentState(workDir);
   const missing = [];
   if (!args.name && !state.config.name && !recommended) missing.push("name");
@@ -294,6 +305,7 @@ async function setupPlan(args) {
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
   const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const guideCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`;
   return {
     ok: true,
     workDir,
@@ -303,6 +315,7 @@ async function setupPlan(args) {
     recommendedRecipe: recommended,
     missing,
     nextCommand: command,
+    guideCommand,
     baselineCommand,
     guidedFlow: [
       { step: "setup", command, purpose: "Create the session files and metric config." },
@@ -314,6 +327,63 @@ async function setupPlan(args) {
       "setup-plan is read-only.",
       "Generated recipe scripts remain inspectable and should be checked with doctor before logging a keep.",
     ],
+  };
+}
+
+async function guidedSetup(args) {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const setup = await setupPlan(args);
+  const state = publicState({ cwd: workDir });
+  const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
+  const lastRun = await readLastRunPacket(workDir).catch(() => null);
+  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} export --cwd ${shellQuote(workDir)}`;
+  const baselineCommand = setup.baselineCommand;
+  const logCommand = lastRun
+    ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRun.decision?.suggestedStatus || "keep")} --description ${shellQuote("Describe the last packet")}`
+    : setup.guidedFlow.find((step) => step.step === "log")?.command;
+  let stage = "ready";
+  let nextAction = "Run the next measured packet.";
+  if (setup.missing.length) {
+    stage = "needs-setup";
+    nextAction = "Create or complete the session setup before running a baseline.";
+  } else if (lastRun) {
+    stage = "needs-log-decision";
+    nextAction = "Log the last packet with an allowed status before starting another run.";
+  } else if (state.runs === 0) {
+    stage = "needs-baseline";
+    nextAction = "Run and log a baseline before trying optimizations.";
+  } else if (state.limit.limitReached) {
+    stage = "limit-reached";
+    nextAction = "Export the dashboard or extend the iteration limit.";
+  }
+  return {
+    ok: doctor.issues.length === 0,
+    workDir,
+    stage,
+    setup,
+    state,
+    doctor: {
+      ok: doctor.ok,
+      issues: doctor.issues,
+      warnings: doctor.warnings,
+      nextAction: doctor.nextAction,
+    },
+    lastRun: lastRun ? {
+      ok: lastRun.ok,
+      allowedStatuses: lastRun.decision?.allowedStatuses || [],
+      suggestedStatus: lastRun.decision?.suggestedStatus || "",
+      metric: lastRun.decision?.metric ?? null,
+      path: lastRun.lastRunPath || "",
+    } : null,
+    commands: {
+      setup: setup.nextCommand,
+      doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command,
+      baseline: baselineCommand,
+      logLast: logCommand,
+      dashboard: dashboardCommand,
+    },
+    settings: dashboardSettings(config),
+    nextAction,
   };
 }
 
@@ -398,6 +468,25 @@ function renderSessionDocument(args) {
     [constraintsPlaceholder]: markdownList(constraints, "TBD: add correctness and compatibility constraints"),
     "- Baseline: <initial metric and notes>": "- Baseline: pending",
   });
+}
+
+function renderResumeBlock(workDir) {
+  const cwd = shellQuote(workDir);
+  const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
+  return [
+    "## Resume This Session",
+    "",
+    "Use these commands to pick the loop back up without rediscovering state:",
+    "",
+    "```bash",
+    `node ${script} state --cwd ${cwd}`,
+    `node ${script} doctor --cwd ${cwd} --check-benchmark`,
+    `node ${script} next --cwd ${cwd}`,
+    `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
+    `node ${script} export --cwd ${cwd}`,
+    "```",
+    "",
+  ].join("\n");
 }
 
 function renderBenchmarkScript(args, shellKind) {
@@ -1049,7 +1138,7 @@ async function writeSetupBootstrapFiles(args, options) {
 
   files.push(await writeSessionFile(
     path.join(workDir, "autoresearch.md"),
-    renderSessionDocument(options.sessionDocumentArgs(context)),
+    `${renderSessionDocument(options.sessionDocumentArgs(context)).trimEnd()}\n\n${renderResumeBlock(workDir)}`,
     { overwrite },
   ));
   files.push(await writeSessionFile(
@@ -1200,7 +1289,11 @@ async function setupResearchSession(args) {
 
 async function measureQualityGap(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const slug = researchSlugFromArgs(args);
+  const requestedSlug = args.research_slug ?? args.researchSlug ?? args.slug ?? args.name;
+  const slug = requestedSlug ? safeSlug(requestedSlug) : currentQualityGapSlug(workDir);
+  if (!slug) {
+    throw new Error("No research slug was provided and no active quality-gaps.md file was found under autoresearch.research/.");
+  }
   const researchDir = researchDirPath(workDir, slug);
   const gapsPath = path.join(researchDir, "quality-gaps.md");
   if (!(await pathExists(gapsPath))) {
@@ -1257,11 +1350,13 @@ function dashboardSettings(config) {
 
 async function dashboardViewModel(workDir, config) {
   const qualityGap = await currentQualityGapSummary(workDir);
+  const state = currentState(workDir);
   return buildDashboardViewModel({
-    state: currentState(workDir),
+    state,
     settings: dashboardSettings(config),
     commands: dashboardCommands(workDir, qualityGap),
     setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
+    guidedSetup: await guidedSetup({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
     qualityGap,
     finalizePreview: await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
       ok: false,
@@ -1269,7 +1364,9 @@ async function dashboardViewModel(workDir, config) {
       warnings: [error.message],
       nextAction: "Fix finalization preview errors before relying on review readiness.",
     })),
-    recipes: listBuiltInRecipes().map((recipe) => ({ id: recipe.id, title: recipe.title })),
+    recipes: listBuiltInRecipes().map((recipe) => ({ id: recipe.id, title: recipe.title, tags: recipe.tags || [] })),
+    experimentMemory: buildExperimentMemory({ runs: state.current, direction: state.config.bestDirection }),
+    drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({ ok: false, warnings: [error.message] })),
   });
 }
 
@@ -1474,6 +1571,7 @@ async function logExperiment(args) {
     limit,
     git: gitMessage,
     revert: revertMessage,
+    continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
 }
 
@@ -1565,6 +1663,7 @@ async function readLastRunPacket(workDir) {
 function publicState(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
+  const memory = buildExperimentMemory({ runs: state.current, direction: state.config.bestDirection });
   const statusCounts = Object.fromEntries([...STATUS_VALUES].map((status) => [
     status,
     state.current.filter((run) => run.status === status).length,
@@ -1592,6 +1691,8 @@ function publicState(args) {
       commitPaths: config.commitPaths || [],
     },
     commands: dashboardCommands(workDir),
+    memory,
+    continuation: loopContinuation(workDir, state, config, "state"),
   };
 }
 
@@ -1612,6 +1713,95 @@ function dashboardCommands(workDir, qualityGap = null) {
   ];
 }
 
+function loopContinuation(workDir, state, config = {}, stage = "state", options = {}) {
+  const mode = config.autonomyMode || "guarded";
+  const limit = iterationLimitInfo(state, config);
+  const commands = continuationCommands(workDir);
+  const stopConditions = [
+    "user interrupts or turns the loop off",
+    "iteration limit is reached",
+    "benchmark or correctness checks are blocked",
+    "the task is genuinely exhausted",
+  ];
+  if (options.stopReason) {
+    return {
+      mode,
+      stage,
+      shouldContinue: false,
+      shouldAskUser: false,
+      stopReason: options.stopReason,
+      nextAction: options.stopReason,
+      commands,
+      stopConditions,
+    };
+  }
+  if (stage === "needs-log-decision") {
+    return {
+      mode,
+      stage,
+      shouldContinue: false,
+      shouldAskUser: false,
+      requiresLogDecision: true,
+      forbidFinalAnswer: mode === "owner-autonomous",
+      nextAction: options.requiredStatus
+        ? `Log this packet as ${options.requiredStatus} with rollback ASI, then continue to the next hypothesis.`
+        : "Log this packet as keep or discard with ASI, then continue to the next hypothesis.",
+      commands,
+      stopConditions,
+    };
+  }
+  if (limit.limitReached) {
+    return {
+      mode,
+      stage,
+      shouldContinue: false,
+      shouldAskUser: false,
+      stopReason: `maxIterations reached (${limit.maxIterations}).`,
+      nextAction: "Export the dashboard and summarize the limit, or extend the session before more experiments.",
+      commands,
+      stopConditions,
+    };
+  }
+  if (mode === "manual") {
+    return {
+      mode,
+      stage,
+      shouldContinue: false,
+      shouldAskUser: true,
+      stopReason: "autonomy_mode is manual.",
+      nextAction: "Return the current state and wait for the operator before the next experiment.",
+      commands,
+      stopConditions,
+    };
+  }
+  const ownerAutonomous = mode === "owner-autonomous";
+  return {
+    mode,
+    stage,
+    shouldContinue: true,
+    shouldAskUser: false,
+    forbidFinalAnswer: ownerAutonomous,
+    nextAction: ownerAutonomous
+      ? "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to restart the create skill."
+      : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
+    commands,
+    stopConditions,
+  };
+}
+
+function continuationCommands(workDir) {
+  const cwd = shellQuote(workDir);
+  const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
+  return {
+    state: `node ${script} state --cwd ${cwd}`,
+    next: `node ${script} next --cwd ${cwd}`,
+    keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
+    discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    exportDashboard: `node ${script} export --cwd ${cwd}`,
+    extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
+  };
+}
+
 function currentQualityGapSlug(workDir) {
   const researchRoot = path.join(workDir, RESEARCH_DIR);
   try {
@@ -1626,7 +1816,7 @@ function currentQualityGapSlug(workDir) {
 }
 
 async function doctorSession(args) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = publicState(args);
   const issues = [];
   const warnings = [];
@@ -1635,8 +1825,14 @@ async function doctorSession(args) {
 
   if (!state.config.metricName) issues.push("No primary metric is configured.");
   if (state.runs === 0) warnings.push("No runs are logged yet. Run a baseline before experimenting.");
+  warnings.push(...(state.memory?.warnings || []));
   if (inGit && clean === false) warnings.push("Git worktree is dirty; review unrelated changes before logging a keep result.");
   if (!inGit) warnings.push("Working directory is not a Git repository; keep commits and discard reverts are unavailable.");
+  const drift = await buildDriftReport({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
+  });
+  warnings.push(...drift.warnings);
 
   const benchmark = {
     checked: false,
@@ -1690,13 +1886,16 @@ async function doctorSession(args) {
       clean,
     },
     benchmark,
+    drift,
     issues,
     warnings,
     nextAction,
+    continuation: loopContinuation(workDir, currentState(workDir), config, "doctor"),
   };
 }
 
 async function nextExperiment(args) {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const doctor = await doctorSession({
     ...args,
     check_benchmark: false,
@@ -1710,6 +1909,9 @@ async function nextExperiment(args) {
       run: null,
       decision: null,
       nextAction: doctor.nextAction,
+      continuation: loopContinuation(doctor.workDir, currentState(doctor.workDir), config, "blocked", {
+        stopReason: doctor.nextAction,
+      }),
     };
   }
   const run = await runExperiment(args);
@@ -1742,6 +1944,9 @@ async function nextExperiment(args) {
     nextAction: run.ok
       ? "Log this run with status keep or discard, include ASI, then continue with the next hypothesis."
       : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
+    continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", {
+      requiredStatus: run.logHint.status,
+    }),
   };
   await writeLastRunPacket(run.workDir, packet, lastRunFile);
   return packet;
@@ -1755,6 +1960,7 @@ const mcpInterface = createMcpInterface({
   exportDashboard,
   finalizePreview: buildFinalizePreview,
   gapCandidates: buildGapCandidates,
+  guidedSetup,
   initExperiment,
   integrationsCommand,
   logExperiment,
@@ -1822,7 +2028,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.11" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.13" },
       },
     });
     return;
@@ -2001,6 +2207,7 @@ async function main() {
     exportDashboard,
     finalizePreview: buildFinalizePreview,
     gapCandidates: buildGapCandidates,
+    guidedSetup,
     initExperiment,
     integrationsCommand,
     interactiveSetup,

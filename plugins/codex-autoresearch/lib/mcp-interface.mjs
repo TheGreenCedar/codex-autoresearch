@@ -1,7 +1,25 @@
-export const toolSchemas = [
+import { applyToolContracts } from "./tool-contracts.mjs";
+
+export const toolSchemas = applyToolContracts([
   {
     name: "setup_plan",
     description: "Return a read-only first-run setup readiness plan with missing fields, recipe suggestion, and next commands.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        recipe_id: { type: "string" },
+        catalog: { type: "string" },
+        name: { type: "string" },
+        metric_name: { type: "string" },
+        benchmark_command: { type: "string" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "guided_setup",
+    description: "Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard actions.",
     inputSchema: {
       type: "object",
       properties: {
@@ -139,7 +157,7 @@ export const toolSchemas = [
   },
   {
     name: "next_experiment",
-    description: "Run a preflight readout and benchmark in one packet, then return allowed log decisions and an ASI template.",
+    description: "Run a preflight readout and benchmark in one packet, then return allowed log decisions, an ASI template, and the active-loop continuation contract.",
     inputSchema: {
       type: "object",
       properties: {
@@ -156,7 +174,7 @@ export const toolSchemas = [
   },
   {
     name: "log_experiment",
-    description: "Append an experiment result, then keep/commit or discard/revert changes.",
+    description: "Append an experiment result, keep/commit or discard/revert changes, then return whether the active loop should immediately continue.",
     inputSchema: {
       type: "object",
       properties: {
@@ -256,6 +274,7 @@ export const toolSchemas = [
         working_dir: { type: "string" },
         command: { type: "string" },
         check_benchmark: { type: "boolean" },
+        check_installed: { type: "boolean" },
         timeout_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
@@ -274,7 +293,7 @@ export const toolSchemas = [
       required: ["working_dir", "confirm"],
     },
   },
-];
+]);
 
 export function createMcpInterface(deps) {
   const requireUnsafeCommandGate = (toolName, args) => {
@@ -286,6 +305,7 @@ export function createMcpInterface(deps) {
 
   const callTool = async (name, args) => {
     if (name === "setup_plan") return await deps.setupPlan(args);
+    if (name === "guided_setup") return await deps.guidedSetup(args);
     if (name === "list_recipes") return await deps.recipeCommand("list", args);
     if (name === "setup_session") return await deps.setupSession(args);
     if (name === "setup_research_session") return await deps.setupResearchSession(args);

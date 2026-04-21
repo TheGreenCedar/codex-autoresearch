@@ -333,6 +333,68 @@ test("next writes a reusable last-run packet and log can consume it", async () =
   });
 });
 
+test("owner-autonomous runs return continuation instead of handing control back", async () => {
+  await withTempDir("continuation", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "continuation", "--metric-name", "seconds"]);
+    await runCli(["config", "--cwd", dir, "--autonomy-mode", "owner-autonomous", "--checks-policy", "manual"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.continuation.stage, "needs-log-decision");
+    assert.equal(packet.continuation.requiresLogDecision, true);
+    assert.equal(packet.continuation.shouldAskUser, false);
+    assert.equal(packet.continuation.forbidFinalAnswer, true);
+
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Keep baseline",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.continuation.stage, "logged");
+    assert.equal(payload.continuation.shouldContinue, true);
+    assert.equal(payload.continuation.shouldAskUser, false);
+    assert.equal(payload.continuation.forbidFinalAnswer, true);
+    assert.match(payload.continuation.nextAction, /without asking the user/);
+    assert.match(payload.continuation.commands.next, / next /);
+  });
+});
+
+test("continuation stops cleanly at the configured iteration limit", async () => {
+  await withTempDir("continuation-limit", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "continuation limit", "--metric-name", "seconds"]);
+    await runCli([
+      "config",
+      "--cwd", dir,
+      "--autonomy-mode", "owner-autonomous",
+      "--checks-policy", "manual",
+      "--max-iterations", "1",
+    ]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(next.code, 0, next.stderr);
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Limit baseline",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.limit.limitReached, true);
+    assert.equal(payload.continuation.shouldContinue, false);
+    assert.match(payload.continuation.stopReason, /maxIterations reached/);
+    assert.match(payload.continuation.commands.extendLimit, /--extend 10/);
+  });
+});
+
 test("log from last packet rejects keep after failed checks", async () => {
   await withTempDir("last-run-check-failure", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "last run checks", "--metric-name", "seconds"]);
@@ -662,6 +724,26 @@ test("mcp-smoke reports direct stdio server readiness", async () => {
   assert.equal(payload.missingRequiredTools.length, 0);
   assert.match(payload.toolNames.join("\n"), /setup_session/);
   assert.match(payload.toolNames.join("\n"), /next_experiment/);
+});
+
+test("mcp tools expose guidance and output contracts", async () => {
+  const [{ toolSchemas }, { validateToolContracts }] = await Promise.all([
+    import("../lib/mcp-interface.mjs"),
+    import("../lib/tool-contracts.mjs"),
+  ]);
+  const contractCheck = validateToolContracts(toolSchemas);
+  assert.equal(contractCheck.ok, true, contractCheck.issues.join("\n"));
+
+  const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
+  const next = toolSchemas.find((tool) => tool.name === "next_experiment");
+  const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
+
+  assert.ok(guided);
+  assert.match(guided.description, /first-run or resume action packet/);
+  assert.equal(guided.outputSchema.type, "object");
+  assert.equal(next.outputSchema.type, "object");
+  assert.match(next.description, /normal measured loop iteration/);
+  assert.equal(doctor.annotations.safety, "Read-only unless benchmark check runs configured commands.");
 });
 
 test("plugin MCP registration uses the lightweight startup entrypoint", async () => {

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-const SAFE_DASHBOARD_ACTIONS = new Set(["doctor", "setup-plan", "recipes", "gap-candidates", "finalize-preview", "export"]);
+const SAFE_DASHBOARD_ACTIONS = new Set(["doctor", "setup-plan", "guide", "recipes", "gap-candidates", "finalize-preview", "export"]);
 
 export async function serveAutoresearch(args) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
@@ -61,6 +61,7 @@ export async function serveAutoresearch(args) {
 async function actionArgs(action, workDir, body) {
   if (action === "doctor") return ["doctor", "--cwd", workDir, "--check-benchmark"];
   if (action === "setup-plan") return ["setup-plan", "--cwd", workDir];
+  if (action === "guide") return ["guide", "--cwd", workDir];
   if (action === "recipes") return ["recipes", "list"];
   if (action === "gap-candidates") return ["gap-candidates", "--cwd", workDir, "--research-slug", body.researchSlug || body.slug || await firstResearchSlug(workDir) || "research"];
   if (action === "finalize-preview") return ["finalize-preview", "--cwd", workDir];

@@ -516,6 +516,7 @@ th {
     <div class="action-grid" id="action-grid">
       <button class="tool-button live-action" type="button" data-action="doctor">Doctor</button>
       <button class="tool-button live-action" type="button" data-action="setup-plan">Setup plan</button>
+      <button class="tool-button live-action" type="button" data-action="guide">Guide</button>
       <button class="tool-button live-action" type="button" data-action="recipes">Recipes</button>
       <button class="tool-button live-action" type="button" data-action="gap-candidates">Gap candidates</button>
       <button class="tool-button live-action" type="button" data-action="finalize-preview">Finalize preview</button>
@@ -720,16 +721,21 @@ async function refreshViewModel() {
 
 function renderProductCockpit() {
   const setup = viewModel.setup || {};
+  const guided = viewModel.guidedSetup || {};
   const qualityGap = viewModel.qualityGap || null;
   const finalizePreview = viewModel.finalizePreview || {};
+  const drift = viewModel.drift || {};
+  const memory = viewModel.experimentMemory || {};
   const recipeId = viewModel.summary?.settings?.recipeId || meta.settings?.recipeId || "";
   const blockers = [
     ...(Array.isArray(setup.missing) ? setup.missing.map((item) => "Missing " + item) : []),
     ...(Array.isArray(finalizePreview.warnings) ? finalizePreview.warnings : []),
+    ...(Array.isArray(drift.warnings) ? drift.warnings : []),
+    ...(Array.isArray(memory.warnings) ? memory.warnings : []),
   ];
 
-  document.getElementById("setup-status-title").textContent = setup.ok === false ? "Needs setup" : "Setup readable";
-  document.getElementById("setup-status-detail").textContent = setup.nextCommand || "Run setup-plan for a guided first-run command.";
+  document.getElementById("setup-status-title").textContent = guided.stage ? "Guide: " + guided.stage : (setup.ok === false ? "Needs setup" : "Setup readable");
+  document.getElementById("setup-status-detail").textContent = guided.nextAction || setup.nextCommand || "Run setup-plan for a guided first-run command.";
   document.getElementById("recipe-title").textContent = recipeId || setup.recommendedRecipe?.id || "No recipe locked";
   document.getElementById("recipe-detail").textContent = setup.recommendedRecipe?.title || "Use recipes list to choose a benchmark starting point.";
   document.getElementById("quality-gap-title").textContent = qualityGap ? qualityGap.open + " open / " + qualityGap.total + " total" : "No gap file";
@@ -737,7 +743,7 @@ function renderProductCockpit() {
   document.getElementById("finalize-preview-title").textContent = finalizePreview.ready ? "Preview ready" : "Not ready";
   document.getElementById("finalize-preview-detail").textContent = finalizePreview.nextAction || "Run finalize-preview after keeping at least one committed experiment.";
   document.getElementById("blocker-title").textContent = blockers.length ? blockers.length + " blocker" + (blockers.length === 1 ? "" : "s") : "No blockers";
-  document.getElementById("blocker-detail").textContent = blockers.slice(0, 2).join("; ") || "No setup or finalization blockers reported in the export.";
+  document.getElementById("blocker-detail").textContent = blockers.slice(0, 2).join("; ") || "No setup, memory, version, or finalization blockers reported in the export.";
 }
 
 function renderSegmentSelector() {
@@ -857,7 +863,7 @@ function asiText(run, keys, fallback) {
 function renderReadout() {
   const keptBest = bestKeptRun();
   const recentFailure = failedRuns().at(-1);
-  const nextAction = [...session.runs].reverse().map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], "")).find(Boolean);
+  const nextAction = viewModel.experimentMemory?.latestNextAction || [...session.runs].reverse().map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], "")).find(Boolean);
   const confidence = latestConfidence();
 
   document.getElementById("best-kept-title").textContent = keptBest ? "#" + keptBest.run + " " + formatMetric(keptBest.metric) : "No kept changes yet";

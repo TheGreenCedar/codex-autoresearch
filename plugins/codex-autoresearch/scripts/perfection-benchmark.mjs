@@ -190,6 +190,28 @@ const checks = [
     },
   },
   {
+    id: "active-loop-continuation-contract",
+    file: "README.md, ../../README.md, skills/autoresearch-create/SKILL.md, commands/autoresearch.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs",
+    description: "Owner-autonomous loops expose and document a machine-readable continuation contract after each packet.",
+    run: async () => {
+      const readme = await readText("README.md");
+      const rootReadme = await readRootText("README.md");
+      const skill = await readText("skills/autoresearch-create/SKILL.md");
+      const command = await readText("commands/autoresearch.md");
+      const cli = await readText("scripts/autoresearch.mjs");
+      const mcp = await readText("lib/mcp-interface.mjs");
+      return includesAll(`${readme}\n${rootReadme}\n${skill}\n${command}\n${cli}\n${mcp}`, [
+        "Active Loop Contract",
+        "continuation.shouldContinue",
+        "continuation.forbidFinalAnswer",
+        "loopContinuation",
+        "active-loop continuation contract",
+      ])
+        ? pass()
+        : fail("Missing active-loop continuation docs or CLI/MCP continuation output.");
+    },
+  },
+  {
     id: "deep-research-skill",
     file: "skills/autoresearch-deep-research/SKILL.md",
     description: "Plugin-local deep research skill preserves orchestration ideas and converts them into quality_gap loops.",

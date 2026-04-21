@@ -38,6 +38,10 @@ node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
 
 After any start or resume path, directly provide the dashboard file link before continuing with experiments or status narration. Use a clickable Markdown link to the absolute `autoresearch-dashboard.html` path, for example `[autoresearch-dashboard.html](/absolute/project/path/autoresearch-dashboard.html)`.
 
+## Active Loop Contract
+
+An active autoresearch run is not a one-shot command. After `next`, log the packet. After `log`, follow the returned `continuation` object. If `continuation.shouldContinue` is true, keep working in the same conversation: pick the next hypothesis, edit, run `next`, and log again. If `continuation.forbidFinalAnswer` is true, do not return a final answer between runs; use brief progress updates until a stop condition is reached.
+
 ## Dispatch
 
 Use the local routing above when this repository is the target.
@@ -47,6 +51,7 @@ Use the local routing above when this repository is the target.
 - `recipes ...`: run `node <plugin-root>/scripts/autoresearch.mjs recipes list|show ...` to inspect built-in or local/remote catalog benchmark recipes. Catalog recipe IDs can be used by `setup --recipe <id> --catalog <path-or-url>`.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
 - `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
+- `log`: run `node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status <keep|discard|crash|checks_failed> --description <text>`, then follow `continuation`; do not ask the user to rerun `autoresearch-create` for the next packet.
 - `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
 - `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`.

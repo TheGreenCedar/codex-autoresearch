@@ -178,11 +178,22 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     const planPayload = JSON.parse(plan.stdout);
     assert.equal(planPayload.recommendedRecipe.id, "node-test-runtime");
     assert.match(planPayload.nextCommand, /setup/);
+    assert.match(planPayload.guideCommand, / guide /);
     assert.deepEqual(planPayload.guidedFlow.map((step) => step.step), ["setup", "doctor", "baseline", "log"]);
 
     const recipes = await runCli(["recipes", "list"]);
     assert.equal(recipes.code, 0, recipes.stderr);
     assert.match(recipes.stdout, /memory-usage/);
+    const recipesPayload = JSON.parse(recipes.stdout);
+    const memoryRecipe = recipesPayload.recipes.find((recipe) => recipe.id === "memory-usage");
+    assert.ok(memoryRecipe.tags.includes("memory"));
+
+    const firstGuide = await runCli(["guide", "--cwd", dir]);
+    assert.equal(firstGuide.code, 0, firstGuide.stderr);
+    const firstGuidePayload = JSON.parse(firstGuide.stdout);
+    assert.equal(firstGuidePayload.stage, "needs-setup");
+    assert.match(firstGuidePayload.commands.setup, / setup /);
+    assert.match(firstGuidePayload.commands.dashboard, / export /);
 
     const setup = await runCli([
       "setup",
@@ -196,10 +207,21 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
 
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.recipeId, "memory-usage");
+    assert.match(await readFile(path.join(dir, "autoresearch.md"), "utf8"), /## Resume This Session/);
+
+    const resumeGuide = await runCli(["guide", "--cwd", dir]);
+    assert.equal(resumeGuide.code, 0, resumeGuide.stderr);
+    const resumeGuidePayload = JSON.parse(resumeGuide.stdout);
+    assert.equal(resumeGuidePayload.stage, "needs-baseline");
+    assert.equal(resumeGuidePayload.setup.recommendedRecipe.id, "memory-usage");
+    assert.equal(resumeGuidePayload.doctor.ok, true);
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
     assert.equal(doctor.code, 0, doctor.stderr);
-    assert.equal(JSON.parse(doctor.stdout).ok, true);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, true);
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.1.13");
+    assert.equal(doctorPayload.drift.ok, true);
   });
 });
 
@@ -307,6 +329,21 @@ test("quality-gap recipe benchmarks through the plugin CLI", async () => {
   });
 });
 
+test("quality-gap auto-detects the active research slug for JSON output", async () => {
+  await withTempDir("quality-gap-autodetect", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "Delight Study", "--goal", "Study project delight"]);
+    const gapsPath = path.join(dir, "autoresearch.research", "delight-study", "quality-gaps.md");
+    await writeFile(gapsPath, "- [ ] Open delight gap\n- [x] Closed delight gap\n", "utf8");
+
+    const result = await runCli(["quality-gap", "--cwd", dir, "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.slug, "delight-study");
+    assert.equal(payload.open, 1);
+    assert.deepEqual(payload.openItems, ["Open delight gap"]);
+  });
+});
+
 test("gap-candidates extracts, dedupes, applies, and rejects malformed model output", async () => {
   await withTempDir("gap-candidates", async (dir) => {
     await runCli(["research-setup", "--cwd", dir, "--slug", "study", "--goal", "Study delight"]);
@@ -331,6 +368,48 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     const appliedPayload = JSON.parse(applied.stdout);
     assert.equal(appliedPayload.applied, true);
     assert.equal(appliedPayload.qualityGap.total, 7);
+
+    await writeFile(synthesisPath, [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Build a guided setup flow with recipe suggestions.",
+      "- Add a resume cockpit that explains the exact next operator action.",
+      "",
+    ].join("\n"));
+    const reapplied = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study", "--apply"]);
+    assert.equal(reapplied.code, 0, reapplied.stderr);
+    const reappliedPayload = JSON.parse(reapplied.stdout);
+    assert.equal(reappliedPayload.qualityGap.total, 8);
+    const gaps = await readFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), "utf8");
+    assert.equal((gaps.match(/## Candidate Gaps/g) || []).length, 1);
+    assert.equal((gaps.match(/<!-- codex-autoresearch:generated-candidates -->/g) || []).length, 1);
+    assert.match(gaps, /resume cockpit/);
+    assert.match(gaps, /guided setup flow/);
+
+    await writeFile(synthesisPath, [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Add a resume cockpit that explains the exact next operator action.",
+      "",
+    ].join("\n"));
+    const refreshed = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study", "--apply"]);
+    assert.equal(refreshed.code, 0, refreshed.stderr);
+    const refreshedPayload = JSON.parse(refreshed.stdout);
+    assert.equal(refreshedPayload.qualityGap.total, 7);
+    const refreshedGaps = await readFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), "utf8");
+    assert.equal((refreshedGaps.match(/## Candidate Gaps/g) || []).length, 1);
+    assert.match(refreshedGaps, /resume cockpit/);
+    assert.doesNotMatch(refreshedGaps, /guided setup flow/);
+
+    await writeFile(synthesisPath, "# Research Synthesis\n\n## High-Impact Findings\n\n");
+    const cleared = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study", "--apply"]);
+    assert.equal(cleared.code, 0, cleared.stderr);
+    const clearedPayload = JSON.parse(cleared.stdout);
+    assert.equal(clearedPayload.qualityGap.total, 6);
+    const clearedGaps = await readFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), "utf8");
+    assert.doesNotMatch(clearedGaps, /## Candidate Gaps/);
 
     const badModel = await runCli([
       "gap-candidates",
