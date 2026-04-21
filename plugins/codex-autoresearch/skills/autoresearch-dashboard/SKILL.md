@@ -5,7 +5,7 @@ description: Export and inspect a Codex autoresearch dashboard from autoresearch
 
 # Autoresearch Dashboard
 
-Use this skill to turn `autoresearch.jsonl` into an HTML dashboard with embedded snapshot data, optional live refresh from disk, and copyable operator commands.
+Use this skill to turn `autoresearch.jsonl` into an HTML dashboard with embedded snapshot data, optional live refresh from disk, copyable operator commands, setup/readiness/gap/finalization panels, and safe local actions when served through live mode.
 
 ## Workflow
 
@@ -41,10 +41,12 @@ Use this review readout pattern when summarizing:
 
 The dashboard can be opened directly from disk and does not require a dev server. It embeds the current JSONL snapshot, then the `Refresh` and `Live on` controls try to refetch `autoresearch.jsonl` next to the HTML file. If the browser blocks local `fetch` for `file://`, the embedded snapshot remains usable and the status strip reports that live refresh is unavailable.
 
-The command panel includes copyable commands for doctor, next run, keep/discard last packet, dashboard export, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
+The command panel includes copyable commands for setup-plan, doctor, next run, keep/discard last packet, gap candidates, finalization preview, dashboard export, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
+
+The live action panel calls local `serve` endpoints only. Safe actions include doctor, setup-plan, recipe listing, gap-candidates preview, finalize-preview, and export; branch creation stays behind `/autoresearch-finalize`.
 
 ## Notes
 
-The operator readout, segment selector, command panel, live status strip, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
+The operator readout, setup/gap/finalization cockpit, segment selector, command panel, live status strip, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
 
 If no `autoresearch.jsonl` exists, say that there is no session to export yet and point the user to `autoresearch-create`.

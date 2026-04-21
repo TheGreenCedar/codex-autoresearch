@@ -333,6 +333,12 @@ th {
   gap: 8px;
   padding: 14px 18px 18px;
 }
+.cockpit-grid, .action-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
 .command-row {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr) auto;
@@ -356,7 +362,7 @@ th {
 @media (max-width: 940px) {
   .wrap { padding: 18px; }
   .masthead, .layout { grid-template-columns: 1fr; }
-  .readout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-strip { align-items: stretch; flex-direction: column; }
   .live-strip, .command-row { grid-template-columns: 1fr; }
   .metric-tag { justify-self: stretch; }
@@ -364,7 +370,7 @@ th {
   svg { height: 280px; }
 }
 @media (max-width: 540px) {
-  .score-strip, .readout-grid { grid-template-columns: 1fr; }
+  .score-strip, .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: 1fr; }
   h1 { font-size: 28px; }
 }
 </style>
@@ -404,6 +410,40 @@ th {
     </div>
     <button class="tool-button" id="refresh-now" type="button">Refresh</button>
     <button class="tool-button" id="live-toggle" type="button" aria-pressed="false">Live off</button>
+  </section>
+
+  <section class="panel readout" aria-label="Operator cockpit">
+    <div class="panel-head">
+      <h2 class="panel-title">Operator cockpit</h2>
+      <span class="panel-note" id="cockpit-note">Setup, gaps, and review readiness</span>
+    </div>
+    <div class="cockpit-grid">
+      <article class="readout-card">
+        <span class="readout-label">Setup</span>
+        <strong id="setup-status-title">-</strong>
+        <p id="setup-status-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Recipe</span>
+        <strong id="recipe-title">-</strong>
+        <p id="recipe-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Quality gaps</span>
+        <strong id="quality-gap-title">-</strong>
+        <p id="quality-gap-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Finalize preview</span>
+        <strong id="finalize-preview-title">-</strong>
+        <p id="finalize-preview-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Blockers</span>
+        <strong id="blocker-title">-</strong>
+        <p id="blocker-detail">-</p>
+      </article>
+    </div>
   </section>
 
   <section class="panel readout" aria-label="Operator readout">
@@ -468,6 +508,21 @@ th {
     <div class="command-grid" id="command-grid"></div>
   </section>
 
+  <section class="panel" aria-label="Live actions">
+    <div class="panel-head">
+      <h2 class="panel-title">Live actions</h2>
+      <span class="panel-note" id="action-note">Available when served through autoresearch live mode</span>
+    </div>
+    <div class="action-grid" id="action-grid">
+      <button class="tool-button live-action" type="button" data-action="doctor">Doctor</button>
+      <button class="tool-button live-action" type="button" data-action="setup-plan">Setup plan</button>
+      <button class="tool-button live-action" type="button" data-action="recipes">Recipes</button>
+      <button class="tool-button live-action" type="button" data-action="gap-candidates">Gap candidates</button>
+      <button class="tool-button live-action" type="button" data-action="finalize-preview">Finalize preview</button>
+      <button class="tool-button live-action" type="button" data-action="export">Export</button>
+    </div>
+  </section>
+
   <section class="panel ledger" aria-label="Experiment ledger">
     <table>
       <thead>
@@ -490,6 +545,7 @@ th {
 <script>
 let entries = __AUTORESEARCH_DATA__;
 const meta = __AUTORESEARCH_META__;
+let viewModel = meta.viewModel || {};
 const validStatuses = new Set(["keep", "discard", "crash", "checks_failed"]);
 const palette = {
   line: "#d7ded9",
@@ -588,9 +644,11 @@ function render() {
   document.getElementById("readout-note").textContent = metricSignature();
   renderSegmentSelector();
   renderReadout();
+  renderProductCockpit();
   renderChart();
   renderRail();
   renderCommands();
+  renderLiveActions();
   renderLedger();
 }
 
@@ -642,12 +700,44 @@ async function refreshEntries() {
     const nextEntries = parseJsonl(await response.text());
     entries = nextEntries;
     normalized = normalize();
+    await refreshViewModel();
     if (!selectSegment(activeSegment).runs.length) activeSegment = normalized.latestSegment;
     render();
     updateLiveStatus("Live data refreshed", new Date().toLocaleTimeString());
   } catch (error) {
     updateLiveStatus("Live refresh failed", error.message || String(error));
   }
+}
+
+async function refreshViewModel() {
+  try {
+    const response = await fetch("view-model.json?t=" + Date.now(), { cache: "no-store" });
+    if (response.ok) viewModel = await response.json();
+  } catch {
+    // Static file mode cannot provide the live view model endpoint.
+  }
+}
+
+function renderProductCockpit() {
+  const setup = viewModel.setup || {};
+  const qualityGap = viewModel.qualityGap || null;
+  const finalizePreview = viewModel.finalizePreview || {};
+  const recipeId = viewModel.summary?.settings?.recipeId || meta.settings?.recipeId || "";
+  const blockers = [
+    ...(Array.isArray(setup.missing) ? setup.missing.map((item) => "Missing " + item) : []),
+    ...(Array.isArray(finalizePreview.warnings) ? finalizePreview.warnings : []),
+  ];
+
+  document.getElementById("setup-status-title").textContent = setup.ok === false ? "Needs setup" : "Setup readable";
+  document.getElementById("setup-status-detail").textContent = setup.nextCommand || "Run setup-plan for a guided first-run command.";
+  document.getElementById("recipe-title").textContent = recipeId || setup.recommendedRecipe?.id || "No recipe locked";
+  document.getElementById("recipe-detail").textContent = setup.recommendedRecipe?.title || "Use recipes list to choose a benchmark starting point.";
+  document.getElementById("quality-gap-title").textContent = qualityGap ? qualityGap.open + " open / " + qualityGap.total + " total" : "No gap file";
+  document.getElementById("quality-gap-detail").textContent = qualityGap ? ("Research slug: " + qualityGap.slug) : "Run research-setup or gap-candidates to create measurable research gaps.";
+  document.getElementById("finalize-preview-title").textContent = finalizePreview.ready ? "Preview ready" : "Not ready";
+  document.getElementById("finalize-preview-detail").textContent = finalizePreview.nextAction || "Run finalize-preview after keeping at least one committed experiment.";
+  document.getElementById("blocker-title").textContent = blockers.length ? blockers.length + " blocker" + (blockers.length === 1 ? "" : "s") : "No blockers";
+  document.getElementById("blocker-detail").textContent = blockers.slice(0, 2).join("; ") || "No setup or finalization blockers reported in the export.";
 }
 
 function renderSegmentSelector() {
@@ -908,6 +998,37 @@ function renderCommands() {
       }
     };
   }
+}
+
+function renderLiveActions() {
+  const grid = document.getElementById("action-grid");
+  if (!grid || !grid.querySelectorAll) return;
+  for (const button of grid.querySelectorAll(".live-action")) {
+    button.onclick = async () => {
+      const action = button.dataset.action;
+      button.textContent = "Running";
+      try {
+        const response = await fetch("actions/" + action, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const payload = await response.json();
+        button.textContent = payload.ok ? "Done" : "Failed";
+        updateLiveStatus(action + " action", payload.ok ? "Completed" : (payload.stderr || payload.error || "Failed"));
+        if (typeof setTimeout === "function") {
+          setTimeout(() => { button.textContent = actionLabel(action); }, 1400);
+        }
+      } catch (error) {
+        button.textContent = "Unavailable";
+        updateLiveStatus("Live action unavailable", error.message || String(error));
+      }
+    };
+  }
+}
+
+function actionLabel(action) {
+  return String(action || "Action").split("-").map((part) => part.slice(0, 1).toUpperCase() + part.slice(1)).join(" ");
 }
 
 function renderLedger() {

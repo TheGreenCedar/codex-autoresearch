@@ -60,12 +60,16 @@ Starter templates live in the plugin `assets/` directory:
 If MCP tools are not loaded, use the CLI from the plugin root:
 
 ```bash
+node scripts/autoresearch.mjs setup-plan --cwd /absolute/project/path
+node scripts/autoresearch.mjs recipes list
 node scripts/autoresearch.mjs setup --cwd /absolute/project/path --name "short session name" --goal "what is being optimized" --metric-name seconds --metric-unit s --direction lower --benchmark-command "benchmark command" --checks-command "optional correctness command" --commit-paths "src,tests" --max-iterations 50 --autonomy-mode owner-autonomous --checks-policy on-improvement --keep-policy primary-or-risk-reduction
 ```
 
-6. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
-7. Run `node scripts/autoresearch.mjs doctor --cwd /absolute/project/path --check-benchmark` or MCP `doctor_session` to catch missing metric output before the loop starts.
-8. Run the baseline immediately.
+6. Prefer a built-in `--recipe <id>` when it matches the project. Recipes generate inspectable scripts and still need `doctor` before logging results.
+7. For a terminal-guided first run, use `node scripts/autoresearch.mjs setup --cwd /absolute/project/path --interactive`.
+8. Review generated files and tighten `autoresearch.md`, the benchmark script, and checks before the first run. The benchmark must print the primary metric as `METRIC <name>=<number>`.
+9. Run `node scripts/autoresearch.mjs doctor --cwd /absolute/project/path --check-benchmark` or MCP `doctor_session` to catch missing metric output before the loop starts.
+10. Run the baseline immediately.
 
 ## Broad Research Loops
 

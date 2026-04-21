@@ -4,7 +4,17 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
+import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
+import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.mjs";
+import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview.mjs";
+import { integrationsCommand } from "../lib/integrations.mjs";
+import { createMcpInterface } from "../lib/mcp-interface.mjs";
+import { gapCandidates as buildGapCandidates } from "../lib/research-gaps.mjs";
+import { applyResolvedRecipeDefaults, findRecipe, getBuiltInRecipe, listBuiltInRecipes, loadRecipeCatalog, recommendRecipe } from "../lib/recipes.mjs";
+import { serveAutoresearch } from "../lib/live-server.mjs";
 
 const SESSION_FILES = [
   "autoresearch.jsonl",
@@ -40,13 +50,20 @@ function usage() {
   return `Codex Autoresearch
 
 Usage:
-  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup --cwd <project> --interactive
+  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>]
+  node scripts/autoresearch.mjs recipes list|show [recipe-id] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
+  node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>]
+  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
+  node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
+  node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
   node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
@@ -233,6 +250,117 @@ function shellKindFromArgs(args) {
   return process.platform === "win32" ? "powershell" : "bash";
 }
 
+async function withRecipeDefaults(args) {
+  const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
+  return recipeId ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog) : args;
+}
+
+async function setupPlan(args) {
+  const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
+  const recommended = requestedRecipe ? await findRecipe(requestedRecipe, args.catalog) : await recommendRecipe(workDir);
+  if (requestedRecipe && !recommended) throw new Error(`Unknown recipe: ${requestedRecipe}`);
+  const state = currentState(workDir);
+  const missing = [];
+  if (!args.name && !state.config.name && !recommended) missing.push("name");
+  if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended) missing.push("metric_name");
+  if (!args.benchmark_command && !args.benchmarkCommand && !(await pathExists(path.join(workDir, "autoresearch.ps1"))) && !(await pathExists(path.join(workDir, "autoresearch.sh")))) {
+    missing.push("benchmark_command");
+  }
+  const planArgs = await withRecipeDefaults({
+    ...args,
+    recipe: recommended?.id,
+    name: args.name || recommended?.title || "Autoresearch session",
+  });
+  const shellKind = shellKindFromArgs(planArgs);
+  const command = [
+    "node",
+    shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
+    "setup",
+    "--cwd",
+    shellQuote(workDir),
+    "--name",
+    shellQuote(planArgs.name || "Autoresearch session"),
+    "--metric-name",
+    shellQuote(planArgs.metric_name || planArgs.metricName || "seconds"),
+    "--direction",
+    shellQuote(planArgs.direction || "lower"),
+    "--shell",
+    shellQuote(shellKind),
+    recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
+    args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
+  ].filter(Boolean).join(" ");
+  return {
+    ok: true,
+    workDir,
+    sessionCwd,
+    configured: Boolean(config && Object.keys(config).length > 0),
+    currentMetric: state.config.metricName,
+    recommendedRecipe: recommended,
+    missing,
+    nextCommand: command,
+    baselineCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`,
+    notes: [
+      "setup-plan is read-only.",
+      "Generated recipe scripts remain inspectable and should be checked with doctor before logging a keep.",
+    ],
+  };
+}
+
+async function recipeCommand(subcommand, args) {
+  if (!subcommand || subcommand === "list") {
+    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    return { ok: true, recipes: [...listBuiltInRecipes(), ...catalogRecipes] };
+  }
+  if (subcommand === "show") {
+    const id = args._[2] || args.id || args.recipe || args.recipeId;
+    if (!id) throw new Error("recipes show requires a recipe id");
+    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    const recipe = [...listBuiltInRecipes(), ...catalogRecipes].find((item) => item.id === id);
+    if (!recipe) throw new Error(`Unknown recipe: ${id}`);
+    return { ok: true, recipe };
+  }
+  throw new Error(`Unknown recipes subcommand: ${subcommand}`);
+}
+
+async function interactiveSetup(args) {
+  const plan = await setupPlan(args);
+  const recipe = plan.recommendedRecipe || getBuiltInRecipe("custom");
+  const rl = createInterface({ input, output });
+  try {
+    const ask = async (prompt, fallback) => {
+      const answer = await rl.question(`${prompt}${fallback ? ` (${fallback})` : ""}: `);
+      return answer.trim() || fallback;
+    };
+    const selectedRecipeId = await ask("Recipe id", recipe?.id || "custom");
+    const selectedRecipe = await findRecipe(selectedRecipeId, args.catalog);
+    if (!selectedRecipe) throw new Error(`Unknown recipe: ${selectedRecipeId}`);
+    const nextArgs = await withRecipeDefaults({
+      ...args,
+      recipe: selectedRecipeId,
+      name: await ask("Session name", args.name || selectedRecipe.title || "Autoresearch session"),
+      goal: await ask("Goal", args.goal || "Improve the measured target"),
+      metricName: await ask("Primary metric", args.metricName || args.metric_name || selectedRecipe.metricName || "seconds"),
+      metricUnit: await ask("Metric unit", args.metricUnit || args.metric_unit || selectedRecipe.metricUnit || ""),
+      direction: await ask("Direction lower/higher", args.direction || selectedRecipe.direction || "lower"),
+      filesInScope: await ask("Files in scope (comma separated)", args.filesInScope || args.files_in_scope || (selectedRecipe.scope || []).join(",")),
+      checksCommand: await ask("Checks command", args.checksCommand || args.checks_command || selectedRecipe.checksCommand || ""),
+      commitPaths: await ask("Commit paths (comma separated)", args.commitPaths || args.commit_paths || ""),
+      maxIterations: await ask("Max iterations", args.maxIterations || args.max_iterations || "50"),
+    });
+    const setup = await setupSession(nextArgs);
+    const doctor = await doctorSession({ cwd: setup.workDir, checkBenchmark: false });
+    return {
+      ok: true,
+      setup,
+      doctor,
+      baselineCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(setup.workDir)}`,
+    };
+  } finally {
+    rl.close();
+  }
+}
+
 function markdownList(items, emptyText) {
   if (!items.length) return `- ${emptyText}`;
   return items.map((item) => `- ${item}`).join("\n");
@@ -265,6 +393,27 @@ function renderSessionDocument(args) {
 function renderBenchmarkScript(args, shellKind) {
   const command = args.benchmark_command || args.benchmarkCommand || "# TODO: replace with the real workload";
   const metricName = validateMetricName(args.metric_name || args.metricName || "elapsed_seconds");
+  if (boolOption(args.benchmark_prints_metric ?? args.benchmarkPrintsMetric, false)) {
+    if (shellKind === "bash") {
+      return [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        "# This recipe command is responsible for printing METRIC lines.",
+        command,
+        "",
+      ].join("\n");
+    }
+    return [
+      "$ErrorActionPreference = \"Stop\"",
+      "",
+      "# This recipe command is responsible for printing METRIC lines.",
+      "$global:LASTEXITCODE = 0",
+      command,
+      "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+      "",
+    ].join("\n");
+  }
   const templateName = shellKind === "bash" ? "autoresearch.sh.template" : "autoresearch.ps1.template";
   return replaceAllText(readAssetTemplate(templateName), {
     "<benchmark command>": command,
@@ -906,6 +1055,7 @@ async function writeSetupBootstrapFiles(args, options) {
 }
 
 async function setupSession(args) {
+  args = await withRecipeDefaults(args);
   if (!args.name) throw new Error("name is required");
   if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
   validateMetricName(args.metric_name || args.metricName);
@@ -916,9 +1066,10 @@ async function setupSession(args) {
   });
 
   const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
-  if (maxIterations != null) {
-    await appendRuntimeConfigFile(files, sessionCwd, { maxIterations: Math.floor(maxIterations) });
-  }
+  const setupConfig = {};
+  if (maxIterations != null) setupConfig.maxIterations = Math.floor(maxIterations);
+  if (args.recipe_id || args.recipeId || args.recipe) setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
+  if (Object.keys(setupConfig).length > 0) await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (commitPaths.length > 0) {
     await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
@@ -1053,6 +1204,48 @@ async function measureQualityGap(args) {
     total: counts.total,
     metricOutput,
   };
+}
+
+async function currentQualityGapSummary(workDir) {
+  const researchRoot = path.join(workDir, RESEARCH_DIR);
+  if (!(await pathExists(researchRoot))) return null;
+  const entries = await fsp.readdir(researchRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const slug = entry.name;
+    const gapsPath = path.join(researchRoot, slug, "quality-gaps.md");
+    if (!(await pathExists(gapsPath))) continue;
+    const text = await fsp.readFile(gapsPath, "utf8");
+    const counts = parseQualityGaps(text);
+    return { slug, path: gapsPath, ...counts };
+  }
+  return null;
+}
+
+function dashboardSettings(config) {
+  return {
+    autonomyMode: config.autonomyMode || "guarded",
+    checksPolicy: config.checksPolicy || "always",
+    keepPolicy: config.keepPolicy || "primary-only",
+    recipeId: config.recipeId || "",
+  };
+}
+
+async function dashboardViewModel(workDir, config) {
+  return buildDashboardViewModel({
+    state: currentState(workDir),
+    settings: dashboardSettings(config),
+    commands: dashboardCommands(workDir),
+    setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
+    qualityGap: await currentQualityGapSummary(workDir),
+    finalizePreview: await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
+      ok: false,
+      ready: false,
+      warnings: [error.message],
+      nextAction: "Fix finalization preview errors before relying on review readiness.",
+    })),
+    recipes: listBuiltInRecipes().map((recipe) => ({ id: recipe.id, title: recipe.title })),
+  });
 }
 
 async function configureSession(args) {
@@ -1258,20 +1451,19 @@ async function exportDashboard(args) {
   const entries = readJsonl(workDir);
   if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
   const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
+  const commands = dashboardCommands(workDir);
+  const viewModel = await dashboardViewModel(workDir, config);
   const html = dashboardHtml(entries, {
     workDir,
     generatedAt: new Date().toISOString(),
     jsonlName: "autoresearch.jsonl",
     refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
-    commands: dashboardCommands(workDir),
-    settings: {
-      autonomyMode: config.autonomyMode || "guarded",
-      checksPolicy: config.checksPolicy || "always",
-      keepPolicy: config.keepPolicy || "primary-only",
-    },
+    commands,
+    settings: dashboardSettings(config),
+    viewModel,
   });
   await fsp.writeFile(output, html, "utf8");
-  return { ok: true, workDir, output };
+  return { ok: true, workDir, output, viewModel };
 }
 
 async function clearSession(args) {
@@ -1376,10 +1568,13 @@ function dashboardCommands(workDir) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   return [
+    { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
     { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
     { label: "Keep last", command: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"` },
     { label: "Discard last", command: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"` },
+    { label: "Gap candidates", command: `node ${script} gap-candidates --cwd ${cwd} --research-slug research` },
+    { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
   ];
@@ -1507,251 +1702,28 @@ async function nextExperiment(args) {
   return packet;
 }
 
-async function callTool(name, args) {
-  if (name === "setup_session") return await setupSession(args);
-  if (name === "setup_research_session") return await setupResearchSession(args);
-  if (name === "configure_session") return await configureSession(args);
-  if (name === "init_experiment") return await initExperiment(args);
-  if (name === "run_experiment") {
-    requireUnsafeCommandGate(name, args);
-    return await runExperiment(args);
-  }
-  if (name === "next_experiment") {
-    requireUnsafeCommandGate(name, args);
-    return await nextExperiment(args);
-  }
-  if (name === "log_experiment") return await logExperiment({
-    ...args,
-    metrics: parseJsonOption(args.metrics, null),
-    asi: parseJsonOption(args.asi, null),
-  });
-  if (name === "export_dashboard") return await exportDashboard(args);
-  if (name === "clear_session") return await clearSession(args);
-  if (name === "read_state") return publicState(args);
-  if (name === "measure_quality_gap") return await measureQualityGap(args);
-  if (name === "doctor_session") {
-    requireUnsafeCommandGate(name, args);
-    return await doctorSession(args);
-  }
-  throw new Error(`Unknown tool: ${name}`);
-}
-
-function requireUnsafeCommandGate(toolName, args) {
-  const hasCustomCommand = Boolean(args.command || args.checks_command || args.checksCommand);
-  if (hasCustomCommand && !boolOption(args.allow_unsafe_command ?? args.allowUnsafeCommand, false)) {
-    throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
-  }
-}
-
-const toolSchemas = [
-  {
-    name: "setup_session",
-    description: "Create autoresearch session files from templates and append an initial config header.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        name: { type: "string" },
-        goal: { type: "string" },
-        metric_name: { type: "string" },
-        metric_unit: { type: "string" },
-        direction: { type: "string", enum: ["lower", "higher"] },
-        benchmark_command: { type: "string" },
-        checks_command: { type: "string" },
-        shell: { type: "string", enum: ["bash", "powershell"] },
-        files_in_scope: { type: "array", items: { type: "string" } },
-        off_limits: { type: "array", items: { type: "string" } },
-        constraints: { type: "array", items: { type: "string" } },
-        secondary_metrics: { type: "array", items: { type: "string" } },
-        commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
-        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
-        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
-        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
-        dashboard_refresh_seconds: { type: "number" },
-        overwrite: { type: "boolean" },
-        create_checks: { type: "boolean" },
-        skip_init: { type: "boolean" },
-      },
-      required: ["working_dir", "name", "metric_name"],
-    },
-  },
-  {
-    name: "setup_research_session",
-    description: "Create a deep-research scratchpad and initialize a quality_gap autoresearch session.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        slug: { type: "string" },
-        goal: { type: "string" },
-        name: { type: "string" },
-        checks_command: { type: "string" },
-        shell: { type: "string", enum: ["bash", "powershell"] },
-        files_in_scope: { type: "array", items: { type: "string" } },
-        constraints: { type: "array", items: { type: "string" } },
-        commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
-        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
-        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
-        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
-        dashboard_refresh_seconds: { type: "number" },
-        overwrite: { type: "boolean" },
-        create_checks: { type: "boolean" },
-        skip_init: { type: "boolean" },
-      },
-      required: ["working_dir", "slug", "goal"],
-    },
-  },
-  {
-    name: "configure_session",
-    description: "Update runtime settings such as autonomy mode, checks policy, keep policy, dashboard refresh, commit paths, or iteration limit.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
-        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
-        keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
-        dashboard_refresh_seconds: { type: "number" },
-        max_iterations: { type: "number" },
-        extend: { type: "number" },
-        commit_paths: { type: "array", items: { type: "string" } },
-      },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "init_experiment",
-    description: "Append an autoresearch config header to autoresearch.jsonl.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        name: { type: "string" },
-        metric_name: { type: "string" },
-        metric_unit: { type: "string" },
-        direction: { type: "string", enum: ["lower", "higher"] },
-      },
-      required: ["working_dir", "name", "metric_name"],
-    },
-  },
-  {
-    name: "run_experiment",
-    description: "Run a timed benchmark command, parse METRIC lines, and optionally run checks.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        command: { type: "string" },
-        timeout_seconds: { type: "number" },
-        checks_command: { type: "string" },
-        checks_timeout_seconds: { type: "number" },
-        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
-        allow_unsafe_command: { type: "boolean" },
-      },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "next_experiment",
-    description: "Run a preflight readout and benchmark in one packet, then return allowed log decisions and an ASI template.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        command: { type: "string" },
-        timeout_seconds: { type: "number" },
-        checks_command: { type: "string" },
-        checks_timeout_seconds: { type: "number" },
-        checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
-        allow_unsafe_command: { type: "boolean" },
-      },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "log_experiment",
-    description: "Append an experiment result, then keep/commit or discard/revert changes.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        commit: { type: "string" },
-        metric: { type: "number" },
-        status: { type: "string", enum: ["keep", "discard", "crash", "checks_failed"] },
-        description: { type: "string" },
-        metrics: { type: "object" },
-        asi: { type: "object" },
-        commit_paths: { type: "array", items: { type: "string" } },
-        revert_paths: { type: "array", items: { type: "string" } },
-        allow_dirty_revert: { type: "boolean" },
-        from_last: { type: "boolean" },
-      },
-      required: ["working_dir", "description"],
-    },
-  },
-  {
-    name: "read_state",
-    description: "Summarize the current autoresearch.jsonl state.",
-    inputSchema: {
-      type: "object",
-      properties: { working_dir: { type: "string" } },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "measure_quality_gap",
-    description: "Count open and closed checklist items in autoresearch.research/<slug>/quality-gaps.md.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        research_slug: { type: "string" },
-      },
-      required: ["working_dir", "research_slug"],
-    },
-  },
-  {
-    name: "export_dashboard",
-    description: "Write a self-contained HTML dashboard for autoresearch.jsonl.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        output: { type: "string" },
-      },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "doctor_session",
-    description: "Run a preflight readout for an autoresearch session and optionally verify benchmark metric output.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        command: { type: "string" },
-        check_benchmark: { type: "boolean" },
-        timeout_seconds: { type: "number" },
-        allow_unsafe_command: { type: "boolean" },
-      },
-      required: ["working_dir"],
-    },
-  },
-  {
-    name: "clear_session",
-    description: "Delete autoresearch runtime artifacts after explicit confirmation.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        working_dir: { type: "string" },
-        confirm: { type: "boolean" },
-      },
-      required: ["working_dir", "confirm"],
-    },
-  },
-];
+const mcpInterface = createMcpInterface({
+  boolOption,
+  clearSession,
+  configureSession,
+  doctorSession,
+  exportDashboard,
+  finalizePreview: buildFinalizePreview,
+  gapCandidates: buildGapCandidates,
+  initExperiment,
+  integrationsCommand,
+  logExperiment,
+  measureQualityGap,
+  nextExperiment,
+  parseJsonOption,
+  publicState,
+  recipeCommand,
+  runExperiment,
+  setupPlan,
+  setupResearchSession,
+  setupSession,
+});
+const { callTool, toolSchemas, validateToolArguments } = mcpInterface;
 
 function startMcpServer() {
   let buffer = Buffer.alloc(0);
@@ -1843,28 +1815,6 @@ async function handleMcpMessage(message) {
   }
 }
 
-function isObjectArgument(value) {
-  return typeof value === "object" && !Array.isArray(value);
-}
-
-function validateToolArguments(name, args) {
-  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
-  if (!schema) throw new Error(`Unknown tool: ${name}`);
-  for (const required of schema.required || []) {
-    if (args[required] == null || args[required] === "") throw new Error(`Missing required argument: ${required}`);
-  }
-  for (const [key, value] of Object.entries(args)) {
-    const property = schema.properties?.[key];
-    if (!property || value == null) continue;
-    if (property.type === "array" && !Array.isArray(value)) throw new Error(`Argument ${key} must be an array.`);
-    if (property.type === "object" && !isObjectArgument(value)) throw new Error(`Argument ${key} must be an object.`);
-    if (property.type === "number" && typeof value !== "number") throw new Error(`Argument ${key} must be a number.`);
-    if (property.type === "boolean" && typeof value !== "boolean") throw new Error(`Argument ${key} must be a boolean.`);
-    if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
-    if (property.enum && !property.enum.includes(value)) throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
-  }
-}
-
 function sendMcp(message) {
   const body = JSON.stringify(message);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
@@ -1881,128 +1831,43 @@ async function main() {
     console.log(usage());
     return;
   }
-  let result;
-  if (command === "setup") {
-    result = await setupSession({
-      cwd: args.cwd,
-      name: args.name,
-      goal: args.goal,
-      metricName: args.metricName,
-      metricUnit: args.metricUnit,
-      direction: args.direction,
-      benchmarkCommand: args.benchmarkCommand,
-      checksCommand: args.checksCommand,
-      shell: args.shell,
-      filesInScope: args.filesInScope,
-      offLimits: args.offLimits,
-      constraints: args.constraints,
-      secondaryMetrics: args.secondaryMetrics,
-      commitPaths: args.commitPaths,
-      maxIterations: args.maxIterations,
-      autonomyMode: args.autonomyMode,
-      checksPolicy: args.checksPolicy,
-      keepPolicy: args.keepPolicy,
-      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
-      overwrite: args.overwrite,
-      createChecks: args.createChecks,
-      skipInit: args.skipInit,
-    });
-  } else if (command === "research-setup") {
-    result = await setupResearchSession({
-      cwd: args.cwd,
-      slug: args.slug,
-      goal: args.goal,
-      name: args.name,
-      checksCommand: args.checksCommand,
-      shell: args.shell,
-      filesInScope: args.filesInScope,
-      constraints: args.constraints,
-      commitPaths: args.commitPaths,
-      maxIterations: args.maxIterations,
-      autonomyMode: args.autonomyMode,
-      checksPolicy: args.checksPolicy,
-      keepPolicy: args.keepPolicy,
-      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
-      overwrite: args.overwrite,
-      createChecks: args.createChecks,
-      skipInit: args.skipInit,
-    });
-  } else if (command === "config") {
-    result = await configureSession({
-      cwd: args.cwd,
-      autonomyMode: args.autonomyMode,
-      checksPolicy: args.checksPolicy,
-      keepPolicy: args.keepPolicy,
-      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
-      maxIterations: args.maxIterations,
-      extend: args.extend,
-      commitPaths: args.commitPaths,
-    });
-  } else if (command === "quality-gap") {
-    result = await measureQualityGap({
-      cwd: args.cwd,
-      researchSlug: args.researchSlug,
-      slug: args.slug,
-    });
-    console.log(result.metricOutput);
+  const handlers = createCliCommandHandlers({
+    buildDashboardViewModel,
+    clearSession,
+    configureSession,
+    dashboardCommands,
+    dashboardHtml,
+    dashboardSettings,
+    dashboardViewModel,
+    doctorSession,
+    exportDashboard,
+    finalizePreview: buildFinalizePreview,
+    gapCandidates: buildGapCandidates,
+    initExperiment,
+    integrationsCommand,
+    interactiveSetup,
+    logExperiment,
+    measureQualityGap,
+    nextExperiment,
+    parseJsonOption,
+    pluginRoot: PLUGIN_ROOT,
+    publicState,
+    readJsonl,
+    recipeCommand,
+    resolveWorkDir,
+    runExperiment,
+    serveAutoresearch,
+    setupPlan,
+    setupResearchSession,
+    setupSession,
+  });
+  const outcome = await runCliCommand(command, args, handlers);
+  if (outcome.text != null) {
+    console.log(outcome.text);
     return;
-  } else if (command === "init") {
-    result = await initExperiment({
-      cwd: args.cwd,
-      name: args.name,
-      metricName: args.metricName,
-      metricUnit: args.metricUnit,
-      direction: args.direction,
-    });
-  } else if (command === "run") {
-    result = await runExperiment({
-      cwd: args.cwd,
-      command: args.command,
-      timeoutSeconds: args.timeoutSeconds,
-      checksCommand: args.checksCommand,
-      checksTimeoutSeconds: args.checksTimeoutSeconds,
-      checksPolicy: args.checksPolicy,
-    });
-  } else if (command === "next") {
-    result = await nextExperiment({
-      cwd: args.cwd,
-      command: args.command,
-      timeoutSeconds: args.timeoutSeconds,
-      checksCommand: args.checksCommand,
-      checksTimeoutSeconds: args.checksTimeoutSeconds,
-      checksPolicy: args.checksPolicy,
-    });
-  } else if (command === "log") {
-    result = await logExperiment({
-      cwd: args.cwd,
-      commit: args.commit,
-      metric: args.metric,
-      status: args.status,
-      description: args.description,
-      metrics: parseJsonOption(args.metrics, null),
-      asi: parseJsonOption(args.asi, null),
-      commitPaths: args.commitPaths,
-      revertPaths: args.revertPaths,
-      allowDirtyRevert: args.allowDirtyRevert,
-      fromLast: args.fromLast,
-    });
-  } else if (command === "state") {
-    result = publicState({ cwd: args.cwd });
-  } else if (command === "doctor") {
-    result = await doctorSession({
-      cwd: args.cwd,
-      command: args.command,
-      checkBenchmark: args.checkBenchmark,
-      timeoutSeconds: args.timeoutSeconds,
-    });
-  } else if (command === "export") {
-    result = await exportDashboard({ cwd: args.cwd, output: args.output });
-  } else if (command === "clear") {
-    result = await clearSession({ cwd: args.cwd, yes: args.yes, confirm: args.confirm });
-  } else {
-    throw new Error(`Unknown command: ${command}`);
   }
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(outcome.result, null, 2));
+  if (outcome.keepAlive) return await new Promise(() => {});
 }
 
 main().catch((error) => {

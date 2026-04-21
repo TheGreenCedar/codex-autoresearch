@@ -16,14 +16,15 @@ node <plugin-root>/scripts/autoresearch.mjs research-setup --cwd /absolute/proje
 ```
 
 2. Fill `autoresearch.research/<slug>/brief.md`, `sources.md`, `notes/`, and `synthesis.md` with repo evidence, web sources when needed, contradictions, and confidence.
-3. Convert the synthesis into checklist items in `quality-gaps.md`.
-4. Run `/autoresearch next` or:
+3. Run `node <plugin-root>/scripts/autoresearch.mjs gap-candidates --cwd /absolute/project/path --research-slug <slug>` to preview validated gap candidates from `synthesis.md`. If model assistance is useful, pass `--model-command <cmd>`; the command must print a JSON array and its output is validated before apply.
+4. Convert accepted candidates into checklist items with `gap-candidates --apply` or by editing `quality-gaps.md`.
+5. Run `/autoresearch next` or:
 
 ```bash
 node <plugin-root>/scripts/autoresearch.mjs next --cwd /absolute/project/path
 ```
 
-5. Implement or explicitly reject the highest-impact open gap, then log the run with ASI.
+6. Implement or explicitly reject the highest-impact open gap, then log the run with ASI.
 
 ## Scratchpad Rules
 

@@ -1,0 +1,450 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { appendJsonl, currentState, iterationLimitInfo, parseQualityGaps } from "../lib/session-core.mjs";
+import { parseMetricLines, runShell, tailText } from "../lib/runner.mjs";
+
+const pluginRoot = path.resolve(import.meta.dirname, "..");
+const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
+
+const runProcess = (command, args, cwd) => {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => resolve({ code: -1, stdout, stderr: String(error.message || error) }));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+};
+
+const runCli = (args, options = {}) => {
+  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
+};
+
+const runCliWithAnswers = (args, answers, options = {}) => {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], {
+      cwd: options.cwd || pluginRoot,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let answered = 0;
+    let seenPrompts = 0;
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      const promptCount = (stdout.match(/: /g) || []).length;
+      while (seenPrompts < promptCount && answered < answers.length) {
+        child.stdin.write(`${answers[answered]}\n`);
+        answered += 1;
+        seenPrompts += 1;
+      }
+      if (answered === answers.length && !child.stdin.destroyed) child.stdin.end();
+    });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => resolve({ code: -1, stdout, stderr: String(error.message || error) }));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+};
+
+const withTempDir = async (name, fn) => {
+  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-full-${name}-`));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+const git = async (cwd, args) => {
+  const result = await runProcess("git", args, cwd);
+  assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
+  return result.stdout.trim();
+};
+
+async function callMcpTool(name, args) {
+  const child = spawn(process.execPath, [cli, "--mcp"], {
+    cwd: pluginRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+  const request = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name, arguments: args },
+  });
+  child.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
+  try {
+    const response = await waitForMcpResponse(() => stdout, () => stderr);
+    assert.equal(response.id, 1);
+    return response;
+  } finally {
+    child.kill();
+  }
+}
+
+async function waitForMcpResponse(stdoutFn, stderrFn) {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const frame = parseFirstMcpFrame(stdoutFn());
+    if (frame) return frame;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`MCP response timed out\n${stderrFn()}`);
+}
+
+function parseFirstMcpFrame(stdout) {
+  const headerEnd = stdout.indexOf("\r\n\r\n");
+  if (headerEnd < 0) return null;
+  const header = stdout.slice(0, headerEnd);
+  const match = header.match(/Content-Length:\s*(\d+)/i);
+  if (!match) return null;
+  const length = Number(match[1]);
+  const bodyStart = headerEnd + 4;
+  if (stdout.length < bodyStart + length) return null;
+  return JSON.parse(stdout.slice(bodyStart, bodyStart + length));
+}
+
+test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
+  await withTempDir("session-core", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "core", metricName: "delta", bestDirection: "lower" });
+    appendJsonl(dir, { run: 1, metric: 0, status: "keep", description: "Zero baseline" });
+    appendJsonl(dir, { run: 2, metric: -2, status: "keep", description: "Negative improvement" });
+
+    let state = currentState(dir);
+    assert.equal(state.baseline, 0);
+    assert.equal(state.best, -2);
+    assert.equal(iterationLimitInfo(state, { maxIterations: 3 }).remainingIterations, 1);
+
+    appendJsonl(dir, { type: "config", name: "second", metricName: "seconds", bestDirection: "higher" });
+    appendJsonl(dir, { run: 3, metric: 5, status: "discard", description: "Segment reset" });
+    state = currentState(dir);
+    assert.equal(state.segment, 1);
+    assert.equal(state.current.length, 1);
+    assert.equal(iterationLimitInfo(state, { maxIterations: 1 }).limitReached, true);
+
+    assert.deepEqual(parseQualityGaps("- [ ] Open\n- [x] Closed\n- [X] Rejected\n"), {
+      open: 1,
+      closed: 2,
+      total: 3,
+    });
+  });
+});
+
+test("runner parses metrics, truncates tails, and reports timeouts", async () => {
+  const metrics = parseMetricLines([
+    "metric seconds=1.25",
+    "METRIC delta=-2",
+    "METRIC scaled=1.5e+2",
+    "METRIC __proto__=99",
+  ].join("\n"));
+  assert.equal(metrics.seconds, 1.25);
+  assert.equal(metrics.delta, -2);
+  assert.equal(metrics.scaled, 150);
+  assert.equal(Object.hasOwn(metrics, "__proto__"), false);
+
+  const tail = tailText(Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n"), 5, 2000);
+  assert.equal(tail.split(/\r?\n/).length, 5);
+  assert.match(tail, /line 39/);
+
+  const command = `${JSON.stringify(process.execPath)} -e "setTimeout(()=>{}, 2000)"`;
+  const result = await runShell(command, pluginRoot, 1);
+  assert.equal(result.timedOut, true);
+});
+
+test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", async () => {
+  await withTempDir("setup-recipes", async (dir) => {
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({
+      scripts: { test: "node -e \"console.log('ok')\"" },
+    }, null, 2));
+
+    const plan = await runCli(["setup-plan", "--cwd", dir]);
+    assert.equal(plan.code, 0, plan.stderr);
+    const planPayload = JSON.parse(plan.stdout);
+    assert.equal(planPayload.recommendedRecipe.id, "node-test-runtime");
+    assert.match(planPayload.nextCommand, /setup/);
+
+    const recipes = await runCli(["recipes", "list"]);
+    assert.equal(recipes.code, 0, recipes.stderr);
+    assert.match(recipes.stdout, /memory-usage/);
+
+    const setup = await runCli([
+      "setup",
+      "--cwd", dir,
+      "--recipe", "memory-usage",
+      "--name", "Memory loop",
+    ]);
+    assert.equal(setup.code, 0, setup.stderr);
+    const payload = JSON.parse(setup.stdout);
+    assert.equal(payload.init.config.metricName, "rss_mb");
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.recipeId, "memory-usage");
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).ok, true);
+  });
+});
+
+test("MCP setup_session can use recipe defaults without explicit name and metric", async () => {
+  await withTempDir("mcp-recipe-setup", async (dir) => {
+    const response = await callMcpTool("setup_session", {
+      working_dir: dir,
+      recipe_id: "memory-usage",
+    });
+    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.equal(payload.init.config.metricName, "rss_mb");
+  });
+});
+
+test("MCP gap_candidates requires the unsafe command gate for model commands", async () => {
+  await withTempDir("mcp-gap-gate", async (dir) => {
+    const response = await callMcpTool("gap_candidates", {
+      working_dir: dir,
+      research_slug: "study",
+      model_command: `${JSON.stringify(process.execPath)} -e "console.log([])"`,
+    });
+    assert.equal(response.result?.isError, true);
+    assert.match(response.result.content[0].text, /allow_unsafe_command=true/);
+  });
+});
+
+test("catalog recipes can drive setup-plan and setup", async () => {
+  await withTempDir("catalog-setup", async (dir) => {
+    const catalog = path.join(dir, "recipes.json");
+    await writeFile(catalog, JSON.stringify({
+      recipes: [
+        {
+          id: "catalog-demo",
+          title: "Catalog Demo",
+          metricName: "demo_score",
+          metricUnit: "points",
+          direction: "higher",
+          benchmarkCommand: "node -e \"console.log('METRIC demo_score=42')\"",
+          benchmarkPrintsMetric: true,
+          checksCommand: "node -e \"process.exit(0)\"",
+          scope: ["src"],
+        },
+      ],
+    }, null, 2));
+
+    const plan = await runCli(["setup-plan", "--cwd", dir, "--recipe", "catalog-demo", "--catalog", catalog]);
+    assert.equal(plan.code, 0, plan.stderr);
+    const planPayload = JSON.parse(plan.stdout);
+    assert.equal(planPayload.recommendedRecipe.id, "catalog-demo");
+    assert.match(planPayload.nextCommand, /--catalog/);
+
+    const setup = await runCli(["setup", "--cwd", dir, "--recipe", "catalog-demo", "--catalog", catalog]);
+    assert.equal(setup.code, 0, setup.stderr);
+    const setupPayload = JSON.parse(setup.stdout);
+    assert.equal(setupPayload.init.config.metricName, "demo_score");
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).ok, true);
+  });
+});
+
+test("interactive setup uses defaults from the recipe selected by the operator", async () => {
+  await withTempDir("interactive-recipe", async (dir) => {
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({
+      scripts: { test: "node -e \"console.log('ok')\"" },
+    }, null, 2));
+
+    const answers = [
+      "memory-usage",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ];
+    const interactive = await runCliWithAnswers(["setup", "--cwd", dir, "--interactive"], answers);
+    assert.equal(interactive.code, 0, interactive.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(JSON.parse(state.stdout).config.metricName, "rss_mb");
+  });
+});
+
+test("quality-gap recipe benchmarks through the plugin CLI", async () => {
+  await withTempDir("quality-gap-recipe", async (dir) => {
+    const researchDir = path.join(dir, "autoresearch.research", "research");
+    await mkdir(researchDir, { recursive: true });
+    await writeFile(path.join(researchDir, "quality-gaps.md"), "- [ ] Existing gap\n");
+
+    const setup = await runCli(["setup", "--cwd", dir, "--recipe", "quality-gap"]);
+    assert.equal(setup.code, 0, setup.stderr);
+    const setupPayload = JSON.parse(setup.stdout);
+    assert.equal(setupPayload.init.config.metricName, "quality_gap");
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).ok, true);
+  });
+});
+
+test("gap-candidates extracts, dedupes, applies, and rejects malformed model output", async () => {
+  await withTempDir("gap-candidates", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "study", "--goal", "Study delight"]);
+    const synthesisPath = path.join(dir, "autoresearch.research", "study", "synthesis.md");
+    await writeFile(synthesisPath, [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Build a guided setup flow with recipe suggestions.",
+      "- Build a guided setup flow with recipe suggestions.",
+      "",
+    ].join("\n"));
+
+    const preview = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study"]);
+    assert.equal(preview.code, 0, preview.stderr);
+    const previewPayload = JSON.parse(preview.stdout);
+    assert.equal(previewPayload.candidates.length, 1);
+    assert.equal(previewPayload.applied, false);
+
+    const applied = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study", "--apply"]);
+    assert.equal(applied.code, 0, applied.stderr);
+    const appliedPayload = JSON.parse(applied.stdout);
+    assert.equal(appliedPayload.applied, true);
+    assert.equal(appliedPayload.qualityGap.total, 7);
+
+    const badModel = await runCli([
+      "gap-candidates",
+      "--cwd", dir,
+      "--research-slug", "study",
+      "--model-command", `${JSON.stringify(process.execPath)} -e "console.log('not json')"`,
+    ]);
+    assert.notEqual(badModel.code, 0);
+    assert.match(badModel.stderr, /model-command must print a JSON array/);
+  });
+});
+
+test("finalize-preview summarizes kept commits without creating branches", async () => {
+  await withTempDir("finalize-preview", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "value.txt"), "base\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "base"]);
+    await git(dir, ["branch", "develop"]);
+
+    await git(dir, ["switch", "-c", "codex/autoresearch-preview"]);
+    await runCli(["init", "--cwd", dir, "--name", "preview", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "src", "value.txt"), "kept\n");
+    const keep = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "1",
+      "--status", "keep",
+      "--description", "Keep value",
+      "--commit-paths", "src",
+    ]);
+    assert.equal(keep.code, 0, keep.stderr);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "record run"]);
+
+    const preview = await runCli(["finalize-preview", "--cwd", dir]);
+    assert.equal(preview.code, 0, preview.stderr);
+    const payload = JSON.parse(preview.stdout);
+    assert.equal(payload.ready, true);
+    assert.equal(payload.groups.length, 1);
+    assert.deepEqual(payload.groups[0].files, ["src/value.txt"]);
+
+    const developPreview = await runCli(["finalize-preview", "--cwd", dir, "--trunk", "develop"]);
+    assert.equal(developPreview.code, 0, developPreview.stderr);
+    assert.match(JSON.parse(developPreview.stdout).suggestedCommand, /--trunk "develop"/);
+
+    const branches = await git(dir, ["branch", "--list", "autoresearch-review/*"]);
+    assert.equal(branches, "");
+  });
+});
+
+test("integrations can load local recipe catalogs", async () => {
+  await withTempDir("integrations", async (dir) => {
+    const catalog = path.join(dir, "recipes.json");
+    await writeFile(catalog, JSON.stringify({
+      recipes: [
+        {
+          id: "demo-recipe",
+          title: "Demo Recipe",
+          metricName: "demo",
+          direction: "higher",
+          benchmarkCommand: "node -e \"console.log('METRIC demo=1')\"",
+        },
+      ],
+    }, null, 2));
+
+    const synced = await runCli(["integrations", "sync-recipes", "--catalog", catalog]);
+    assert.equal(synced.code, 0, synced.stderr);
+    const payload = JSON.parse(synced.stdout);
+    assert.equal(payload.synced, false);
+    assert.ok(payload.recipes.some((recipe) => recipe.id === "demo-recipe"));
+
+    const doctor = await runCli(["integrations", "doctor", "--catalog", catalog]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.match(doctor.stdout, /Configured recipe catalog/);
+  });
+});
+
+test("live server exposes health and view-model endpoints", async () => {
+  await withTempDir("live-server", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "live", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "1", "--status", "keep", "--description", "Baseline"]);
+
+    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
+      cwd: pluginRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    try {
+      const payload = await waitForServerPayload(() => stdout, () => stderr);
+      const health = await fetch(`${payload.url}health`).then((res) => res.json());
+      assert.equal(health.ok, true);
+      const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
+      assert.equal(viewModel.summary.runs, 1);
+    } finally {
+      child.kill();
+    }
+  });
+});
+
+async function waitForServerPayload(stdoutFn, stderrFn) {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const stdout = stdoutFn();
+    if (stdout.trim().endsWith("}")) return JSON.parse(stdout);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`serve did not print startup JSON\n${stderrFn()}`);
+}

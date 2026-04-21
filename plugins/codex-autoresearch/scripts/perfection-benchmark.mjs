@@ -191,11 +191,12 @@ const checks = [
   },
   {
     id: "research-cli-and-mcp",
-    file: "scripts/autoresearch.mjs",
+    file: "scripts/autoresearch.mjs, lib/mcp-interface.mjs",
     description: "CLI help and MCP schema expose research setup and quality-gap measurement.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.mjs");
-      return includesAll(cli, [
+      const mcp = await readText("lib/mcp-interface.mjs");
+      return includesAll(`${cli}\n${mcp}`, [
         "research-setup --cwd <project>",
         "quality-gap --cwd <project>",
         "setup_research_session",
@@ -326,6 +327,89 @@ const checks = [
       return template.includes('<link rel="icon" href="data:image/svg+xml,')
         ? pass()
         : fail("Missing embedded data-URL favicon.");
+    },
+  },
+  {
+    id: "full-product-cli-surface",
+    file: "scripts/autoresearch.mjs",
+    description: "CLI and MCP expose guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
+    run: async () => {
+      const cli = await readText("scripts/autoresearch.mjs");
+      const cliHandlers = await readText("lib/cli-handlers.mjs");
+      const mcpInterface = await readText("lib/mcp-interface.mjs");
+      return includesAll(cli + cliHandlers + mcpInterface, [
+        "setup-plan --cwd <project>",
+        "recipes list|show",
+        "gap-candidates --cwd <project>",
+        "finalize-preview --cwd <project>",
+        "serve --cwd <project>",
+        "integrations list|doctor|sync-recipes",
+        "setup_plan",
+        "gap_candidates",
+        "finalize_preview",
+      ])
+        ? pass()
+        : fail("Missing one or more full-product CLI/MCP surfaces.");
+    },
+  },
+  {
+    id: "full-product-lib-boundaries",
+    file: "lib/*.mjs",
+    description: "New product tracks live behind explicit lib module boundaries.",
+    run: async () => {
+      const files = [
+        "lib/session-core.mjs",
+        "lib/runner.mjs",
+        "lib/cli-handlers.mjs",
+        "lib/mcp-interface.mjs",
+        "lib/recipes.mjs",
+        "lib/dashboard-view-model.mjs",
+        "lib/research-gaps.mjs",
+        "lib/finalize-preview.mjs",
+        "lib/live-server.mjs",
+        "lib/integrations.mjs",
+      ];
+      for (const file of files) await readText(file);
+      return pass();
+    },
+  },
+  {
+    id: "full-product-docs",
+    file: "README.md, commands/autoresearch.md, skills/*.md",
+    description: "Public docs describe recipes, setup-plan, gap candidates, finalization preview, live actions, and integrations.",
+    run: async () => {
+      const readme = await readText("README.md");
+      const command = await readText("commands/autoresearch.md");
+      const dashboard = await readText("skills/autoresearch-dashboard/SKILL.md");
+      return includesAll(readme + command + dashboard, [
+        "setup-plan",
+        "gap-candidates",
+        "finalize-preview",
+        "safe live actions",
+        "Recipes and integrations",
+      ])
+        ? pass()
+        : fail("Docs are missing full-product workflow terms.");
+    },
+  },
+  {
+    id: "full-product-tests",
+    file: "tests/full-product.test.mjs",
+    description: "Regression tests cover the full product tracks.",
+    run: async () => {
+      const test = await readText("tests/full-product.test.mjs");
+      return includesAll(test, [
+        "session core",
+        "runner parses metrics",
+        "catalog recipes can drive setup-plan",
+        "setup-plan",
+        "gap-candidates",
+        "finalize-preview",
+        "integrations",
+        "live server",
+      ])
+        ? pass()
+        : fail("Missing focused full-product regression tests.");
     },
   },
 ];

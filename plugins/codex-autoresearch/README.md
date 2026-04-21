@@ -115,17 +115,20 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `doctor_session`, `export_dashboard`, `clear_session` |
+| MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, live refresh, and copyable commands |
+| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, live refresh, copyable commands, setup/readiness/gap/finalization panels, and safe live actions when served locally |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
+| Recipes and integrations | Built-in benchmark recipes, local/remote recipe catalogs, model-command gap candidates, and live dashboard action providers |
 
 ## MCP Tools
 
 | Tool | Description |
 | --- | --- |
-| `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional max-iteration config, and the initial JSONL config header |
+| `setup_plan` | Returns a read-only first-run setup plan with missing fields, recipe suggestion, and exact next commands |
+| `list_recipes` | Lists built-in recipes and optional local/remote catalog recipes |
+| `setup_session` | Creates `autoresearch.md`, benchmark/check scripts, `autoresearch.ideas.md`, optional recipe/catalog defaults, max-iteration config, and the initial JSONL config header |
 | `setup_research_session` | Creates `autoresearch.research/<slug>/`, initializes a `quality_gap` session, and writes a benchmark script that measures open gaps |
 | `configure_session` | Updates runtime config such as autonomy mode, checks policy, keep policy, dashboard refresh, scoped paths, and max iterations |
 | `init_experiment` | Writes the session config header: name, metric, unit, and direction |
@@ -134,6 +137,9 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | `log_experiment` | Records the result, commits kept changes, and reverts discarded/crashed changes with scoped cleanup when paths are configured |
 | `read_state` | Summarizes the current baseline, best metric, run count, status counts, confidence score, and iteration limit |
 | `measure_quality_gap` | Counts open and closed checklist items in `autoresearch.research/<slug>/quality-gaps.md` |
+| `gap_candidates` | Extracts validated deep-research gap candidates from synthesis and optional model-command JSON; optional apply mode appends checklist items |
+| `finalize_preview` | Previews kept-run grouping, touched files, warnings, and review readiness without creating branches |
+| `integrations` | Lists, doctors, or loads additive integrations such as recipe catalogs and model commands |
 | `doctor_session` | Checks session readiness, Git state, and optionally whether the benchmark emits the configured primary metric |
 | `export_dashboard` | Writes `autoresearch-dashboard.html` from the run log |
 | `clear_session` | Deletes session artifacts after explicit confirmation |
@@ -145,7 +151,13 @@ For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefe
 | Command | Description |
 | --- | --- |
 | `/autoresearch <text>` | Start or resume an autoresearch loop using `<text>` as context |
+| `/autoresearch setup-plan` | Produce a read-only guided setup plan and recipe recommendation, including catalog recipes when a catalog is supplied |
+| `/autoresearch recipes` | Inspect built-in or catalog recipes |
 | `/autoresearch research <text>` | Create a deep-research scratchpad and `quality_gap` loop |
+| `/autoresearch gap-candidates` | Convert synthesis and optional model-command output into validated quality-gap candidates |
+| `/autoresearch finalize-preview` | Preview finalization readiness without creating branches |
+| `/autoresearch serve` | Start a local live dashboard with safe action endpoints |
+| `/autoresearch integrations` | Inspect or load additive integration surfaces |
 | `/autoresearch status` | Summarize the current run log |
 | `/autoresearch doctor` | Run the preflight/operator readout before the next experiment |
 | `/autoresearch next` | Run preflight + benchmark and prepare the keep/discard decision packet |

@@ -25,6 +25,8 @@ For MCP, the local `.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `c
 Direct CLI sequence:
 
 ```bash
+node <plugin-root>/scripts/autoresearch.mjs setup-plan --cwd <current-project>
+node <plugin-root>/scripts/autoresearch.mjs recipes list
 node <plugin-root>/scripts/autoresearch.mjs setup --cwd <current-project> --name "test speed" --metric-name seconds --metric-unit s --direction lower --benchmark-command "npm test -- --runInBand" --checks-command "npm test" --max-iterations 50
 node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark
 node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>
@@ -37,6 +39,8 @@ node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
 Use the local routing above when this repository is the target.
 
 - Empty or `help`: summarize available actions.
+- `setup-plan`: run `node <plugin-root>/scripts/autoresearch.mjs setup-plan --cwd <current-project>` to get a read-only guided setup plan, missing fields, recipe recommendation, and exact next setup command. Add `--catalog <path-or-url>` when planning from a local or remote recipe catalog.
+- `recipes ...`: run `node <plugin-root>/scripts/autoresearch.mjs recipes list|show ...` to inspect built-in or local/remote catalog benchmark recipes. Catalog recipe IDs can be used by `setup --recipe <id> --catalog <path-or-url>`.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
 - `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
 - `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
@@ -45,6 +49,10 @@ Use the local routing above when this repository is the target.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
 - `clear`: use MCP `clear_session` or run `node <plugin-root>/scripts/autoresearch.mjs clear --cwd <current-project> --yes` after confirming the target project path.
 - `research <goal>`: use the `autoresearch-deep-research` skill or MCP `setup_research_session` to create `autoresearch.research/<slug>/`, initialize a `quality_gap` session, then measure gaps with `quality-gap`.
+- `gap-candidates`: run `node <plugin-root>/scripts/autoresearch.mjs gap-candidates --cwd <current-project> --research-slug <slug>` to extract validated candidates from synthesis and optional model-command JSON; add `--apply` only after reviewing the candidates.
+- `finalize-preview`: run `node <plugin-root>/scripts/autoresearch.mjs finalize-preview --cwd <current-project>` to inspect review-branch readiness without creating branches.
+- `serve`: run `node <plugin-root>/scripts/autoresearch.mjs serve --cwd <current-project>` to start the local live dashboard and safe action endpoints.
+- `integrations ...`: run `node <plugin-root>/scripts/autoresearch.mjs integrations list|doctor|sync-recipes` to inspect additive integration surfaces such as recipe catalogs and model commands.
 - Any other text: use the `autoresearch-create` skill to start or resume the loop using the text as the goal/context.
 
 ## Safety
@@ -62,5 +70,9 @@ Before logging a discard/crash/checks-failed result, use configured `commitPaths
 When calling MCP tools with custom shell commands, pass `allow_unsafe_command: true` only after confirming the command and target directory.
 
 For qualitative research loops, use `autoresearch-deep-research`. Its benchmark counts unchecked items in `autoresearch.research/<slug>/quality-gaps.md`, so the loop can continue until high-impact findings are implemented, intentionally rejected with evidence, or no longer relevant.
+
+Model-assisted gap generation must stay provider-agnostic. Use `gap-candidates --model-command <cmd>` only when the command prints a JSON array of candidate objects; the helper validates and previews the output before `--apply`.
+
+Dashboard live actions are local-only and limited to safe commands: doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, and export. Mutating review branch creation remains in `/autoresearch-finalize`.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.

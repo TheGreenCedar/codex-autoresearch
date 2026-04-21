@@ -9,6 +9,14 @@ Turn an autoresearch branch into one or more independent branches from the merge
 
 ## Step 1: Analyze
 
+0. Run a read-only preview when available:
+
+```bash
+node /absolute/path/to/codex-autoresearch/scripts/autoresearch.mjs finalize-preview --cwd /absolute/project/path
+```
+
+Use the preview to find dirty worktrees, missing kept commits, overlap risks, and likely review groups before creating branches.
+
 1. Read `autoresearch.jsonl`; keep only results with `status: "keep"`.
 2. Read `autoresearch.md` for objective and constraints.
 3. Expand each kept commit to a full hash with `git rev-parse`.
