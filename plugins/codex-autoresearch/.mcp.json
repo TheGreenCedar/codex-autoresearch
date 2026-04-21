@@ -3,10 +3,10 @@
     "codex-autoresearch": {
       "command": "node",
       "args": [
-        "./scripts/autoresearch.mjs",
-        "--mcp"
+        "./scripts/autoresearch-mcp.mjs"
       ],
       "cwd": ".",
+      "startup_timeout_sec": 60,
       "note": "Local no-dependency MCP server exposing setup_session, setup_research_session, configure_session, init_experiment, run_experiment, next_experiment, log_experiment, read_state, measure_quality_gap, doctor_session, export_dashboard, and clear_session tools for Codex autoresearch loops."
     }
   }

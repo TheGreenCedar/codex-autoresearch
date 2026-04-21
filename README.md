@@ -20,9 +20,10 @@ Install or refresh the plugin, then verify the MCP server before the first loop:
 ```bash
 codex marketplace add TheGreenCedar/codex-autoresearch
 codex mcp get codex-autoresearch
+node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 ```
 
-Marketplace installs are versioned. If Codex still shows an older version, bump or refresh the installed plugin cache before testing new tools.
+Marketplace installs are versioned. If Codex still shows an older version, bump or refresh the installed plugin cache before testing new tools. `mcp-smoke` validates the plugin's lightweight stdio MCP entrypoint directly; the MCP process only imports the static tool schema at startup and defers the full CLI load until an actual tool call.
 
 Ask Codex:
 
@@ -51,6 +52,7 @@ The plugin self-check is:
 
 ```bash
 node plugins/codex-autoresearch/scripts/perfection-benchmark.mjs --fail-on-gap
+node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 ```
 
 It reports `METRIC quality_gap=<n>`, where zero means the local plugin has the current guidance, prompts, tests, and session hygiene expected for Codex autoresearch work.

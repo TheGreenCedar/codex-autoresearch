@@ -69,6 +69,7 @@ Usage:
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>]
   node scripts/autoresearch.mjs clear --cwd <project> --yes
+  node scripts/autoresearch.mjs mcp-smoke
   node scripts/autoresearch.mjs --mcp
 
 Benchmark output format:
@@ -1821,7 +1822,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.9" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.10" },
       },
     });
     return;
@@ -1864,6 +1865,115 @@ function sendMcp(message) {
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
 }
 
+function mcpFrame(message) {
+  const body = JSON.stringify(message);
+  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+}
+
+function collectMcpFrames(buffer, messages) {
+  let remaining = buffer;
+  for (;;) {
+    const headerEnd = remaining.indexOf("\r\n\r\n");
+    if (headerEnd < 0) return remaining;
+    const header = remaining.subarray(0, headerEnd).toString("utf8");
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) {
+      remaining = remaining.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (!Number.isFinite(length) || length < 0) {
+      remaining = remaining.subarray(bodyStart);
+      continue;
+    }
+    if (remaining.length < bodyStart + length) return remaining;
+    const body = remaining.subarray(bodyStart, bodyStart + length).toString("utf8");
+    remaining = remaining.subarray(bodyStart + length);
+    try {
+      messages.push(JSON.parse(body));
+    } catch (error) {
+      messages.push({ jsonrpc: "2.0", error: { code: -32700, message: error.message } });
+    }
+  }
+}
+
+function waitForMcpResponse(messages, id, timeoutMs) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const message = messages.find((item) => item.id === id);
+      if (message || Date.now() - started >= timeoutMs) {
+        resolve(message || null);
+        return;
+      }
+      setTimeout(check, 25);
+    };
+    check();
+  });
+}
+
+async function mcpSmoke() {
+  const messages = [];
+  let buffer = Buffer.alloc(0);
+  let stderr = "";
+  const child = spawn(process.execPath, [path.join(SCRIPT_DIR, "autoresearch-mcp.mjs")], {
+    cwd: PLUGIN_ROOT,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk) => {
+    buffer = collectMcpFrames(Buffer.concat([buffer, chunk]), messages);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  child.stdin.write(mcpFrame({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "codex-autoresearch-smoke", version: "0" },
+    },
+  }));
+  child.stdin.write(mcpFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }));
+  child.stdin.write(mcpFrame({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
+
+  const initialize = await waitForMcpResponse(messages, 1, 1500);
+  const toolsList = await waitForMcpResponse(messages, 2, 1500);
+  child.kill();
+
+  const tools = toolsList?.result?.tools || [];
+  const toolNames = tools.map((tool) => tool.name).filter(Boolean);
+  const requiredTools = [
+    "setup_plan",
+    "setup_session",
+    "next_experiment",
+    "read_state",
+    "doctor_session",
+    "clear_session",
+  ];
+  const missingRequiredTools = requiredTools.filter((tool) => !toolNames.includes(tool));
+  return {
+    ok: Boolean(
+      initialize?.result?.serverInfo?.name === "codex-autoresearch"
+      && tools.length > 0
+      && missingRequiredTools.length === 0,
+    ),
+    pluginRoot: PLUGIN_ROOT,
+    command: `${process.execPath} ${path.join(SCRIPT_DIR, "autoresearch-mcp.mjs")}`,
+    initialize: initialize?.result || initialize?.error || null,
+    toolCount: tools.length,
+    toolNames,
+    missingRequiredTools,
+    stderr: stderr.trim(),
+    note: "This validates the plugin stdio server directly. If this is ok but Codex does not show MCP tools, the failure is in Codex tool surfacing or session registration, not this server process.",
+  };
+}
+
 async function main() {
   const args = parseCliArgs(process.argv.slice(2));
   if (args.mcp) {
@@ -1873,6 +1983,10 @@ async function main() {
   const command = args._[0];
   if (!command || args.help || command === "help") {
     console.log(usage());
+    return;
+  }
+  if (command === "mcp-smoke") {
+    console.log(JSON.stringify(await mcpSmoke(), null, 2));
     return;
   }
   const handlers = createCliCommandHandlers({

@@ -36,21 +36,23 @@ function pass(message = "") {
 const checks = [
   {
     id: "version-sync",
-    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs",
+    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs, scripts/autoresearch-mcp.mjs",
     description: "All public version surfaces expose the same plugin version.",
     run: async () => {
       const pkg = await readJson("package.json");
       const manifest = await readJson(".codex-plugin/plugin.json");
       const cli = await readText("scripts/autoresearch.mjs");
+      const mcp = await readText("scripts/autoresearch-mcp.mjs");
       const serverVersion = cli.match(/serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s)?.[1];
-      if (pkg.version === manifest.version && pkg.version === serverVersion) return pass();
-      return fail(`package=${pkg.version}, manifest=${manifest.version}, server=${serverVersion || "(missing)"}`);
+      const mcpVersion = mcp.match(/const VERSION = "([^"]+)"/)?.[1];
+      if (pkg.version === manifest.version && pkg.version === serverVersion && pkg.version === mcpVersion) return pass();
+      return fail(`package=${pkg.version}, manifest=${manifest.version}, server=${serverVersion || "(missing)"}, mcp=${mcpVersion || "(missing)"}`);
     },
   },
   {
     id: "local-mcp-config",
     file: ".mcp.json",
-    description: "The local MCP server starts from the plugin root and exposes the one-packet next flow.",
+    description: "The local MCP server starts through the lightweight entrypoint and exposes the one-packet next flow.",
     run: async () => {
       const config = await readJson(".mcp.json");
       const server = config.mcpServers?.["codex-autoresearch"];
@@ -59,15 +61,15 @@ const checks = [
       const note = String(server.note || "");
       if (
         server.cwd === "."
-        && args.includes("./scripts/autoresearch.mjs")
-        && args.includes("--mcp")
+        && args.includes("./scripts/autoresearch-mcp.mjs")
+        && Number(server.startup_timeout_sec) >= 30
         && note.includes("next_experiment")
         && note.includes("setup_research_session")
         && note.includes("measure_quality_gap")
       ) {
         return pass();
       }
-      return fail("MCP config should use cwd='.', the local script, --mcp, and mention next_experiment plus research tools");
+      return fail("MCP config should use cwd='.', the lightweight startup script, startup_timeout_sec, and mention next_experiment plus research tools");
     },
   },
   {

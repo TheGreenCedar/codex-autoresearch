@@ -10,6 +10,7 @@ import vm from "node:vm";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
+const mcpServer = path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs");
 
 const quoteForShell = (value) => {
   return `"${String(value).replace(/"/g, '\\"')}"`;
@@ -624,7 +625,7 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
 });
 
 test("mcp server returns a JSON-RPC parse error for malformed JSON", async () => {
-  const child = spawn(process.execPath, [cli, "--mcp"], {
+  const child = spawn(process.execPath, [mcpServer], {
     cwd: pluginRoot,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
@@ -650,8 +651,88 @@ test("mcp server returns a JSON-RPC parse error for malformed JSON", async () =>
   assert.equal(stderr, "");
 });
 
+test("mcp-smoke reports direct stdio server readiness", async () => {
+  const result = await runCli(["mcp-smoke"]);
+  assert.equal(result.code, 0, result.stderr);
+
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.initialize.serverInfo.name, "codex-autoresearch");
+  assert.ok(payload.toolCount >= 6);
+  assert.equal(payload.missingRequiredTools.length, 0);
+  assert.match(payload.toolNames.join("\n"), /setup_session/);
+  assert.match(payload.toolNames.join("\n"), /next_experiment/);
+});
+
+test("plugin MCP registration uses the lightweight startup entrypoint", async () => {
+  const manifest = JSON.parse(await readFile(path.join(pluginRoot, ".mcp.json"), "utf8"));
+  const registration = manifest.mcpServers["codex-autoresearch"];
+
+  assert.deepEqual(registration.args, ["./scripts/autoresearch-mcp.mjs"]);
+  assert.equal(registration.startup_timeout_sec, 60);
+});
+
+test("mcp server dispatches tool calls through the CLI wrapper", async () => {
+  const child = spawn(process.execPath, [mcpServer], {
+    cwd: pluginRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  const send = (message) => {
+    const body = JSON.stringify(message);
+    child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  };
+  const responseWithId = async (id) => {
+    const started = Date.now();
+    while (Date.now() - started < 5000) {
+      const parsed = [];
+      let remaining = Buffer.from(stdout, "utf8");
+      for (;;) {
+        const headerEnd = remaining.indexOf("\r\n\r\n");
+        if (headerEnd < 0) break;
+        const header = remaining.subarray(0, headerEnd).toString("utf8");
+        const match = header.match(/Content-Length:\s*(\d+)/i);
+        if (!match) break;
+        const length = Number(match[1]);
+        const bodyStart = headerEnd + 4;
+        if (remaining.length < bodyStart + length) break;
+        parsed.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
+        remaining = remaining.subarray(bodyStart + length);
+      }
+      const found = parsed.find((message) => message.id === id);
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`No MCP response for ${id}\nstdout=${stdout}\nstderr=${stderr}`);
+  };
+
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } });
+  send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+  send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "setup_plan", arguments: { working_dir: pluginRoot } } });
+
+  const init = await responseWithId(1);
+  const tool = await responseWithId(2);
+  child.kill();
+
+  assert.equal(init.result.serverInfo.name, "codex-autoresearch");
+  const payload = JSON.parse(tool.result.content[0].text);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.workDir, pluginRoot);
+  assert.equal(stderr, "");
+});
+
 test("mcp server rejects oversized frames before parsing", async () => {
-  const child = spawn(process.execPath, [cli, "--mcp"], {
+  const child = spawn(process.execPath, [mcpServer], {
     cwd: pluginRoot,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],

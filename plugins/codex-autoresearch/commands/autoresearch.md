@@ -13,6 +13,7 @@ This command doc is the canonical CLI walkthrough for repo-local autoresearch ru
 From the repository root:
 
 ```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
 node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
 node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
@@ -20,7 +21,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 
 From `plugins/codex-autoresearch`, use `node scripts/autoresearch.mjs ...` with the target project passed through `--cwd`.
 
-For MCP, the local `.mcp.json` starts `./scripts/autoresearch.mjs --mcp` with `cwd` set to `.`. If Codex still routes to a globally installed plugin, call the repo-local CLI explicitly.
+For MCP, the local `.mcp.json` starts `./scripts/autoresearch-mcp.mjs` with `cwd` set to `.` and `startup_timeout_sec` set. That entrypoint is intentionally tiny: it answers `initialize` and `tools/list` before loading the full CLI, then shells out to `scripts/autoresearch.mjs` only for `tools/call`. Run `node <plugin-root>/scripts/autoresearch.mjs mcp-smoke` to verify the stdio server directly.
 
 Direct CLI sequence:
 
