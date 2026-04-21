@@ -96,6 +96,10 @@ export function bestMetric(runs, direction) {
   return best;
 }
 
+export function bestKeptMetric(runs, direction) {
+  return bestMetric(runs.filter((run) => run.status === "keep"), direction);
+}
+
 export function isBetter(value, current, direction) {
   return direction === "higher" ? value > current : value < current;
 }
@@ -111,7 +115,7 @@ export function computeConfidence(runs, direction) {
   const values = runs.map((run) => finiteMetric(run.metric)).filter((value) => value != null);
   if (values.length < 3) return null;
   const baseline = values[0];
-  const best = bestMetric(runs, direction);
+  const best = bestKeptMetric(runs, direction);
   if (best == null || best === baseline) return null;
   const med = median(values);
   const mad = median(values.map((value) => Math.abs(value - med)));
@@ -146,7 +150,7 @@ export function currentState(workDir) {
   }
   const current = results.filter((run) => run.segment === segment);
   const baseline = finiteMetric(current.find((run) => finiteMetric(run.metric) != null)?.metric);
-  const best = bestMetric(current, config.bestDirection);
+  const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };
 }

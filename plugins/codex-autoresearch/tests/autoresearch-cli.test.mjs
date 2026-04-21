@@ -211,6 +211,31 @@ test("state supports negative metrics when lower is better", async () => {
   });
 });
 
+test("discarded metrics do not become best or suppress on-improvement checks", async () => {
+  await withTempDir("discarded-best", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "discarded best", "--metric-name", "seconds", "--direction", "lower"]);
+    await runCli(["log", "--cwd", dir, "--metric", "10", "--status", "keep", "--description", "Baseline"]);
+    await runCli(["log", "--cwd", dir, "--metric", "5", "--status", "discard", "--description", "Faster but rejected"]);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(JSON.parse(state.stdout).best, 10);
+
+    const checksFile = process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+    const checksBody = process.platform === "win32" ? "exit 1\n" : "#!/bin/sh\nexit 1\n";
+    await writeFile(path.join(dir, checksFile), checksBody, "utf8");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
+    const result = await runCli(["run", "--cwd", dir, "--command", command, "--checks-policy", "on-improvement"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.improvesPrimary, true);
+    assert.equal(payload.checks?.passed, false);
+    assert.equal(payload.ok, false);
+    assert.deepEqual(payload.logHint.allowedStatuses, ["checks_failed"]);
+  });
+});
+
 test("dashboard includes segment and finalize-readiness cockpit controls", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
@@ -292,6 +317,32 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.experiment.metric, 3);
     assert.equal(payload.experiment.metrics.cache_hits, 8);
+  });
+});
+
+test("log from last packet rejects keep after failed checks", async () => {
+  await withTempDir("last-run-check-failure", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "last run checks", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-command", checks]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.deepEqual(packet.decision.allowedStatuses, ["checks_failed"]);
+
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Should not keep failed checks",
+    ]);
+    assert.notEqual(log.code, 0);
+    assert.match(log.stderr, /Cannot log status 'keep'/);
+
+    const jsonl = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.doesNotMatch(jsonl, /Should not keep failed checks/);
   });
 });
 
