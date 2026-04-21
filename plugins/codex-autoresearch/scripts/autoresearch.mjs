@@ -59,7 +59,7 @@ Usage:
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
+  node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug> [--list]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
@@ -290,6 +290,9 @@ async function setupPlan(args) {
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
     args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
   ].filter(Boolean).join(" ");
+  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
   return {
     ok: true,
     workDir,
@@ -299,7 +302,13 @@ async function setupPlan(args) {
     recommendedRecipe: recommended,
     missing,
     nextCommand: command,
-    baselineCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`,
+    baselineCommand,
+    guidedFlow: [
+      { step: "setup", command, purpose: "Create the session files and metric config." },
+      { step: "doctor", command: doctorCommand, purpose: "Verify the benchmark emits the configured metric." },
+      { step: "baseline", command: baselineCommand, purpose: "Run the first measured packet." },
+      { step: "log", command: logCommand, purpose: "Record the last packet with a deliberate keep/discard decision." },
+    ],
     notes: [
       "setup-plan is read-only.",
       "Generated recipe scripts remain inspectable and should be checked with doctor before logging a keep.",
@@ -560,15 +569,21 @@ function renderResearchFile(fileName, args, slug) {
 }
 
 function parseQualityGaps(text) {
-  let open = 0;
-  let closed = 0;
+  const items = parseQualityGapItems(text);
+  return { open: items.open.length, closed: items.closed.length, total: items.open.length + items.closed.length };
+}
+
+function parseQualityGapItems(text) {
+  const open = [];
+  const closed = [];
   for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*-\s*\[([ xX])\]\s+\S/);
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
     if (!match) continue;
-    if (match[1].toLowerCase() === "x") closed += 1;
-    else open += 1;
+    const item = match[2].trim();
+    if (match[1].toLowerCase() === "x") closed.push(item);
+    else open.push(item);
   }
-  return { open, closed, total: open + closed };
+  return { open, closed };
 }
 
 async function writeSessionFile(filePath, content, options = {}) {
@@ -1192,6 +1207,7 @@ async function measureQualityGap(args) {
   }
   const text = await fsp.readFile(gapsPath, "utf8");
   const counts = parseQualityGaps(text);
+  const items = parseQualityGapItems(text);
   const metricOutput = [
     `METRIC quality_gap=${counts.open}`,
     `METRIC quality_total=${counts.total}`,
@@ -1206,6 +1222,8 @@ async function measureQualityGap(args) {
     open: counts.open,
     closed: counts.closed,
     total: counts.total,
+    openItems: items.open,
+    closedItems: items.closed,
     metricOutput,
   };
 }
@@ -1221,7 +1239,8 @@ async function currentQualityGapSummary(workDir) {
     if (!(await pathExists(gapsPath))) continue;
     const text = await fsp.readFile(gapsPath, "utf8");
     const counts = parseQualityGaps(text);
-    return { slug, path: gapsPath, ...counts };
+    const items = parseQualityGapItems(text);
+    return { slug, path: gapsPath, ...counts, openItems: items.open, closedItems: items.closed };
   }
   return null;
 }
@@ -1236,12 +1255,13 @@ function dashboardSettings(config) {
 }
 
 async function dashboardViewModel(workDir, config) {
+  const qualityGap = await currentQualityGapSummary(workDir);
   return buildDashboardViewModel({
     state: currentState(workDir),
     settings: dashboardSettings(config),
-    commands: dashboardCommands(workDir),
+    commands: dashboardCommands(workDir, qualityGap),
     setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
-    qualityGap: await currentQualityGapSummary(workDir),
+    qualityGap,
     finalizePreview: await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
       ok: false,
       ready: false,
@@ -1574,20 +1594,34 @@ function publicState(args) {
   };
 }
 
-function dashboardCommands(workDir) {
+function dashboardCommands(workDir, qualityGap = null) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
+  const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
   return [
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
     { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
     { label: "Keep last", command: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"` },
     { label: "Discard last", command: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"` },
-    { label: "Gap candidates", command: `node ${script} gap-candidates --cwd ${cwd} --research-slug research` },
+    { label: "Gap candidates", command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}` },
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
   ];
+}
+
+function currentQualityGapSlug(workDir) {
+  const researchRoot = path.join(workDir, RESEARCH_DIR);
+  try {
+    for (const entry of fs.readdirSync(researchRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (fs.existsSync(path.join(researchRoot, entry.name, "quality-gaps.md"))) return entry.name;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 async function doctorSession(args) {
@@ -1787,7 +1821,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.1.8" },
+        serverInfo: { name: "codex-autoresearch", version: "0.1.9" },
       },
     });
     return;

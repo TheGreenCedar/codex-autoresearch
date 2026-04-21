@@ -130,6 +130,12 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).config.metricName, "quality_gap");
+
+    const exportResult = await runCli(["export", "--cwd", dir]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    assert.match(dashboard, /--research-slug \\"project-study\\"/);
+    assert.match(dashboard, /activeResearchSlug/);
   });
 });
 
@@ -152,6 +158,12 @@ test("quality-gap counts checked and unchecked research gaps", async () => {
     assert.match(result.stdout, /METRIC quality_gap=2/);
     assert.match(result.stdout, /METRIC quality_total=4/);
     assert.match(result.stdout, /METRIC quality_closed=2/);
+
+    const listed = await runCli(["quality-gap", "--cwd", dir, "--research-slug", "study", "--list"]);
+    assert.equal(listed.code, 0, listed.stderr);
+    const listedPayload = JSON.parse(listed.stdout);
+    assert.deepEqual(listedPayload.openItems, ["Open gap", "Another open gap"]);
+    assert.deepEqual(listedPayload.closedItems, ["Closed gap", "Rejected with evidence"]);
   });
 });
 

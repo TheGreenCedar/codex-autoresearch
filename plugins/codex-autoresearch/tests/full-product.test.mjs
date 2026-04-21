@@ -178,6 +178,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     const planPayload = JSON.parse(plan.stdout);
     assert.equal(planPayload.recommendedRecipe.id, "node-test-runtime");
     assert.match(planPayload.nextCommand, /setup/);
+    assert.deepEqual(planPayload.guidedFlow.map((step) => step.step), ["setup", "doctor", "baseline", "log"]);
 
     const recipes = await runCli(["recipes", "list"]);
     assert.equal(recipes.code, 0, recipes.stderr);
@@ -433,6 +434,34 @@ test("live server exposes health and view-model endpoints", async () => {
       assert.equal(health.ok, true);
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
+    } finally {
+      child.kill();
+    }
+  });
+});
+
+test("live server gap-candidates action uses the active research slug", async () => {
+  await withTempDir("live-gap-action", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "Custom Study", "--goal", "Study live gaps"]);
+
+    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
+      cwd: pluginRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    try {
+      const payload = await waitForServerPayload(() => stdout, () => stderr);
+      const action = await fetch(`${payload.url}actions/gap-candidates`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }).then((res) => res.json());
+      assert.equal(action.ok, true, action.stderr || action.error);
+      assert.match(action.stdout, /"slug": "custom-study"/);
     } finally {
       child.kill();
     }

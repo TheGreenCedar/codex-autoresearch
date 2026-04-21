@@ -1,1 +1,14 @@
 .learnings/
+
+# Codex Autoresearch session artifacts
+/autoresearch.md
+/autoresearch.jsonl
+/autoresearch.ideas.md
+/autoresearch.research/
+/autoresearch.config.json
+/autoresearch.last-run.json
+/autoresearch.sh
+/autoresearch.ps1
+/autoresearch.checks.sh
+/autoresearch.checks.ps1
+/autoresearch-dashboard.html

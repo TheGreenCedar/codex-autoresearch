@@ -37,7 +37,7 @@ export async function serveAutoresearch(args) {
           return;
         }
         const body = await readJsonBody(req);
-        const cliArgs = actionArgs(action, workDir, body);
+        const cliArgs = await actionArgs(action, workDir, body);
         const result = await runNode(scriptPath, cliArgs, workDir);
         sendJson(res, { ok: result.code === 0, action, stdout: result.stdout, stderr: result.stderr, code: result.code });
         return;
@@ -58,14 +58,33 @@ export async function serveAutoresearch(args) {
   };
 }
 
-function actionArgs(action, workDir, body) {
+async function actionArgs(action, workDir, body) {
   if (action === "doctor") return ["doctor", "--cwd", workDir, "--check-benchmark"];
   if (action === "setup-plan") return ["setup-plan", "--cwd", workDir];
   if (action === "recipes") return ["recipes", "list"];
-  if (action === "gap-candidates") return ["gap-candidates", "--cwd", workDir, "--research-slug", body.researchSlug || body.slug || "research"];
+  if (action === "gap-candidates") return ["gap-candidates", "--cwd", workDir, "--research-slug", body.researchSlug || body.slug || await firstResearchSlug(workDir) || "research"];
   if (action === "finalize-preview") return ["finalize-preview", "--cwd", workDir];
   if (action === "export") return ["export", "--cwd", workDir];
   return [];
+}
+
+async function firstResearchSlug(workDir) {
+  const researchRoot = path.join(workDir, "autoresearch.research");
+  try {
+    const entries = await fsp.readdir(researchRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        await fsp.access(path.join(researchRoot, entry.name, "quality-gaps.md"));
+        return entry.name;
+      } catch {
+        // Keep looking.
+      }
+    }
+  } catch {
+    return "";
+  }
+  return "";
 }
 
 async function readJsonBody(req) {

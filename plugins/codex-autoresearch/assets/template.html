@@ -1008,10 +1008,13 @@ function renderLiveActions() {
       const action = button.dataset.action;
       button.textContent = "Running";
       try {
+        const body = action === "gap-candidates"
+          ? { researchSlug: activeResearchSlug() }
+          : {};
         const response = await fetch("actions/" + action, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({}),
+          body: JSON.stringify(body),
         });
         const payload = await response.json();
         button.textContent = payload.ok ? "Done" : "Failed";
@@ -1025,6 +1028,10 @@ function renderLiveActions() {
       }
     };
   }
+}
+
+function activeResearchSlug() {
+  return viewModel?.qualityGap?.slug || meta?.viewModel?.qualityGap?.slug || "research";
 }
 
 function actionLabel(action) {

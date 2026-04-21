@@ -95,6 +95,7 @@ export function createCliCommandHandlers(deps) {
         researchSlug: args.researchSlug,
         slug: args.slug,
       });
+      if (args.list) return { result };
       return { text: result.metricOutput };
     },
     "gap-candidates": async (args) => ({
