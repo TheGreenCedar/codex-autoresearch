@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "private": true,
   "description": "Codex plugin for autonomous benchmark and optimization loops.",

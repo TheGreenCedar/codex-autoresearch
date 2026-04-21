@@ -56,6 +56,38 @@ const git = async (cwd, args) => {
   return result.stdout.trim();
 };
 
+function mcpFrame(message) {
+  const body = JSON.stringify(message);
+  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
+}
+
+function parseMcpFrames(stdout) {
+  const frames = [];
+  let remaining = Buffer.from(stdout, "utf8");
+  for (;;) {
+    const headerEnd = remaining.indexOf("\r\n\r\n");
+    if (headerEnd < 0) return frames;
+    const header = remaining.subarray(0, headerEnd).toString("utf8");
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) return frames;
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (remaining.length < bodyStart + length) return frames;
+    frames.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
+    remaining = remaining.subarray(bodyStart + length);
+  }
+}
+
+async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const found = parseMcpFrames(stdoutFn()).find((message) => message.id === id);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`No MCP response for ${id}\nstdout=${stdoutFn()}\nstderr=${stderrFn()}`);
+}
+
 const createDashboardElement = (id) => ({
   id,
   textContent: "",
@@ -814,6 +846,42 @@ test("mcp-smoke reports direct stdio server readiness", async () => {
   assert.equal(payload.missingRequiredTools.length, 0);
   assert.match(payload.toolNames.join("\n"), /setup_session/);
   assert.match(payload.toolNames.join("\n"), /next_experiment/);
+});
+
+test("mcp tools/list uses conservative 2024-compatible tool metadata", async () => {
+  const child = spawn(process.execPath, [mcpServer], {
+    cwd: pluginRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  child.stdin.write(mcpFrame({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {} },
+  }));
+  child.stdin.write(mcpFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }));
+  child.stdin.write(mcpFrame({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
+
+  const response = await waitForMcpResponseById(() => stdout, () => stderr, 2);
+  child.kill();
+
+  const tools = response.result.tools;
+  assert.ok(tools.length >= 6);
+  for (const tool of tools) {
+    assert.deepEqual(Object.keys(tool).sort(), ["description", "inputSchema", "name"]);
+  }
+  assert.equal(stderr, "");
 });
 
 test("mcp tools expose guidance and output contracts", async () => {

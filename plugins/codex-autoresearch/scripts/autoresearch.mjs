@@ -2218,7 +2218,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.2.0" },
+        serverInfo: { name: "codex-autoresearch", version: "0.2.1" },
       },
     });
     return;

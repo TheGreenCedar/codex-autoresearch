@@ -2,14 +2,14 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { toolSchemas, validateToolArguments } from "../lib/mcp-interface.mjs";
+import { mcpToolSchemas, validateToolArguments } from "../lib/mcp-interface.mjs";
 
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const TOOL_TIMEOUT_SECONDS = 15 * 60;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CLI_SCRIPT = path.join(SCRIPT_DIR, "autoresearch.mjs");
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 let buffer = Buffer.alloc(0);
 
@@ -75,7 +75,7 @@ async function handleMcpMessage(message) {
   if (message.method === "notifications/initialized") return;
 
   if (message.method === "tools/list") {
-    sendMcp({ jsonrpc: "2.0", id: message.id, result: { tools: toolSchemas } });
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: { tools: mcpToolSchemas } });
     return;
   }
 

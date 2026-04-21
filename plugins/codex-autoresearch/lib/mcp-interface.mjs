@@ -295,6 +295,8 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
+export const mcpToolSchemas = toolSchemas.map(toMcpToolSchema);
+
 export function createMcpInterface(deps) {
   const requireUnsafeCommandGate = (toolName, args) => {
     const hasCustomCommand = Boolean(args.command || args.checks_command || args.checksCommand || args.model_command || args.modelCommand);
@@ -343,7 +345,7 @@ export function createMcpInterface(deps) {
 
   return {
     callTool,
-    toolSchemas,
+    toolSchemas: mcpToolSchemas,
     validateToolArguments,
   };
 }
@@ -368,4 +370,12 @@ export function validateToolArguments(name, args) {
 
 function isObjectArgument(value) {
   return typeof value === "object" && !Array.isArray(value);
+}
+
+function toMcpToolSchema(tool) {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  };
 }
