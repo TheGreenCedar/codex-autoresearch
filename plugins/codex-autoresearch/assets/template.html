@@ -126,6 +126,67 @@ h1 {
   color: var(--ink);
   font-size: 14px;
 }
+.next-rail {
+  margin: 18px 0;
+}
+.next-action-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr);
+  gap: 16px;
+  padding: 16px 18px 18px;
+  align-items: stretch;
+  min-height: 218px;
+}
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  background: rgba(15, 159, 143, .12);
+  color: #0b6f65;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+.next-action-copy h3 {
+  margin: 10px 0 0;
+  font-size: 22px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+.next-action-copy p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.next-action-command {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  grid-template-rows: minmax(112px, auto) 38px 38px;
+}
+.inline-command {
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 10px;
+  min-width: 0;
+}
+.inline-command span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.inline-command code {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
 .tool-button {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -328,6 +389,38 @@ th {
   color: var(--muted);
   text-align: center;
 }
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  padding: 16px 18px 18px;
+  align-items: start;
+}
+.family-list,
+.lane-list {
+  display: grid;
+  gap: 8px;
+}
+.family-row,
+.lane-row {
+  border-top: 1px solid var(--soft-line);
+  padding-top: 9px;
+  min-width: 0;
+  min-height: 68px;
+}
+.family-row strong,
+.lane-row strong {
+  display: block;
+  font-size: 14px;
+}
+.family-row span,
+.lane-row span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
 .command-grid {
   display: grid;
   gap: 8px;
@@ -362,6 +455,7 @@ th {
 @media (max-width: 940px) {
   .wrap { padding: 18px; }
   .masthead, .layout { grid-template-columns: 1fr; }
+  .next-action-body, .portfolio-grid { grid-template-columns: 1fr; }
   .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-strip { align-items: stretch; flex-direction: column; }
   .live-strip, .command-row { grid-template-columns: 1fr; }
@@ -410,6 +504,29 @@ th {
     </div>
     <button class="tool-button" id="refresh-now" type="button">Refresh</button>
     <button class="tool-button" id="live-toggle" type="button" aria-pressed="false">Live off</button>
+  </section>
+
+  <section class="panel next-rail" aria-label="Next best action">
+    <div class="panel-head">
+      <h2 class="panel-title">Next best action</h2>
+      <span class="panel-note" id="next-best-note">Evidence-backed recommendation</span>
+    </div>
+    <div class="next-action-body">
+      <div class="next-action-copy">
+        <span class="priority-badge" id="next-best-priority">Recommended</span>
+        <h3 id="next-best-title">Choose next hypothesis</h3>
+        <p id="next-best-detail">Run and log a baseline before optimizing.</p>
+        <p id="next-best-evidence">No run evidence yet.</p>
+      </div>
+      <div class="next-action-command">
+        <div class="inline-command">
+          <span id="next-best-command-label">Command</span>
+          <code id="next-best-command">-</code>
+        </div>
+        <button class="tool-button" id="copy-next-best" type="button">Copy command</button>
+        <button class="tool-button" id="run-next-best-action" type="button">Live action unavailable</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel readout" aria-label="Operator cockpit">
@@ -498,6 +615,27 @@ th {
       </div>
       <div class="rail-list" id="decision-rail"></div>
     </aside>
+  </section>
+
+  <section class="panel" aria-label="Experiment portfolio">
+    <div class="panel-head">
+      <h2 class="panel-title">Experiment portfolio</h2>
+      <span class="panel-note" id="portfolio-note">Families, lanes, and plateau risk</span>
+    </div>
+    <div class="portfolio-grid">
+      <div>
+        <span class="readout-label">Plateau</span>
+        <div class="family-row">
+          <strong id="plateau-title">Signal forming</strong>
+          <span id="plateau-detail">Plateau detection needs more measured runs.</span>
+        </div>
+        <div class="family-list" id="family-list"></div>
+      </div>
+      <div>
+        <span class="readout-label">Lane portfolio</span>
+        <div class="lane-list" id="lane-list"></div>
+      </div>
+    </div>
   </section>
 
   <section class="panel" aria-label="Command shortcuts">
@@ -646,8 +784,10 @@ function render() {
   renderSegmentSelector();
   renderReadout();
   renderProductCockpit();
+  renderNextBestAction();
   renderChart();
   renderRail();
+  renderPortfolio();
   renderCommands();
   renderLiveActions();
   renderLedger();
@@ -744,6 +884,64 @@ function renderProductCockpit() {
   document.getElementById("finalize-preview-detail").textContent = finalizePreview.nextAction || "Run finalize-preview after keeping at least one committed experiment.";
   document.getElementById("blocker-title").textContent = blockers.length ? blockers.length + " blocker" + (blockers.length === 1 ? "" : "s") : "No blockers";
   document.getElementById("blocker-detail").textContent = blockers.slice(0, 2).join("; ") || "No setup, memory, version, or finalization blockers reported in the export.";
+}
+
+function renderNextBestAction() {
+  const action = viewModel.nextBestAction || (Array.isArray(viewModel.actionRail) ? viewModel.actionRail[0] : null) || {};
+  const command = action.primaryCommand?.command || action.command || "";
+  const safeAction = action.safeAction || "";
+  document.getElementById("next-best-note").textContent = action.source ? "Source: " + action.source : "Evidence-backed recommendation";
+  document.getElementById("next-best-priority").textContent = action.priority || "Recommended";
+  document.getElementById("next-best-title").textContent = action.title || "Choose next hypothesis";
+  document.getElementById("next-best-detail").textContent = action.detail || "Run and log a baseline before optimizing.";
+  document.getElementById("next-best-evidence").textContent = action.utilityCopy || action.reason || "No run evidence yet.";
+  document.getElementById("next-best-command-label").textContent = action.primaryCommand?.label || action.commandLabel || "Command";
+  document.getElementById("next-best-command").textContent = command || "No command embedded";
+  const copyButton = document.getElementById("copy-next-best");
+  if (copyButton) {
+    copyButton.onclick = () => copyText(command, copyButton, "Copy command");
+  }
+  const liveButton = document.getElementById("run-next-best-action");
+  if (liveButton) {
+    liveButton.textContent = safeAction ? actionLabel(safeAction) : "Live action unavailable";
+    liveButton.disabled = !safeAction;
+    liveButton.onclick = safeAction ? () => runLiveAction(safeAction, liveButton) : null;
+  }
+}
+
+function renderPortfolio() {
+  const portfolio = viewModel.portfolio || {};
+  const memory = viewModel.experimentMemory || {};
+  const plateau = portfolio.plateau || memory.plateau || {};
+  const families = Array.isArray(portfolio.families) ? portfolio.families : [];
+  const lanes = Array.isArray(portfolio.lanes) ? portfolio.lanes : [];
+  const noveltyScore = portfolio.summary?.noveltyScore;
+  document.getElementById("portfolio-note").textContent = noveltyScore == null
+    ? "Families, lanes, and plateau risk"
+    : "Novelty score " + noveltyScore;
+  document.getElementById("plateau-title").textContent = plateau.detected || plateau.state === "plateau"
+    ? "Plateau likely"
+    : (plateau.title || "Signal moving");
+  document.getElementById("plateau-detail").textContent = plateau.reason || plateau.detail || plateau.recommendation || "No plateau warning in the current segment.";
+  const familyList = document.getElementById("family-list");
+  familyList.innerHTML = families.length ? families.slice(0, 6).map((family) => {
+    const runCount = family.runs ?? family.total ?? family.runCount ?? 0;
+    const kept = family.kept ?? 0;
+    const rejected = family.rejected ?? 0;
+    const bestMetric = family.bestRun?.metric ?? family.bestMetric ?? null;
+    return '<div class="family-row">' +
+      '<strong>' + escapeHtml(family.label || family.name || family.title || "Experiment family") + '</strong>' +
+      '<span>' + escapeHtml(runCount + " run(s), " + kept + " kept, " + rejected + " rejected" + (bestMetric == null ? "" : ", best " + formatMetric(Number(bestMetric)))) + '</span>' +
+      '</div>';
+  }).join("") : '<div class="empty">No experiment families yet</div>';
+  const laneList = document.getElementById("lane-list");
+  laneList.innerHTML = lanes.length ? lanes.slice(0, 6).map((lane) => {
+    const priority = lane.priority ? " [" + lane.priority + "]" : "";
+    return '<div class="lane-row">' +
+      '<strong>' + escapeHtml(lane.label || lane.title || lane.id || "Lane") + escapeHtml(priority) + '</strong>' +
+      '<span>' + escapeHtml(lane.nextActionHint || lane.detail || lane.reason || "No lane detail yet.") + '</span>' +
+      '</div>';
+  }).join("") : '<div class="empty">No lane portfolio yet</div>';
 }
 
 function renderSegmentSelector() {
@@ -863,7 +1061,10 @@ function asiText(run, keys, fallback) {
 function renderReadout() {
   const keptBest = bestKeptRun();
   const recentFailure = failedRuns().at(-1);
-  const nextAction = viewModel.experimentMemory?.latestNextAction || [...session.runs].reverse().map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], "")).find(Boolean);
+  const nextAction = viewModel.readout?.nextAction
+    || viewModel.nextBestAction?.detail
+    || viewModel.experimentMemory?.latestNextAction
+    || [...session.runs].reverse().map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], "")).find(Boolean);
   const confidence = latestConfidence();
 
   document.getElementById("best-kept-title").textContent = keptBest ? "#" + keptBest.run + " " + formatMetric(keptBest.metric) : "No kept changes yet";
@@ -988,21 +1189,25 @@ function renderCommands() {
   for (const button of grid.querySelectorAll ? grid.querySelectorAll(".copy-command") : []) {
     button.onclick = async () => {
       const command = commands[Number(button.dataset.commandIndex)]?.command || "";
-      try {
-        const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
-        if (!clipboard?.writeText) {
-          button.textContent = "Select";
-          return;
-        }
-        await clipboard.writeText(command);
-        button.textContent = "Copied";
-        if (typeof setTimeout === "function") {
-          setTimeout(() => { button.textContent = "Copy"; }, 1200);
-        }
-      } catch {
-        button.textContent = "Select";
-      }
+      await copyText(command, button, "Copy");
     };
+  }
+}
+
+async function copyText(value, button, resetText) {
+  try {
+    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+    if (!value || !clipboard?.writeText) {
+      button.textContent = "Select";
+      return;
+    }
+    await clipboard.writeText(value);
+    button.textContent = "Copied";
+    if (typeof setTimeout === "function") {
+      setTimeout(() => { button.textContent = resetText; }, 1200);
+    }
+  } catch {
+    button.textContent = "Select";
   }
 }
 
@@ -1012,27 +1217,41 @@ function renderLiveActions() {
   for (const button of grid.querySelectorAll(".live-action")) {
     button.onclick = async () => {
       const action = button.dataset.action;
-      button.textContent = "Running";
-      try {
-        const body = action === "gap-candidates"
-          ? { researchSlug: activeResearchSlug() }
-          : {};
-        const response = await fetch("actions/" + action, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const payload = await response.json();
-        button.textContent = payload.ok ? "Done" : "Failed";
-        updateLiveStatus(action + " action", payload.ok ? "Completed" : (payload.stderr || payload.error || "Failed"));
-        if (typeof setTimeout === "function") {
-          setTimeout(() => { button.textContent = actionLabel(action); }, 1400);
-        }
-      } catch (error) {
-        button.textContent = "Unavailable";
-        updateLiveStatus("Live action unavailable", error.message || String(error));
-      }
+      runLiveAction(action, button);
     };
+  }
+}
+
+async function runLiveAction(action, button) {
+  button.textContent = "Running";
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const body = action === "gap-candidates"
+      ? { researchSlug: activeResearchSlug() }
+      : {};
+    const response = await fetch("actions/" + action, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json();
+    button.textContent = payload.ok ? "Done" : "Failed";
+    updateLiveStatus(action + " action", payload.ok ? "Completed" : (payload.stderr || payload.error || "Failed"));
+    await refreshViewModel();
+    if (typeof setTimeout === "function") {
+      setTimeout(() => {
+        button.textContent = actionLabel(action);
+        button.disabled = false;
+        button.setAttribute("aria-busy", "false");
+        render();
+      }, 1400);
+    }
+  } catch (error) {
+    button.textContent = "Unavailable";
+    button.disabled = false;
+    button.setAttribute("aria-busy", "false");
+    updateLiveStatus("Live action unavailable", error.message || String(error));
   }
 }
 

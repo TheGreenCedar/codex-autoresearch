@@ -121,7 +121,7 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, live refresh, copyable commands, setup/readiness/gap/finalization panels, and safe live actions when served locally |
+| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, a next-best-action rail, experiment-family and lane-portfolio panels, live refresh, copyable commands, setup/readiness/gap/finalization panels, and safe live actions when served locally |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
 | Recipes and integrations | Built-in benchmark recipes, local/remote recipe catalogs, model-command gap candidates, and live dashboard action providers |
 
@@ -200,7 +200,7 @@ Then it creates:
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |
 | `autoresearch-dashboard.html` | Exported operator dashboard that Codex links directly when the workflow starts or resumes |
-| last-run packet | Latest `next` packet for quick keep/discard logging with `--from-last`; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json` |
+| last-run packet | Latest `next` packet for quick keep/discard logging with `--from-last`; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`, then cleared after a successful `log --from-last` |
 | `autoresearch.ideas.md` | Optional backlog for promising ideas |
 
 The deterministic setup path is available as MCP `setup_session` and CLI `setup`. It is the fastest way to create a fresh, resumable Codex session without hand-copying templates.
@@ -228,6 +228,8 @@ After `next`, the helper persists a last-run packet. Use `log --from-last` to re
 ```bash
 node scripts/autoresearch.mjs log --cwd /path/to/project --from-last --status keep --description "Use worker pool"
 ```
+
+Successful packets still require an explicit `--status keep` or `--status discard`; failed benchmark/check packets can suggest the forced status. A consumed packet is cleared after logging, and stale packets are rejected if another run was logged after the packet was produced.
 
 Minimum useful ASI is one compact JSON object:
 
@@ -299,6 +301,8 @@ The dashboard shows:
 - baseline vs. best
 - improvement percentage
 - kept run count
+- the next best action, including evidence, command text, and any safe live action
+- experiment families, plateau risk, novelty signal, and lane-portfolio guidance
 - live refresh status plus `Refresh` and `Live on` controls that try to read the adjacent `autoresearch.jsonl`
 - copyable operator commands for doctor, next, keep/discard last packet, export, and extend
 - operator readout with best kept change, recent failures, next action, and confidence explanation

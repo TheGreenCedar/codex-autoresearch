@@ -50,7 +50,7 @@ Use the local routing above when this repository is the target.
 - `setup-plan`: run `node <plugin-root>/scripts/autoresearch.mjs setup-plan --cwd <current-project>` to get a read-only guided setup plan, missing fields, recipe recommendation, and exact next setup command. Add `--catalog <path-or-url>` when planning from a local or remote recipe catalog.
 - `recipes ...`: run `node <plugin-root>/scripts/autoresearch.mjs recipes list|show ...` to inspect built-in or local/remote catalog benchmark recipes. Catalog recipe IDs can be used by `setup --recipe <id> --catalog <path-or-url>`.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
-- `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, ASI template, and next action.
+- `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, suggested status if present, ASI template, and next action.
 - `log`: run `node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status <keep|discard|crash|checks_failed> --description <text>`, then follow `continuation`; do not ask the user to rerun `autoresearch-create` for the next packet.
 - `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
@@ -72,7 +72,7 @@ Before starting a new loop, check git status. If the worktree is dirty, ask whet
 
 Before logging a kept result in a dirty tree, prefer scoped commit paths from the session scope or ask the user to confirm broad staging.
 
-After `next`, prefer `log --from-last` so Codex does not retype parsed metrics from the previous packet. Still choose `keep` or `discard` deliberately based on the metric and ASI.
+After `next`, prefer `log --from-last` so Codex does not retype parsed metrics from the previous packet. Still choose `keep` or `discard` deliberately based on the metric and ASI. Successful packets require an explicit status; consumed packets are cleared, and stale packets must be replaced by running `next` again.
 
 Before logging a discard/crash/checks-failed result, use configured `commitPaths`/`revertPaths`. Do not pass `--allow-dirty-revert` unless the user explicitly accepts broad cleanup.
 
@@ -82,6 +82,6 @@ For qualitative research loops, use `autoresearch-deep-research`. Its benchmark 
 
 Model-assisted gap generation must stay provider-agnostic. Use `gap-candidates --model-command <cmd>` only when the command prints a JSON array of candidate objects; the helper validates and previews the output before `--apply`.
 
-Dashboard live actions are local-only and limited to safe commands: doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, and export. Mutating review branch creation remains in `/autoresearch-finalize`.
+Dashboard live actions are local-only and limited to safe commands: doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, and export. Mutating review branch creation and keep/discard logging remain outside the dashboard surface.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.
