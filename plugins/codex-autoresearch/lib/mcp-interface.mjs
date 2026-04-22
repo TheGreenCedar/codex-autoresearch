@@ -256,7 +256,7 @@ export const toolSchemas = applyToolContracts([
   },
   {
     name: "export_dashboard",
-    description: "Write a self-contained HTML dashboard for autoresearch.jsonl.",
+    description: "Write a self-contained fallback HTML snapshot for autoresearch.jsonl.",
     inputSchema: {
       type: "object",
       properties: {
@@ -264,6 +264,18 @@ export const toolSchemas = applyToolContracts([
         output: { type: "string" },
         full: { type: "boolean" },
         json_full: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "serve_dashboard",
+    description: "Start a local live dashboard for autoresearch.jsonl and return the operator URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        port: { type: "number" },
       },
       required: ["working_dir"],
     },
@@ -330,6 +342,7 @@ export function createMcpInterface(deps) {
       asi: deps.parseJsonOption(args.asi, null),
     });
     if (name === "export_dashboard") return await deps.exportDashboard(args);
+    if (name === "serve_dashboard") return await deps.serveDashboard(args);
     if (name === "clear_session") return await deps.clearSession(args);
     if (name === "read_state") return await deps.publicState(args);
     if (name === "measure_quality_gap") return await deps.measureQualityGap(args);

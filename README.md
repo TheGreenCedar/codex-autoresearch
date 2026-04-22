@@ -112,7 +112,7 @@ next    Run preflight + benchmark and return allowed log decisions plus a next-r
 log     Record baseline with status keep.
 next    Try reusing a test database fixture; benchmark prints METRIC seconds=13.7; checks pass.
 log     Record status keep with ASI: {"hypothesis":"fixture reuse removes setup cost","next_action_hint":"measure worker count next"}.
-export  Generate autoresearch-dashboard.html for the run history.
+serve   Keep the live dashboard open for the run history.
 finalize Split the kept fixture change into a review branch when the noisy loop is done.
 ```
 
@@ -120,10 +120,10 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 
 | Part | What it does |
 | --- | --- |
-| MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `export_dashboard`, `clear_session` |
-| Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
+| MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `serve_dashboard`, `export_dashboard`, `clear_session` |
+| Skills | Create/resume loops, turn deep research into quality gaps, open live dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, a next-best-action rail, experiment-family and lane-portfolio panels, copyable commands, setup/readiness/gap/finalization panels, and safe live refresh/actions only when served locally |
+| Dashboard | Live operator cockpit generated from `autoresearch.jsonl`, with a next-best-action rail, compact metric trajectory, experiment-family and lane-portfolio panels, copyable commands, setup/readiness/gap/finalization panels, and safe local refresh/actions |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
 | Recipes and integrations | Built-in benchmark recipes, local/remote recipe catalogs, model-command gap candidates, and live dashboard action providers |
 
@@ -146,7 +146,8 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | `finalize_preview` | Previews kept-run grouping, touched files, warnings, and review readiness without creating branches |
 | `integrations` | Lists, doctors, or loads additive integrations such as recipe catalogs and model commands |
 | `doctor_session` | Checks session readiness, Git state, and optionally whether the benchmark emits the configured primary metric |
-| `export_dashboard` | Writes `autoresearch-dashboard.html` from the run log |
+| `serve_dashboard` | Starts the local live dashboard and returns the operator URL |
+| `export_dashboard` | Writes a read-only fallback `autoresearch-dashboard.html` snapshot from the run log |
 | `clear_session` | Deletes session artifacts after explicit confirmation |
 
 For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefer configured `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
@@ -166,7 +167,7 @@ For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefe
 | `/autoresearch status` | Summarize the current run log |
 | `/autoresearch doctor` | Run the preflight/operator readout before the next experiment |
 | `/autoresearch next` | Run preflight + benchmark and prepare the keep/discard decision packet |
-| `/autoresearch export` | Generate the dashboard |
+| `/autoresearch export` | Generate a read-only fallback dashboard snapshot |
 | `/autoresearch off` | Stop continuing the loop in the current conversation without deleting session data |
 | `/autoresearch clear` | Clear session artifacts after confirmation |
 | `/autoresearch-finalize` | Split kept experiments into reviewable branches |
@@ -177,7 +178,7 @@ For MCP calls, custom shell commands require `allow_unsafe_command: true`. Prefe
 | --- | --- |
 | `autoresearch-create` | Sets up `autoresearch.md`, benchmark scripts, checks, baseline, and the loop rules |
 | `autoresearch-deep-research` | Turns broad research into source-backed scratchpads and measurable `quality_gap` loops |
-| `autoresearch-dashboard` | Exports and summarizes `autoresearch.jsonl` |
+| `autoresearch-dashboard` | Opens and summarizes the live dashboard for `autoresearch.jsonl` |
 | `autoresearch-finalize` | Turns a noisy experiment branch into independent review branches |
 
 ## Usage
@@ -201,13 +202,14 @@ Then it creates:
 | `autoresearch.sh` or `autoresearch.ps1` | Benchmark script that prints `METRIC name=value` lines |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks after a passing benchmark |
 | `autoresearch.jsonl` | Append-only run log |
-| `autoresearch-dashboard.html` | Exported operator dashboard that Codex links directly when the workflow starts or resumes |
+| live dashboard URL | Served operator dashboard that Codex links directly when the workflow starts or resumes |
+| `autoresearch-dashboard.html` | Optional read-only fallback snapshot for offline review |
 | last-run packet | Latest `next` packet for quick keep/discard logging with `--from-last`; stored in Git metadata when possible and otherwise as `autoresearch.last-run.json`, then cleared after a successful `log --from-last` |
 | `autoresearch.ideas.md` | Optional backlog for promising ideas |
 
 The deterministic setup path is available as MCP `setup_session` and CLI `setup`. It is the fastest way to create a fresh, resumable Codex session without hand-copying templates.
 
-When Codex starts or resumes a workflow, it exports or refreshes the dashboard and directly provides a clickable `autoresearch-dashboard.html` file link before continuing with experiments or status narration.
+When Codex starts or resumes a workflow, it starts or reuses the live dashboard and directly provides the served `http://127.0.0.1:<port>/` URL before continuing with experiments or status narration.
 
 ### 2. Run the Loop
 
@@ -256,7 +258,7 @@ The session is designed to survive interruptions and context resets. A fresh Cod
 
 and continue without rediscovering the same dead ends.
 
-On resume, Codex refreshes `autoresearch-dashboard.html` and links it directly before running the next experiment.
+On resume, Codex starts or reuses the live dashboard URL before running the next experiment.
 
 ### 4. Finalize for Review
 
@@ -286,34 +288,35 @@ Finalization writes a local review packet under `.git/autoresearch-finalize/` wi
 
 ## Dashboard
 
-Generate the dashboard with:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd /path/to/project
-```
-
-The output is:
-
-```text
-autoresearch-dashboard.html
-```
-
-This file is a static snapshot: it embeds current data and provides copyable commands, but it does not render executable dashboard actions from a `file://` URL. For guarded local actions, start the served dashboard instead:
+Start the live dashboard with:
 
 ```bash
 node plugins/codex-autoresearch/scripts/autoresearch.mjs serve --cwd /path/to/project
 ```
 
-When reporting a dashboard to a user, state which mode you are giving them: static export for read-only review, or served dashboard for live refresh endpoints and action buttons.
+The command prints a local URL such as:
+
+```text
+http://127.0.0.1:49152/
+```
+
+The `serve` process stays open to keep that URL alive. This served URL is the dashboard link to provide by default. It refreshes from the run log and exposes guarded local actions. A static fallback snapshot is still available for offline review:
+
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd /path/to/project
+```
+
+When reporting a dashboard to a user, give the served URL unless live serving is unavailable or the user explicitly asks for a static file.
 
 The dashboard shows:
 
 - baseline vs. best
 - improvement percentage
 - kept run count
+- compact metric trajectory in the top cockpit
 - the next best action, including evidence, command text, and any safe live action when served
 - experiment families, plateau risk, novelty signal, and lane-portfolio guidance
-- static snapshot status with copyable commands, or served live status with guarded action buttons
+- served live status with guarded action buttons, plus a static snapshot fallback when exported
 - copyable operator commands for doctor, next, keep/discard last packet, export, and extend
 - operator readout with best kept change, recent failures, next action, and confidence explanation
 - segment selector for multi-phase sessions
@@ -362,7 +365,8 @@ MCP/CLI helpers
   append JSONL records
   commit kept changes or scoped-revert discarded ones
   enforce maxIterations when configured
-  export dashboard HTML
+  serve the live dashboard
+  export fallback dashboard HTML
   draft finalization groups
   clear session artifacts after confirmation
   finalize review branches

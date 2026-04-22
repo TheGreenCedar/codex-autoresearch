@@ -48,6 +48,7 @@ const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA__";
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
+const liveDashboardServers = new Set();
 
 function usage() {
   return `Codex Autoresearch
@@ -341,7 +342,7 @@ async function guidedSetup(args) {
         || (lastRun.decision?.allowedStatuses?.length === 1 ? lastRun.decision.allowedStatuses[0] : "discard"))
     : "";
   const replaceLastRunCommand = lastRun ? replacementNextCommandFromLastRun(workDir, lastRun, setup.defaultBenchmarkCommandReady) : "";
-  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} export --cwd ${shellQuote(workDir)}`;
+  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
   const baselineCommand = setup.baselineCommand;
   const logCommand = lastRun
     ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRunLogStatus)} --description ${shellQuote("Describe the last packet")}`
@@ -1790,7 +1791,7 @@ async function exportDashboard(args) {
   const modeGuidance = {
     staticExport: output,
     liveDashboardCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`,
-    difference: "The exported HTML is a read-only snapshot with copyable commands; the served dashboard can call local live-action endpoints.",
+    difference: "The exported HTML is a read-only fallback snapshot; share the served dashboard URL when the operator needs a live link.",
     fullJson: "Pass --json-full/--verbose on the CLI or full=true over MCP to include the full viewModel in the command response.",
   };
   const progress = operationProgress({
@@ -1814,6 +1815,56 @@ async function exportDashboard(args) {
   };
   if (fullJson) result.viewModel = viewModel;
   return result;
+}
+
+async function serveDashboard(args) {
+  const startedAt = Date.now();
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const serveResult = await serveAutoresearch({
+    cwd: workDir,
+    port: args.port,
+    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    dashboardHtml: async () => {
+      const entries = readJsonl(workDir);
+      return dashboardHtml(entries, {
+        workDir,
+        generatedAt: new Date().toISOString(),
+        jsonlName: "autoresearch.jsonl",
+        deliveryMode: "live-server",
+        liveActionsAvailable: true,
+        modeGuidance: {
+          title: "Live dashboard",
+          detail: "Live refresh and guarded actions are available.",
+        },
+        refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
+        commands: dashboardCommands(workDir),
+        settings: dashboardSettings(config),
+        viewModel: await dashboardViewModel(workDir, config),
+      });
+    },
+    viewModel: async () => dashboardViewModel(workDir, config),
+  });
+  liveDashboardServers.add(serveResult.server);
+  serveResult.server.on("close", () => {
+    liveDashboardServers.delete(serveResult.server);
+  });
+  return {
+    ok: true,
+    workDir: serveResult.workDir,
+    port: serveResult.port,
+    url: serveResult.url,
+    modeGuidance: {
+      deliveryMode: "live-server",
+      difference: "This is the dashboard link to hand to the operator; exported HTML is only a read-only fallback snapshot.",
+    },
+    progress: operationProgress({
+      stage: "serve",
+      label: "Start live dashboard",
+      startedAt,
+      status: "completed",
+      outputTail: serveResult.url,
+    }),
+  };
 }
 
 async function clearSession(args) {
@@ -2002,6 +2053,7 @@ function dashboardCommands(workDir, qualityGap = null) {
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
   return [
+    { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
     { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
@@ -2010,7 +2062,6 @@ function dashboardCommands(workDir, qualityGap = null) {
     { label: "Gap candidates", command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}` },
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
-    { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
   ];
 }
@@ -2109,6 +2160,7 @@ function continuationCommands(workDir) {
     next: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    liveDashboard: `node ${script} serve --cwd ${cwd}`,
     exportDashboard: `node ${script} export --cwd ${cwd}`,
     extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
   };
@@ -2321,6 +2373,7 @@ const mcpInterface = createMcpInterface({
   publicState,
   recipeCommand,
   runExperiment,
+  serveDashboard,
   setupPlan,
   setupResearchSession,
   setupSession,
@@ -2379,7 +2432,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.3.0" },
+        serverInfo: { name: "codex-autoresearch", version: "0.3.1" },
       },
     });
     return;
@@ -2511,6 +2564,7 @@ async function mcpSmoke() {
     "next_experiment",
     "read_state",
     "doctor_session",
+    "serve_dashboard",
     "clear_session",
   ];
   const missingRequiredTools = requiredTools.filter((tool) => !toolNames.includes(tool));

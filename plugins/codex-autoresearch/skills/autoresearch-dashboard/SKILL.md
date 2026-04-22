@@ -5,22 +5,22 @@ description: Export and inspect a Codex autoresearch dashboard from autoresearch
 
 # Autoresearch Dashboard
 
-Use this skill to turn `autoresearch.jsonl` into an HTML dashboard with embedded snapshot data, a next-best-action rail, experiment-family and lane-portfolio panels, optional live refresh from disk, copyable operator commands, setup/readiness/gap/finalization panels, and safe local actions when served through live mode.
+Use this skill to open the live autoresearch dashboard for `autoresearch.jsonl`: a local served runboard with refresh, next-best-action, compact metric trajectory, experiment-family and lane-portfolio panels, copyable operator commands, setup/readiness/gap/finalization panels, and safe local actions.
 
 ## Workflow
 
 1. Locate the target project containing `autoresearch.jsonl`.
-2. Prefer the MCP `export_dashboard` tool when available.
+2. Prefer the MCP `serve_dashboard` tool when available.
 3. Otherwise run from the plugin root:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd /absolute/project/path
+node scripts/autoresearch.mjs serve --cwd /absolute/project/path
 ```
 
-The CLI export response is concise by default. Add `--json-full` or `--verbose` only when you need the full `viewModel`; MCP callers can pass `full: true`. The exported HTML still embeds the full dashboard data either way.
+The `serve` command prints JSON with the local `url` and then stays alive to keep the dashboard available. Report that live URL as the dashboard link.
 
-4. Report the generated `autoresearch-dashboard.html` path and explicitly label it as the static, read-only export with copyable commands.
-5. If the user has the dashboard open, re-export after meaningful new runs so the embedded command metadata stays current.
+4. Use `export_dashboard` or `node scripts/autoresearch.mjs export --cwd /absolute/project/path` only when the user explicitly needs an offline snapshot or the live server cannot be started.
+5. If the user has the dashboard open, keep using the live URL. It can refresh from disk and does not need a fresh static export after each run.
 6. If the user asked for a summary, also run:
 
 ```bash
@@ -42,9 +42,9 @@ Use this review readout pattern when summarizing:
 
 ## Live Dashboard Behavior
 
-The dashboard has two modes. A direct `file://` open is a static snapshot: it embeds the current JSONL and provides copyable commands, but it must not render inert live controls. A served dashboard from `node scripts/autoresearch.mjs serve --cwd /absolute/project/path` is the live-action surface: it can refresh `view-model.json` and call guarded local `/actions/...` endpoints.
+The dashboard has two modes. A served dashboard from `node scripts/autoresearch.mjs serve --cwd /absolute/project/path` is the default live-action surface: it can refresh `view-model.json` and call guarded local `/actions/...` endpoints. A direct `file://` open is only a static fallback snapshot: it embeds the current JSONL and provides copyable commands, but it must not render inert live controls.
 
-When handing a dashboard to the user, say which mode they are looking at. Use the static export for portable review and PR/status links. Use the served URL when the user expects dashboard buttons to run doctor, gap preview, finalize-preview, export, or confirmed log actions.
+When handing a dashboard to the user, provide the served URL by default. Label static exports as fallback snapshots only when live serving is unavailable or explicitly requested.
 
 The next-best-action rail should be read first. The command panel includes copyable commands for setup-plan, doctor, next run, keep/discard last packet, gap candidates, finalization preview, dashboard export, serve dashboard, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
 
@@ -54,6 +54,6 @@ The live action panel is shown only when the dashboard is served locally. It cal
 
 ## Notes
 
-The next-best-action rail, operator readout, setup/gap/finalization cockpit, experiment portfolio, segment selector, command panel, live status strip, and ready-to-finalize card are designed to make exported dashboards useful in PRs and status updates, not just local charts.
+The next-best-action rail, compact metric trajectory, operator readout, setup/gap/finalization cockpit, experiment portfolio, segment selector, command panel, live status strip, and ready-to-finalize card are designed to keep the active loop visible without burying the chart or making the operator hunt for the next action.
 
 If no `autoresearch.jsonl` exists, say that there is no session to export yet and point the user to `autoresearch-create`.

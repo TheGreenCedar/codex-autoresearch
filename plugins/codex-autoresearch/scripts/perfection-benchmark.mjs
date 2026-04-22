@@ -181,19 +181,20 @@ const checks = [
     },
   },
   {
-    id: "create-skill-dashboard-link",
+    id: "create-skill-live-dashboard-link",
     file: "skills/autoresearch-create/SKILL.md, commands/autoresearch.md",
-    description: "Start and resume workflow guidance requires a direct dashboard file link.",
+    description: "Start and resume workflow guidance requires a direct live dashboard URL.",
     run: async () => {
       const skill = await readText("skills/autoresearch-create/SKILL.md");
       const command = await readText("commands/autoresearch.md");
       return includesAll(`${skill}\n${command}`, [
-        "directly provide the dashboard file link",
+        "directly provide the live dashboard URL",
         "session start and resume",
-        "autoresearch-dashboard.html",
+        "serve_dashboard",
+        "http://127.0.0.1:<port>/",
       ])
         ? pass()
-        : fail("Create and command docs must require a direct dashboard link at start and resume.");
+        : fail("Create and command docs must require a direct live dashboard URL at start and resume.");
     },
   },
   {
@@ -433,6 +434,7 @@ const checks = [
         "serve --cwd <project>",
         "integrations list|doctor|sync-recipes",
         "setup_plan",
+        "serve_dashboard",
         "gap_candidates",
         "finalize_preview",
       ])
@@ -475,6 +477,7 @@ const checks = [
         "finalize-preview",
         "safe live actions",
         "confirmed log decisions",
+        "serve_dashboard",
         "Recipes and integrations",
       ])
         ? pass()
@@ -496,6 +499,7 @@ const checks = [
         "finalize-preview",
         "integrations",
         "live server",
+        "serve_dashboard",
       ])
         ? pass()
         : fail("Missing focused full-product regression tests.");

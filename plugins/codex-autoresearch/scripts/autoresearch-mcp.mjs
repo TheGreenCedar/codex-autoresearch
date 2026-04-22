@@ -9,7 +9,8 @@ const TOOL_TIMEOUT_SECONDS = 15 * 60;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CLI_SCRIPT = path.join(SCRIPT_DIR, "autoresearch.mjs");
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
+const liveDashboardProcesses = new Map();
 
 let buffer = Buffer.alloc(0);
 
@@ -124,6 +125,7 @@ function requireUnsafeCommandGate(toolName, args) {
 }
 
 async function callCliTool(name, args) {
+  if (name === "serve_dashboard") return await startLiveDashboard(args);
   const cliArgs = cliArgsForTool(name, args);
   const result = await runCli(cliArgs);
   if (result.code !== 0) {
@@ -134,6 +136,56 @@ async function callCliTool(name, args) {
   } catch {
     return { ok: true, output: result.stdout.trim() };
   }
+}
+
+async function startLiveDashboard(args) {
+  const workDir = path.resolve(args.working_dir ?? args.workingDir ?? args.cwd);
+  const port = args.port == null || args.port === "" ? null : Number(args.port);
+  const key = `${workDir}:${port ?? "auto"}`;
+  const existing = liveDashboardProcesses.get(key);
+  if (existing && !existing.child.killed) return existing.payload;
+
+  const cliArgs = ["serve", "--cwd", workDir];
+  if (port != null) cliArgs.push("--port", String(port));
+  const child = spawn(process.execPath, [CLI_SCRIPT, ...cliArgs], {
+    cwd: PLUGIN_ROOT,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+  child.on("close", () => {
+    liveDashboardProcesses.delete(key);
+  });
+  child.on("error", () => {
+    liveDashboardProcesses.delete(key);
+  });
+
+  const payload = await waitForServePayload(child, () => stdout, () => stderr);
+  liveDashboardProcesses.set(key, { child, payload });
+  return payload;
+}
+
+async function waitForServePayload(child, stdoutFn, stderrFn) {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const stdout = stdoutFn().trim();
+    if (stdout.endsWith("}")) {
+      try {
+        return JSON.parse(stdout);
+      } catch {
+        // Keep waiting for a complete JSON object.
+      }
+    }
+    if (child.exitCode != null) {
+      throw new Error(`autoresearch live dashboard exited (${child.exitCode})\n${stderrFn() || stdoutFn()}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  child.kill();
+  throw new Error(`autoresearch live dashboard did not start\n${stderrFn() || stdoutFn()}`);
 }
 
 function cliArgsForTool(name, args) {
@@ -152,6 +204,7 @@ function cliArgsForTool(name, args) {
   if (name === "finalize_preview") return compactArgs(["finalize-preview", cwdFlag(args), option("--trunk", args.trunk)]);
   if (name === "integrations") return compactArgs(["integrations", args.subcommand || "list", option("--catalog", args.catalog)]);
   if (name === "export_dashboard") return compactArgs(["export", cwdFlag(args), option("--output", args.output)]);
+  if (name === "serve_dashboard") return compactArgs(["serve", cwdFlag(args), option("--port", args.port)]);
   if (name === "doctor_session") return compactArgs(["doctor", cwdFlag(args), option("--command", args.command), flag("--check-benchmark", args.check_benchmark ?? args.checkBenchmark), option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds)]);
   if (name === "clear_session") return compactArgs(["clear", cwdFlag(args), flag("--yes", args.confirm ?? args.yes)]);
   throw new Error(`Unknown tool: ${name}`);

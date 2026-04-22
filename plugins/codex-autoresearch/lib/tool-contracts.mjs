@@ -105,11 +105,18 @@ const CONTRACTS = {
     outputSchema: basicOutputSchema(["ok"]),
   },
   export_dashboard: {
-    purpose: "Write the self-contained dashboard HTML.",
-    whenToUse: "Use after setup, resume, next, log, or finalization preview; pass full=true only when the full viewModel is needed.",
-    contrast: "Use read_state for JSON-only state.",
+    purpose: "Write the self-contained fallback dashboard HTML.",
+    whenToUse: "Use only when an offline snapshot is needed; pass full=true only when the full viewModel is needed.",
+    contrast: "Use serve_dashboard for the normal live operator dashboard.",
     safety: "Writes dashboard HTML inside the workdir.",
     outputSchema: basicOutputSchema(["ok", "workDir", "output", "summary", "best", "nextAction", "modeGuidance"]),
+  },
+  serve_dashboard: {
+    purpose: "Start the live local dashboard and return its URL.",
+    whenToUse: "Use after setup or resume before running experiments so the operator gets the live link.",
+    contrast: "Use export_dashboard only for an offline fallback snapshot.",
+    safety: "Starts a local server bound to 127.0.0.1.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "url", "modeGuidance"]),
   },
   doctor_session: {
     purpose: "Check readiness, git state, benchmark metrics, and version drift.",

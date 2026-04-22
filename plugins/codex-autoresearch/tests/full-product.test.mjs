@@ -193,7 +193,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     const firstGuidePayload = JSON.parse(firstGuide.stdout);
     assert.equal(firstGuidePayload.stage, "needs-setup");
     assert.match(firstGuidePayload.commands.setup, / setup /);
-    assert.match(firstGuidePayload.commands.dashboard, / export /);
+    assert.match(firstGuidePayload.commands.dashboard, / serve /);
 
     const setup = await runCli([
       "setup",
@@ -220,7 +220,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.3.0");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.3.1");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
@@ -252,6 +252,19 @@ test("MCP export_dashboard supports compact and full payloads", async () => {
     assert.equal(full.result?.isError, undefined, full.result?.content?.[0]?.text);
     const fullPayload = JSON.parse(full.result.content[0].text);
     assert.equal(fullPayload.viewModel.summary.runs, 1);
+  });
+});
+
+test("MCP serve_dashboard returns a live dashboard URL", async () => {
+  await withTempDir("mcp-serve", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "mcp serve", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "1", "--status", "keep", "--description", "Baseline"]);
+
+    const response = await callMcpTool("serve_dashboard", { working_dir: dir, port: 0 });
+    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.equal(payload.modeGuidance.deliveryMode, "live-server");
+    assert.match(payload.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
   });
 });
 
@@ -576,7 +589,7 @@ test("live server exposes health and view-model endpoints", async () => {
     try {
       const payload = await waitForServerPayload(() => stdout, () => stderr);
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
-      assert.match(payload.modeGuidance.difference, /read-only snapshots/);
+      assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());
       assert.equal(health.ok, true);
       const html = await fetch(payload.url).then((res) => res.text());

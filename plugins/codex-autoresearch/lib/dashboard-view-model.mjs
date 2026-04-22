@@ -306,14 +306,13 @@ function buildActionRail({
     }),
     actionItem({
       priority: "Safe",
-      title: "Refresh the runboard",
-      detail: "Export a fresh static dashboard after meaningful changes.",
-      utilityCopy: "Keep shared status pages current.",
-      safeAction: "export",
-      command: commandMap.get("export dashboard"),
-      commandLabel: "Export",
+      title: "Use the live runboard",
+      detail: "Open the served dashboard for live refresh and guarded actions.",
+      utilityCopy: "Static exports are fallback snapshots; the live URL is the operator surface.",
+      command: commandMap.get("serve dashboard") || commandMap.get("export dashboard"),
+      commandLabel: commandMap.get("serve dashboard") ? "Live" : "Export",
       tone: "neutral",
-      source: "export",
+      source: "serve",
     }),
   ].filter(Boolean);
 

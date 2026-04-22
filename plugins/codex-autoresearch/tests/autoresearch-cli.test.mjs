@@ -167,7 +167,7 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const exportPayload = JSON.parse(exportResult.stdout);
-    assert.match(exportPayload.modeGuidance.difference, /read-only snapshot/);
+    assert.match(exportPayload.modeGuidance.difference, /read-only fallback snapshot/);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.match(dashboard, /"deliveryMode":"static-export"/);
     assert.match(dashboard, /Read-only snapshot/);
@@ -255,7 +255,7 @@ test("state supports negative metrics when lower is better", async () => {
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
-    assert.match(dashboard, /const low = min < 0/);
+    assert.match(dashboard, /const low = min === 0/);
     assert.doesNotMatch(dashboard, /run\.metric <= 0/);
     assert.match(dashboard, /Math\.abs\(baseline\)/);
   });
@@ -307,6 +307,7 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     assert.match(dashboard, /!clipboard\?\.writeText/);
     assert.match(dashboard, /Ready to finalize/);
     assert.match(dashboard, /renderSegmentSelector/);
+    assert.ok(dashboard.indexOf('id="metric-trend"') < dashboard.indexOf('id="stage-rail"'));
   });
 });
 
@@ -1114,12 +1115,15 @@ test("mcp tools expose guidance and output contracts", async () => {
   const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
+  const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
 
   assert.ok(guided);
+  assert.ok(serve);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
   assert.match(next.description, /normal measured loop iteration/);
+  assert.match(serve.description, /live local dashboard/);
   assert.equal(doctor.annotations.safety, "Read-only unless benchmark check runs configured commands.");
 });
 

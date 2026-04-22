@@ -154,7 +154,7 @@ body {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: .08em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 h1 {
@@ -227,9 +227,10 @@ h1 {
 }
 .top-grid {
   display: grid;
-  grid-template-columns: minmax(460px, .94fr) minmax(560px, 1.06fr);
+  grid-template-columns: minmax(420px, .94fr) minmax(520px, 1.06fr);
   gap: 12px;
   margin: 12px 0;
+  align-items: stretch;
 }
 .score-strip {
   display: grid;
@@ -244,7 +245,7 @@ h1 {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: .06em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .control-strip select {
@@ -535,7 +536,7 @@ summary:focus-visible,
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: .06em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .score output {
@@ -581,7 +582,7 @@ summary:focus-visible,
 }
 .insight-grid {
   display: grid;
-  grid-template-columns: minmax(260px, .8fr) minmax(300px, .95fr) minmax(420px, 1.35fr);
+  grid-template-columns: minmax(360px, 1.1fr) minmax(300px, .9fr);
   gap: 14px;
   margin: 14px 0;
   align-items: stretch;
@@ -633,7 +634,7 @@ summary:focus-visible,
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: .05em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .readout-card strong {
@@ -647,8 +648,11 @@ summary:focus-visible,
   font-size: 13px;
   line-height: 1.4;
 }
-.chart-box { padding: 12px 18px 18px; }
-svg { display: block; width: 100%; height: 360px; }
+.chart-panel {
+  min-height: 100%;
+}
+.chart-box { padding: 10px 14px 14px; }
+svg { display: block; width: 100%; height: 252px; }
 .axis { stroke: var(--soft-line); stroke-width: 1; }
 .trend-line { fill: none; stroke: var(--graph); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .baseline-line { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 8 8; }
@@ -746,7 +750,7 @@ th {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: .05em;
+  letter-spacing: 0;
   text-transform: uppercase;
   background: #f9fafb;
 }
@@ -874,7 +878,7 @@ th {
   .live-strip, .command-row, .terminal-fallback summary { grid-template-columns: 1fr; }
   .metric-tag { justify-self: stretch; }
   .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
-  svg { height: 280px; }
+  svg { height: 232px; }
 }
 @media (max-width: 540px) {
   .score-strip, .readout-grid, .cockpit-grid, .action-grid, .mission-grid { grid-template-columns: 1fr; }
@@ -983,6 +987,18 @@ th {
     </div>
   </section>
 
+    <article class="panel chart-panel" id="metric-trend">
+      <div class="panel-head">
+        <h2 class="panel-title">Metric trajectory</h2>
+        <span class="panel-note" id="chart-note">-</span>
+      </div>
+      <div class="chart-box">
+        <p id="trend-chart-summary" class="sr-only">No metric values recorded.</p>
+        <svg id="trend-chart" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-labelledby="trend-chart-title trend-chart-desc"></svg>
+      </div>
+    </article>
+  </section>
+
   <section class="panel readout trust-panel" aria-label="Trust floor detail">
     <div class="panel-head">
       <h2 class="panel-title">Trust floor</h2>
@@ -1023,7 +1039,6 @@ th {
         <p id="blocker-detail">-</p>
       </article>
     </div>
-  </section>
   </section>
 
   <section class="panel readout" id="evidence" aria-label="Operator readout evidence packet">
@@ -1088,7 +1103,7 @@ th {
     </div>
   </section>
 
-  <section class="insight-grid" aria-label="Gap map, strategy memory, and metric trend">
+  <section class="insight-grid" aria-label="Strategy memory and recent decisions">
   <section class="panel" id="portfolio" aria-label="Experiment portfolio">
     <div class="panel-head">
       <h2 class="panel-title">Strategy memory</h2>
@@ -1118,16 +1133,6 @@ th {
       <div class="rail-list" id="decision-rail"></div>
     </aside>
 
-    <article class="panel" id="metric-trend">
-      <div class="panel-head">
-        <h2 class="panel-title">Metric trajectory</h2>
-        <span class="panel-note" id="chart-note">-</span>
-      </div>
-      <div class="chart-box">
-        <p id="trend-chart-summary" class="sr-only">No metric values recorded.</p>
-        <svg id="trend-chart" viewBox="0 0 1000 360" preserveAspectRatio="none" role="img" aria-labelledby="trend-chart-title trend-chart-desc"></svg>
-      </div>
-    </article>
   </section>
 
   <details class="panel terminal-fallback" id="command-drawer">
@@ -1313,7 +1318,10 @@ function render() {
   document.getElementById("confidence-value").textContent = formatConfidence(latestConfidence());
   setText("confidence-contract-value", formatConfidence(latestConfidence()));
   document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
-  document.getElementById("chart-note").textContent = session.runs.length + " recorded runs";
+  const latestMetricRun = [...session.runs].reverse().find((run) => Number.isFinite(run.metric));
+  document.getElementById("chart-note").textContent = latestMetricRun
+    ? "Best " + formatMetric(best ? best.metric : null) + " / latest " + formatMetric(latestMetricRun.metric)
+    : "Waiting for metrics";
   document.getElementById("decision-note").textContent = countKept() + " kept";
   document.getElementById("readout-note").textContent = metricSignature();
   renderSegmentSelector();
@@ -1923,19 +1931,19 @@ function renderChart() {
   const svg = document.getElementById("trend-chart");
   if (!metricValues.length) {
     setChartSummary("No metric values recorded.");
-    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><text x="500" y="180" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
+    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><text x="500" y="160" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
     return;
   }
 
   const width = 1000;
-  const height = 360;
-  const pad = { left: 70, right: 32, top: 30, bottom: 48 };
+  const height = 320;
+  const pad = { left: 70, right: 32, top: 24, bottom: 42 };
   const min = Math.min(...metricValues);
   const max = Math.max(...metricValues);
-  const spread = max - min || Math.max(1, max * .1);
-  const low = min < 0 ? min - spread * .16 : Math.max(0, min - spread * .16);
-  const high = max + spread * .16;
-  const range = Math.max(1, high - low);
+  const spread = max - min || Math.max(1, Math.abs(max) * .1);
+  const low = min === 0 ? 0 : min - spread * .18;
+  const high = max === 0 ? spread * .18 : max + spread * .18;
+  const range = high - low || 1;
   const usableW = width - pad.left - pad.right;
   const usableH = height - pad.top - pad.bottom;
 
