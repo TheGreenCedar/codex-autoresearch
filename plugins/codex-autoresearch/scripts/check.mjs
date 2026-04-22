@@ -21,6 +21,7 @@ const productChecks = [
 ];
 
 const ok = await runPhase("syntax", syntaxChecks)
+  && await runPhase("dashboard", [["build:dashboard", node, ["node_modules/vite/bin/vite.js", "build", "--config", "vite.dashboard.config.mjs", "--logLevel", "warn"]]])
   && await runPhase("product", productChecks);
 
 process.exit(ok ? 0 : 1);

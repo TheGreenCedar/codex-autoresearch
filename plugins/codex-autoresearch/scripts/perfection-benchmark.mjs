@@ -10,6 +10,37 @@ async function readText(file) {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
+async function readOptionalText(file) {
+  try {
+    return await readText(file);
+  } catch {
+    return "";
+  }
+}
+
+async function readDashboardSurface() {
+  const files = [
+    "assets/template.html",
+    ...(await listDashboardSourceFiles()),
+    "assets/dashboard-build/dashboard-app.js",
+    "assets/dashboard-build/dashboard-app.css",
+  ];
+  const parts = await Promise.all(files.map(readOptionalText));
+  return parts.join("\n");
+}
+
+async function listDashboardSourceFiles(dir = "dashboard/src") {
+  const absoluteDir = path.join(pluginRoot, dir);
+  const entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
+  const files = await Promise.all(entries.map(async (entry) => {
+    const child = path.join(dir, entry.name).replaceAll("\\", "/");
+    if (entry.isDirectory()) return listDashboardSourceFiles(child);
+    if (/\.(css|js|jsx)$/.test(entry.name)) return [child];
+    return [];
+  }));
+  return files.flat().sort();
+}
+
 async function readRootText(file) {
   return await fsp.readFile(path.join(repoRoot, file), "utf8");
 }
@@ -397,14 +428,14 @@ const checks = [
   },
   {
     id: "dashboard-semantic-labels",
-    file: "assets/template.html",
+    file: "assets/template.html, dashboard/src/main.jsx",
     description: "The dashboard uses real labels only for form controls, not decorative microcopy.",
     run: async () => {
-      const template = await readText("assets/template.html");
+      const template = await readDashboardSurface();
       const labelCount = (template.match(/<label\b/g) || []).length;
       if (
         labelCount === 1
-        && template.includes('<label for="segment-select">')
+        && (template.includes('<label for="segment-select">') || template.includes('htmlFor="segment-select"') || template.includes("htmlFor:`segment-select`"))
         && template.includes("score-label")
         && template.includes("readout-label")
         && !template.includes("<label>Best kept change</label>")
@@ -427,19 +458,22 @@ const checks = [
   },
   {
     id: "dashboard-practical-chart",
-    file: "assets/template.html",
-    description: "The chart is a practical run chart with status legend, baseline, best, latest, run ticks, and accessible summary.",
+    file: "assets/template.html, dashboard/src/main.jsx",
+    description: "The dashboard uses a library-backed practical run chart with status legend, baseline, best, latest, run ticks, tooltip, and accessible summary.",
     run: async () => {
-      const template = await readText("assets/template.html");
+      const template = await readDashboardSurface();
       return includesAll(template, [
         "chart-legend",
-        "legend-swatch keep",
+        "legend-swatch",
         "win-zone",
         "best-line",
         "latest-halo",
         "chartRunTicks",
-        "linePath",
-        "canNormalizeChart",
+        "ResponsiveContainer",
+        "LineChart",
+        "Tooltip",
+        "ReferenceLine",
+        "buildChart",
         "Baseline-normalized metric trend",
         "formatChartRunValue",
         "trend-chart-summary",
@@ -450,10 +484,10 @@ const checks = [
   },
   {
     id: "dashboard-does-not-narrate-itself",
-    file: "assets/template.html, lib/dashboard-view-model.mjs",
+    file: "assets/template.html, dashboard/src/main.jsx, lib/dashboard-view-model.mjs",
     description: "Dashboard copy is operational, not explanatory placeholder text.",
     run: async () => {
-      const template = await readText("assets/template.html");
+      const template = await readDashboardSurface();
       const viewModel = await readText("lib/dashboard-view-model.mjs");
       const combined = `${template}\n${viewModel}`;
       const banned = [
@@ -474,10 +508,10 @@ const checks = [
   },
   {
     id: "dashboard-next-action-and-portfolio",
-    file: "assets/template.html, lib/dashboard-view-model.mjs",
+    file: "assets/template.html, dashboard/src/main.jsx, lib/dashboard-view-model.mjs",
     description: "The dashboard keeps the chart, operator readout, and experiment portfolio guidance visible.",
     run: async () => {
-      const template = await readText("assets/template.html");
+      const template = await readDashboardSurface();
       const viewModel = await readText("lib/dashboard-view-model.mjs");
       return includesAll(`${template}\n${viewModel}`, [
         "Metric trajectory",

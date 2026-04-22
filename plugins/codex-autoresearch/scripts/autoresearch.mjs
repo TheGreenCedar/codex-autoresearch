@@ -46,7 +46,11 @@ const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
-const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA__";
+const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
+const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
+const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
+const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
+const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const liveDashboardServers = new Set();
 
@@ -1905,9 +1909,28 @@ function dashboardHtml(entries, meta = {}) {
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
     throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
   }
+  if (!template.includes(DASHBOARD_APP_PLACEHOLDER) || !template.includes(DASHBOARD_CSS_PLACEHOLDER)) {
+    throw new Error("Dashboard template is missing React build placeholders.");
+  }
+  const dashboardApp = readDashboardBuildAsset("dashboard-app.js").replace(/<\/script/gi, "<\\/script");
+  const dashboardCss = readDashboardBuildAsset("dashboard-app.css").replace(/<\/style/gi, "<\\/style");
   return template
-    .replace(DASHBOARD_DATA_PLACEHOLDER, data)
-    .replace("__AUTORESEARCH_META__", metaData);
+    .replace(DASHBOARD_DATA_PLACEHOLDER, () => data)
+    .replace(DASHBOARD_META_PLACEHOLDER, () => metaData)
+    .replace(DASHBOARD_CSS_PLACEHOLDER, () => dashboardCss)
+    .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
+}
+
+function readDashboardBuildAsset(fileName) {
+  const filePath = path.join(DASHBOARD_BUILD_DIR, fileName);
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(`Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`);
+    }
+    throw error;
+  }
 }
 
 function stripDashboardCommandFields(value) {
@@ -2451,7 +2474,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.4.0" },
+        serverInfo: { name: "codex-autoresearch", version: "0.4.1" },
       },
     });
     return;

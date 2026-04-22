@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import vm from "node:vm";
+import { JSDOM } from "jsdom";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
@@ -88,32 +88,19 @@ async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
   throw new Error(`No MCP response for ${id}\nstdout=${stdoutFn()}\nstderr=${stderrFn()}`);
 }
 
-const createDashboardElement = (id) => ({
-  id,
-  textContent: "",
-  innerHTML: "",
-  className: "",
-  onchange: null,
-  onclick: null,
-  dataset: {},
-  setAttribute(name, value) {
-    this[name] = value;
-  },
-  querySelectorAll() {
-    return [];
-  },
-});
-
-const getDashboardElement = (elements, id) => {
-  if (!elements.has(id)) {
-    elements.set(id, createDashboardElement(id));
+async function renderExportedDashboard(html) {
+  const dom = new JSDOM(html, {
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+    url: "file:///autoresearch-dashboard.html",
+  });
+  const started = Date.now();
+  while (!dom.window.__AUTORESEARCH_DASHBOARD_READY__) {
+    if (Date.now() - started > 2000) throw new Error("Dashboard React app did not finish rendering.");
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  return elements.get(id);
-};
-
-const createDashboardDocument = (elements) => ({
-  getElementById: (id) => getDashboardElement(elements, id),
-});
+  return dom;
+}
 
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
@@ -255,11 +242,13 @@ test("state supports negative metrics when lower is better", async () => {
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
-    assert.match(dashboard, /function canNormalizeChart/);
-    assert.match(dashboard, /const low = canNormalizeChart\(\) \? min - spread \* \.18 : \(min === 0 \? 0 : min - spread \* \.24\)/);
-    assert.match(dashboard, /formatChartRunValue/);
-    assert.doesNotMatch(dashboard, /run\.metric <= 0/);
-    assert.match(dashboard, /Math\.abs\(baseline\)/);
+    const dom = await renderExportedDashboard(dashboard);
+    const chart = dom.window.document.getElementById("trend-chart").innerHTML;
+    assert.match(chart, /#1 1 keep/);
+    assert.match(chart, /#2 -2 keep/);
+    assert.doesNotMatch(chart, /Infinity|NaN/);
+    assert.equal(dom.window.document.getElementById("improvement-value").textContent, "+300.0%");
+    dom.window.close();
   });
 });
 
@@ -298,25 +287,28 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    const dom = await renderExportedDashboard(dashboard);
+    const doc = dom.window.document;
+    const rendered = doc.body.innerHTML;
 
-    assert.match(dashboard, /id="segment-select"/);
-    assert.match(dashboard, /id="live-toggle"/);
+    assert.ok(doc.getElementById("segment-select"));
+    assert.ok(doc.getElementById("live-toggle"));
     assert.doesNotMatch(dashboard, /id="command-grid"/);
-    assert.match(dashboard, /Mission control/);
-    assert.match(dashboard, /id="mission-control-grid"/);
-    assert.match(dashboard, /Run log/);
-    assert.match(dashboard, /id="ledger-scroll"/);
-    assert.match(dashboard, /Codex brief/);
-    assert.match(dashboard, /id="ai-summary-title"/);
-    assert.match(dashboard, /id="run-log-decision"/);
-    assert.match(dashboard, /const meta = \{/);
+    assert.match(doc.body.textContent, /Mission control/);
+    assert.ok(doc.getElementById("mission-control-grid"));
+    assert.match(doc.body.textContent, /Run log/);
+    assert.ok(doc.getElementById("ledger-scroll"));
+    assert.match(doc.body.textContent, /Codex brief/);
+    assert.ok(doc.getElementById("ai-summary-title"));
+    assert.ok(doc.getElementById("run-log-decision"));
+    assert.match(dashboard, /__AUTORESEARCH_META__/);
     assert.doesNotMatch(dashboard, /clipboard\?\.writeText/);
     assert.doesNotMatch(dashboard, /autoresearch\.mjs/);
-    assert.match(dashboard, /Ready to finalize/);
-    assert.match(dashboard, /renderSegmentSelector/);
-    assert.ok(dashboard.indexOf('id="metric-trend"') < dashboard.indexOf('id="stage-rail"'));
-    assert.ok(dashboard.indexOf('id="metric-trend"') < dashboard.indexOf('id="ledger"'));
-    assert.ok(dashboard.indexOf('id="ledger"') < dashboard.indexOf('id="stage-rail"'));
+    assert.match(doc.body.textContent, /Finalize/);
+    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="mission-panel"'));
+    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="ledger"'));
+    assert.ok(rendered.indexOf('id="mission-panel"') < rendered.indexOf('id="ledger"'));
+    dom.window.close();
   });
 });
 
@@ -736,16 +728,11 @@ test("dashboard script renders zero and negative metric points", async () => {
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
-    const script = dashboard.match(/<script>([\s\S]*)<\/script>/)?.[1];
-    assert.ok(script);
-
-    const elements = new Map();
-    const document = createDashboardDocument(elements);
-    vm.runInNewContext(script, { document, console });
-
-    const chart = elements.get("trend-chart").innerHTML;
+    const dom = await renderExportedDashboard(dashboard);
+    const chart = dom.window.document.getElementById("trend-chart").innerHTML;
     assert.match(chart, /#1 0 keep/);
     assert.match(chart, /#2 -2 keep/);
+    dom.window.close();
   });
 });
 

@@ -220,7 +220,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.4.0");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.4.1");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });

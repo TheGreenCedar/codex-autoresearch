@@ -3,67 +3,50 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import vm from "node:vm";
+import { JSDOM } from "jsdom";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
 const dashboardTemplatePath = path.join(pluginRoot, "assets", "template.html");
+const dashboardBuildPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js");
+const dashboardCssPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css");
 
-const createDashboardElement = (id) => {
-  return {
-    id,
-    textContent: "",
-    innerHTML: "",
-    className: "",
-    hidden: false,
-    disabled: false,
-    onclick: null,
-    onchange: null,
-    dataset: {},
-    value: "",
-    setAttribute(name, value) {
-      this[name] = String(value);
-    },
-    querySelectorAll() {
-      return [];
-    },
-  };
-};
-
-const getDashboardElement = (elements, id) => {
-  if (!elements.has(id)) {
-    elements.set(id, createDashboardElement(id));
-  }
-  return elements.get(id);
-};
-
-const createDashboardDocument = (elements) => ({
-  getElementById: (id) => getDashboardElement(elements, id),
-});
-
-const extractDashboardScript = (template) => {
-  const match = template.match(/<script>([\s\S]*?)<\/script>/);
-  assert.ok(match?.[1], "Dashboard script block not found");
-  return match[1];
-};
-
-const runDashboard = async (entries, meta = {}) => {
+const runDashboard = async (entries, meta = {}, options = {}) => {
   const template = await readFile(dashboardTemplatePath, "utf8");
-  const script = extractDashboardScript(template);
-  const elements = new Map();
-  const context = {
-    console,
-    document: createDashboardDocument(elements),
-    location: { protocol: meta.deliveryMode === "live-server" ? "http:" : "file:" },
-    __AUTORESEARCH_DATA__: entries,
-    __AUTORESEARCH_META__: meta,
+  const app = await readFile(dashboardBuildPath, "utf8");
+  const css = await readFile(dashboardCssPath, "utf8");
+  const html = template
+    .replace("__AUTORESEARCH_DATA_PAYLOAD__", () => JSON.stringify(entries).replace(/</g, "\\u003c"))
+    .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replace(/</g, "\\u003c"))
+    .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
+    .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+  const dom = new JSDOM(html, {
+    pretendToBeVisual: true,
+    runScripts: "dangerously",
+    url: options.url || (meta.deliveryMode === "live-server" ? "http://127.0.0.1/" : "file:///autoresearch-dashboard.html"),
+    beforeParse: options.beforeParse,
+  });
+  await waitForDashboardReady(dom.window);
+  const getById = (id) => {
+    const element = dom.window.document.getElementById(id);
+    assert.ok(element, `Missing dashboard element: ${id}`);
+    return element;
   };
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const getById = (id) => getDashboardElement(elements, id);
-  return { elements, getById };
+  return { dom, getById };
 };
+
+async function waitForDashboardReady(window) {
+  await waitFor(() => window.__AUTORESEARCH_DASHBOARD_READY__, "Dashboard React app did not finish rendering.");
+}
+
+async function waitFor(predicate, message) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > 2000) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
   const entries = [
@@ -154,7 +137,7 @@ test("dashboard renders the run log as a virtualized top-of-page scroll area", a
   assert.equal(getById("ledger").hidden, false);
   assert.match(getById("ledger-note").textContent, /100 runs \/ newest first \/ showing 1-16/);
   assert.equal(renderedRows.length < 30, true);
-  assert.match(ledgerHtml, /height: 8200px/);
+  assert.match(getById("ledger-body").getAttribute("style"), /height: 8200px/);
   assert.match(ledgerHtml, /#100/);
   assert.doesNotMatch(ledgerHtml, /#1<\/div>/);
 });
@@ -501,6 +484,33 @@ test("dashboard distinguishes static snapshot controls from live actions", async
   assert.equal(getById("run-log-decision").hidden, true);
 });
 
+test("dashboard keeps static exports read-only when served over HTTP", async () => {
+  const entries = [
+    { type: "config", name: "hosted static dashboard", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+    { type: "run", run: 1, metric: 0, status: "keep", description: "Closed gaps", confidence: 1 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    modeGuidance: {
+      title: "Static snapshot",
+      detail: "Read-only export. Use autoresearch serve for executable dashboard actions.",
+    },
+    viewModel: {
+      nextBestAction: { title: "Preview finalization", detail: "Review the packet.", safeAction: "finalize-preview" },
+    },
+  }, {
+    url: "https://static.example/autoresearch-dashboard.html",
+  });
+
+  assert.equal(getById("live-title").textContent, "Static snapshot");
+  assert.equal(getById("refresh-now").hidden, true);
+  assert.equal(getById("live-toggle").hidden, true);
+  assert.equal(getById("live-actions-panel").hidden, true);
+  dom.window.close();
+});
+
 test("served dashboard keeps live action controls executable", async () => {
   const viewModel = {
     nextBestAction: {
@@ -536,4 +546,99 @@ test("served dashboard keeps live action controls executable", async () => {
   assert.match(getById("action-note").textContent, /Guarded actions/);
   assert.equal(getById("live-actions-panel").hidden, false);
   assert.match(getById("mission-control-grid").innerHTML, /mission-run/);
+});
+
+test("served dashboard live toggle starts automatic refresh", async () => {
+  const entries = [
+    { type: "config", name: "served dashboard", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+    { type: "run", run: 1, metric: 1, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const viewModel = {
+    summary: { segment: 0, baseline: 1, best: 1, confidence: 1 },
+  };
+  const { getById, dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveActionsAvailable: true,
+    refreshMs: 1234,
+    viewModel,
+  }, {
+    beforeParse(window) {
+      window.__refreshFetches = [];
+      window.fetch = async (url) => {
+        window.__refreshFetches.push(String(url));
+        if (String(url).includes("view-model")) {
+          return { ok: true, json: async () => viewModel };
+        }
+        return { ok: true, text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n") };
+      };
+      window.setInterval = (callback, ms) => {
+        window.__liveInterval = { callback, ms };
+        return 42;
+      };
+      window.clearInterval = (id) => {
+        window.__clearedLiveInterval = id;
+      };
+    },
+  });
+
+  getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => dom.window.__liveInterval, "Live toggle did not start an interval.");
+
+  assert.equal(dom.window.__liveInterval.ms, 1234);
+  await waitFor(() => dom.window.__refreshFetches.length >= 2, "Live toggle did not refresh immediately.");
+  assert.deepEqual(dom.window.__refreshFetches.slice(0, 2), ["autoresearch.jsonl", "view-model.json"]);
+  getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => dom.window.__clearedLiveInterval === 42, "Live toggle did not clear the interval.");
+  dom.window.close();
+});
+
+test("dashboard readout uses the selected segment baseline", async () => {
+  const entries = [
+    { type: "config", name: "first segment", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 10, status: "keep", description: "First baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 8, status: "keep", description: "First best", confidence: 2 },
+    { type: "config", name: "second segment", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 100, status: "keep", description: "Second baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 90, status: "keep", description: "Second best", confidence: 2 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    viewModel: {
+      summary: { segment: 1, baseline: 100, best: 90, confidence: 2 },
+    },
+  });
+
+  assert.equal(getById("baseline-value").textContent, "100s");
+  const select = getById("segment-select");
+  select.value = "0";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await waitFor(() => getById("baseline-value").textContent === "10s", "Selected segment baseline did not update.");
+  assert.equal(getById("best-value").textContent, "8s");
+  dom.window.close();
+});
+
+test("dashboard decision rail shows newest runs first", async () => {
+  const entries = [
+    { type: "config", name: "recent rail", metricName: "score", bestDirection: "higher", metricUnit: "pt" },
+    { type: "run", run: 1, metric: 1, status: "keep", description: "Run one", confidence: 1 },
+    { type: "run", run: 2, metric: 2, status: "keep", description: "Run two", confidence: 1 },
+    { type: "run", run: 3, metric: 3, status: "discard", description: "Run three", confidence: 1 },
+    { type: "run", run: 4, metric: 4, status: "keep", description: "Run four", confidence: 1 },
+    { type: "run", run: 5, metric: 5, status: "discard", description: "Run five", confidence: 1 },
+    { type: "run", run: 6, metric: 6, status: "keep", description: "Run six", confidence: 1 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+  });
+
+  const railText = getById("decision-rail").textContent;
+  assert.match(railText, /#6/);
+  assert.match(railText, /Run six/);
+  assert.match(railText, /#5/);
+  assert.doesNotMatch(railText, /Run one/);
+  dom.window.close();
 });
