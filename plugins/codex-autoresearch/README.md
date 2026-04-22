@@ -219,7 +219,7 @@ edit -> run benchmark -> parse metrics -> keep or discard -> log what happened
 
 The CLI and MCP responses include `continuation`. When `continuation.shouldContinue` is true, Codex should keep the loop in the same conversation by choosing the next hypothesis, editing, running `next`, and logging again. When `continuation.forbidFinalAnswer` is true, a completed run is only a checkpoint, not a reason to return control to the user.
 
-Kept results are committed. If Git cannot add or commit the kept change, logging fails instead of recording a false win.
+Kept results are committed. If Git cannot add or commit the kept change, logging fails instead of recording a false win. In Git repositories, automatic keep commits require `commitPaths`/`--commit-paths` unless `--allow-add-all` is passed explicitly; `--commit <hash>` records an already-created commit and skips staging.
 
 For tighter keep commits and safer discard cleanup, pass `--commit-paths "src,test"` or configure `commitPaths` through setup. Discarded, crashed, or checks-failed results use those paths as the cleanup boundary. Without scoped paths, the helper refuses broad discard cleanup in a dirty Git tree unless `--allow-dirty-revert` is passed explicitly.
 
@@ -231,7 +231,7 @@ After `next`, the helper persists a last-run packet. Use `log --from-last` to re
 node scripts/autoresearch.mjs log --cwd /path/to/project --from-last --status keep --description "Use worker pool"
 ```
 
-Successful packets still require an explicit `--status keep` or `--status discard`; failed benchmark/check packets can suggest the forced status. A consumed packet is cleared after logging, and stale packets are rejected if another run was logged after the packet was produced.
+Successful `keep` and `discard` logs require a finite primary metric. `crash` and `checks_failed` can be logged without a metric, so failed packets do not need sentinel values. A consumed packet is cleared after logging, and stale packets are rejected if another run was logged after the packet was produced.
 
 Minimum useful ASI is one compact JSON object:
 
@@ -284,6 +284,8 @@ Use `--collapse-overlap` when overlapping draft groups should become one review 
 
 Finalization writes a local review packet under `.git/autoresearch-finalize/` with branch stats, suggested PR titles/bodies, review commands, verification status, and cleanup notes.
 
+Finalizer cleanup is intentionally after merge: preview groups, approve the plan, create review branches, verify the union, merge the review branches into trunk, then cleanup source branches and autoresearch artifacts.
+
 ## Dashboard
 
 Generate the dashboard with:
@@ -305,6 +307,8 @@ node scripts/autoresearch.mjs serve --cwd /path/to/project
 ```
 
 When reporting a dashboard to a user, state which mode you are giving them: static export for read-only review, or served dashboard for live refresh endpoints and action buttons.
+
+The `export` command response is concise by default. Pass `--json-full` or `--verbose` when a caller needs the full embedded `viewModel`; the HTML snapshot itself still contains the full dashboard data.
 
 The dashboard shows:
 

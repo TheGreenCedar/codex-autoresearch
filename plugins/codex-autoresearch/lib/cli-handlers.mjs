@@ -168,12 +168,13 @@ export function createCliCommandHandlers(deps) {
         asi: deps.parseJsonOption(args.asi, null),
         commitPaths: args.commitPaths,
         revertPaths: args.revertPaths,
+        allowAddAll: args.allowAddAll,
         allowDirtyRevert: args.allowDirtyRevert,
         fromLast: args.fromLast,
       }),
     }),
     state: async (args) => ({
-      result: deps.publicState({ cwd: args.cwd }),
+      result: await deps.publicState({ cwd: args.cwd }),
     }),
     doctor: async (args) => ({
       result: await deps.doctorSession({
@@ -185,7 +186,12 @@ export function createCliCommandHandlers(deps) {
       }),
     }),
     export: async (args) => ({
-      result: await deps.exportDashboard({ cwd: args.cwd, output: args.output }),
+      result: await deps.exportDashboard({
+        cwd: args.cwd,
+        output: args.output,
+        jsonFull: args.jsonFull,
+        verbose: args.verbose,
+      }),
     }),
     clear: async (args) => ({
       result: await deps.clearSession({ cwd: args.cwd, yes: args.yes, confirm: args.confirm }),

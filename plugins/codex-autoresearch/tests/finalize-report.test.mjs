@@ -87,6 +87,19 @@ test("finalizer writes an ignored review summary and preserves verification", as
   assert.match(summary, /scripts\/autoresearch\.mjs/);
   assert.match(summary, /Suggested PR/);
   assert.match(summary, /git show --stat/);
+  assert.match(summary, /## Finalization Runway/);
+  assert.match(summary, /Final file set: .*scripts\/autoresearch\.mjs.*src\/value\.txt|Final file set: .*src\/value\.txt.*scripts\/autoresearch\.mjs/);
+  assert.match(summary, /Do not run cleanup until the review branch merge has succeeded/);
+  const runwayOrder = [
+    "Preview groups and risks",
+    "Approve the review branch plan",
+    "Create review branches",
+    "Verify union",
+    "Merge the review branches",
+    "Cleanup source branches",
+  ].map((text) => summary.indexOf(text));
+  assert.ok(runwayOrder.every((index) => index >= 0), runwayOrder.join(", "));
+  assert.deepEqual(runwayOrder, [...runwayOrder].sort((a, b) => a - b));
 
   const branchFiles = (await git(["show", "--name-only", "--format=", "autoresearch-review/ux-test/01-value-change"], repo)).stdout;
   assert.doesNotMatch(branchFiles, /autoresearch\.research/);

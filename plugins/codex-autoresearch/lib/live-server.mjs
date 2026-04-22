@@ -102,6 +102,9 @@ function logActionArgs(action, workDir, body) {
   if (body.metrics && typeof body.metrics === "object" && Object.keys(body.metrics).length > 0) {
     args.push("--metrics", JSON.stringify(body.metrics));
   }
+  if (body.allowAddAll === true || body.allow_add_all === true) {
+    args.push("--allow-add-all");
+  }
   return args;
 }
 

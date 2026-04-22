@@ -17,6 +17,8 @@ Use this skill to turn `autoresearch.jsonl` into an HTML dashboard with embedded
 node scripts/autoresearch.mjs export --cwd /absolute/project/path
 ```
 
+The CLI export response is concise by default. Add `--json-full` or `--verbose` only when you need the full `viewModel`; MCP callers can pass `full: true`. The exported HTML still embeds the full dashboard data either way.
+
 4. Report the generated `autoresearch-dashboard.html` path and explicitly label it as the static, read-only export with copyable commands.
 5. If the user has the dashboard open, re-export after meaningful new runs so the embedded command metadata stays current.
 6. If the user asked for a summary, also run:
@@ -45,6 +47,8 @@ The dashboard has two modes. A direct `file://` open is a static snapshot: it em
 When handing a dashboard to the user, say which mode they are looking at. Use the static export for portable review and PR/status links. Use the served URL when the user expects dashboard buttons to run doctor, gap preview, finalize-preview, export, or confirmed log actions.
 
 The next-best-action rail should be read first. The command panel includes copyable commands for setup-plan, doctor, next run, keep/discard last packet, gap candidates, finalization preview, dashboard export, serve dashboard, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
+
+Treat dashboard warnings with stable codes as operator blocks. In particular, `empty_commit_paths_in_git_repo` means kept runs will not auto-commit until `commitPaths` are configured, `--commit-paths` is supplied, an existing `--commit` is recorded, or add-all is explicitly allowed.
 
 The live action panel is shown only when the dashboard is served locally. It calls local `serve` endpoints only. These safe live actions include doctor, setup-plan, recipe listing, gap-candidates preview, finalize-preview, and export. Confirmed keep/discard logging requires a specific description; branch creation stays outside the dashboard.
 

@@ -112,8 +112,10 @@ node scripts/autoresearch.mjs log --cwd /absolute/project/path --from-last --sta
 Rules:
 
 - Primary metric decides keep/discard. Lower or higher depends on the active session config.
+- `keep` and ordinary `discard` logs require a finite metric.
+- `crash` and `checks_failed` logs can omit the metric; never invent sentinel values for failed packets.
 - Keep improvements, especially simple improvements.
-- Use scoped `commit_paths` for kept commits when a narrow experiment surface is known; otherwise inspect staged files carefully before trusting broad staging.
+- Use scoped `commit_paths` for kept commits when a narrow experiment surface is known. In Git repositories, keep logging blocks if `commitPaths` are empty unless `allow_add_all` / `--allow-add-all` is explicit. If the change is already committed, pass `commit` / `--commit <hash>` to record it and skip staging.
 - Use scoped `commit_paths` or `revert_paths` for discard/crash/checks-failed cleanup. Do not use broad dirty-tree cleanup unless the user explicitly accepts it.
 - Discard worse or equal results.
 - Log benchmark failures as `crash`.

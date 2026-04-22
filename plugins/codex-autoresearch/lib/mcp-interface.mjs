@@ -187,6 +187,7 @@ export const toolSchemas = applyToolContracts([
         asi: { type: "object" },
         commit_paths: { type: "array", items: { type: "string" } },
         revert_paths: { type: "array", items: { type: "string" } },
+        allow_add_all: { type: "boolean" },
         allow_dirty_revert: { type: "boolean" },
         from_last: { type: "boolean" },
       },
@@ -261,6 +262,8 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         output: { type: "string" },
+        full: { type: "boolean" },
+        json_full: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -328,7 +331,7 @@ export function createMcpInterface(deps) {
     });
     if (name === "export_dashboard") return await deps.exportDashboard(args);
     if (name === "clear_session") return await deps.clearSession(args);
-    if (name === "read_state") return deps.publicState(args);
+    if (name === "read_state") return await deps.publicState(args);
     if (name === "measure_quality_gap") return await deps.measureQualityGap(args);
     if (name === "gap_candidates") {
       requireUnsafeCommandGate(name, args);

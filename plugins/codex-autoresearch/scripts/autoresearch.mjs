@@ -17,6 +17,7 @@ import { createMcpInterface } from "../lib/mcp-interface.mjs";
 import { gapCandidates as buildGapCandidates, researchRoundGuidance } from "../lib/research-gaps.mjs";
 import { applyResolvedRecipeDefaults, findRecipe, getBuiltInRecipe, listBuiltInRecipes, loadRecipeCatalog, recommendRecipe } from "../lib/recipes.mjs";
 import { serveAutoresearch } from "../lib/live-server.mjs";
+import { STATUS_VALUES, FAILURE_STATUSES, finiteMetric, isBaselineEligibleMetricRun } from "../lib/session-core.mjs";
 
 const SESSION_FILES = [
   "autoresearch.jsonl",
@@ -31,7 +32,6 @@ const SESSION_FILES = [
 ];
 const RESEARCH_DIR = "autoresearch.research";
 
-const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
@@ -47,6 +47,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA__";
+const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 
 function usage() {
   return `Codex Autoresearch
@@ -67,10 +68,10 @@ Usage:
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
-  node scripts/autoresearch.mjs export --cwd <project> [--output <html>]
+  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--json-full|--verbose]
   node scripts/autoresearch.mjs clear --cwd <project> --yes
   node scripts/autoresearch.mjs mcp-smoke
   node scripts/autoresearch.mjs --mcp
@@ -160,12 +161,6 @@ function validateMetricName(name) {
     throw new Error(`Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${name}`);
   }
   return String(name);
-}
-
-function finiteMetric(value) {
-  if (value == null || value === "") return null;
-  const metric = Number(value);
-  return Number.isFinite(metric) ? metric : null;
 }
 
 function normalizeRelativePaths(paths, optionName = "paths") {
@@ -336,7 +331,7 @@ async function setupPlan(args) {
 async function guidedSetup(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const setup = await setupPlan(args);
-  const state = publicState({ cwd: workDir });
+  const state = await publicState({ cwd: workDir });
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
   const lastRun = await readLastRunPacket(workDir).catch(() => null);
   const lastRunFreshness = lastRun ? lastRunPacketFreshness(workDir, lastRun) : null;
@@ -783,7 +778,7 @@ function currentState(workDir) {
     }
   }
   const current = results.filter((run) => run.segment === segment);
-  const baseline = finiteMetric(current.find((run) => finiteMetric(run.metric) != null)?.metric);
+  const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };
@@ -833,7 +828,9 @@ function median(values) {
 }
 
 function computeConfidence(runs, direction) {
-  const values = runs.map((run) => finiteMetric(run.metric)).filter((value) => value != null);
+  const values = runs
+    .filter(isBaselineEligibleMetricRun)
+    .map((run) => finiteMetric(run.metric));
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestKeptMetric(runs, direction);
@@ -1024,6 +1021,14 @@ async function shortHead(cwd) {
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
+async function resolveCommitRef(cwd, commit) {
+  const value = String(commit || "").trim();
+  if (!value) throw new Error("commit is required");
+  const result = await git(["rev-parse", "--verify", `${value}^{commit}`], cwd);
+  if (result.code !== 0) throw new Error(`Git commit could not be resolved: ${gitOutput(result, value)}`);
+  return result.stdout.trim();
+}
+
 async function hasStagedChanges(cwd) {
   const result = await git(["diff", "--cached", "--quiet"], cwd);
   return result.code === 1;
@@ -1034,6 +1039,19 @@ async function isGitClean(cwd) {
   const result = await git(["status", "--porcelain"], cwd);
   if (result.code !== 0) return false;
   return result.stdout.trim() === "";
+}
+
+function emptyCommitPathsWarning() {
+  return {
+    code: EMPTY_COMMIT_PATHS_WARNING_CODE,
+    severity: "warning",
+    message: "Kept runs will not auto-commit because commitPaths is empty. Configure commitPaths, pass --commit-paths, or use --allow-add-all explicitly.",
+    action: "Configure commitPaths for the experiment surface before logging kept changes, or use --allow-add-all when broad staging is intentional.",
+  };
+}
+
+function shouldWarnEmptyCommitPaths({ inGit, commitPaths = [], explicitCommit = false, allowAddAll = false } = {}) {
+  return Boolean(inGit && !explicitCommit && !allowAddAll && commitPaths.length === 0);
 }
 
 async function gitStatusShort(cwd) {
@@ -1406,6 +1424,7 @@ function dashboardSettings(config) {
 async function dashboardViewModel(workDir, config) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
+  const warnings = await operatorWarningsForWorkDir(workDir, config);
   return buildDashboardViewModel({
     state,
     settings: dashboardSettings(config),
@@ -1426,7 +1445,14 @@ async function dashboardViewModel(workDir, config) {
       settings: dashboardSettings(config),
     }),
     drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({ ok: false, warnings: [error.message] })),
+    warnings,
   });
+}
+
+async function operatorWarningsForWorkDir(workDir, config = {}) {
+  const inGit = await insideGitRepo(workDir);
+  const commitPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
+  return shouldWarnEmptyCommitPaths({ inGit, commitPaths }) ? [emptyCommitPathsWarning()] : [];
 }
 
 async function configureSession(args) {
@@ -1490,7 +1516,7 @@ async function runExperiment(args) {
   const primaryPresent = finiteMetric(primary) != null;
   const primaryMetric = finiteMetric(primary);
   const improvesPrimary = primaryMetric != null && (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
-  const isBaseline = state.current.filter((run) => finiteMetric(run.metric) != null).length === 0;
+  const isBaseline = state.current.filter(isBaselineEligibleMetricRun).length === 0;
   let checks = null;
   const checksCommand = args.checks_command || args.checksCommand || await defaultChecksCommand(workDir);
   const checksPolicy = checksPolicyFromArgs(args, config);
@@ -1624,14 +1650,16 @@ async function logExperiment(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false) ? await readLastRunPacket(workDir) : null;
   if (lastPacket) assertFreshLastRunPacket(workDir, lastPacket);
-  const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
-  if (metric == null) throw new Error("metric is required");
   const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses) ? lastPacket.decision.allowedStatuses : [];
-  const status = args.status || (packetAllowed.length === 1 ? lastPacket?.decision?.suggestedStatus : null);
+  const status = String(args.status || (packetAllowed.length === 1 ? lastPacket?.decision?.suggestedStatus : "") || "");
   if (!status) throw new Error("status is required; choose keep or discard explicitly for successful packets.");
   if (!STATUS_VALUES.has(status)) throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
   if (lastPacket?.decision && Array.isArray(lastPacket.decision.allowedStatuses) && !lastPacket.decision.allowedStatuses.includes(status)) {
     throw new Error(`Cannot log status '${status}' for the last run. Allowed statuses: ${lastPacket.decision.allowedStatuses.join(", ")}.`);
+  }
+  const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
+  if (!FAILURE_STATUSES.has(status) && metric == null) {
+    throw new Error("metric is required for keep and discard");
   }
   if (status === "keep" && lastPacket?.run?.checks?.passed === false) {
     throw new Error("Cannot keep the last run because correctness checks failed. Log it as checks_failed.");
@@ -1643,42 +1671,58 @@ async function logExperiment(args) {
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
-  let commit = args.commit || (inGit ? await shortHead(workDir) : "");
+  const explicitCommit = args.commit != null && String(args.commit).trim() !== "";
+  const allowAddAll = boolOption(args.allow_add_all ?? args.allowAddAll, false);
+  if (explicitCommit && !inGit) {
+    throw new Error("--commit requires a Git repository so the commit can be verified.");
+  }
+  let commit = "";
+  if (explicitCommit) {
+    commit = (await resolveCommitRef(workDir, args.commit)).slice(0, 12);
+  } else if (inGit) {
+    commit = await shortHead(workDir);
+  }
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
   let revertMessage = "";
 
   if (status === "keep" && inGit) {
-    const resultData = {
-      status,
-      [stateBefore.config.metricName || "metric"]: metric,
-      ...metrics,
-    };
-    const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths ?? config.commitPaths, "commitPaths");
-    let addResult;
-    if (commitPaths.length > 0) {
-      addResult = await git(["add", "--", ...commitPaths], workDir);
+    if (explicitCommit) {
+      gitMessage = `Git: recorded existing commit ${commit}.`;
     } else {
-      addResult = await git(["add", "-A"], workDir);
-    }
-    if (addResult.code !== 0) {
-      throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
-    }
-    if (await hasStagedChanges(workDir)) {
-      const commitResult = await git([
-        "commit",
-        "-m",
-        description,
-        "-m",
-        `Result: ${JSON.stringify(resultData)}`,
-      ], workDir);
-      if (commitResult.code === 0) {
-        commit = await shortHead(workDir);
-        gitMessage = `Git: committed ${commit}.`;
-      } else {
-        throw new Error(`Git commit failed: ${gitOutput(commitResult, "unknown error")}`);
+      const resultData = {
+        status,
+        [stateBefore.config.metricName || "metric"]: metric,
+        ...metrics,
+      };
+      const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths ?? config.commitPaths, "commitPaths");
+      if (shouldWarnEmptyCommitPaths({ inGit, commitPaths, allowAddAll })) {
+        throw new Error(`${emptyCommitPathsWarning().message} Pass --allow-add-all only when every dirty file belongs in the kept commit.`);
       }
-    } else {
-      gitMessage = "Git: nothing to commit.";
+      const addResult = commitPaths.length > 0
+        ? await git(["add", "--", ...commitPaths], workDir)
+        : await git(["add", "-A"], workDir);
+      if (addResult.code !== 0) {
+        throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
+      }
+      if (await hasStagedChanges(workDir)) {
+        const commitResult = await git([
+          "commit",
+          "-m",
+          description,
+          "-m",
+          `Result: ${JSON.stringify(resultData)}`,
+        ], workDir);
+        if (commitResult.code === 0) {
+          commit = await shortHead(workDir);
+          gitMessage = allowAddAll
+            ? `Git: committed ${commit} using explicit add-all.`
+            : `Git: committed ${commit}.`;
+        } else {
+          throw new Error(`Git commit failed: ${gitOutput(commitResult, "unknown error")}`);
+        }
+      } else {
+        gitMessage = "Git: nothing to commit.";
+      }
     }
   } else if (status !== "keep") {
     revertMessage = await cleanupDiscardChanges(workDir, args, config);
@@ -1743,24 +1787,33 @@ async function exportDashboard(args) {
     viewModel,
   });
   await fsp.writeFile(output, html, "utf8");
-  return {
+  const modeGuidance = {
+    staticExport: output,
+    liveDashboardCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`,
+    difference: "The exported HTML is a read-only snapshot with copyable commands; the served dashboard can call local live-action endpoints.",
+    fullJson: "Pass --json-full/--verbose on the CLI or full=true over MCP to include the full viewModel in the command response.",
+  };
+  const progress = operationProgress({
+    stage: "export",
+    label: "Write dashboard HTML",
+    startedAt,
+    status: "completed",
+    outputTail: output,
+  });
+  const fullJson = boolOption(args.json_full ?? args.jsonFull ?? args.full ?? args.verbose, false);
+  const result = {
     ok: true,
     workDir,
     output,
-    viewModel,
-    modeGuidance: {
-      staticExport: output,
-      liveDashboardCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`,
-      difference: "The exported HTML is a read-only snapshot with copyable commands; the served dashboard can call local live-action endpoints.",
-    },
-    progress: operationProgress({
-      stage: "export",
-      label: "Write dashboard HTML",
-      startedAt,
-      status: "completed",
-      outputTail: output,
-    }),
+    summary: viewModel.summary,
+    baseline: viewModel.summary?.baseline ?? null,
+    best: viewModel.summary?.best ?? null,
+    nextAction: viewModel.nextBestAction?.detail || viewModel.readout?.nextAction || "",
+    modeGuidance,
+    progress,
   };
+  if (fullJson) result.viewModel = viewModel;
+  return result;
 }
 
 async function clearSession(args) {
@@ -1901,9 +1954,10 @@ async function deleteLastRunPacket(workDir) {
   }
 }
 
-function publicState(args) {
+async function publicState(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
+  const warningDetails = await operatorWarningsForWorkDir(workDir, config);
   const memory = buildExperimentMemory({
     runs: state.current,
     direction: state.config.bestDirection,
@@ -1936,6 +1990,8 @@ function publicState(args) {
       commitPaths: config.commitPaths || [],
     },
     commands: dashboardCommands(workDir),
+    warnings: warningDetails.map((warning) => warning.message),
+    warningDetails,
     memory,
     continuation: loopContinuation(workDir, state, config, "state"),
   };
@@ -2073,9 +2129,10 @@ function currentQualityGapSlug(workDir) {
 
 async function doctorSession(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = publicState(args);
+  const state = await publicState(args);
   const issues = [];
   const warnings = [];
+  const warningDetails = [];
   const inGit = await insideGitRepo(workDir);
   const clean = await isGitClean(workDir);
 
@@ -2084,6 +2141,12 @@ async function doctorSession(args) {
   warnings.push(...(state.memory?.warnings || []));
   if (inGit && clean === false) warnings.push("Git worktree is dirty; review unrelated changes before logging a keep result.");
   if (!inGit) warnings.push("Working directory is not a Git repository; keep commits and discard reverts are unavailable.");
+  const commitPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
+  if (shouldWarnEmptyCommitPaths({ inGit, commitPaths })) {
+    const warning = emptyCommitPathsWarning();
+    warnings.push(warning.message);
+    warningDetails.push(warning);
+  }
   const drift = await buildDriftReport({
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
@@ -2135,7 +2198,7 @@ async function doctorSession(args) {
     nextAction = "Run and log a baseline before trying optimizations.";
   } else if (state.limit.limitReached) {
     nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
-  } else if (warnings.some((warning) => /dirty/.test(warning))) {
+  } else if (warnings.some((warning) => /dirty/.test(String(warning)))) {
     nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
@@ -2152,6 +2215,7 @@ async function doctorSession(args) {
     drift,
     issues,
     warnings,
+    warningDetails,
     nextAction,
     continuation: loopContinuation(workDir, currentState(workDir), config, "doctor"),
   };
@@ -2315,7 +2379,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.2.1" },
+        serverInfo: { name: "codex-autoresearch", version: "0.3.0" },
       },
     });
     return;

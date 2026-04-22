@@ -307,10 +307,33 @@ function renderVerificationText(status, error) {
   ];
 }
 
+function renderRunwayText(groups, results) {
+  const fileSet = new Set();
+  for (const group of groups) {
+    for (const file of group.files || []) fileSet.add(file);
+  }
+  return [
+    "",
+    "## Finalization Runway",
+    "",
+    "1. Preview groups and risks.",
+    "2. Approve the review branch plan.",
+    "3. Create review branches.",
+    "4. Verify union and session-artifact checks.",
+    "5. Merge the review branches into trunk.",
+    "6. Cleanup source branches and autoresearch artifacts only after merge succeeds.",
+    "",
+    `Final file set: ${[...fileSet].sort().join(", ") || "(none)"}`,
+    `Review branches created: ${results.filter((result) => result && !result.skipped).map((result) => result.branch).join(", ") || "(none)"}`,
+  ];
+}
+
 function renderCleanupNotes(sourceBranch) {
   return [
     "",
     "## Cleanup After Merge",
+    "",
+    "Do not run cleanup until the review branch merge has succeeded on trunk.",
     "",
     "```bash",
     `git branch -D ${sourceBranch}`,
@@ -329,6 +352,7 @@ async function writeReviewSummary(file, context) {
     ...renderBranchRows(groups, results),
     ...renderSuggestedPrBlocks(config, groups, results),
     ...renderVerificationText(status, error),
+    ...renderRunwayText(groups, results),
     ...renderCleanupNotes(sourceBranch),
   ];
 
@@ -579,7 +603,8 @@ async function main() {
   console.log("Created review branches:");
   for (const branch of created) console.log(`  ${branch}`);
   console.log("");
-  console.log("Cleanup after merge:");
+  console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
+  console.log("Cleanup after merge only:");
   console.log(`  git branch -D ${sourceBranch}`);
   console.log("  rm -rf autoresearch.research && rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.config.json autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1");
 }

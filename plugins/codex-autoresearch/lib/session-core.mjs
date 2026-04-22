@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
+export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
 export const RESEARCH_DIR = "autoresearch.research";
 
 export function listOption(value) {
@@ -33,6 +34,18 @@ export function finiteMetric(value) {
   if (value == null || value === "") return null;
   const metric = Number(value);
   return Number.isFinite(metric) ? metric : null;
+}
+
+export function hasFiniteMetric(run) {
+  return finiteMetric(run?.metric) != null;
+}
+
+export function isFailureStatus(status) {
+  return FAILURE_STATUSES.has(status);
+}
+
+export function isBaselineEligibleMetricRun(run) {
+  return hasFiniteMetric(run) && !isFailureStatus(run?.status);
 }
 
 export async function pathExists(filePath) {
@@ -112,7 +125,9 @@ function median(values) {
 }
 
 export function computeConfidence(runs, direction) {
-  const values = runs.map((run) => finiteMetric(run.metric)).filter((value) => value != null);
+  const values = runs
+    .filter(isBaselineEligibleMetricRun)
+    .map((run) => finiteMetric(run.metric));
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestKeptMetric(runs, direction);
@@ -149,7 +164,7 @@ export function currentState(workDir) {
     }
   }
   const current = results.filter((run) => run.segment === segment);
-  const baseline = finiteMetric(current.find((run) => finiteMetric(run.metric) != null)?.metric);
+  const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };

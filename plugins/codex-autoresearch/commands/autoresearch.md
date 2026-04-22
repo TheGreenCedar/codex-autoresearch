@@ -51,10 +51,10 @@ Use the local routing above when this repository is the target.
 - `recipes ...`: run `node <plugin-root>/scripts/autoresearch.mjs recipes list|show ...` to inspect built-in or local/remote catalog benchmark recipes. Catalog recipe IDs can be used by `setup --recipe <id> --catalog <path-or-url>`.
 - `doctor`: run `node <plugin-root>/scripts/autoresearch.mjs doctor --cwd <current-project> --check-benchmark` when a benchmark is configured, then report issues, warnings, and next action.
 - `next`: run `node <plugin-root>/scripts/autoresearch.mjs next --cwd <current-project>`, then report doctor status, metric, allowed log statuses, suggested status if present, ASI template, and next action.
-- `log`: run `node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status <keep|discard|crash|checks_failed> --description <text>`, then follow `continuation`; do not ask the user to rerun `autoresearch-create` for the next packet.
+- `log`: run `node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status <keep|discard|crash|checks_failed> --description <text>`, then follow `continuation`; do not ask the user to rerun `autoresearch-create` for the next packet. `keep` and `discard` require a finite metric, while `crash` and `checks_failed` can be logged metricless.
 - `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
-- `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`. Report the returned `modeGuidance` so the user knows this is a static snapshot, not the live-action dashboard.
+- `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`. Report the returned `modeGuidance` so the user knows this is a static snapshot, not the live-action dashboard. The command response is concise by default; add `--json-full` or `--verbose` when the full `viewModel` is needed. MCP callers should use `full: true`.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
 - `clear`: use MCP `clear_session` or run `node <plugin-root>/scripts/autoresearch.mjs clear --cwd <current-project> --yes` after confirming the target project path.
 - `research <goal>`: use the `autoresearch-deep-research` skill or MCP `setup_research_session` to create `autoresearch.research/<slug>/`, initialize a `quality_gap` session, then measure gaps with `quality-gap`.
@@ -70,9 +70,9 @@ Before `clear`, show the absolute files that will be deleted and ask for confirm
 
 Before starting a new loop, check git status. If the worktree is dirty, ask whether to branch from the current state, commit first, or stop.
 
-Before logging a kept result in a dirty tree, prefer scoped commit paths from the session scope or ask the user to confirm broad staging.
+Before logging a kept result in a Git repo, use scoped commit paths from the session scope or pass `--commit-paths`. If the change was already committed, pass `--commit <hash>` so logging records that commit and skips staging. Use `--allow-add-all` only when every dirty file belongs in the kept commit; otherwise logging blocks with `empty_commit_paths_in_git_repo`.
 
-After `next`, prefer `log --from-last` so Codex does not retype parsed metrics from the previous packet. Still choose `keep` or `discard` deliberately based on the metric and ASI. Successful packets require an explicit status; consumed packets are cleared, and stale packets must be replaced by running `next` again.
+After `next`, prefer `log --from-last` so Codex does not retype parsed metrics from the previous packet. Still choose `keep` or `discard` deliberately based on the metric and ASI. Successful packets require an explicit status and finite metric; failed packets can be logged as `crash` or `checks_failed` without a fake metric. Consumed packets are cleared, and stale packets must be replaced by running `next` again.
 
 Before logging a discard/crash/checks-failed result, use configured `commitPaths`/`revertPaths`. Do not pass `--allow-dirty-revert` unless the user explicitly accepts broad cleanup.
 

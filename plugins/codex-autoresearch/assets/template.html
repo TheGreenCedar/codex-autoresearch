@@ -1442,6 +1442,7 @@ function renderProductCockpit() {
     ...(Array.isArray(finalizePreview.warnings) ? finalizePreview.warnings : []),
     ...(Array.isArray(drift.warnings) ? drift.warnings : []),
     ...(Array.isArray(memory.warnings) ? memory.warnings : []),
+    ...(Array.isArray(viewModel.warnings) ? viewModel.warnings.map(warningText) : []),
   ];
 
   document.getElementById("setup-status-title").textContent = guided.stage ? "Guide: " + guided.stage : (setup.ok === false ? "Needs setup" : "Setup readable");
@@ -1461,6 +1462,11 @@ function renderProductCockpit() {
   setText("trust-floor-message", qualityGap
     ? `${qualityGap.open} open gap${qualityGap.open === 1 ? "" : "s"}, ${blockers.length} blocker${blockers.length === 1 ? "" : "s"}.`
     : `${blockers.length} blocker${blockers.length === 1 ? "" : "s"} and no research gap file.`);
+}
+
+function warningText(warning) {
+  if (warning && typeof warning === "object") return String(warning.message || warning.code || "Warning");
+  return String(warning || "");
 }
 
 function renderNextBestAction() {

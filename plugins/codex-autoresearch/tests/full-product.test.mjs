@@ -220,7 +220,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.2.1");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.3.0");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
@@ -234,6 +234,24 @@ test("MCP setup_session can use recipe defaults without explicit name and metric
     assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
     const payload = JSON.parse(response.result.content[0].text);
     assert.equal(payload.init.config.metricName, "rss_mb");
+  });
+});
+
+test("MCP export_dashboard supports compact and full payloads", async () => {
+  await withTempDir("mcp-export", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "mcp export", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "1", "--status", "keep", "--description", "Baseline"]);
+
+    const compact = await callMcpTool("export_dashboard", { working_dir: dir });
+    assert.equal(compact.result?.isError, undefined, compact.result?.content?.[0]?.text);
+    const compactPayload = JSON.parse(compact.result.content[0].text);
+    assert.equal(compactPayload.summary.runs, 1);
+    assert.equal(compactPayload.viewModel, undefined);
+
+    const full = await callMcpTool("export_dashboard", { working_dir: dir, full: true });
+    assert.equal(full.result?.isError, undefined, full.result?.content?.[0]?.text);
+    const fullPayload = JSON.parse(full.result.content[0].text);
+    assert.equal(fullPayload.viewModel.summary.runs, 1);
   });
 });
 

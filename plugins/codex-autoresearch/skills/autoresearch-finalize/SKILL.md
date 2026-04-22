@@ -109,7 +109,9 @@ The script:
 - verifies no session artifacts landed in review branches
 - prints phase-specific failure messages so the user can tell whether the problem is configuration, preflight, grouping, branch creation, union verification, or session artifact verification
 - writes a generated Markdown review summary under `.git/autoresearch-finalize/` after branch creation; this path is durable locally but does not dirty the worktree
-- includes suggested PR titles/bodies, branch stats, review commands, verification status, and cleanup notes in the generated summary
+- includes suggested PR titles/bodies, branch stats, review commands, verification status, the final file set, runway order, and cleanup notes in the generated summary
+
+The runway order is mandatory: preview, approve, create review branches, verify, merge into trunk, then cleanup. Do not delete the source branch or autoresearch artifacts before the review branch merge succeeds.
 
 ## Step 5: Report
 

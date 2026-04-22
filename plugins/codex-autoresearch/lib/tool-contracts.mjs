@@ -74,7 +74,7 @@ const CONTRACTS = {
     whenToUse: "Use to resume, inspect progress, or feed dashboards.",
     contrast: "Use doctor_session for readiness checks.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "runs", "best", "memory"]),
+    outputSchema: basicOutputSchema(["ok", "workDir", "runs", "best", "warnings", "memory"]),
   },
   measure_quality_gap: {
     purpose: "Measure open and closed research checklist gaps.",
@@ -106,10 +106,10 @@ const CONTRACTS = {
   },
   export_dashboard: {
     purpose: "Write the self-contained dashboard HTML.",
-    whenToUse: "Use after setup, resume, next, log, or finalization preview.",
+    whenToUse: "Use after setup, resume, next, log, or finalization preview; pass full=true only when the full viewModel is needed.",
     contrast: "Use read_state for JSON-only state.",
     safety: "Writes dashboard HTML inside the workdir.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "output", "viewModel"]),
+    outputSchema: basicOutputSchema(["ok", "workDir", "output", "summary", "best", "nextAction", "modeGuidance"]),
   },
   doctor_session: {
     purpose: "Check readiness, git state, benchmark metrics, and version drift.",

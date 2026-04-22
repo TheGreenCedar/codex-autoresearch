@@ -11,6 +11,7 @@ export function buildDashboardViewModel({
   recipes = [],
   experimentMemory = null,
   drift = null,
+  warnings = [],
 }) {
   const current = state.current || [];
   const kept = current.filter((run) => run.status === "keep");
@@ -31,6 +32,7 @@ export function buildDashboardViewModel({
     finalizePreview,
     experimentMemory,
     drift,
+    warnings,
     commands,
   });
   const portfolio = buildPortfolio(experimentMemory, state.config.bestDirection);
@@ -57,6 +59,7 @@ export function buildDashboardViewModel({
     nextBestAction: actionRail[0],
     actionRail,
     drift,
+    warnings,
     summary: {
       name: state.config.name || "Autoresearch",
       metricName: state.config.metricName,
@@ -101,6 +104,7 @@ function buildActionRail({
   finalizePreview,
   experimentMemory,
   drift,
+  warnings: operatorWarnings = [],
   commands,
 }) {
   const commandMap = commandLookup(commands);
@@ -108,6 +112,7 @@ function buildActionRail({
     ...(current.length ? [] : Array.isArray(setupPlan?.missing) ? setupPlan.missing : []),
     ...(Array.isArray(setupPlan?.warnings) ? setupPlan.warnings : []),
     ...(Array.isArray(drift?.warnings) ? drift.warnings : []),
+    ...operatorWarnings,
   ];
   const lastMemoryAction = experimentMemory?.latestNextAction || "";
   const qualityGapOpen = Number(qualityGap?.open);
@@ -175,7 +180,7 @@ function buildActionRail({
       kind: "fix-blocker",
       priority: "Critical",
       title: "Clear setup drift",
-      detail: String(warnings[0]),
+      detail: warningMessage(warnings[0]),
       utilityCopy: "Trust the loop after doctor is clean.",
       safeAction: "doctor",
       command: commandMap.get("doctor"),
@@ -533,6 +538,11 @@ function commandLookup(commands) {
     if (label) map.set(label, item.command || "");
   }
   return map;
+}
+
+function warningMessage(warning) {
+  if (warning && typeof warning === "object") return String(warning.message || warning.code || "Warning");
+  return String(warning || "");
 }
 
 function buildPortfolio(memory, direction) {

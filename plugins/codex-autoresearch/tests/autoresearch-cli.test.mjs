@@ -164,7 +164,7 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).config.metricName, "quality_gap");
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const exportPayload = JSON.parse(exportResult.stdout);
     assert.match(exportPayload.modeGuidance.difference, /read-only snapshot/);
@@ -233,7 +233,7 @@ test("state and dashboard math keep zero-valued metrics visible", async () => {
     assert.equal(payload.baseline, 0);
     assert.equal(payload.best, 0);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.match(dashboard, /Reach zero failures/);
@@ -252,7 +252,7 @@ test("state supports negative metrics when lower is better", async () => {
     assert.equal(payload.baseline, 1);
     assert.equal(payload.best, -2);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.match(dashboard, /const low = min < 0/);
@@ -293,7 +293,7 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     await runCli(["init", "--cwd", dir, "--name", "second segment", "--metric-name", "seconds"]);
     await runCli(["log", "--cwd", dir, "--metric", "3", "--status", "keep", "--description", "Second baseline"]);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
 
@@ -551,6 +551,118 @@ test("log from last packet rejects keep after failed checks", async () => {
   });
 });
 
+test("metricless failure logs do not become baseline or best", async () => {
+  await withTempDir("metricless-failures", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "metricless failures", "--metric-name", "seconds"]);
+
+    const crash = await runCli([
+      "log",
+      "--cwd", dir,
+      "--status", "crash",
+      "--description", "Benchmark crashed before metric",
+    ]);
+    assert.equal(crash.code, 0, crash.stderr);
+    assert.equal(JSON.parse(crash.stdout).experiment.metric, null);
+
+    const checksFailed = await runCli([
+      "log",
+      "--cwd", dir,
+      "--status", "checks_failed",
+      "--description", "Checks failed before metric",
+    ]);
+    assert.equal(checksFailed.code, 0, checksFailed.stderr);
+    assert.equal(JSON.parse(checksFailed.stdout).experiment.metric, null);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.baseline, null);
+    assert.equal(payload.best, null);
+    assert.equal(payload.crashed, 1);
+    assert.equal(payload.checksFailed, 1);
+  });
+});
+
+test("legacy failed sentinel metrics do not suppress next-run baseline guidance", async () => {
+  await withTempDir("legacy-sentinel-baseline", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "legacy sentinel", "--metric-name", "seconds"]);
+
+    const legacyFailure = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "-999",
+      "--status", "crash",
+      "--description", "Legacy sentinel failure",
+    ]);
+    assert.equal(legacyFailure.code, 0, legacyFailure.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(JSON.parse(state.stdout).baseline, null);
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const payload = JSON.parse(next.stdout);
+    assert.equal(payload.decision.rawSuggestedStatus, "keep");
+    assert.equal(payload.decision.safeSuggestedStatus, "keep");
+  });
+});
+
+test("metricless failed last-run packets log cleanly and preserve packet on invalid status", async () => {
+  await withTempDir("metricless-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "metricless last run", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.decision.metric, null);
+    assert.deepEqual(packet.decision.allowedStatuses, ["crash"]);
+
+    const invalid = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Wrong failed status",
+    ]);
+    assert.notEqual(invalid.code, 0);
+    assert.match(invalid.stderr, /Cannot log status 'keep'/);
+    await access(path.join(dir, "autoresearch.last-run.json"));
+
+    const logged = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "crash",
+      "--description", "Log failed packet",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const payload = JSON.parse(logged.stdout);
+    assert.equal(payload.experiment.metric, null);
+    assert.equal(payload.lastRunCleared, true);
+    await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
+  });
+});
+
+test("keep and discard still require finite metrics", async () => {
+  await withTempDir("metric-required", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "metric required", "--metric-name", "seconds"]);
+
+    for (const status of ["keep", "discard"]) {
+      const result = await runCli([
+        "log",
+        "--cwd", dir,
+        "--status", status,
+        "--description", `${status} without metric`,
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /metric is required/);
+    }
+  });
+});
+
 test("last-run packet does not dirty git worktrees before discard logging", async () => {
   await withTempDir("git-last-run", async (dir) => {
     await git(dir, ["init"]);
@@ -611,7 +723,7 @@ test("dashboard script renders zero and negative metric points", async () => {
     await runCli(["log", "--cwd", dir, "--metric", "0", "--status", "keep", "--description", "Zero baseline"]);
     await runCli(["log", "--cwd", dir, "--metric", "-2", "--status", "keep", "--description", "Negative improvement"]);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     const script = dashboard.match(/<script>([\s\S]*)<\/script>/)?.[1];
@@ -656,6 +768,104 @@ test("keep commits can be scoped to experiment paths", async () => {
 
     const status = await git(dir, ["status", "--short"]);
     assert.match(status, /\?\? scratch\.txt/);
+  });
+});
+
+test("keep logs require scoped commit paths or explicit add-all in git repos", async () => {
+  await withTempDir("keep-add-all-gate", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "add all gate", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+
+    const blocked = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "1",
+      "--status", "keep",
+      "--description", "Blocked keep",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /commitPaths is empty/);
+    assert.match(await git(dir, ["status", "--short"]), /M tracked\.txt/);
+
+    const allowed = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "1",
+      "--status", "keep",
+      "--description", "Allow broad keep",
+      "--allow-add-all",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.match(JSON.parse(allowed.stdout).git, /explicit add-all/);
+  });
+});
+
+test("keep logs can record an existing commit without staging dirty work", async () => {
+  await withTempDir("keep-existing-commit", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "existing commit", "--metric-name", "seconds"]);
+    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "manual experiment"]);
+    const manualCommit = await git(dir, ["rev-parse", "HEAD"]);
+    await writeFile(path.join(dir, "scratch.txt"), "leave dirty\n", "utf8");
+
+    const logged = await runCli([
+      "log",
+      "--cwd", dir,
+      "--metric", "1",
+      "--status", "keep",
+      "--description", "Record existing commit",
+      "--commit", manualCommit,
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const payload = JSON.parse(logged.stdout);
+    assert.equal(payload.experiment.commit, manualCommit.slice(0, 12));
+    assert.match(payload.git, /recorded existing commit/);
+    assert.match(await git(dir, ["status", "--short"]), /\?\? autoresearch\.jsonl/);
+    assert.match(await git(dir, ["status", "--short"]), /\?\? scratch\.txt/);
+  });
+});
+
+test("doctor and dashboard warn when git commit paths are empty", async () => {
+  await withTempDir("empty-commit-path-warning", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "warning", "--metric-name", "seconds"]);
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.ok(doctorPayload.warningDetails.some((warning) => warning.code === "empty_commit_paths_in_git_repo"));
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.ok(statePayload.warningDetails.some((warning) => warning.code === "empty_commit_paths_in_git_repo"));
+
+    const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const exportPayload = JSON.parse(exported.stdout);
+    assert.ok(exportPayload.viewModel.warnings.some((warning) => warning.code === "empty_commit_paths_in_git_repo"));
   });
 });
 
@@ -707,6 +917,7 @@ test("keep logs fail instead of recording success when git commit fails", async 
       "--metric", "1",
       "--status", "keep",
       "--description", "Should not commit",
+      "--commit-paths", "tracked.txt",
     ]);
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Git commit failed/);
@@ -1020,6 +1231,27 @@ test("export refuses to write outside the working directory", async () => {
   });
 });
 
+test("export is compact by default and full with json-full", async () => {
+  await withTempDir("compact-export", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "compact export", "--metric-name", "seconds"]);
+    await runCli(["log", "--cwd", dir, "--metric", "1", "--status", "keep", "--description", "Baseline"]);
+
+    const compact = await runCli(["export", "--cwd", dir]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.ok, true);
+    assert.equal(compactPayload.summary.runs, 1);
+    assert.equal(compactPayload.best, 1);
+    assert.equal(compactPayload.viewModel, undefined);
+    assert.equal(compactPayload.progress.stages[0].stage, "export");
+
+    const full = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(full.code, 0, full.stderr);
+    const fullPayload = JSON.parse(full.stdout);
+    assert.equal(fullPayload.viewModel.summary.runs, 1);
+  });
+});
+
 test("large benchmark output is capped and marked truncated", async () => {
   await withTempDir("large-output", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "large output", "--metric-name", "seconds"]);
@@ -1109,7 +1341,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.ok(statePayload.memory.lanePortfolio.some((lane) => lane.id === "measurement-quality"));
     assert.ok(statePayload.memory.diversityGuidance);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const payload = JSON.parse(exportResult.stdout);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
@@ -1143,7 +1375,7 @@ test("dashboard does not recommend next when manual metrics have no benchmark co
     const log = await runCli(["log", "--cwd", dir, "--metric", "5", "--status", "keep", "--description", "Manual baseline"]);
     assert.equal(log.code, 0, log.stderr);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const payload = JSON.parse(exportResult.stdout);
 
@@ -1164,7 +1396,7 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
     const directLog = await runCli(["log", "--cwd", dir, "--metric", "2", "--status", "keep", "--description", "Manual run"]);
     assert.equal(directLog.code, 0, directLog.stderr);
 
-    const exportResult = await runCli(["export", "--cwd", dir]);
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const payload = JSON.parse(exportResult.stdout);
 
