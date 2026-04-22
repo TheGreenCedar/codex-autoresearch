@@ -14,7 +14,7 @@ import { buildExperimentMemory } from "../lib/experiment-memory.mjs";
 import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview.mjs";
 import { integrationsCommand } from "../lib/integrations.mjs";
 import { createMcpInterface } from "../lib/mcp-interface.mjs";
-import { gapCandidates as buildGapCandidates } from "../lib/research-gaps.mjs";
+import { gapCandidates as buildGapCandidates, researchRoundGuidance } from "../lib/research-gaps.mjs";
 import { applyResolvedRecipeDefaults, findRecipe, getBuiltInRecipe, listBuiltInRecipes, loadRecipeCatalog, recommendRecipe } from "../lib/recipes.mjs";
 import { serveAutoresearch } from "../lib/live-server.mjs";
 
@@ -391,6 +391,7 @@ async function guidedSetup(args) {
       rawSuggestedStatus: lastRun.decision?.rawSuggestedStatus || "",
       safeSuggestedStatus: lastRun.decision?.safeSuggestedStatus || lastRunLogStatus,
       statusGuidance: lastRun.decision?.statusGuidance || "",
+      asiTemplate: lastRun.decision?.asiTemplate || {},
       diversityGuidance: lastRun.decision?.diversityGuidance || state.memory?.diversityGuidance || null,
       lanePortfolio: lastRun.decision?.lanePortfolio || state.memory?.lanePortfolio || [],
       metric: lastRun.decision?.metric ?? null,
@@ -1388,7 +1389,7 @@ async function currentQualityGapSummary(workDir) {
     const text = await fsp.readFile(gapsPath, "utf8");
     const counts = parseQualityGaps(text);
     const items = parseQualityGapItems(text);
-    return { slug, path: gapsPath, ...counts, openItems: items.open, closedItems: items.closed };
+    return { slug, path: gapsPath, ...counts, openItems: items.open, closedItems: items.closed, roundGuidance: researchRoundGuidance() };
   }
   return null;
 }
@@ -1517,6 +1518,7 @@ async function runExperiment(args) {
         ? "Safe to consider keep because this is a baseline or a checked improvement; still review ASI before logging."
         : "Default to discard unless the operator can justify keep with ASI and verification evidence.")
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
+  const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
   return {
     ok: passed,
     workDir,
@@ -1532,6 +1534,7 @@ async function runExperiment(args) {
     outputTruncated: Boolean(benchmark.outputTruncated || checks?.outputTruncated),
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
+    progress,
     checks: checks ? {
       command: checksCommand,
       exitCode: checks.exitCode,
@@ -1552,6 +1555,68 @@ async function runExperiment(args) {
       allowedStatuses,
     },
     limit,
+  };
+}
+
+function buildRunProgress({ benchmark, checks, checksCommand, passed }) {
+  const stages = [
+    progressStage("benchmark", "Run benchmark command", benchmark),
+  ];
+  if (checksCommand) {
+    stages.push(checks
+      ? progressStage("checks", "Run correctness checks", checks)
+      : {
+          stage: "checks",
+          label: "Run correctness checks",
+          status: "skipped",
+          durationSeconds: 0,
+          exitCode: null,
+          timedOut: false,
+          outputTail: "",
+        });
+  }
+  const timedOut = stages.some((stage) => stage.timedOut);
+  return {
+    mode: "synchronous",
+    status: timedOut ? "timed_out" : passed ? "completed" : "failed",
+    cancellable: false,
+    cancelStatus: timedOut ? "timeout-killed" : "not_requested",
+    elapsedSeconds: Number(stages.reduce((total, stage) => total + Number(stage.durationSeconds || 0), 0).toFixed(3)),
+    stages,
+    latestOutputTail: [...stages].reverse().find((stage) => stage.outputTail)?.outputTail || "",
+  };
+}
+
+function progressStage(stage, label, result) {
+  return {
+    stage,
+    label,
+    status: result.timedOut ? "timed_out" : result.exitCode === 0 ? "completed" : "failed",
+    durationSeconds: result.durationSeconds,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    outputTail: tailText(result.output),
+  };
+}
+
+function operationProgress({ stage, label, startedAt, status = "completed", outputTail = "" }) {
+  const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+  return {
+    mode: "synchronous",
+    status,
+    cancellable: false,
+    cancelStatus: "not_requested",
+    elapsedSeconds: durationSeconds,
+    stages: [{
+      stage,
+      label,
+      status,
+      durationSeconds,
+      exitCode: null,
+      timedOut: false,
+      outputTail,
+    }],
+    latestOutputTail: outputTail,
   };
 }
 
@@ -1655,6 +1720,7 @@ async function logExperiment(args) {
 }
 
 async function exportDashboard(args) {
+  const startedAt = Date.now();
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const entries = readJsonl(workDir);
   if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
@@ -1665,13 +1731,36 @@ async function exportDashboard(args) {
     workDir,
     generatedAt: new Date().toISOString(),
     jsonlName: "autoresearch.jsonl",
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    modeGuidance: {
+      title: "Static snapshot",
+      detail: "Read-only snapshot.",
+    },
     refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
     commands,
     settings: dashboardSettings(config),
     viewModel,
   });
   await fsp.writeFile(output, html, "utf8");
-  return { ok: true, workDir, output, viewModel };
+  return {
+    ok: true,
+    workDir,
+    output,
+    viewModel,
+    modeGuidance: {
+      staticExport: output,
+      liveDashboardCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`,
+      difference: "The exported HTML is a read-only snapshot with copyable commands; the served dashboard can call local live-action endpoints.",
+    },
+    progress: operationProgress({
+      stage: "export",
+      label: "Write dashboard HTML",
+      startedAt,
+      status: "completed",
+      outputTail: output,
+    }),
+  };
 }
 
 async function clearSession(args) {
@@ -1865,6 +1954,7 @@ function dashboardCommands(workDir, qualityGap = null) {
     { label: "Gap candidates", command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}` },
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
+    { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
   ];
 }
@@ -2008,6 +2098,7 @@ async function doctorSession(args) {
     exitCode: null,
     timedOut: false,
     metricError: null,
+    progress: null,
   };
 
   if (boolOption(args.check_benchmark ?? args.checkBenchmark, false)) {
@@ -2022,6 +2113,12 @@ async function doctorSession(args) {
       benchmark.timedOut = run.timedOut;
       benchmark.parsedMetrics = parseMetricLines(run.output);
       benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
+      benchmark.progress = buildRunProgress({
+        benchmark: run,
+        checks: null,
+        checksCommand: null,
+        passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary,
+      });
       if (run.exitCode !== 0 || run.timedOut) {
         issues.push(`Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`);
       } else if (!benchmark.emitsPrimary) {

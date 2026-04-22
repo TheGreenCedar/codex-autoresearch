@@ -117,6 +117,9 @@ const checks = [
         "delightful",
         "autoresearch.research/<slug>/",
         "METRIC quality_total",
+        "one research round",
+        "filter hallucinations",
+        "quality_gap=0 closes the accepted checklist",
       ])
         ? pass()
         : fail("Missing the qualitative prompt-to-metric loop.");
@@ -136,6 +139,8 @@ const checks = [
         "METRIC quality_closed",
         "setup_research_session",
         "measure_quality_gap",
+        "one research round",
+        "filter hallucinations",
       ])
         ? pass()
         : fail("Root README is missing the deep-research quality_gap workflow.");
@@ -152,6 +157,8 @@ const checks = [
         "plugins/codex-autoresearch",
         "autoresearch-deep-research",
         "quality_gap",
+        "one research round",
+        "filter hallucinations",
       ])
         ? pass()
         : fail("Command docs do not explicitly prefer the local plugin and quality_gap loops.");
@@ -224,6 +231,9 @@ const checks = [
         "ASI",
         "quality_gap",
         "confidence",
+        "Round Protocol",
+        "filter hallucinations",
+        "quality_gap=0 only means",
       ])
         ? pass()
         : fail("Deep research skill is missing scratchpad, source, synthesis, ASI, confidence, or quality_gap guidance.");
@@ -464,6 +474,7 @@ const checks = [
         "gap-candidates",
         "finalize-preview",
         "safe live actions",
+        "confirmed log decisions",
         "Recipes and integrations",
       ])
         ? pass()

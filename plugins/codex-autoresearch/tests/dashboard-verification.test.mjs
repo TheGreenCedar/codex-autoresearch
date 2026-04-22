@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "..");
@@ -15,6 +16,8 @@ const createDashboardElement = (id) => {
     textContent: "",
     innerHTML: "",
     className: "",
+    hidden: false,
+    disabled: false,
     onclick: null,
     onchange: null,
     dataset: {},
@@ -52,6 +55,7 @@ const runDashboard = async (entries, meta = {}) => {
   const context = {
     console,
     document: createDashboardDocument(elements),
+    location: { protocol: meta.deliveryMode === "live-server" ? "http:" : "file:" },
     __AUTORESEARCH_DATA__: entries,
     __AUTORESEARCH_META__: meta,
   };
@@ -101,6 +105,9 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.notEqual(rail.includes("No decisions yet"), true);
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
+  assert.match(getById("next-best-why").textContent, /Run the next measured hypothesis|Try reducing startup overhead/i);
+  assert.match(getById("next-best-avoids").textContent, /Avoids/);
+  assert.match(getById("next-best-proof").textContent, /evidence|logged packet|run/i);
 });
 
 test("dashboard family/plateau display marks best row and zero-delta plateau clearly", async () => {
@@ -212,13 +219,234 @@ test("stale last-run handling remains visible in dashboard guidance", async () =
     },
   ];
 
-  const { getById } = await runDashboard(entries, { viewModel, commands: [] });
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveActionsAvailable: true,
+    viewModel,
+    commands: [],
+  });
   const staleTimestamp = Date.parse(viewModel.lastRun.generatedAt);
   assert.equal(Number.isFinite(staleTimestamp), true);
   assert.equal(staleTimestamp <= Date.now(), true);
   assert.equal(viewModel.guidedSetup.stage, "stale-last-run");
   assert.equal(viewModel.lastRun.freshness.fresh, false);
   assert.match(getById("next-best-title").textContent, /Replace the stale packet/);
+  assert.match(getById("next-best-avoids").textContent, /old metric|stale/i);
+  assert.match(getById("next-best-proof").textContent, /fresh next packet/i);
   assert.match(getById("next-action-detail").textContent, /Last-run packet is stale/);
   assert.equal(getById("decision-rail").innerHTML.includes("No decisions yet"), false);
+});
+
+test("dashboard mission control renders explicit log-decision controls", async () => {
+  const viewModel = {
+    missionControl: {
+      activeStep: "log",
+      staticFallback: "Commands remain copyable.",
+      steps: [
+        { id: "setup", title: "Setup", state: "done", detail: "Session setup is readable.", command: "node scripts/autoresearch.mjs setup-plan --cwd .", safeAction: "setup-plan" },
+        { id: "gaps", title: "Gap review", state: "ready", detail: "1 open / 4 total.", command: "node scripts/autoresearch.mjs gap-candidates --cwd .", safeAction: "gap-candidates" },
+        { id: "log", title: "Log decision", state: "ready", detail: "Last packet is ready.", command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"", mutates: true },
+        { id: "finalize", title: "Finalize", state: "idle", detail: "Preview later.", command: "node scripts/autoresearch.mjs finalize-preview --cwd .", safeAction: "finalize-preview" },
+      ],
+      logDecision: {
+        available: true,
+        allowedStatuses: ["keep", "discard"],
+        suggestedStatus: "keep",
+        metric: 4.2,
+        statusGuidance: "Keep if the evidence matches the diff.",
+        defaultDescription: "Describe the kept change",
+        asiTemplate: { evidence: "seconds=4.2", next_action_hint: "" },
+        command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"",
+        commandsByStatus: {
+          keep: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"",
+          discard: "node scripts/autoresearch.mjs log --cwd . --from-last --status discard --description \"Describe the discarded change\"",
+        },
+      },
+    },
+  };
+  const entries = [
+    { type: "config", name: "mission path", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveActionsAvailable: true,
+    viewModel,
+    commands: [],
+  });
+
+  assert.match(getById("mission-note").textContent, /Active: Log decision/);
+  assert.match(getById("mission-control-grid").innerHTML, /Gap review/);
+  assert.match(getById("mission-control-grid").innerHTML, /Log decision/);
+  assert.match(getById("log-decision-status").innerHTML, /keep/);
+  assert.equal(getById("log-decision-description").value, "Describe the kept change");
+  assert.match(getById("log-decision-asi").value, /seconds=4\.2/);
+  assert.equal(getById("run-log-decision").disabled, false);
+});
+
+test("dashboard explains that zero quality gaps still need a fresh research round", async () => {
+  const viewModel = {
+    qualityGap: {
+      slug: "delight-study",
+      open: 0,
+      total: 3,
+      roundGuidance: {
+        metricScope: "quality_gap counts accepted checklist gaps.",
+        requiredRefresh: "Before declaring completion, rerun the project-study prompt.",
+      },
+    },
+  };
+  const entries = [
+    { type: "config", name: "round guidance", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+    { type: "run", run: 1, metric: 0, status: "keep", description: "Closed accepted gaps", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, { viewModel, commands: [] });
+
+  assert.equal(getById("quality-gap-title").textContent, "0 open / 3 total");
+  assert.match(getById("quality-gap-detail").textContent, /Accepted gaps closed/);
+  assert.match(getById("quality-gap-detail").textContent, /rerun the project-study prompt/);
+});
+
+test("dashboard view model treats closed quality gaps as completion instead of another run", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "closed gap path",
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          description: "Closed accepted gaps",
+          confidence: 1,
+          asi: {
+            next_action_hint: "Stop iteration: all accepted quality gaps are closed.",
+          },
+        },
+      ],
+      baseline: 0,
+      best: 0,
+      confidence: 1,
+    },
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
+      { label: "Gap candidates", command: "node scripts/autoresearch.mjs gap-candidates --cwd . --research-slug closed-gap-path" },
+      { label: "Export dashboard", command: "node scripts/autoresearch.mjs export --cwd ." },
+    ],
+    qualityGap: {
+      slug: "closed-gap-path",
+      open: 0,
+      closed: 4,
+      total: 4,
+    },
+    finalizePreview: {
+      ready: false,
+      warnings: ["Working tree is dirty."],
+      nextAction: "Resolve warnings before finalizing.",
+    },
+    experimentMemory: {
+      latestNextAction: "Stop iteration: all accepted quality gaps are closed.",
+    },
+  });
+
+  assert.equal(viewModel.nextBestAction.kind, "complete");
+  assert.equal(viewModel.nextBestAction.title, "Review completion state");
+  assert.match(viewModel.nextBestAction.detail, /Stop iteration/);
+  assert.doesNotMatch(viewModel.nextBestAction.title, /Run the next measured hypothesis/);
+  assert.equal(viewModel.nextBestAction.primaryCommand.label, "Gaps");
+  assert.equal(viewModel.missionControl.activeStep, "gaps");
+});
+
+test("dashboard distinguishes static snapshot controls from live actions", async () => {
+  const viewModel = {
+    nextBestAction: {
+      kind: "finalize-preview",
+      priority: "Review",
+      title: "Preview finalization",
+      detail: "Review the packet.",
+      safeAction: "finalize-preview",
+      command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
+    },
+    missionControl: {
+      activeStep: "finalize",
+      steps: [
+        { id: "finalize", title: "Finalize", state: "ready", detail: "Preview the packet.", command: "node scripts/autoresearch.mjs finalize-preview --cwd .", safeAction: "finalize-preview" },
+      ],
+      logDecision: { available: false, allowedStatuses: [], suggestedStatus: "", commandsByStatus: {} },
+    },
+  };
+  const entries = [
+    { type: "config", name: "static dashboard", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+    { type: "run", run: 1, metric: 0, status: "keep", description: "Closed gaps", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    modeGuidance: {
+      title: "Static snapshot",
+      detail: "Read-only export. Use autoresearch serve for executable dashboard actions.",
+    },
+    viewModel,
+    commands: [],
+  });
+
+  assert.equal(getById("live-title").textContent, "Static snapshot");
+  assert.match(getById("live-detail").textContent, /Read-only export/);
+  assert.equal(getById("refresh-now").hidden, true);
+  assert.equal(getById("live-toggle").hidden, true);
+  assert.equal(getById("run-next-best-action").hidden, true);
+  assert.doesNotMatch(getById("mission-control-grid").innerHTML, /mission-run|Serve to run/);
+  assert.equal(getById("live-actions-panel").hidden, true);
+  assert.equal(getById("log-status-field").hidden, true);
+  assert.equal(getById("log-description-field").hidden, true);
+  assert.equal(getById("log-asi-field").hidden, true);
+  assert.equal(getById("copy-log-command").hidden, true);
+  assert.equal(getById("run-log-decision").hidden, true);
+});
+
+test("served dashboard keeps live action controls executable", async () => {
+  const viewModel = {
+    nextBestAction: {
+      kind: "finalize-preview",
+      priority: "Review",
+      title: "Preview finalization",
+      detail: "Review the packet.",
+      safeAction: "finalize-preview",
+      command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
+    },
+  };
+  const entries = [
+    { type: "config", name: "served dashboard", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+    { type: "run", run: 1, metric: 0, status: "keep", description: "Closed gaps", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveActionsAvailable: true,
+    modeGuidance: {
+      title: "Live dashboard",
+      detail: "Served mode can refresh the view model and run guarded local actions.",
+    },
+    viewModel,
+    commands: [],
+  });
+
+  assert.equal(getById("live-title").textContent, "Live dashboard");
+  assert.equal(getById("refresh-now").textContent, "Refresh live data");
+  assert.equal(getById("live-toggle").textContent, "Live off");
+  assert.equal(getById("refresh-now").hidden, false);
+  assert.equal(getById("live-toggle").hidden, false);
+  assert.match(getById("action-note").textContent, /Guarded actions/);
+  assert.equal(getById("live-actions-panel").hidden, false);
+  assert.equal(getById("run-next-best-action").disabled, false);
+  assert.equal(getById("run-next-best-action").hidden, false);
+  assert.equal(getById("run-next-best-action").textContent, "Finalize Preview");
 });

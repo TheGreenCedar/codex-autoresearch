@@ -36,7 +36,7 @@ node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-l
 node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>
 ```
 
-After any start or resume path, directly provide the dashboard file link before continuing with experiments or status narration. Use a clickable Markdown link to the absolute `autoresearch-dashboard.html` path, for example `[autoresearch-dashboard.html](/absolute/project/path/autoresearch-dashboard.html)`.
+After any start or resume path, directly provide the dashboard file link before continuing with experiments or status narration. Use a clickable Markdown link to the absolute `autoresearch-dashboard.html` path, for example `[autoresearch-dashboard.html](/absolute/project/path/autoresearch-dashboard.html)`. Also state that this is the static, read-only export: it embeds current data and copyable commands, while executable dashboard controls appear only from the `serve` command and its `http://127.0.0.1:<port>/` URL.
 
 ## Active Loop Contract
 
@@ -54,13 +54,13 @@ Use the local routing above when this repository is the target.
 - `log`: run `node <plugin-root>/scripts/autoresearch.mjs log --cwd <current-project> --from-last --status <keep|discard|crash|checks_failed> --description <text>`, then follow `continuation`; do not ask the user to rerun `autoresearch-create` for the next packet.
 - `config ...`: run `node <plugin-root>/scripts/autoresearch.mjs config --cwd <current-project> ...` for runtime settings such as `--autonomy-mode`, `--checks-policy`, `--keep-policy`, `--extend`, and `--dashboard-refresh-seconds`.
 - `status`: run `node <plugin-root>/scripts/autoresearch.mjs state --cwd <current-project>` and summarize.
-- `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`.
+- `export`: use the `autoresearch-dashboard` skill or run `node <plugin-root>/scripts/autoresearch.mjs export --cwd <current-project>`. Report the returned `modeGuidance` so the user knows this is a static snapshot, not the live-action dashboard.
 - `off`: stop continuing the loop in this conversation. Do not delete files; report where the session can be resumed.
 - `clear`: use MCP `clear_session` or run `node <plugin-root>/scripts/autoresearch.mjs clear --cwd <current-project> --yes` after confirming the target project path.
 - `research <goal>`: use the `autoresearch-deep-research` skill or MCP `setup_research_session` to create `autoresearch.research/<slug>/`, initialize a `quality_gap` session, then measure gaps with `quality-gap`.
 - `gap-candidates`: run `node <plugin-root>/scripts/autoresearch.mjs gap-candidates --cwd <current-project> --research-slug <slug>` to extract validated candidates from synthesis and optional model-command JSON; add `--apply` only after reviewing the candidates.
 - `finalize-preview`: run `node <plugin-root>/scripts/autoresearch.mjs finalize-preview --cwd <current-project>` to inspect review-branch readiness without creating branches.
-- `serve`: run `node <plugin-root>/scripts/autoresearch.mjs serve --cwd <current-project>` to start the local live dashboard and safe action endpoints.
+- `serve`: run `node <plugin-root>/scripts/autoresearch.mjs serve --cwd <current-project>` to start the local live dashboard and safe action endpoints. Report the returned URL as the executable dashboard surface.
 - `integrations ...`: run `node <plugin-root>/scripts/autoresearch.mjs integrations list|doctor|sync-recipes` to inspect additive integration surfaces such as recipe catalogs and model commands.
 - Any other text: use the `autoresearch-create` skill to start or resume the loop using the text as the goal/context, then export or refresh `autoresearch-dashboard.html` and directly provide the dashboard file link.
 
@@ -78,10 +78,10 @@ Before logging a discard/crash/checks-failed result, use configured `commitPaths
 
 When calling MCP tools with custom shell commands, pass `allow_unsafe_command: true` only after confirming the command and target directory.
 
-For qualitative research loops, use `autoresearch-deep-research`. Its benchmark counts unchecked items in `autoresearch.research/<slug>/quality-gaps.md`, so the loop can continue until high-impact findings are implemented, intentionally rejected with evidence, or no longer relevant.
+For qualitative research loops, use `autoresearch-deep-research`. Its benchmark counts unchecked items in `autoresearch.research/<slug>/quality-gaps.md`, so it measures accepted gaps, not fresh discovery. For repeated project-study prompts, count one full prompt pass as one research round: rerun the prompt against the current branch, refresh source-backed synthesis, run `gap-candidates`, filter hallucinations, apply only credible high-impact gaps, and treat all work from that accepted set as one round. Stop only when a fresh research round yields no credible high-impact candidates and accepted gaps are implemented, intentionally rejected with evidence, or no longer relevant.
 
-Model-assisted gap generation must stay provider-agnostic. Use `gap-candidates --model-command <cmd>` only when the command prints a JSON array of candidate objects; the helper validates and previews the output before `--apply`.
+Model-assisted gap generation must stay provider-agnostic. Use `gap-candidates --model-command <cmd>` only when the command prints a JSON array of candidate objects; the helper validates and previews the output before `--apply`. Reject candidates that lack repo evidence, primary-source support, direct measurement, or a plausible validation path.
 
-Dashboard live actions are local-only and limited to safe commands: doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, and export. Mutating review branch creation and keep/discard logging remain outside the dashboard surface.
+Dashboard modes must stay explicit. The exported `autoresearch-dashboard.html` file is a static, read-only snapshot with copyable commands and no inert live controls. The served `http://127.0.0.1:<port>/` dashboard is the live-action surface. Dashboard live actions are local-only and limited to bounded commands: doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions with a specific description. Mutating review branch creation remains outside the dashboard surface.
 
 When using this repo-local copy, `<plugin-root>` is `plugins/codex-autoresearch`.

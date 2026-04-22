@@ -34,6 +34,16 @@ export function buildDashboardViewModel({
     commands,
   });
   const portfolio = buildPortfolio(experimentMemory, state.config.bestDirection);
+  const missionControl = buildMissionControl({
+    current,
+    setupPlan,
+    guidedSetup,
+    qualityGap,
+    finalizePreview,
+    experimentMemory,
+    actionRail,
+    commands,
+  });
   return {
     setup: setupPlan,
     guidedSetup,
@@ -43,6 +53,7 @@ export function buildDashboardViewModel({
     recipes,
     experimentMemory,
     portfolio,
+    missionControl,
     nextBestAction: actionRail[0],
     actionRail,
     drift,
@@ -101,6 +112,7 @@ function buildActionRail({
   const lastMemoryAction = experimentMemory?.latestNextAction || "";
   const qualityGapOpen = Number(qualityGap?.open);
   const hasQualityGaps = Number.isFinite(qualityGapOpen) && qualityGapOpen > 0;
+  const hasClosedQualityGapSet = Boolean(qualityGap) && Number.isFinite(qualityGapOpen) && qualityGapOpen === 0 && Number(qualityGap?.total) > 0;
   const canFinalize = Boolean(finalizePreview?.ready);
 
   let primary;
@@ -222,6 +234,24 @@ function buildActionRail({
       tone: "focus",
       source: "quality-gap",
     });
+  } else if (hasClosedQualityGapSet) {
+    const detail = lastMemoryAction && /^stop\b|^stop iteration\b/i.test(lastMemoryAction)
+      ? lastMemoryAction
+      : `${qualityGap.total} accepted quality gap${qualityGap.total === 1 ? "" : "s"} are closed in ${qualityGap.slug}.`;
+    primary = actionItem({
+      kind: "complete",
+      priority: "Complete",
+      title: "Review completion state",
+      detail,
+      utilityCopy: finalizePreview?.warnings?.length
+        ? "Accepted gaps are closed; resolve finalization warnings before creating review branches."
+        : "Accepted gaps are closed; run a fresh gap preview only if you need another research round.",
+      safeAction: "gap-candidates",
+      command: commandMap.get("gap candidates") || commandMap.get("finalize preview") || commandMap.get("export dashboard"),
+      commandLabel: commandMap.get("gap candidates") ? "Gaps" : "Review",
+      tone: "good",
+      source: "quality-gap",
+    });
   } else if (lastMemoryAction || nextAction) {
     primary = actionItem({
       kind: "continue",
@@ -285,19 +315,215 @@ function buildActionRail({
   return [primary, ...secondary].slice(0, 4);
 }
 
-function actionItem({ kind = "continue", priority, title, detail, utilityCopy, safeAction = "", command = "", commandLabel = "Copy", tone = "neutral", source = "" }) {
+function buildMissionControl({
+  current,
+  setupPlan,
+  guidedSetup,
+  qualityGap,
+  finalizePreview,
+  experimentMemory,
+  actionRail,
+  commands,
+}) {
+  const commandMap = commandLookup(commands);
+  const stage = guidedSetup?.stage || "ready";
+  const lastRun = guidedSetup?.lastRun || null;
+  const allowedStatuses = Array.isArray(lastRun?.allowedStatuses) ? lastRun.allowedStatuses : [];
+  const suggestedStatus = lastRun?.safeSuggestedStatus || lastRun?.suggestedStatus || (allowedStatuses.length === 1 ? allowedStatuses[0] : "");
+  const hasFreshLastRun = Boolean(lastRun && lastRun?.freshness?.fresh !== false);
+  const canLog = stage === "needs-log-decision" && hasFreshLastRun && allowedStatuses.length > 0;
+  const qualityGapOpen = Number(qualityGap?.open);
+  const hasQualityGaps = Number.isFinite(qualityGapOpen) && qualityGapOpen > 0;
+  const setupState = stage === "needs-setup"
+    ? "ready"
+    : setupPlan?.configured || current.length
+      ? "done"
+      : "idle";
+  const gapState = qualityGap
+    ? hasQualityGaps ? "ready" : "done"
+    : "idle";
+  const logState = lastRun
+    ? hasFreshLastRun ? "ready" : "blocked"
+    : "idle";
+  const finalizeState = finalizePreview?.ready
+    ? "ready"
+    : current.length ? "idle" : "blocked";
+  const activeStep = canLog
+    ? "log"
+    : stage === "needs-setup"
+      ? "setup"
+      : hasQualityGaps
+        ? "gaps"
+        : finalizePreview?.ready
+          ? "finalize"
+          : qualityGap
+            ? "gaps"
+            : actionRail?.[0]?.kind || "next";
+  const logCommandsByStatus = Object.fromEntries(allowedStatuses.map((status) => [
+    status,
+    logCommandForStatus(guidedSetup?.commands?.logLast, status),
+  ]));
+
+  return {
+    activeStep,
+    staticFallback: "Every mission-control action keeps a copyable command; live actions require the local serve mode.",
+    steps: [
+      missionStep({
+        id: "setup",
+        title: "Setup",
+        state: setupState,
+        detail: guidedSetup?.stage === "needs-setup"
+          ? guidedSetup.nextAction
+          : "Session setup is readable.",
+        safeAction: "setup-plan",
+        command: guidedSetup?.commands?.setup || commandMap.get("setup plan"),
+        commandLabel: "Setup",
+      }),
+      missionStep({
+        id: "gaps",
+        title: "Gap review",
+        state: gapState,
+        detail: qualityGap
+          ? `${qualityGap.open} open / ${qualityGap.total} total in ${qualityGap.slug}.`
+          : "No research gap file detected.",
+        safeAction: "gap-candidates",
+        command: commandMap.get("gap candidates"),
+        commandLabel: "Gaps",
+      }),
+      missionStep({
+        id: "log",
+        title: "Log decision",
+        state: logState,
+        detail: canLog
+          ? `Last packet is ready to log as ${suggestedStatus || "an allowed status"}.`
+          : lastRun?.freshness?.reason || "No fresh last-run packet is waiting.",
+        command: guidedSetup?.commands?.logLast || commandMap.get("keep last") || commandMap.get("discard last"),
+        commandLabel: "Log",
+        mutates: true,
+      }),
+      missionStep({
+        id: "finalize",
+        title: "Finalize",
+        state: finalizeState,
+        detail: finalizePreview?.nextAction || "Preview review branches after kept evidence is ready.",
+        safeAction: "finalize-preview",
+        command: commandMap.get("finalize preview"),
+        commandLabel: "Preview",
+      }),
+    ],
+    logDecision: {
+      available: canLog,
+      mutates: true,
+      allowedStatuses,
+      suggestedStatus,
+      metric: lastRun?.metric ?? null,
+      statusGuidance: lastRun?.statusGuidance || "",
+      defaultDescription: suggestedStatus === "discard"
+        ? "Describe the discarded packet"
+        : suggestedStatus === "checks_failed"
+          ? "Describe the failed checks"
+          : "Describe the kept change",
+      asiTemplate: lastRun?.asiTemplate || {},
+      command: guidedSetup?.commands?.logLast || "",
+      commandsByStatus: logCommandsByStatus,
+      liveAction: suggestedStatus ? `log-${String(suggestedStatus).replace(/_/g, "-")}` : "",
+      requiresDescription: true,
+      requiresConfirmation: true,
+    },
+    nextAction: actionRail?.[0]?.detail || experimentMemory?.latestNextAction || guidedSetup?.nextAction || "",
+  };
+}
+
+function missionStep({
+  id,
+  title,
+  state,
+  detail,
+  safeAction = "",
+  command = "",
+  commandLabel = "Copy",
+  mutates = false,
+}) {
+  return {
+    id,
+    title,
+    state,
+    detail,
+    safeAction,
+    command,
+    primaryCommand: command ? { label: commandLabel, command } : null,
+    mutates,
+  };
+}
+
+function logCommandForStatus(command, status) {
+  if (!command || !status) return "";
+  return String(command).replace(/--status\s+(?:"[^"]+"|'[^']+'|\S+)/, `--status ${status}`);
+}
+
+function actionItem({
+  kind = "continue",
+  priority,
+  title,
+  detail,
+  utilityCopy,
+  safeAction = "",
+  command = "",
+  commandLabel = "Copy",
+  tone = "neutral",
+  source = "",
+  explanation = null,
+}) {
   return {
     kind,
     priority,
     title,
     detail,
     utilityCopy,
+    explanation: explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
     command,
     primaryCommand: command ? { label: commandLabel, command } : null,
     tone,
     source,
   };
+}
+
+function buildActionExplanation({ kind, title, detail, utilityCopy, source }) {
+  return {
+    why: detail || title || "This is the highest-priority action in the current loop state.",
+    evidence: utilityCopy || (source ? `Derived from ${source}.` : "Derived from the latest run state and ASI."),
+    avoids: defaultAvoidance(kind),
+    proof: defaultProof(kind),
+  };
+}
+
+function defaultAvoidance(kind) {
+  if (kind === "setup") return "Avoids a baseline built on incomplete session metadata.";
+  if (kind === "stale-packet") return "Avoids logging an old metric against newer run history.";
+  if (kind === "log-decision") return "Avoids piling new experiments on top of an unrecorded packet.";
+  if (kind === "benchmark-command") return "Avoids running an optimization loop with no repeatable measurement.";
+  if (kind === "fix-blocker") return "Avoids trusting a loop while doctor or drift warnings are unresolved.";
+  if (kind === "baseline") return "Avoids optimizing before a comparison floor exists.";
+  if (kind === "plateau") return "Avoids repeating the same experiment family after signal has flattened.";
+  if (kind === "finalize-preview") return "Avoids creating review branches before the evidence packet is understood.";
+  if (kind === "complete") return "Avoids starting another run after the accepted gap set is already closed.";
+  if (kind === "continue") return "Avoids losing the next ASI hint or repeating the latest rejected path.";
+  return "Avoids acting without a clear operator reason.";
+}
+
+function defaultProof(kind) {
+  if (kind === "setup") return "The session has setup files, a configured metric, and a doctorable command.";
+  if (kind === "stale-packet") return "A fresh next packet replaces the stale one and becomes loggable.";
+  if (kind === "log-decision") return "The last-run packet is consumed and the ledger shows the decision.";
+  if (kind === "benchmark-command") return "Doctor confirms the command emits the configured primary metric.";
+  if (kind === "fix-blocker") return "Doctor returns without blocking issues or drift warnings.";
+  if (kind === "baseline") return "Run 1 is logged and future changes compare against its metric.";
+  if (kind === "plateau") return "A different lane produces new evidence or a better metric.";
+  if (kind === "finalize-preview") return "Finalize preview reports a ready review packet with no unresolved blockers.";
+  if (kind === "complete") return "A fresh gap preview stays empty or finalization warnings are resolved.";
+  if (kind === "continue") return "The next packet is logged with metric evidence and ASI for the following run.";
+  return "The next run produces evidence that updates the dashboard state.";
 }
 
 function commandLookup(commands) {

@@ -32,6 +32,8 @@ export async function gapCandidates(args) {
     qualityGap = parseQualityGaps(await readIfExists(gapsPath));
   }
 
+  const stopStatus = candidateStopStatus({ candidates: deduped, qualityGap, applied: Boolean(args.apply) });
+
   return {
     ok: true,
     workDir,
@@ -40,9 +42,26 @@ export async function gapCandidates(args) {
     candidates: deduped,
     applied,
     qualityGap,
+    stopRecommended: stopStatus.recommended,
+    stopStatus,
+    roundGuidance: researchRoundGuidance(),
     warnings: deduped.some((candidate) => !candidate.source)
       ? ["Some candidates have no source reference."]
       : [],
+  };
+}
+
+export function researchRoundGuidance() {
+  return {
+    unit: "research-round",
+    metricScope: "quality_gap counts accepted checklist gaps in quality-gaps.md; it does not discover fresh recommendations by itself.",
+    requiredRefresh: "Before declaring completion or starting another implementation round, rerun the project-study prompt, update sources.md and synthesis.md, then preview gap-candidates.",
+    hallucinationFilter: [
+      "Keep candidates only when they are grounded in repo evidence, primary sources, direct measurements, or explicitly dated external sources.",
+      "Reject candidates that describe unavailable APIs, duplicate existing behavior, or cannot name a validation path.",
+      "Keep small QoL and bug-fix ideas separate unless they materially advance the round goal.",
+    ],
+    stopRule: "Stop only after a fresh research round yields no credible high-impact candidates, all accepted gaps are closed or explicitly rejected, and checks pass.",
   };
 }
 
@@ -170,8 +189,32 @@ async function readIfExists(file) {
 function normalizeCandidateText(text) {
   return String(text || "")
     .replace(/^\s*-\s*\[[ xX]\]\s*/, "")
+    .replace(/(?:[.;]\s+|\s+-\s+)Evidence:\s+.*$/i, "")
     .replace(/\s*\(source:.*$/, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function candidateStopStatus({ candidates, qualityGap, applied }) {
+  const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
+  const open = Number(qualityGap?.open ?? 0);
+  const total = Number(qualityGap?.total ?? 0);
+  const researchExhausted = candidateCount === 0 && open === 0 && total > 0;
+  let reason = "No accepted quality-gap checklist exists yet.";
+  if (candidateCount > 0) {
+    reason = `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} survived filtering.`;
+  } else if (open > 0) {
+    reason = `${open} accepted gap${open === 1 ? "" : "s"} remain open.`;
+  } else if (researchExhausted) {
+    reason = "No candidate survived filtering and no accepted quality gaps are open.";
+  }
+  return {
+    mode: applied ? "apply" : "preview",
+    recommended: researchExhausted,
+    researchExhausted,
+    requiresPassingChecks: true,
+    checksKnown: false,
+    reason,
+  };
 }

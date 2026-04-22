@@ -362,6 +362,11 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     const previewPayload = JSON.parse(preview.stdout);
     assert.equal(previewPayload.candidates.length, 1);
     assert.equal(previewPayload.applied, false);
+    assert.equal(previewPayload.roundGuidance.unit, "research-round");
+    assert.match(previewPayload.roundGuidance.metricScope, /does not discover fresh recommendations/);
+    assert.match(previewPayload.roundGuidance.requiredRefresh, /rerun the project-study prompt/);
+    assert.ok(previewPayload.roundGuidance.hallucinationFilter.some((item) => /validation path/.test(item)));
+    assert.match(previewPayload.roundGuidance.stopRule, /fresh research round/);
 
     const applied = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study", "--apply"]);
     assert.equal(applied.code, 0, applied.stderr);
@@ -411,6 +416,46 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     const clearedGaps = await readFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), "utf8");
     assert.doesNotMatch(clearedGaps, /## Candidate Gaps/);
 
+    await writeFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), [
+      "# Quality Gaps",
+      "",
+      "- [x] Build a guided setup flow with recipe suggestions. Evidence: implemented in round 1.",
+      "",
+    ].join("\n"), "utf8");
+    await writeFile(synthesisPath, [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Build a guided setup flow with recipe suggestions.",
+      "",
+    ].join("\n"));
+    const closedDuplicate = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study"]);
+    assert.equal(closedDuplicate.code, 0, closedDuplicate.stderr);
+    const closedDuplicatePayload = JSON.parse(closedDuplicate.stdout);
+    assert.equal(closedDuplicatePayload.candidates.length, 0);
+    assert.equal(closedDuplicatePayload.stopRecommended, true);
+    assert.equal(closedDuplicatePayload.stopStatus.researchExhausted, true);
+    assert.equal(closedDuplicatePayload.stopStatus.requiresPassingChecks, true);
+
+    await writeFile(path.join(dir, "autoresearch.research", "study", "quality-gaps.md"), [
+      "# Quality Gaps",
+      "",
+      "- [x] Build an Evidence: ledger for accepted gaps.",
+      "",
+    ].join("\n"), "utf8");
+    await writeFile(synthesisPath, [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Build an Evidence: panel for candidate provenance.",
+      "",
+    ].join("\n"));
+    const evidenceTitle = await runCli(["gap-candidates", "--cwd", dir, "--research-slug", "study"]);
+    assert.equal(evidenceTitle.code, 0, evidenceTitle.stderr);
+    const evidenceTitlePayload = JSON.parse(evidenceTitle.stdout);
+    assert.equal(evidenceTitlePayload.candidates.length, 1);
+    assert.equal(evidenceTitlePayload.stopRecommended, false);
+
     const badModel = await runCli([
       "gap-candidates",
       "--cwd", dir,
@@ -454,6 +499,9 @@ test("finalize-preview summarizes kept commits without creating branches", async
     assert.equal(preview.code, 0, preview.stderr);
     const payload = JSON.parse(preview.stdout);
     assert.equal(payload.ready, true);
+    assert.equal(payload.progress.mode, "synchronous");
+    assert.equal(payload.progress.status, "completed");
+    assert.equal(payload.progress.stages[0].stage, "finalize-preview");
     assert.equal(payload.groups.length, 1);
     assert.deepEqual(payload.groups[0].files, ["src/value.txt"]);
 
@@ -509,8 +557,13 @@ test("live server exposes health and view-model endpoints", async () => {
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     try {
       const payload = await waitForServerPayload(() => stdout, () => stderr);
+      assert.equal(payload.modeGuidance.deliveryMode, "live-server");
+      assert.match(payload.modeGuidance.difference, /read-only snapshots/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());
       assert.equal(health.ok, true);
+      const html = await fetch(payload.url).then((res) => res.text());
+      assert.match(html, /"deliveryMode":"live-server"/);
+      assert.match(html, /Live actions available/);
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
     } finally {
@@ -541,6 +594,63 @@ test("live server gap-candidates action uses the active research slug", async ()
       }).then((res) => res.json());
       assert.equal(action.ok, true, action.stderr || action.error);
       assert.match(action.stdout, /"slug": "custom-study"/);
+    } finally {
+      child.kill();
+    }
+  });
+});
+
+test("live server log action consumes a fresh last-run packet with confirmation", async () => {
+  await withTempDir("live-log-action", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "live log", "--metric-name", "seconds"]);
+    const benchmarkFile = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
+    const benchmarkBody = process.platform === "win32"
+      ? "Write-Output \"METRIC seconds=2\"\n"
+      : "#!/bin/sh\nprintf 'METRIC seconds=2\\n'\n";
+    await writeFile(path.join(dir, benchmarkFile), benchmarkBody, "utf8");
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.continuation.stage, "needs-log-decision");
+
+    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
+      cwd: pluginRoot,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    try {
+      const payload = await waitForServerPayload(() => stdout, () => stderr);
+      const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
+      assert.equal(viewModel.missionControl.logDecision.available, true);
+
+      const rejected = await fetch(`${payload.url}actions/log-keep`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ description: "Live kept packet" }),
+      });
+      assert.equal(rejected.status, 400);
+      const rejectedPayload = await rejected.json();
+      assert.equal(rejectedPayload.ok, false);
+
+      const action = await fetch(`${payload.url}actions/log-keep`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          description: "Live kept packet",
+          asi: { evidence: "seconds=2", next_action_hint: "Review finalization." },
+        }),
+      }).then((res) => res.json());
+      assert.equal(action.ok, true, action.stderr || action.error);
+      assert.match(action.stdout, /"lastRunCleared": true/);
+
+      const state = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
+      assert.equal(state.runs, 1);
+      assert.equal(state.kept, 1);
     } finally {
       child.kill();
     }

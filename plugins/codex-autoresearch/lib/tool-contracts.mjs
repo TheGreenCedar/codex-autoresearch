@@ -88,7 +88,7 @@ const CONTRACTS = {
     whenToUse: "Use after synthesis contains recommendations.",
     contrast: "Use measure_quality_gap to count the current checklist.",
     safety: "Preview is read-only; apply mutates quality-gaps.md.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "candidates", "qualityGap"]),
+    outputSchema: basicOutputSchema(["ok", "workDir", "candidates", "qualityGap", "stopRecommended", "stopStatus"]),
   },
   finalize_preview: {
     purpose: "Preview review-branch readiness without creating branches.",

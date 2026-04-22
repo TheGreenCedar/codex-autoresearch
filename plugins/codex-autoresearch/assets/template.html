@@ -14,12 +14,16 @@
   --muted: #65706b;
   --line: #d7ded9;
   --soft-line: #ebefec;
-  --teal: #0f9f8f;
+  --teal: #08766c;
   --indigo: #4f46e5;
   --rose: #be3455;
-  --amber: #b7791f;
+  --amber: #8a5a05;
   --graph: #194b45;
-  --shadow: 0 18px 46px rgba(21, 32, 28, .08);
+  --shadow: 0 10px 24px rgba(21, 32, 28, .055);
+  --focus: #2f6fed;
+}
+*[hidden] {
+  display: none !important;
 }
 * { box-sizing: border-box; }
 body {
@@ -27,39 +31,151 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
 }
-.wrap { max-width: 1260px; margin: 0 auto; padding: 30px; }
+.runboard-shell {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  max-width: 1440px;
+  min-height: 100vh;
+  margin: 0 auto;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: rgba(255, 255, 255, .52);
+}
+.wrap { min-width: 0; padding: 14px 16px 24px; }
+.side-rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 18px;
+  height: 100vh;
+  padding: 18px 8px 14px;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 255, 255, .78);
+  backdrop-filter: blur(12px);
+}
+.rail-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border-radius: 8px;
+  background: var(--graph);
+  color: #fff;
+  font-weight: 900;
+}
+.side-nav {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.side-nav a {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  min-height: 52px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 750;
+  padding: 8px 4px;
+}
+.side-nav a:hover,
+.side-nav a:focus-visible {
+  background: #edf5f3;
+  color: var(--graph);
+  outline: 3px solid rgba(47, 111, 237, .26);
+  outline-offset: 2px;
+}
+.nav-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--graph);
+  font-size: 10px;
+}
+.side-status {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.side-status strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 999px;
+  background: var(--teal);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .masthead {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 24px;
-  align-items: end;
-  padding: 6px 0 22px;
+  grid-template-columns: minmax(240px, 1.35fr) minmax(150px, .6fr) minmax(120px, .42fr) minmax(160px, .62fr) minmax(96px, .35fr) minmax(102px, .38fr) minmax(96px, .35fr);
+  gap: 0;
+  align-items: stretch;
+  padding: 0;
   border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
+}
+.session-contract {
+  min-width: 0;
+  padding: 10px 14px;
+  border-right: 1px solid var(--soft-line);
 }
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
 h1 {
   margin: 0;
-  max-width: 860px;
-  font-size: 34px;
-  line-height: 1.08;
+  max-width: 900px;
+  font-size: 17px;
+  line-height: 1.16;
   letter-spacing: 0;
+  text-wrap: balance;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .metric-tag {
-  justify-self: end;
-  border: 1px solid var(--line);
+  border: 0;
+  border-right: 1px solid var(--soft-line);
   background: var(--surface);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 0;
+  padding: 10px 14px;
   min-width: 210px;
-  box-shadow: var(--shadow);
 }
 .metric-tag span {
   display: block;
@@ -72,21 +188,57 @@ h1 {
   display: block;
   margin-top: 4px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 18px;
+  font-size: 14px;
   word-break: break-word;
+}
+.contract-cell {
+  min-width: 0;
+  padding: 10px 14px;
+  border-right: 1px solid var(--soft-line);
+}
+.contract-cell:last-child {
+  border-right: 0;
+}
+.contract-cell span,
+.contract-cell label {
+  display: block;
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+.contract-cell strong {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+}
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #b8d8d0;
+  border-radius: 999px;
+  background: #eef8f5;
+  color: var(--graph);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+.top-grid {
+  display: grid;
+  grid-template-columns: minmax(460px, .94fr) minmax(560px, 1.06fr);
+  gap: 12px;
+  margin: 12px 0;
 }
 .score-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(130px, 1fr));
-  gap: 10px;
-  margin: 22px 0;
+  grid-template-columns: repeat(5, minmax(92px, 1fr));
+  gap: 8px;
+  margin: 0;
 }
 .control-strip {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: center;
-  margin: 18px 0;
+  margin: 0;
 }
 .control-strip label {
   color: var(--muted);
@@ -96,8 +248,9 @@ h1 {
   text-transform: uppercase;
 }
 .control-strip select {
-  min-width: 230px;
-  margin-left: 8px;
+  min-width: 160px;
+  max-width: 100%;
+  margin: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -110,32 +263,43 @@ h1 {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
-  margin: 18px 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
   background: var(--surface);
 }
 .live-status {
   min-width: 0;
   color: var(--muted);
   font-size: 13px;
+  outline: none;
 }
 .live-status strong {
   display: block;
   color: var(--ink);
   font-size: 14px;
 }
+.live-status:focus-visible {
+  outline: 3px solid rgba(47, 111, 237, .42);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
 .next-rail {
-  margin: 18px 0;
+  margin: 0;
+}
+.primary-decision {
+  border-color: #cbd7d1;
+  box-shadow: var(--shadow);
 }
 .next-action-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr);
-  gap: 16px;
-  padding: 16px 18px 18px;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 16px 14px;
   align-items: stretch;
-  min-height: 218px;
+  min-height: 0;
 }
 .priority-badge {
   display: inline-flex;
@@ -150,21 +314,160 @@ h1 {
   text-transform: uppercase;
 }
 .next-action-copy h3 {
-  margin: 10px 0 0;
-  font-size: 22px;
+  margin: 8px 0 0;
+  font-size: 20px;
   line-height: 1.18;
   overflow-wrap: anywhere;
 }
 .next-action-copy p {
-  margin: 8px 0 0;
+  margin: 7px 0 0;
   color: var(--muted);
   line-height: 1.45;
 }
+.next-action-copy > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.decision-explain {
+  display: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.decision-explain div {
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 8px 10px;
+}
+.decision-explain dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+.decision-explain dd {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .next-action-command {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) minmax(150px, 190px);
   gap: 8px;
-  align-content: start;
-  grid-template-rows: minmax(112px, auto) 38px 38px;
+  align-items: stretch;
+}
+.next-action-command .inline-command {
+  grid-column: 1 / -1;
+}
+.mission-control {
+  margin: 14px 0;
+}
+.mission-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px 0;
+}
+.mission-step {
+  display: grid;
+  gap: 9px;
+  min-height: 176px;
+  border-top: 3px solid var(--soft-line);
+  padding-top: 10px;
+}
+.mission-step.ready,
+.mission-step.done,
+.mission-step.blocked {
+  background: linear-gradient(180deg, rgba(249, 250, 251, .88), rgba(255, 255, 255, 0));
+}
+.mission-step.ready { border-top-color: var(--indigo); }
+.mission-step.done { border-top-color: var(--teal); }
+.mission-step.blocked { border-top-color: var(--amber); }
+.mission-step strong {
+  display: block;
+  font-size: 15px;
+}
+.mission-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.mission-state {
+  width: fit-content;
+  border-radius: 999px;
+  background: #f9fafb;
+  border: 1px solid var(--soft-line);
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+.mission-step.ready .mission-state { color: var(--indigo); }
+.mission-step.done .mission-state { color: #0b6f65; }
+.mission-step.blocked .mission-state { color: var(--amber); }
+.mission-step-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: auto;
+}
+.mission-step-actions.single {
+  grid-template-columns: 1fr;
+}
+.log-decision-panel {
+  display: grid;
+  grid-template-columns: minmax(150px, .34fr) minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  margin: 16px 18px 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--soft-line);
+}
+.log-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.log-decision-panel select,
+.log-decision-panel input,
+.log-decision-panel textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fafb;
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+.log-decision-panel textarea {
+  min-height: 38px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.log-decision-summary {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.log-decision-summary strong {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
 }
 .inline-command {
   border: 1px solid var(--soft-line);
@@ -172,6 +475,7 @@ h1 {
   background: #f9fafb;
   padding: 10px;
   min-width: 0;
+  user-select: text;
 }
 .inline-command span {
   display: block;
@@ -197,8 +501,23 @@ h1 {
   font: inherit;
   font-weight: 750;
   cursor: pointer;
+  touch-action: manipulation;
 }
 .tool-button:hover { border-color: var(--graph); }
+.tool-button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+.command-row:focus-within {
+  outline: 3px solid rgba(47, 111, 237, .42);
+  outline-offset: 2px;
+  border-color: var(--focus);
+}
+.tool-button:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
 .tool-button[aria-pressed="true"] {
   background: var(--graph);
   color: #fff;
@@ -208,8 +527,8 @@ h1 {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
-  min-height: 88px;
+  padding: 10px 12px;
+  min-height: 74px;
 }
 .score-label {
   display: block;
@@ -221,9 +540,9 @@ h1 {
 }
 .score output {
   display: block;
-  margin-top: 9px;
+  margin-top: 8px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 23px;
+  font-size: 20px;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;
@@ -232,6 +551,41 @@ h1 {
 .good { color: var(--teal); }
 .bad { color: var(--rose); }
 .warn { color: var(--amber); }
+.decision-stack {
+  display: grid;
+  gap: 18px;
+}
+.trust-panel {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+.trust-panel .score-strip,
+.trust-panel .cockpit-grid {
+  padding: 0 14px;
+}
+.trust-panel .cockpit-grid {
+  display: none;
+}
+.trust-message {
+  margin: 0 14px;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.trust-message strong {
+  color: var(--teal);
+}
+.insight-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, .8fr) minmax(300px, .95fr) minmax(420px, 1.35fr);
+  gap: 14px;
+  margin: 14px 0;
+  align-items: stretch;
+}
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 2.2fr) minmax(300px, .9fr);
@@ -260,13 +614,13 @@ h1 {
   font-size: 13px;
 }
 .readout {
-  margin: 0 0 18px;
+  margin: 12px 0;
 }
 .readout-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
-  padding: 16px 18px 18px;
+  padding: 12px 16px 14px;
 }
 .readout-card {
   border-top: 1px solid var(--soft-line);
@@ -348,8 +702,33 @@ svg { display: block; width: 100%; height: 360px; }
 .status-pill.discard { color: #fff; background: var(--rose); }
 .status-pill.crash, .status-pill.checks_failed { color: #211500; background: #f0c36b; }
 .ledger {
-  margin-top: 18px;
+  margin-top: 14px;
   overflow: auto;
+}
+.ledger summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  padding: 16px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.ledger summary::-webkit-details-marker {
+  display: none;
+}
+.ledger summary::after {
+  content: "Show";
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.ledger[open] summary {
+  border-bottom: 1px solid var(--soft-line);
+}
+.ledger[open] summary::after {
+  content: "Hide";
 }
 table {
   width: 100%;
@@ -391,7 +770,7 @@ th {
 }
 .portfolio-grid {
   display: grid;
-  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  grid-template-columns: 1fr;
   gap: 16px;
   padding: 16px 18px 18px;
   align-items: start;
@@ -426,6 +805,35 @@ th {
   gap: 8px;
   padding: 14px 18px 18px;
 }
+.terminal-fallback {
+  margin-top: 18px;
+  overflow: hidden;
+}
+.terminal-fallback summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  padding: 16px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.terminal-fallback summary::-webkit-details-marker {
+  display: none;
+}
+.terminal-fallback summary::after {
+  content: "Show";
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.terminal-fallback[open] summary {
+  border-bottom: 1px solid var(--soft-line);
+}
+.terminal-fallback[open] summary::after {
+  content: "Hide";
+}
 .cockpit-grid, .action-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -434,7 +842,7 @@ th {
 }
 .command-row {
   display: grid;
-  grid-template-columns: 110px minmax(0, 1fr) auto;
+  grid-template-columns: 130px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   border-top: 1px solid var(--soft-line);
@@ -446,33 +854,56 @@ th {
   font-weight: 800;
 }
 .command-code {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: auto;
   white-space: nowrap;
+  user-select: text;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
 }
 @media (max-width: 940px) {
+  .runboard-shell { grid-template-columns: 1fr; }
+  .side-rail { position: static; height: auto; grid-template-columns: auto 1fr auto; grid-template-rows: 1fr; }
+  .side-nav { grid-auto-flow: column; overflow-x: auto; }
   .wrap { padding: 18px; }
-  .masthead, .layout { grid-template-columns: 1fr; }
-  .next-action-body, .portfolio-grid { grid-template-columns: 1fr; }
+  .masthead, .layout, .top-grid, .insight-grid { grid-template-columns: 1fr; }
+  .next-action-body, .portfolio-grid, .log-decision-panel { grid-template-columns: 1fr; }
+  .decision-explain { grid-template-columns: 1fr; }
   .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-strip { align-items: stretch; flex-direction: column; }
-  .live-strip, .command-row { grid-template-columns: 1fr; }
+  .live-strip, .command-row, .terminal-fallback summary { grid-template-columns: 1fr; }
   .metric-tag { justify-self: stretch; }
   .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   svg { height: 280px; }
 }
 @media (max-width: 540px) {
-  .score-strip, .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: 1fr; }
+  .score-strip, .readout-grid, .cockpit-grid, .action-grid, .mission-grid { grid-template-columns: 1fr; }
+  .side-rail { display: none; }
   h1 { font-size: 28px; }
 }
 </style>
 </head>
 <body>
-<main class="wrap">
-  <header class="masthead">
-    <div>
+<main class="runboard-shell">
+  <aside class="side-rail" aria-label="Dashboard navigation">
+    <div class="rail-mark" aria-hidden="true">AR</div>
+    <nav class="side-nav">
+      <a href="#cockpit"><span class="nav-icon" aria-hidden="true">C</span><span>Cockpit</span></a>
+      <a href="#evidence"><span class="nav-icon" aria-hidden="true">E</span><span>Evidence</span></a>
+      <a href="#stage-rail"><span class="nav-icon" aria-hidden="true">S</span><span>Stages</span></a>
+      <a href="#portfolio"><span class="nav-icon" aria-hidden="true">G</span><span>Gaps</span></a>
+      <a href="#metric-trend"><span class="nav-icon" aria-hidden="true">M</span><span>Metric</span></a>
+      <a href="#ledger"><span class="nav-icon" aria-hidden="true">L</span><span>Ledger</span></a>
+      <a href="#command-drawer"><span class="nav-icon" aria-hidden="true">T</span><span>Terminal</span></a>
+    </nav>
+    <div class="side-status">
+      <strong><span class="live-dot" aria-hidden="true"></span><span id="side-mode-title">Snapshot</span></strong>
+      <span id="side-mode-detail">Read-only</span>
+    </div>
+  </aside>
+  <section class="wrap workbench" id="cockpit">
+  <header class="masthead" aria-label="Session contract">
+    <div class="session-contract">
       <p class="eyebrow">Autoresearch runboard</p>
       <h1 id="session-title">Autoresearch</h1>
     </div>
@@ -480,33 +911,42 @@ th {
       <span>Primary metric</span>
       <strong id="metric-signature">metric</strong>
     </aside>
+    <div class="contract-cell">
+      <span>Mode</span>
+      <strong class="mode-pill" id="mode-contract-value">Snapshot</strong>
+    </div>
+    <div class="contract-cell">
+      <span id="segment-select-wrap" hidden>
+        <label for="segment-select">Segment</label>
+        <select id="segment-select"></select>
+      </span>
+      <strong id="segment-note">Latest segment</strong>
+    </div>
+    <div class="contract-cell">
+      <span>Confidence</span>
+      <strong id="confidence-contract-value">-</strong>
+    </div>
+    <div class="contract-cell">
+      <span>Generated</span>
+      <strong id="generated-value">-</strong>
+    </div>
+    <div class="contract-cell">
+      <span>Refreshed</span>
+      <strong id="refreshed-value">-</strong>
+    </div>
   </header>
 
-  <section class="score-strip" aria-label="Session summary">
-    <div class="score"><span class="score-label">Baseline</span><output id="baseline-value">-</output></div>
-    <div class="score"><span class="score-label">Best</span><output id="best-value" class="good">-</output></div>
-    <div class="score"><span class="score-label">Improvement</span><output id="improvement-value">-</output></div>
-    <div class="score"><span class="score-label">Confidence</span><output id="confidence-value">-</output></div>
-    <div class="score"><span class="score-label">Kept / runs</span><output id="kept-value">-</output></div>
-  </section>
-
-  <section class="control-strip" aria-label="Dashboard controls">
-    <label for="segment-select">Segment
-      <select id="segment-select"></select>
-    </label>
-    <span class="panel-note" id="segment-note">Latest segment</span>
-  </section>
-
-  <section class="live-strip" aria-label="Live dashboard controls">
-    <div class="live-status">
+  <section class="live-strip" id="live-strip" aria-label="Dashboard mode and status">
+    <div class="live-status" id="live-status" role="status" aria-live="polite" tabindex="-1">
       <strong id="live-title">Snapshot loaded</strong>
       <span id="live-detail">Static export</span>
     </div>
-    <button class="tool-button" id="refresh-now" type="button">Refresh</button>
-    <button class="tool-button" id="live-toggle" type="button" aria-pressed="false">Live off</button>
+    <button class="tool-button" id="refresh-now" type="button" hidden>Refresh</button>
+    <button class="tool-button" id="live-toggle" type="button" aria-pressed="false" hidden>Live off</button>
   </section>
 
-  <section class="panel next-rail" aria-label="Next best action">
+  <section class="top-grid" aria-label="Cockpit">
+  <section class="panel next-rail primary-decision" aria-label="Primary decision">
     <div class="panel-head">
       <h2 class="panel-title">Next best action</h2>
       <span class="panel-note" id="next-best-note">Evidence-backed recommendation</span>
@@ -517,6 +957,20 @@ th {
         <h3 id="next-best-title">Choose next hypothesis</h3>
         <p id="next-best-detail">Run and log a baseline before optimizing.</p>
         <p id="next-best-evidence">No run evidence yet.</p>
+        <dl class="decision-explain" aria-label="Decision explanation">
+          <div>
+            <dt>Why</dt>
+            <dd id="next-best-why">Need a measured next step.</dd>
+          </div>
+          <div>
+            <dt>Avoids</dt>
+            <dd id="next-best-avoids">Avoids ungrounded iteration.</dd>
+          </div>
+          <div>
+            <dt>Proof</dt>
+            <dd id="next-best-proof">A logged packet changes the run state.</dd>
+          </div>
+        </dl>
       </div>
       <div class="next-action-command">
         <div class="inline-command">
@@ -524,16 +978,24 @@ th {
           <code id="next-best-command">-</code>
         </div>
         <button class="tool-button" id="copy-next-best" type="button">Copy command</button>
-        <button class="tool-button" id="run-next-best-action" type="button">Live action unavailable</button>
+        <button class="tool-button" id="run-next-best-action" type="button" hidden></button>
       </div>
     </div>
   </section>
 
-  <section class="panel readout" aria-label="Operator cockpit">
+  <section class="panel readout trust-panel" aria-label="Trust floor detail">
     <div class="panel-head">
-      <h2 class="panel-title">Operator cockpit</h2>
+      <h2 class="panel-title">Trust floor</h2>
       <span class="panel-note" id="cockpit-note">Setup, gaps, and review readiness</span>
     </div>
+    <div class="score-strip trust-strip" aria-label="Trust floor metrics">
+      <div class="score"><span class="score-label">Baseline</span><output id="baseline-value">-</output></div>
+      <div class="score"><span class="score-label">Best</span><output id="best-value" class="good">-</output></div>
+      <div class="score"><span class="score-label">Improvement</span><output id="improvement-value">-</output></div>
+      <div class="score"><span class="score-label">Confidence</span><output id="confidence-value">-</output></div>
+      <div class="score"><span class="score-label">Kept / runs</span><output id="kept-value">-</output></div>
+    </div>
+    <p class="trust-message"><strong>Trust floor:</strong> <span id="trust-floor-message">Waiting for session evidence.</span></p>
     <div class="cockpit-grid">
       <article class="readout-card">
         <span class="readout-label">Setup</span>
@@ -562,10 +1024,11 @@ th {
       </article>
     </div>
   </section>
+  </section>
 
-  <section class="panel readout" aria-label="Operator readout">
+  <section class="panel readout" id="evidence" aria-label="Operator readout evidence packet">
     <div class="panel-head">
-      <h2 class="panel-title">Operator readout</h2>
+      <h2 class="panel-title">Evidence packet</h2>
       <span class="panel-note" id="readout-note">lower is better</span>
     </div>
     <div class="readout-grid">
@@ -597,29 +1060,38 @@ th {
     </div>
   </section>
 
-  <section class="layout">
-    <article class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">Metric trajectory</h2>
-        <span class="panel-note" id="chart-note">-</span>
+  <section class="panel mission-control" id="stage-rail" aria-label="Mission control loop stage rail">
+    <div class="panel-head">
+      <h2 class="panel-title">Loop stage rail</h2>
+      <span class="panel-note" id="mission-note">Static fallback ready</span>
+    </div>
+    <div class="mission-grid" id="mission-control-grid"></div>
+    <div class="log-decision-panel" id="log-decision-panel">
+      <div class="log-decision-summary">
+        <strong id="log-decision-title">No packet</strong>
+        <span id="log-decision-detail">No log decision is pending.</span>
       </div>
-      <div class="chart-box">
-        <svg id="trend-chart" viewBox="0 0 1000 360" preserveAspectRatio="none" role="img" aria-label="Experiment metric trend"></svg>
+      <div class="log-field" id="log-status-field" hidden>
+        <span>Status</span>
+        <select id="log-decision-status" aria-label="Log decision status"></select>
       </div>
-    </article>
-
-    <aside class="panel rail">
-      <div class="panel-head">
-        <h2 class="panel-title">Recent decisions</h2>
-        <span class="panel-note" id="decision-note">-</span>
+      <div class="log-field" id="log-description-field" hidden>
+        <span>Description</span>
+        <input id="log-decision-description" type="text" autocomplete="off" aria-label="Log decision description">
       </div>
-      <div class="rail-list" id="decision-rail"></div>
-    </aside>
+      <div class="log-field" id="log-asi-field" hidden>
+        <span>ASI JSON</span>
+        <textarea id="log-decision-asi" spellcheck="false" aria-label="Log decision ASI JSON"></textarea>
+      </div>
+      <button class="tool-button" id="copy-log-command" type="button" hidden>Copy log command</button>
+      <button class="tool-button" id="run-log-decision" type="button" hidden>Live log decision</button>
+    </div>
   </section>
 
-  <section class="panel" aria-label="Experiment portfolio">
+  <section class="insight-grid" aria-label="Gap map, strategy memory, and metric trend">
+  <section class="panel" id="portfolio" aria-label="Experiment portfolio">
     <div class="panel-head">
-      <h2 class="panel-title">Experiment portfolio</h2>
+      <h2 class="panel-title">Strategy memory</h2>
       <span class="panel-note" id="portfolio-note">Families, lanes, and plateau risk</span>
     </div>
     <div class="portfolio-grid">
@@ -638,17 +1110,37 @@ th {
     </div>
   </section>
 
-  <section class="panel" aria-label="Command shortcuts">
-    <div class="panel-head">
-      <h2 class="panel-title">Commands</h2>
-      <span class="panel-note" id="command-note">Copy and run from a terminal</span>
-    </div>
-    <div class="command-grid" id="command-grid"></div>
+    <aside class="panel rail" id="recent-decisions">
+      <div class="panel-head">
+        <h2 class="panel-title">Recent decisions</h2>
+        <span class="panel-note" id="decision-note">-</span>
+      </div>
+      <div class="rail-list" id="decision-rail"></div>
+    </aside>
+
+    <article class="panel" id="metric-trend">
+      <div class="panel-head">
+        <h2 class="panel-title">Metric trajectory</h2>
+        <span class="panel-note" id="chart-note">-</span>
+      </div>
+      <div class="chart-box">
+        <p id="trend-chart-summary" class="sr-only">No metric values recorded.</p>
+        <svg id="trend-chart" viewBox="0 0 1000 360" preserveAspectRatio="none" role="img" aria-labelledby="trend-chart-title trend-chart-desc"></svg>
+      </div>
+    </article>
   </section>
 
-  <section class="panel" aria-label="Live actions">
+  <details class="panel terminal-fallback" id="command-drawer">
+    <summary>
+      <span class="panel-title">Terminal fallback</span>
+      <span class="panel-note" id="command-note">Copy and run from a terminal</span>
+    </summary>
+    <div class="command-grid" id="command-grid"></div>
+  </details>
+
+  <section class="panel" id="live-actions-panel" aria-label="Live actions" hidden>
     <div class="panel-head">
-      <h2 class="panel-title">Live actions</h2>
+      <h2 class="panel-title">Guarded live actions</h2>
       <span class="panel-note" id="action-note">Available when served through autoresearch live mode</span>
     </div>
     <div class="action-grid" id="action-grid">
@@ -662,7 +1154,11 @@ th {
     </div>
   </section>
 
-  <section class="panel ledger" aria-label="Experiment ledger">
+  <details class="panel ledger" id="ledger" aria-label="Experiment ledger">
+    <summary>
+      <span class="panel-title">Ledger</span>
+      <span class="panel-note">Append-only audit trail of every decision and run</span>
+    </summary>
     <table>
       <thead>
         <tr>
@@ -678,6 +1174,7 @@ th {
       </thead>
       <tbody id="ledger-body"></tbody>
     </table>
+  </details>
   </section>
 </main>
 
@@ -692,12 +1189,49 @@ const palette = {
   text: "#15201c",
   muted: "#65706b",
   trend: "#194b45",
-  baseline: "#b7791f",
-  keep: "#0f9f8f",
+  baseline: "#8a5a05",
+  keep: "#08766c",
   discard: "#be3455",
-  crash: "#b7791f",
+  crash: "#8a5a05",
   best: "#4f46e5"
 };
+
+function isServedPage() {
+  const protocol = typeof location !== "undefined" ? String(location.protocol || "") : "";
+  return protocol === "http:" || protocol === "https:";
+}
+
+function liveActionsAvailable() {
+  return Boolean(meta.liveActionsAvailable) && isServedPage();
+}
+
+function dashboardMode() {
+  const mode = meta.deliveryMode || (liveActionsAvailable() ? "live-server" : "static-export");
+  const guidance = meta.modeGuidance || {};
+  const served = liveActionsAvailable();
+  if (served) {
+    return {
+      mode,
+      liveActions: true,
+      title: guidance.title || "Live dashboard",
+      detail: guidance.detail || "Live refresh and guarded local actions are available.",
+      refreshOn: "Live on",
+      refreshOff: "Live off",
+      refreshDone: "Live data refreshed",
+      actionNote: "Guarded actions execute through the local autoresearch server."
+    };
+  }
+  return {
+    mode,
+    liveActions: false,
+    title: guidance.title || "Static snapshot",
+    detail: guidance.detail || "Read-only snapshot.",
+    refreshOn: "Snapshot refresh on",
+    refreshOff: "Snapshot refresh off",
+    refreshDone: "Snapshot refreshed",
+    actionNote: "Commands only."
+  };
+}
 
 function normalize() {
   let config = { name: "Autoresearch", metricName: "metric", metricUnit: "", bestDirection: "lower" };
@@ -777,6 +1311,7 @@ function render() {
   document.getElementById("improvement-value").textContent = formatImprovement();
   document.getElementById("improvement-value").className = improvementClass();
   document.getElementById("confidence-value").textContent = formatConfidence(latestConfidence());
+  setText("confidence-contract-value", formatConfidence(latestConfidence()));
   document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
   document.getElementById("chart-note").textContent = session.runs.length + " recorded runs";
   document.getElementById("decision-note").textContent = countKept() + " kept";
@@ -785,6 +1320,7 @@ function render() {
   renderReadout();
   renderProductCockpit();
   renderNextBestAction();
+  renderMissionControl();
   renderChart();
   renderRail();
   renderPortfolio();
@@ -794,15 +1330,28 @@ function render() {
 }
 
 function initLiveControls() {
-  updateLiveStatus("Snapshot loaded", meta.generatedAt ? "Generated " + meta.generatedAt : "Static export");
+  const mode = dashboardMode();
+  setText("mode-contract-value", mode.liveActions ? "Live cockpit" : "Snapshot");
+  setText("generated-value", formatDisplayTime(meta.generatedAt));
+  setText("refreshed-value", mode.liveActions ? "Not yet" : "Snapshot");
+  updateLiveStatus(mode.title, mode.detail + (meta.generatedAt ? " Generated " + meta.generatedAt + "." : ""));
+  setHidden("live-strip", !mode.liveActions);
   const refreshButton = document.getElementById("refresh-now");
   const liveButton = document.getElementById("live-toggle");
-  if (refreshButton) refreshButton.onclick = () => refreshEntries();
+  if (refreshButton) {
+    refreshButton.hidden = !mode.liveActions;
+    refreshButton.textContent = "Refresh live data";
+    refreshButton.setAttribute("aria-label", "Refresh live dashboard data");
+    refreshButton.onclick = mode.liveActions ? () => refreshEntries() : null;
+  }
   if (liveButton) {
-    liveButton.onclick = () => {
+    liveButton.hidden = !mode.liveActions;
+    liveButton.textContent = liveEnabled ? mode.refreshOn : mode.refreshOff;
+    liveButton.setAttribute("aria-label", "Toggle automatic live dashboard refresh");
+    liveButton.onclick = mode.liveActions ? () => {
       liveEnabled = !liveEnabled;
       liveButton.setAttribute("aria-pressed", liveEnabled ? "true" : "false");
-      liveButton.textContent = liveEnabled ? "Live on" : "Live off";
+      liveButton.textContent = liveEnabled ? mode.refreshOn : mode.refreshOff;
       if (liveEnabled) {
         refreshEntries();
         if (typeof setInterval === "function" && !liveTimer) {
@@ -812,15 +1361,34 @@ function initLiveControls() {
         clearInterval(liveTimer);
         liveTimer = null;
       }
-    };
+    } : null;
   }
 }
 
-function updateLiveStatus(title, detail) {
+function updateLiveStatus(title, detail, options = {}) {
   const titleEl = document.getElementById("live-title");
   const detailEl = document.getElementById("live-detail");
+  const statusEl = document.getElementById("live-status");
+  const sideTitle = title.replace(/\sdashboard$/i, "").replace(/^Static\s/i, "");
+  if (statusEl?.setAttribute) {
+    statusEl.setAttribute("aria-live", options.assertive ? "assertive" : "polite");
+  }
   if (titleEl) titleEl.textContent = title;
   if (detailEl) detailEl.textContent = detail;
+  setText("side-mode-title", sideTitle || title);
+  setText("side-mode-detail", dashboardMode().liveActions ? "Live local actions" : "Read-only snapshot");
+  if (options.refreshedAt) setText("refreshed-value", formatDisplayTime(options.refreshedAt));
+  if (options.focus) focusElement(statusEl);
+}
+
+function setHidden(id, hidden) {
+  const element = document.getElementById(id);
+  if (element) element.hidden = Boolean(hidden);
+}
+
+function setText(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value == null || value === "" ? "-" : String(value);
 }
 
 function parseJsonl(text) {
@@ -832,7 +1400,7 @@ function parseJsonl(text) {
 
 async function refreshEntries() {
   if (typeof fetch !== "function") {
-    updateLiveStatus("Live refresh unavailable", "This browser context does not expose fetch.");
+    updateLiveStatus(dashboardMode().liveActions ? "Live refresh unavailable" : "Snapshot refresh unavailable", "This browser context does not expose fetch.", { assertive: true, focus: true });
     return;
   }
   try {
@@ -844,9 +1412,10 @@ async function refreshEntries() {
     await refreshViewModel();
     if (!selectSegment(activeSegment).runs.length) activeSegment = normalized.latestSegment;
     render();
-    updateLiveStatus("Live data refreshed", new Date().toLocaleTimeString());
+    const refreshedAt = new Date();
+    updateLiveStatus(dashboardMode().refreshDone, formatDisplayTime(refreshedAt), { refreshedAt });
   } catch (error) {
-    updateLiveStatus("Live refresh failed", error.message || String(error));
+    updateLiveStatus(dashboardMode().liveActions ? "Live refresh failed" : "Snapshot refresh failed", error.message || String(error), { assertive: true, focus: true });
   }
 }
 
@@ -863,6 +1432,7 @@ function renderProductCockpit() {
   const setup = viewModel.setup || {};
   const guided = viewModel.guidedSetup || {};
   const qualityGap = viewModel.qualityGap || null;
+  const qualityRound = qualityGap?.roundGuidance || {};
   const finalizePreview = viewModel.finalizePreview || {};
   const drift = viewModel.drift || {};
   const memory = viewModel.experimentMemory || {};
@@ -879,34 +1449,267 @@ function renderProductCockpit() {
   document.getElementById("recipe-title").textContent = recipeId || setup.recommendedRecipe?.id || "No recipe locked";
   document.getElementById("recipe-detail").textContent = setup.recommendedRecipe?.title || "Use recipes list to choose a benchmark starting point.";
   document.getElementById("quality-gap-title").textContent = qualityGap ? qualityGap.open + " open / " + qualityGap.total + " total" : "No gap file";
-  document.getElementById("quality-gap-detail").textContent = qualityGap ? ("Research slug: " + qualityGap.slug) : "Run research-setup or gap-candidates to create measurable research gaps.";
+  document.getElementById("quality-gap-detail").textContent = qualityGap
+    ? (qualityGap.open === 0 && qualityRound.requiredRefresh
+        ? "Accepted gaps closed. " + qualityRound.requiredRefresh
+        : "Research slug: " + qualityGap.slug + (qualityRound.metricScope ? ". " + qualityRound.metricScope : ""))
+    : "Run research-setup or gap-candidates to create measurable research gaps.";
   document.getElementById("finalize-preview-title").textContent = finalizePreview.ready ? "Preview ready" : "Not ready";
   document.getElementById("finalize-preview-detail").textContent = finalizePreview.nextAction || "Run finalize-preview after keeping at least one committed experiment.";
   document.getElementById("blocker-title").textContent = blockers.length ? blockers.length + " blocker" + (blockers.length === 1 ? "" : "s") : "No blockers";
   document.getElementById("blocker-detail").textContent = blockers.slice(0, 2).join("; ") || "No setup, memory, version, or finalization blockers reported in the export.";
+  setText("trust-floor-message", qualityGap
+    ? `${qualityGap.open} open gap${qualityGap.open === 1 ? "" : "s"}, ${blockers.length} blocker${blockers.length === 1 ? "" : "s"}.`
+    : `${blockers.length} blocker${blockers.length === 1 ? "" : "s"} and no research gap file.`);
 }
 
 function renderNextBestAction() {
-  const action = viewModel.nextBestAction || (Array.isArray(viewModel.actionRail) ? viewModel.actionRail[0] : null) || {};
+  const action = resolvedNextBestAction();
   const command = action.primaryCommand?.command || action.command || "";
   const safeAction = action.safeAction || "";
+  const explanation = action.explanation || fallbackActionExplanation(action);
   document.getElementById("next-best-note").textContent = action.source ? "Source: " + action.source : "Evidence-backed recommendation";
   document.getElementById("next-best-priority").textContent = action.priority || "Recommended";
   document.getElementById("next-best-title").textContent = action.title || "Choose next hypothesis";
   document.getElementById("next-best-detail").textContent = action.detail || "Run and log a baseline before optimizing.";
-  document.getElementById("next-best-evidence").textContent = action.utilityCopy || action.reason || "No run evidence yet.";
+  document.getElementById("next-best-evidence").textContent = explanation.evidence || action.utilityCopy || action.reason || "No run evidence yet.";
+  document.getElementById("next-best-why").textContent = explanation.why || action.detail || "This is the highest-priority action in the current loop state.";
+  document.getElementById("next-best-avoids").textContent = explanation.avoids || "Avoids acting without a clear operator reason.";
+  document.getElementById("next-best-proof").textContent = explanation.proof || "The next run produces evidence that updates the dashboard state.";
   document.getElementById("next-best-command-label").textContent = action.primaryCommand?.label || action.commandLabel || "Command";
   document.getElementById("next-best-command").textContent = command || "No command embedded";
   const copyButton = document.getElementById("copy-next-best");
   if (copyButton) {
-    copyButton.onclick = () => copyText(command, copyButton, "Copy command");
+    copyButton.disabled = !command;
+    copyButton.textContent = command ? commandCopyButtonText("Copy command") : "No command";
+    copyButton.setAttribute("aria-label", command ? "Copy primary decision command" : "No primary decision command available");
+    copyButton.onclick = command ? () => copyText(command, copyButton, "Copy command", document.getElementById("next-best-command")) : null;
   }
   const liveButton = document.getElementById("run-next-best-action");
   if (liveButton) {
-    liveButton.textContent = safeAction ? actionLabel(safeAction) : "Live action unavailable";
-    liveButton.disabled = !safeAction;
-    liveButton.onclick = safeAction ? () => runLiveAction(safeAction, liveButton) : null;
+    const canRunLive = safeAction && liveActionsAvailable();
+    liveButton.hidden = !canRunLive;
+    liveButton.textContent = canRunLive ? actionLabel(safeAction) : "";
+    liveButton.disabled = false;
+    liveButton.title = "";
+    liveButton.onclick = canRunLive ? () => runLiveAction(safeAction, liveButton) : null;
   }
+}
+
+function renderMissionControl() {
+  const mission = viewModel.missionControl || fallbackMissionControl();
+  const steps = Array.isArray(mission.steps) ? mission.steps : [];
+  const grid = document.getElementById("mission-control-grid");
+  const note = document.getElementById("mission-note");
+  if (note) {
+    const active = steps.find((step) => step.id === mission.activeStep);
+    note.textContent = active ? "Active: " + active.title : (mission.staticFallback || "Static fallback ready");
+  }
+  if (grid) {
+    grid.innerHTML = steps.length ? steps.map((step, index) => {
+      const command = step.primaryCommand?.command || step.command || "";
+      const safeAction = step.safeAction || "";
+      const canRunLive = safeAction && liveActionsAvailable();
+      const buttons = [];
+      if (command) {
+        buttons.push('<button class="tool-button mission-copy" type="button" data-mission-index="' + index + '" aria-label="Copy ' + escapeHtml(step.title || "stage") + ' command">' + escapeHtml(commandCopyButtonText("Copy command", true)) + '</button>');
+      }
+      if (canRunLive) {
+        buttons.push('<button class="tool-button mission-run" type="button" data-mission-action="' + escapeHtml(safeAction) + '">' + escapeHtml(actionLabel(safeAction)) + '</button>');
+      }
+      const actions = buttons.length
+        ? '<div class="mission-step-actions' + (buttons.length === 1 ? " single" : "") + '">' + buttons.join("") + '</div>'
+        : "";
+      return '<article class="mission-step ' + escapeHtml(step.state || "idle") + '">' +
+        '<span class="mission-state">' + escapeHtml(stateLabel(step.state)) + '</span>' +
+        '<strong>' + escapeHtml(step.title || "Step") + '</strong>' +
+        '<p>' + escapeHtml(step.detail || "No detail reported.") + '</p>' +
+        actions +
+        '</article>';
+    }).join("") : '<div class="empty">No mission-control steps were embedded in this export.</div>';
+    for (const button of grid.querySelectorAll ? grid.querySelectorAll(".mission-copy") : []) {
+      button.onclick = () => {
+        const step = steps[Number(button.dataset.missionIndex)] || {};
+        copyText(step.primaryCommand?.command || step.command || "", button, "Copy command");
+      };
+    }
+    for (const button of grid.querySelectorAll ? grid.querySelectorAll(".mission-run") : []) {
+      button.onclick = liveActionsAvailable() ? () => runLiveAction(button.dataset.missionAction, button) : null;
+    }
+  }
+  renderLogDecision(mission.logDecision || {});
+}
+
+function renderLogDecision(logDecision) {
+  const available = Boolean(logDecision.available);
+  const allowed = Array.isArray(logDecision.allowedStatuses) ? logDecision.allowedStatuses : [];
+  const suggested = logDecision.suggestedStatus || allowed[0] || "";
+  const title = document.getElementById("log-decision-title");
+  const detail = document.getElementById("log-decision-detail");
+  const status = document.getElementById("log-decision-status");
+  const description = document.getElementById("log-decision-description");
+  const asi = document.getElementById("log-decision-asi");
+  const copy = document.getElementById("copy-log-command");
+  const run = document.getElementById("run-log-decision");
+  const packetKey = [available, suggested, logDecision.metric, allowed.join("|")].join(":");
+  const canRunLive = available && liveActionsAvailable();
+  const canCopyCommand = available && Boolean(logDecision.command || logDecision.commandsByStatus?.[suggested]);
+
+  if (title) title.textContent = available ? "Packet ready" : "No packet";
+  if (detail) {
+    detail.textContent = available
+      ? (logDecision.statusGuidance || ("Metric " + formatMetric(Number(logDecision.metric)) + " is waiting for a decision."))
+      : "No fresh last-run packet is waiting.";
+  }
+  setHidden("log-status-field", !available || allowed.length === 0);
+  setHidden("log-description-field", !canRunLive);
+  setHidden("log-asi-field", !canRunLive);
+
+  if (status) {
+    status.innerHTML = allowed.length
+      ? allowed.map((item) => '<option value="' + escapeHtml(item) + '"' + (item === suggested ? " selected" : "") + '>' + escapeHtml(item) + '</option>').join("")
+      : '<option value="">none</option>';
+    status.disabled = !available;
+  }
+  if (description && description.dataset.packetKey !== packetKey) {
+    description.value = available ? (logDecision.defaultDescription || "") : "";
+    description.dataset.packetKey = packetKey;
+  }
+  if (description) description.disabled = !available;
+  if (asi && asi.dataset.packetKey !== packetKey) {
+    const template = logDecision.asiTemplate && Object.keys(logDecision.asiTemplate).length ? logDecision.asiTemplate : {};
+    asi.value = available ? JSON.stringify(template, null, 2) : "";
+    asi.dataset.packetKey = packetKey;
+  }
+  if (asi) asi.disabled = !available;
+  if (copy) {
+    copy.hidden = !canCopyCommand;
+    copy.disabled = false;
+    copy.textContent = commandCopyButtonText("Copy log command");
+    copy.setAttribute("aria-label", "Copy log decision command");
+    copy.onclick = () => copyText(logCommandForSelectedStatus(logDecision), copy, "Copy log command");
+  }
+  if (run) {
+    run.hidden = !canRunLive;
+    run.disabled = false;
+    run.textContent = "Live log decision";
+    run.title = "";
+    run.onclick = canRunLive ? () => runLogDecision(run) : null;
+  }
+}
+
+function fallbackMissionControl() {
+  const commandMap = new Map((Array.isArray(meta.commands) ? meta.commands : []).map((item) => [String(item.label || "").toLowerCase(), item.command || ""]));
+  const hasRuns = session.runs.length > 0;
+  const finalizeReady = countKept() > 0 && hasRuns;
+  return {
+    activeStep: hasRuns ? "finalize" : "setup",
+    staticFallback: "Derived from embedded commands.",
+    steps: [
+      { id: "setup", title: "Setup", state: hasRuns ? "done" : "ready", detail: hasRuns ? "Session has recorded runs." : "Prepare a measurable session.", command: commandMap.get("setup plan"), safeAction: "setup-plan" },
+      { id: "gaps", title: "Gap review", state: "idle", detail: "Review research gaps from the exported command set.", command: commandMap.get("gap candidates"), safeAction: "gap-candidates" },
+      { id: "log", title: "Log decision", state: "idle", detail: "No fresh last-run packet is embedded in this static export.", command: commandMap.get("keep last") },
+      { id: "finalize", title: "Finalize", state: finalizeReady ? "ready" : "idle", detail: finalizeReady ? "Preview the review packet." : "Keep evidence before finalization.", command: commandMap.get("finalize preview"), safeAction: "finalize-preview" },
+    ],
+    logDecision: { available: false, allowedStatuses: [], suggestedStatus: "", commandsByStatus: {} },
+  };
+}
+
+function logCommandForSelectedStatus(logDecision) {
+  const status = document.getElementById("log-decision-status")?.value || logDecision.suggestedStatus || "";
+  return logDecision.commandsByStatus?.[status] || logDecision.command || "";
+}
+
+async function runLogDecision(button) {
+  const status = document.getElementById("log-decision-status")?.value || "";
+  const description = document.getElementById("log-decision-description")?.value?.trim() || "";
+  const asiText = document.getElementById("log-decision-asi")?.value?.trim() || "";
+  if (!status || !description || /^Describe the /.test(description)) {
+    updateLiveStatus("Log decision needs detail", "Choose a status and write a specific description.", { assertive: true, focus: true });
+    return;
+  }
+  let asi = {};
+  if (asiText) {
+    try {
+      asi = JSON.parse(asiText);
+    } catch (error) {
+      updateLiveStatus("ASI JSON is invalid", error.message || String(error), { assertive: true, focus: true });
+      return;
+    }
+  }
+  await runLiveAction("log-" + status.replace(/_/g, "-"), button, {
+    confirm: true,
+    description,
+    asi,
+  });
+}
+
+function stateLabel(state) {
+  if (state === "done") return "Done";
+  if (state === "ready") return "Ready";
+  if (state === "blocked") return "Blocked";
+  return "Idle";
+}
+
+function resolvedNextBestAction() {
+  const action = viewModel.nextBestAction || (Array.isArray(viewModel.actionRail) ? viewModel.actionRail[0] : null);
+  if (action) return action;
+  const latestHint = [...session.runs]
+    .reverse()
+    .map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], ""))
+    .find(Boolean);
+  if (!session.runs.length) {
+    return {
+      kind: "baseline",
+      title: "Capture the baseline",
+      detail: "Run and log a baseline before optimizing.",
+      utilityCopy: "Static export fallback derived this from an empty run ledger.",
+      source: "static-ledger",
+    };
+  }
+  return {
+    kind: "continue",
+    title: "Run the next measured hypothesis",
+    detail: latestHint || "Choose the next measured hypothesis.",
+    utilityCopy: latestHint ? "Uses the latest ASI hint as the next loop input." : "Static export fallback derived this from the run ledger.",
+    source: "static-ledger",
+  };
+}
+
+function fallbackActionExplanation(action) {
+  const kind = action.kind || "continue";
+  return {
+    why: action.detail || action.title || "This is the highest-priority action in the current loop state.",
+    evidence: action.utilityCopy || action.reason || (action.source ? "Derived from " + action.source + "." : "Derived from the latest run state and ASI."),
+    avoids: fallbackAvoidance(kind),
+    proof: fallbackProof(kind),
+  };
+}
+
+function fallbackAvoidance(kind) {
+  if (kind === "setup") return "Avoids a baseline built on incomplete session metadata.";
+  if (kind === "stale-packet") return "Avoids logging an old metric against newer run history.";
+  if (kind === "log-decision") return "Avoids piling new experiments on top of an unrecorded packet.";
+  if (kind === "benchmark-command") return "Avoids running an optimization loop with no repeatable measurement.";
+  if (kind === "fix-blocker") return "Avoids trusting a loop while doctor or drift warnings are unresolved.";
+  if (kind === "baseline") return "Avoids optimizing before a comparison floor exists.";
+  if (kind === "plateau") return "Avoids repeating the same experiment family after signal has flattened.";
+  if (kind === "finalize-preview") return "Avoids creating review branches before the evidence packet is understood.";
+  if (kind === "continue") return "Avoids losing the next ASI hint or repeating the latest rejected path.";
+  return "Avoids acting without a clear operator reason.";
+}
+
+function fallbackProof(kind) {
+  if (kind === "setup") return "The session has setup files, a configured metric, and a doctorable command.";
+  if (kind === "stale-packet") return "A fresh next packet replaces the stale one and becomes loggable.";
+  if (kind === "log-decision") return "The last-run packet is consumed and the ledger shows the decision.";
+  if (kind === "benchmark-command") return "Doctor confirms the command emits the configured primary metric.";
+  if (kind === "fix-blocker") return "Doctor returns without blocking issues or drift warnings.";
+  if (kind === "baseline") return "Run 1 is logged and future changes compare against its metric.";
+  if (kind === "plateau") return "A different lane produces new evidence or a better metric.";
+  if (kind === "finalize-preview") return "Finalize preview reports a ready review packet with no unresolved blockers.";
+  if (kind === "continue") return "The next packet is logged with metric evidence and ASI for the following run.";
+  return "The next run produces evidence that updates the dashboard state.";
 }
 
 function renderPortfolio() {
@@ -947,6 +1750,7 @@ function renderPortfolio() {
 function renderSegmentSelector() {
   const select = document.getElementById("segment-select");
   const note = document.getElementById("segment-note");
+  const hasMultipleSegments = normalized.segments.length > 1;
   select.innerHTML = normalized.segments.map((item) => {
     const label = "Segment " + (item.segment + 1) + " - " + (item.config.name || "Autoresearch") + " (" + item.runs.length + " runs)";
     return '<option value="' + item.segment + '"' + (item.segment === session.segment ? " selected" : "") + '>' + escapeHtml(label) + '</option>';
@@ -955,7 +1759,8 @@ function renderSegmentSelector() {
     activeSegment = Number(select.value);
     render();
   };
-  note.textContent = normalized.segments.length > 1
+  setHidden("segment-select-wrap", !hasMultipleSegments);
+  note.textContent = hasMultipleSegments
     ? "Showing segment " + (session.segment + 1) + " of " + normalized.segments.length
     : "Single segment";
 }
@@ -1038,6 +1843,17 @@ function formatConfidence(value) {
   return typeof value === "number" ? value.toFixed(1) + "x" : "-";
 }
 
+function formatDisplayTime(value) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
 function keptRuns() {
   return session.runs.filter((run) => run.status === "keep");
 }
@@ -1100,7 +1916,8 @@ function statusClass(status) {
 function renderChart() {
   const svg = document.getElementById("trend-chart");
   if (!metricValues.length) {
-    svg.innerHTML = '<text x="500" y="180" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
+    setChartSummary("No metric values recorded.");
+    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><text x="500" y="180" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
     return;
   }
 
@@ -1143,10 +1960,20 @@ function renderChart() {
     const ring = best && point.index === best.index ? '<circle class="best-ring" cx="' + point.x + '" cy="' + point.y + '" r="11"></circle>' : "";
     return ring + '<circle class="run-dot ' + statusClass(point.run.status) + '" cx="' + point.x + '" cy="' + point.y + '" r="6"><title>' + escapeHtml(label) + '</title></circle>';
   }).join("");
+  const latest = session.runs.at(-1);
+  const failures = failedRuns().length;
+  const summary = "Metric trend for " + session.runs.length + " runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatMetric(best.metric) : "not available") + ". Latest " + (latest ? "#" + latest.run + " at " + formatMetric(latest.metric) + " with status " + latest.status : "not available") + ". " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
+  setChartSummary(summary);
 
-  svg.innerHTML = grid + baselineLine + '<path class="trend-line" d="' + path + '"></path>' + circles +
+  svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">' + escapeHtml(summary) + '</desc>' +
+    grid + baselineLine + '<path class="trend-line" d="' + path + '"></path>' + circles +
     '<text class="axis-label" x="' + pad.left + '" y="' + (height - 14) + '">first</text>' +
     '<text class="axis-label" x="' + (width - pad.right) + '" y="' + (height - 14) + '" text-anchor="end">latest</text>';
+}
+
+function setChartSummary(summary) {
+  const element = document.getElementById("trend-chart-summary");
+  if (element) element.textContent = summary;
 }
 
 function renderRail() {
@@ -1174,16 +2001,27 @@ function renderRail() {
 function renderCommands() {
   const grid = document.getElementById("command-grid");
   const commands = Array.isArray(meta.commands) ? meta.commands : [];
+  const note = document.getElementById("command-note");
+  const drawer = document.getElementById("command-drawer");
   if (!grid) return;
+  if (note) {
+    note.textContent = liveActionsAvailable()
+      ? "Terminal fallback for audit and recovery"
+      : "Snapshot mode uses terminal commands";
+  }
+  if (drawer) drawer.open = !liveActionsAvailable();
   if (!commands.length) {
     grid.innerHTML = '<div class="empty">No command shortcuts were embedded in this export.</div>';
     return;
   }
   grid.innerHTML = commands.map((item, index) => {
+    const label = item.label || "Command";
+    const command = item.command || "";
+    const disabled = command ? "" : " disabled";
     return '<div class="command-row">' +
-      '<span class="command-label">' + escapeHtml(item.label || "Command") + '</span>' +
-      '<code class="command-code" title="' + escapeHtml(item.command || "") + '">' + escapeHtml(item.command || "") + '</code>' +
-      '<button class="tool-button copy-command" type="button" data-command-index="' + index + '">Copy</button>' +
+      '<span class="command-label">' + escapeHtml(label) + '</span>' +
+      '<code class="command-code" title="' + escapeHtml(command) + '">' + escapeHtml(command || "No command embedded") + '</code>' +
+      '<button class="tool-button copy-command" type="button" data-command-index="' + index + '" aria-label="Copy command: ' + escapeHtml(label) + '"' + disabled + '>' + escapeHtml(command ? commandCopyButtonText("Copy", true) : "No command") + '</button>' +
       '</div>';
   }).join("");
   for (const button of grid.querySelectorAll ? grid.querySelectorAll(".copy-command") : []) {
@@ -1194,11 +2032,18 @@ function renderCommands() {
   }
 }
 
-async function copyText(value, button, resetText) {
+function commandCopyButtonText(label, compact = false) {
+  const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+  if (clipboard?.writeText) return label;
+  return compact ? "Select" : "Select command text";
+}
+
+async function copyText(value, button, resetText, sourceElement = null) {
   try {
     const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
     if (!value || !clipboard?.writeText) {
-      button.textContent = "Select";
+      selectCommandText(sourceElement || nearestCommandText(button));
+      button.textContent = commandCopyButtonText(resetText, resetText === "Copy");
       return;
     }
     await clipboard.writeText(value);
@@ -1207,14 +2052,54 @@ async function copyText(value, button, resetText) {
       setTimeout(() => { button.textContent = resetText; }, 1200);
     }
   } catch {
-    button.textContent = "Select";
+    selectCommandText(sourceElement || nearestCommandText(button));
+    button.textContent = commandCopyButtonText(resetText, resetText === "Copy");
   }
+}
+
+function nearestCommandText(button) {
+  if (!button || typeof button.closest !== "function") return null;
+  const container = button.closest(".command-row, .next-action-command, .inline-command");
+  if (!container || typeof container.querySelector !== "function") return null;
+  return container.querySelector("code");
+}
+
+function selectCommandText(element) {
+  if (!element || typeof document === "undefined" || typeof window === "undefined") return;
+  if (typeof document.createRange !== "function" || typeof window.getSelection !== "function") return;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function focusElement(element) {
+  if (!element || typeof element.focus !== "function") return;
+  try {
+    element.focus({ preventScroll: true });
+  } catch {
+    element.focus();
+  }
+}
+
+function focusLiveStatus() {
+  focusElement(document.getElementById("live-status"));
 }
 
 function renderLiveActions() {
   const grid = document.getElementById("action-grid");
+  const note = document.getElementById("action-note");
+  const mode = dashboardMode();
+  setHidden("live-actions-panel", !mode.liveActions);
+  if (!mode.liveActions) return;
+  if (note) note.textContent = mode.actionNote;
   if (!grid || !grid.querySelectorAll) return;
   for (const button of grid.querySelectorAll(".live-action")) {
+    const action = button.dataset.action;
+    button.textContent = actionLabel(action);
+    button.disabled = false;
+    button.title = "";
     button.onclick = async () => {
       const action = button.dataset.action;
       runLiveAction(action, button);
@@ -1222,14 +2107,19 @@ function renderLiveActions() {
   }
 }
 
-async function runLiveAction(action, button) {
+async function runLiveAction(action, button, bodyOverride = null) {
+  if (!action) return;
+  if (!liveActionsAvailable()) {
+    updateLiveStatus("Live action unavailable", "Open the dashboard through autoresearch serve to execute guarded actions.", { assertive: true, focus: true });
+    return;
+  }
   button.textContent = "Running";
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
   try {
-    const body = action === "gap-candidates"
+    const body = bodyOverride || (action === "gap-candidates"
       ? { researchSlug: activeResearchSlug() }
-      : {};
+      : {});
     const response = await fetch("actions/" + action, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1237,21 +2127,29 @@ async function runLiveAction(action, button) {
     });
     const payload = await response.json();
     button.textContent = payload.ok ? "Done" : "Failed";
-    updateLiveStatus(action + " action", payload.ok ? "Completed" : (payload.stderr || payload.error || "Failed"));
-    await refreshViewModel();
+    updateLiveStatus(action + " action", payload.ok ? "Completed" : (payload.stderr || payload.error || "Failed"), { assertive: !payload.ok, focus: !payload.ok });
+    if (payload.ok) {
+      await refreshEntries();
+      focusLiveStatus();
+    } else {
+      await refreshViewModel();
+      render();
+      focusLiveStatus();
+    }
     if (typeof setTimeout === "function") {
       setTimeout(() => {
         button.textContent = actionLabel(action);
         button.disabled = false;
         button.setAttribute("aria-busy", "false");
         render();
+        focusLiveStatus();
       }, 1400);
     }
   } catch (error) {
     button.textContent = "Unavailable";
     button.disabled = false;
     button.setAttribute("aria-busy", "false");
-    updateLiveStatus("Live action unavailable", error.message || String(error));
+    updateLiveStatus("Live action unavailable", error.message || String(error), { assertive: true, focus: true });
   }
 }
 

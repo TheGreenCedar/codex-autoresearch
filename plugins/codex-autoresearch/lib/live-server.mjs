@@ -3,7 +3,25 @@ import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-const SAFE_DASHBOARD_ACTIONS = new Set(["doctor", "setup-plan", "guide", "recipes", "gap-candidates", "finalize-preview", "export"]);
+const SAFE_DASHBOARD_ACTIONS = new Set([
+  "doctor",
+  "setup-plan",
+  "guide",
+  "recipes",
+  "gap-candidates",
+  "finalize-preview",
+  "export",
+  "log-keep",
+  "log-discard",
+  "log-crash",
+  "log-checks-failed",
+]);
+const LOG_ACTION_STATUS = new Map([
+  ["log-keep", "keep"],
+  ["log-discard", "discard"],
+  ["log-crash", "crash"],
+  ["log-checks-failed", "checks_failed"],
+]);
 
 export async function serveAutoresearch(args) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
@@ -44,7 +62,7 @@ export async function serveAutoresearch(args) {
       }
       sendJson(res, { ok: false, error: "Not found" }, 404);
     } catch (error) {
-      sendJson(res, { ok: false, error: error.stack || error.message || String(error) }, 500);
+      sendJson(res, { ok: false, error: error.stack || error.message || String(error) }, error.statusCode || 500);
     }
   });
   await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
@@ -66,7 +84,32 @@ async function actionArgs(action, workDir, body) {
   if (action === "gap-candidates") return ["gap-candidates", "--cwd", workDir, "--research-slug", body.researchSlug || body.slug || await firstResearchSlug(workDir) || "research"];
   if (action === "finalize-preview") return ["finalize-preview", "--cwd", workDir];
   if (action === "export") return ["export", "--cwd", workDir];
+  if (LOG_ACTION_STATUS.has(action)) return logActionArgs(action, workDir, body);
   return [];
+}
+
+function logActionArgs(action, workDir, body) {
+  const status = LOG_ACTION_STATUS.get(action);
+  if (!body?.confirm) throw new DashboardActionError("Log actions require confirm=true.");
+  const description = String(body.description || "").trim();
+  if (!description || /^Describe the /.test(description)) {
+    throw new DashboardActionError("Log actions require a specific description.");
+  }
+  const args = ["log", "--cwd", workDir, "--from-last", "--status", status, "--description", description];
+  if (body.asi && typeof body.asi === "object" && Object.keys(body.asi).length > 0) {
+    args.push("--asi", JSON.stringify(body.asi));
+  }
+  if (body.metrics && typeof body.metrics === "object" && Object.keys(body.metrics).length > 0) {
+    args.push("--metrics", JSON.stringify(body.metrics));
+  }
+  return args;
+}
+
+class DashboardActionError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.statusCode = statusCode;
+  }
 }
 
 async function firstResearchSlug(workDir) {

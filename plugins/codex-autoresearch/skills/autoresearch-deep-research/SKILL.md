@@ -7,6 +7,8 @@ description: Create Codex Autoresearch deep-research loops that turn project stu
 
 Use this skill when the work needs research before experiments. The output is not a one-shot report; it is a source-backed scratchpad plus a `quality_gap` benchmark that Codex can drive down with `/autoresearch next`.
 
+For repeated "study the project and suggest delightful improvements" work, treat each full prompt pass as one research round. A round starts by rerunning the study prompt against the current project, refreshing source-backed synthesis, previewing gap candidates, rejecting hallucinations, and accepting only evidence-backed high-impact gaps. All implementation done from that accepted set counts as the same round.
+
 ## Quick Start
 
 1. Create the scratchpad and session:
@@ -52,7 +54,23 @@ METRIC quality_total=<all checklist items>
 METRIC quality_closed=<checked items>
 ```
 
-Keep iterating until `quality_gap=0`, checks pass, and the synthesis has no unresolved high-impact recommendation.
+Important: `quality_gap=0` only means the currently accepted checklist is closed. Put plainly: quality_gap=0 only means the round checklist is closed. It does not prove fresh research has no new suggestions. Before stopping, run a fresh research round and stop only when that round yields no credible high-impact candidates, checks pass, and the synthesis has no unresolved high-impact recommendation.
+
+## Round Protocol
+
+For each round:
+
+1. Rerun the project-study prompt, adapted to the project and plugin context.
+2. Update `sources.md`, `notes/`, and `synthesis.md` with current repo evidence, dated external sources when needed, contradictions, and confidence.
+3. Run `gap-candidates` to preview candidate gaps from the refreshed synthesis.
+4. Filter hallucinations before applying; in notes, use the phrase "filter hallucinations" for rejected unsupported candidates:
+   - Reject candidates that cannot point to repo evidence, a primary source, a direct measurement, or a dated external source.
+   - Reject candidates that duplicate behavior already present in the current branch.
+   - Reject candidates that cannot name a validation path.
+   - Keep small QoL and bug-fix ideas separate unless they materially advance the round goal.
+5. Apply only the accepted high-impact candidates.
+6. Implement or explicitly reject those accepted gaps, then log the whole implementation set as that round's result with ASI.
+7. Start another round from a fresh prompt pass. Stop when nothing credible and high-impact survives filtering.
 
 ## Research To Experiment Flow
 

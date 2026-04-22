@@ -68,7 +68,7 @@ For Codex + GPT-5.4, treat autoresearch as the operating rail:
 - Treat the returned `continuation` object as the active-loop contract: after `log_experiment`, keep iterating in the same conversation when `shouldContinue` is true.
 - Store qualitative findings in `autoresearch.md`, `autoresearch.ideas.md`, and ASI instead of relying on context memory.
 - Use `autoresearch-deep-research` for broad project-study prompts, then convert recommendations into a qualitative gap benchmark or a small set of measurable acceptance checks.
-- Stop only when the benchmark reaches `quality_gap=0`, checks pass, and the latest synthesis has no remaining high-impact product gaps.
+- Stop only after a fresh research round yields no credible high-impact candidates, accepted gaps are closed or explicitly rejected, checks pass, and the latest synthesis has no remaining high-impact product gaps.
 
 ## Deep Research Autoresearch
 
@@ -89,6 +89,8 @@ node scripts/autoresearch.mjs quality-gap --cwd /path/to/project --research-slug
 
 This creates `autoresearch.research/<slug>/` with `brief.md`, `plan.md`, `tasks.md`, `sources.md`, `synthesis.md`, `quality-gaps.md`, `notes/`, and `deliverables/`. Use `sources.md` as the source ledger with dates, claims, and confidence. Keep `synthesis.md` as the live merged answer, then turn each actionable recommendation into a checklist item in `quality-gaps.md`.
 
+For repeated project-study work, count one full prompt pass as one research round. In every round, rerun the study prompt against the current branch, refresh `sources.md` and `synthesis.md`, preview `gap-candidates`, filter hallucinations, and apply only credible high-impact gaps. Treat all implementation from that accepted set as the same round. `quality_gap=0` closes the accepted checklist for the current round; put another way, quality_gap=0 closes the accepted checklist, not the discovery process.
+
 The generic benchmark counts unchecked items:
 
 ```text
@@ -97,7 +99,7 @@ METRIC quality_total=<all checklist items>
 METRIC quality_closed=<checked items>
 ```
 
-Stop when `quality_gap=0`, checks pass, and high-impact findings are implemented or explicitly rejected with evidence. Small QoL fixes should stay separate from the high-impact gap list unless they are part of the agreed goal.
+Stop when a fresh research round produces no credible high-impact candidates, `quality_gap=0`, checks pass, and high-impact findings are implemented or explicitly rejected with evidence. Small QoL fixes should stay separate from the high-impact gap list unless they are part of the agreed goal.
 
 For direct CLI use, follow the canonical [`/autoresearch` command walkthrough](commands/autoresearch.md#local-plugin-routing). The essential sequence is setup, doctor, next, log with `--from-last`, and export.
 
@@ -121,7 +123,7 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, turn deep research into quality gaps, export dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, a next-best-action rail, experiment-family and lane-portfolio panels, live refresh, copyable commands, setup/readiness/gap/finalization panels, and safe live actions when served locally |
+| Dashboard | HTML operator cockpit generated from `autoresearch.jsonl`, with embedded snapshot data, a next-best-action rail, experiment-family and lane-portfolio panels, copyable commands, setup/readiness/gap/finalization panels, and safe live refresh/actions only when served locally |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
 | Recipes and integrations | Built-in benchmark recipes, local/remote recipe catalogs, model-command gap candidates, and live dashboard action providers |
 
@@ -296,14 +298,22 @@ The output is:
 autoresearch-dashboard.html
 ```
 
+This file is a static snapshot: it embeds current data and provides copyable commands, but it does not render executable dashboard actions from a `file://` URL. For guarded local actions, start the served dashboard instead:
+
+```bash
+node scripts/autoresearch.mjs serve --cwd /path/to/project
+```
+
+When reporting a dashboard to a user, state which mode you are giving them: static export for read-only review, or served dashboard for live refresh endpoints and action buttons.
+
 The dashboard shows:
 
 - baseline vs. best
 - improvement percentage
 - kept run count
-- the next best action, including evidence, command text, and any safe live action
+- the next best action, including evidence, command text, and any safe live action when served
 - experiment families, plateau risk, novelty signal, and lane-portfolio guidance
-- live refresh status plus `Refresh` and `Live on` controls that try to read the adjacent `autoresearch.jsonl`
+- static snapshot status with copyable commands, or served live status with guarded action buttons
 - copyable operator commands for doctor, next, keep/discard last packet, export, and extend
 - operator readout with best kept change, recent failures, next action, and confidence explanation
 - segment selector for multi-phase sessions

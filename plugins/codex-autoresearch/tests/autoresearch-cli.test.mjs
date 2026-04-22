@@ -166,7 +166,12 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
 
     const exportResult = await runCli(["export", "--cwd", dir]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
+    const exportPayload = JSON.parse(exportResult.stdout);
+    assert.match(exportPayload.modeGuidance.difference, /read-only snapshot/);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    assert.match(dashboard, /"deliveryMode":"static-export"/);
+    assert.match(dashboard, /Read-only snapshot/);
+    assert.match(dashboard, /Serve dashboard/);
     assert.match(dashboard, /--research-slug \\"project-study\\"/);
     assert.match(dashboard, /activeResearchSlug/);
   });
@@ -295,6 +300,9 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     assert.match(dashboard, /id="segment-select"/);
     assert.match(dashboard, /id="live-toggle"/);
     assert.match(dashboard, /id="command-grid"/);
+    assert.match(dashboard, /Mission control/);
+    assert.match(dashboard, /id="mission-control-grid"/);
+    assert.match(dashboard, /id="run-log-decision"/);
     assert.match(dashboard, /const meta = \{/);
     assert.match(dashboard, /!clipboard\?\.writeText/);
     assert.match(dashboard, /Ready to finalize/);
@@ -1036,6 +1044,13 @@ test("next command runs preflight and benchmark as one decision packet", async (
     assert.equal(payload.ok, true);
     assert.equal(payload.doctor.ok, true);
     assert.equal(payload.run.parsedPrimary, 2);
+    assert.equal(payload.run.progress.mode, "synchronous");
+    assert.equal(payload.run.progress.status, "completed");
+    assert.equal(payload.run.progress.cancellable, false);
+    assert.equal(payload.run.progress.cancelStatus, "not_requested");
+    assert.equal(payload.run.progress.stages[0].stage, "benchmark");
+    assert.equal(payload.run.progress.stages[0].status, "completed");
+    assert.match(payload.run.progress.latestOutputTail, /METRIC seconds=2/);
     assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard"]);
     assert.equal(payload.decision.suggestedStatus, "keep");
     assert.equal(payload.decision.safeSuggestedStatus, "keep");
@@ -1104,14 +1119,21 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.match(dashboard, /Recent failures/);
     assert.match(dashboard, /Next action/);
     assert.match(dashboard, /Next best action/);
+    assert.match(dashboard, /Decision explanation/);
     assert.match(dashboard, /Experiment portfolio/);
     assert.match(dashboard, /lower is better/);
     assert.ok(payload.viewModel.nextBestAction.detail);
+    assert.ok(payload.viewModel.nextBestAction.explanation.why);
+    assert.ok(payload.viewModel.nextBestAction.explanation.avoids);
+    assert.ok(payload.viewModel.nextBestAction.explanation.proof);
     assert.ok(payload.viewModel.nextBestAction.command || payload.viewModel.nextBestAction.safeAction);
     assert.equal(payload.viewModel.experimentMemory.latestNextAction, "avoid parser inlining");
     assert.equal(payload.viewModel.portfolio.families.length > 0, true);
     assert.equal(payload.viewModel.portfolio.lanes.some((lane) => lane.id === "measurement-quality"), true);
     assert.equal(typeof payload.viewModel.portfolio.plateau.detected, "boolean");
+    assert.equal(payload.progress.mode, "synchronous");
+    assert.equal(payload.progress.status, "completed");
+    assert.equal(payload.progress.stages[0].stage, "export");
   });
 });
 
@@ -1170,6 +1192,10 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
     assert.equal(payload.ok, false);
     assert.equal(payload.benchmark.checked, true);
     assert.equal(payload.benchmark.emitsPrimary, false);
+    assert.equal(payload.benchmark.progress.mode, "synchronous");
+    assert.equal(payload.benchmark.progress.status, "failed");
+    assert.equal(payload.benchmark.progress.cancellable, false);
+    assert.equal(payload.benchmark.progress.stages[0].stage, "benchmark");
     assert.match(payload.issues.join("\n"), /primary metric/);
     assert.match(payload.nextAction, /benchmark/i);
   });

@@ -212,6 +212,12 @@ async function serveCommand(args, deps) {
         workDir,
         generatedAt: new Date().toISOString(),
         jsonlName: "autoresearch.jsonl",
+        deliveryMode: "live-server",
+        liveActionsAvailable: true,
+        modeGuidance: {
+          title: "Live dashboard",
+          detail: "Live actions available.",
+        },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
         commands,
         settings: deps.dashboardSettings(config),
@@ -230,6 +236,10 @@ async function serveCommand(args, deps) {
       workDir: serveResult.workDir,
       port: serveResult.port,
       url: serveResult.url,
+      modeGuidance: {
+        deliveryMode: "live-server",
+        difference: "This served URL can run guarded dashboard actions; exported file:// dashboards are read-only snapshots with copyable commands.",
+      },
     },
   };
 }

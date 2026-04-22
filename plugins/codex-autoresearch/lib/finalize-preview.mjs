@@ -3,18 +3,19 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 export async function finalizePreview(args) {
+  const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
-    return {
+    return withProgress({
       ok: true,
       workDir,
       ready: false,
       groups: [],
       warnings: ["Working directory is not a Git repository."],
       nextAction: "Run finalization preview from a Git-backed autoresearch branch.",
-    };
+    }, startedAt, "blocked");
   }
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
@@ -66,7 +67,7 @@ export async function finalizePreview(args) {
   if (overlaps.length) warnings.push("Some kept runs touch the same files; finalization may need collapsed groups.");
 
   const ready = groups.length > 0 && !dirty && branch && branch !== trunk && baseResult.ok;
-  return {
+  return withProgress({
     ok: true,
     workDir,
     trunk,
@@ -80,6 +81,30 @@ export async function finalizePreview(args) {
     nextAction: ready
       ? "Review the preview, then run the suggested finalizer plan command."
       : "Resolve preview warnings before creating review branches.",
+  }, startedAt, ready ? "completed" : "blocked");
+}
+
+function withProgress(result, startedAt, status) {
+  const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+  return {
+    ...result,
+    progress: {
+      mode: "synchronous",
+      status,
+      cancellable: false,
+      cancelStatus: "not_requested",
+      elapsedSeconds: durationSeconds,
+      stages: [{
+        stage: "finalize-preview",
+        label: "Preview review branch readiness",
+        status,
+        durationSeconds,
+        exitCode: null,
+        timedOut: false,
+        outputTail: result.nextAction || "",
+      }],
+      latestOutputTail: result.nextAction || "",
+    },
   };
 }
 
