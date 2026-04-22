@@ -386,19 +386,24 @@ const checks = [
   {
     id: "dashboard-next-action-and-portfolio",
     file: "assets/template.html, lib/dashboard-view-model.mjs",
-    description: "The dashboard exposes a next-best-action rail and experiment portfolio guidance.",
+    description: "The dashboard keeps the chart, operator readout, and experiment portfolio guidance visible.",
     run: async () => {
       const template = await readText("assets/template.html");
       const viewModel = await readText("lib/dashboard-view-model.mjs");
       return includesAll(`${template}\n${viewModel}`, [
-        "Next best action",
+        "Metric trajectory",
+        "Run log",
+        "ledger-scroll",
+        "Codex brief",
+        "aiSummary",
+        "Next action",
         "nextBestAction",
         "Experiment portfolio",
         "lanePortfolio",
         "plateau",
       ])
         ? pass()
-        : fail("Dashboard is missing next-best-action or portfolio/plateau surfaces.");
+        : fail("Dashboard is missing chart, next-action, or portfolio/plateau surfaces.");
     },
   },
   {

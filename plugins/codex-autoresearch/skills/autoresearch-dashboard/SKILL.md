@@ -5,7 +5,7 @@ description: Export and inspect a Codex autoresearch dashboard from autoresearch
 
 # Autoresearch Dashboard
 
-Use this skill to open the live autoresearch dashboard for `autoresearch.jsonl`: a local served runboard with refresh, next-best-action, compact metric trajectory, experiment-family and lane-portfolio panels, copyable operator commands, setup/readiness/gap/finalization panels, and safe local actions.
+Use this skill to open the live autoresearch dashboard for `autoresearch.jsonl`: a local served runboard with refresh, compact metric trajectory, experiment-family and lane-portfolio panels, setup/readiness/gap/finalization panels, and safe local actions.
 
 ## Workflow
 
@@ -42,11 +42,11 @@ Use this review readout pattern when summarizing:
 
 ## Live Dashboard Behavior
 
-The dashboard has two modes. A served dashboard from `node scripts/autoresearch.mjs serve --cwd /absolute/project/path` is the default live-action surface: it can refresh `view-model.json` and call guarded local `/actions/...` endpoints. A direct `file://` open is only a static fallback snapshot: it embeds the current JSONL and provides copyable commands, but it must not render inert live controls.
+The dashboard has two modes. A served dashboard from `node scripts/autoresearch.mjs serve --cwd /absolute/project/path` is the default live-action surface: it can refresh `view-model.json` and call guarded local `/actions/...` endpoints. A direct `file://` open is only a static fallback snapshot: it embeds the current JSONL, but it must not render inert live controls or a copyable command panel.
 
 When handing a dashboard to the user, provide the served URL by default. Label static exports as fallback snapshots only when live serving is unavailable or explicitly requested.
 
-The next-best-action rail should be read first. The command panel includes copyable commands for setup-plan, doctor, next run, keep/discard last packet, gap candidates, finalization preview, dashboard export, serve dashboard, and iteration-limit extension. Use those commands as operator shortcuts, not as a substitute for reading the current run output before keeping a change.
+Read the top metric trajectory, newest-first run log, generated Codex brief, and loop stage rail first. The dashboard should keep the next action visible without turning terminal commands into a second UI language.
 
 Treat dashboard warnings with stable codes as operator blocks. In particular, `empty_commit_paths_in_git_repo` means kept runs will not auto-commit until `commitPaths` are configured, `--commit-paths` is supplied, an existing `--commit` is recorded, or add-all is explicitly allowed.
 
@@ -54,6 +54,6 @@ The live action panel is shown only when the dashboard is served locally. It cal
 
 ## Notes
 
-The next-best-action rail, compact metric trajectory, operator readout, setup/gap/finalization cockpit, experiment portfolio, segment selector, command panel, live status strip, and ready-to-finalize card are designed to keep the active loop visible without burying the chart or making the operator hunt for the next action.
+The compact metric trajectory, virtualized newest-first run log directly below the graph, generated Codex brief, setup/gap/finalization cockpit, experiment portfolio, segment selector, live status strip, and ready-to-finalize card are designed to keep the active loop visible without burying the chart or making the operator hunt for the next action.
 
 If no `autoresearch.jsonl` exists, say that there is no session to export yet and point the user to `autoresearch-create`.

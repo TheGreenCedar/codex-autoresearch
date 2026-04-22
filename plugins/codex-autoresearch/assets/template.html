@@ -226,11 +226,8 @@ h1 {
   text-transform: uppercase;
 }
 .top-grid {
-  display: grid;
-  grid-template-columns: minmax(420px, .94fr) minmax(520px, 1.06fr);
-  gap: 12px;
+  display: block;
   margin: 12px 0;
-  align-items: stretch;
 }
 .score-strip {
   display: grid;
@@ -287,87 +284,6 @@ h1 {
   outline-offset: 4px;
   border-radius: 6px;
 }
-.next-rail {
-  margin: 0;
-}
-.primary-decision {
-  border-color: #cbd7d1;
-  box-shadow: var(--shadow);
-}
-.next-action-body {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  padding: 12px 16px 14px;
-  align-items: stretch;
-  min-height: 0;
-}
-.priority-badge {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  border-radius: 999px;
-  background: rgba(15, 159, 143, .12);
-  color: #0b6f65;
-  padding: 4px 9px;
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-.next-action-copy h3 {
-  margin: 8px 0 0;
-  font-size: 20px;
-  line-height: 1.18;
-  overflow-wrap: anywhere;
-}
-.next-action-copy p {
-  margin: 7px 0 0;
-  color: var(--muted);
-  line-height: 1.45;
-}
-.next-action-copy > p {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.decision-explain {
-  display: none;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 12px 0 0;
-}
-.decision-explain div {
-  border: 1px solid var(--soft-line);
-  border-radius: 8px;
-  background: #f9fafb;
-  padding: 8px 10px;
-}
-.decision-explain dt {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-.decision-explain dd {
-  margin: 3px 0 0;
-  color: var(--ink);
-  font-size: 12px;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.next-action-command {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) minmax(150px, 190px);
-  gap: 8px;
-  align-items: stretch;
-}
-.next-action-command .inline-command {
-  grid-column: 1 / -1;
-}
 .mission-control {
   margin: 14px 0;
 }
@@ -416,18 +332,9 @@ h1 {
 .mission-step.ready .mission-state { color: var(--indigo); }
 .mission-step.done .mission-state { color: #0b6f65; }
 .mission-step.blocked .mission-state { color: var(--amber); }
-.mission-step-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: auto;
-}
-.mission-step-actions.single {
-  grid-template-columns: 1fr;
-}
 .log-decision-panel {
   display: grid;
-  grid-template-columns: minmax(150px, .34fr) minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(150px, .34fr) minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
   margin: 16px 18px 18px;
@@ -470,28 +377,6 @@ h1 {
   color: var(--ink);
   font-size: 14px;
 }
-.inline-command {
-  border: 1px solid var(--soft-line);
-  border-radius: 8px;
-  background: #f9fafb;
-  padding: 10px;
-  min-width: 0;
-  user-select: text;
-}
-.inline-command span {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-.inline-command code {
-  display: block;
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-}
 .tool-button {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -509,8 +394,7 @@ h1 {
 select:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
-summary:focus-visible,
-.command-row:focus-within {
+summary:focus-visible {
   outline: 3px solid rgba(47, 111, 237, .42);
   outline-offset: 2px;
   border-color: var(--focus);
@@ -648,22 +532,104 @@ summary:focus-visible,
   font-size: 13px;
   line-height: 1.4;
 }
+.codex-brief {
+  margin: 14px 0;
+}
+.brief-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, .32fr);
+  gap: 18px;
+  padding: 16px 18px 0;
+}
+.ai-summary-main {
+  min-width: 0;
+}
+.ai-summary-main > strong {
+  display: block;
+  font-size: 20px;
+  line-height: 1.2;
+}
+.ai-summary-main > p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.ai-summary-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+.ai-summary-columns h3,
+.ai-summary-side span {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.ai-summary-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.ai-summary-side {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.ai-summary-side div {
+  border-left: 3px solid var(--soft-line);
+  padding-left: 12px;
+}
+.ai-summary-side p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
 .chart-panel {
   min-height: 100%;
 }
-.chart-box { padding: 10px 14px 14px; }
-svg { display: block; width: 100%; height: 252px; }
-.axis { stroke: var(--soft-line); stroke-width: 1; }
-.trend-line { fill: none; stroke: var(--graph); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
-.baseline-line { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 8 8; }
-.run-dot { stroke: #fff; stroke-width: 2; }
+.chart-box { padding: 6px 12px 14px; }
+svg { display: block; width: 100%; height: 330px; }
+.plot-frame { fill: #fbfcfd; stroke: var(--soft-line); stroke-width: 1; }
+.axis { stroke: #e7ece8; stroke-width: 1; }
+.trend-fill { fill: url(#trend-fill); }
+.trend-shadow { fill: none; stroke: rgba(25, 75, 69, .14); stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+.trend-line { fill: none; stroke: var(--graph); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+.baseline-line { stroke: var(--amber); stroke-width: 1.6; stroke-dasharray: 7 9; }
+.latest-line { stroke: rgba(79, 70, 229, .22); stroke-width: 1.4; stroke-dasharray: 4 7; }
+.run-dot { stroke: #fff; stroke-width: 2.2; }
 .run-dot.keep { fill: var(--teal); }
 .run-dot.discard { fill: var(--rose); }
 .run-dot.crash, .run-dot.checks_failed { fill: var(--amber); }
-.best-ring { fill: none; stroke: var(--indigo); stroke-width: 3; }
+.muted-dot { opacity: .52; }
+.best-ring { fill: none; stroke: var(--indigo); stroke-width: 3.2; }
 .axis-label {
   fill: var(--muted);
   font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.chart-callout {
+  fill: #fff;
+  stroke: #dce3df;
+  stroke-width: 1;
+}
+.chart-callout-title {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.chart-callout-value {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .rail { padding: 16px 18px 18px; }
@@ -706,65 +672,86 @@ svg { display: block; width: 100%; height: 252px; }
 .status-pill.discard { color: #fff; background: var(--rose); }
 .status-pill.crash, .status-pill.checks_failed { color: #211500; background: #f0c36b; }
 .ledger {
-  margin-top: 14px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.ledger-scroll {
+  height: 316px;
   overflow: auto;
+  border-top: 1px solid var(--soft-line);
+  background: #fff;
 }
-.ledger summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: baseline;
-  padding: 16px 18px;
-  cursor: pointer;
-  list-style: none;
+.ledger-header,
+.ledger-row {
+  display: grid;
+  grid-template-columns: 64px 108px 108px 86px 96px 112px minmax(190px, 1fr) minmax(230px, 1.1fr);
+  min-width: 1080px;
 }
-.ledger summary::-webkit-details-marker {
-  display: none;
-}
-.ledger summary::after {
-  content: "Show";
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-.ledger[open] summary {
-  border-bottom: 1px solid var(--soft-line);
-}
-.ledger[open] summary::after {
-  content: "Hide";
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 860px;
-}
-th, td {
-  padding: 11px 12px;
-  border-bottom: 1px solid var(--soft-line);
-  text-align: left;
-  vertical-align: top;
-  font-size: 13px;
-}
-th {
+.ledger-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
   background: #f9fafb;
+  border-bottom: 1px solid var(--soft-line);
+}
+.ledger-header span,
+.ledger-cell {
+  min-width: 0;
+  padding: 10px 12px;
+}
+.ledger-body {
+  position: relative;
+  min-width: 1080px;
+}
+.ledger-spacer {
+  position: relative;
+}
+.ledger-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: var(--ledger-row-height, 82px);
+  border-bottom: 1px solid var(--soft-line);
+  background: #fff;
+  font-size: 13px;
+}
+.ledger-row.best-row { background: rgba(79, 70, 229, .06); }
+.ledger-cell {
+  overflow: hidden;
+  line-height: 1.35;
 }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .muted { color: var(--muted); }
-.best-row { background: rgba(79, 70, 229, .06); }
 .asi-list {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   margin: 0;
+  max-height: 58px;
+  overflow: hidden;
+}
+.asi-list div {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+.asi-list dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 .asi-list dd {
-  margin: 2px 0 0;
+  margin: 0;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.35;
 }
 .empty {
@@ -804,65 +791,11 @@ th {
   font-size: 12px;
   line-height: 1.35;
 }
-.command-grid {
-  display: grid;
-  gap: 8px;
-  padding: 14px 18px 18px;
-}
-.terminal-fallback {
-  margin-top: 18px;
-  overflow: hidden;
-}
-.terminal-fallback summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: baseline;
-  padding: 16px 18px;
-  cursor: pointer;
-  list-style: none;
-}
-.terminal-fallback summary::-webkit-details-marker {
-  display: none;
-}
-.terminal-fallback summary::after {
-  content: "Show";
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-.terminal-fallback[open] summary {
-  border-bottom: 1px solid var(--soft-line);
-}
-.terminal-fallback[open] summary::after {
-  content: "Hide";
-}
 .cockpit-grid, .action-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   padding: 16px 18px 18px;
-}
-.command-row {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  border-top: 1px solid var(--soft-line);
-  padding-top: 8px;
-}
-.command-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-.command-code {
-  overflow: auto;
-  white-space: nowrap;
-  user-select: text;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
 }
 @media (max-width: 940px) {
   .runboard-shell { grid-template-columns: 1fr; }
@@ -870,15 +803,15 @@ th {
   .side-nav { grid-auto-flow: column; overflow-x: auto; }
   .wrap { padding: 18px; }
   .masthead, .layout, .top-grid, .insight-grid { grid-template-columns: 1fr; }
-  .next-action-body, .portfolio-grid, .log-decision-panel { grid-template-columns: 1fr; }
-  .decision-explain { grid-template-columns: 1fr; }
+  .portfolio-grid, .log-decision-panel, .brief-grid, .ai-summary-columns { grid-template-columns: 1fr; }
   .readout-grid, .cockpit-grid, .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .control-strip { align-items: stretch; flex-direction: column; }
-  .live-strip, .command-row, .terminal-fallback summary { grid-template-columns: 1fr; }
+  .live-strip { grid-template-columns: 1fr; }
+  .ledger-scroll { height: 280px; }
   .metric-tag { justify-self: stretch; }
   .score-strip { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
-  svg { height: 232px; }
+  svg { height: 260px; }
 }
 @media (max-width: 540px) {
   .score-strip, .readout-grid, .cockpit-grid, .action-grid, .mission-grid { grid-template-columns: 1fr; }
@@ -893,12 +826,11 @@ th {
     <div class="rail-mark" aria-hidden="true">AR</div>
     <nav class="side-nav">
       <a href="#cockpit"><span class="nav-icon" aria-hidden="true">C</span><span>Cockpit</span></a>
+      <a href="#metric-trend"><span class="nav-icon" aria-hidden="true">M</span><span>Metric</span></a>
+      <a href="#ledger"><span class="nav-icon" aria-hidden="true">L</span><span>Log</span></a>
       <a href="#evidence"><span class="nav-icon" aria-hidden="true">E</span><span>Evidence</span></a>
       <a href="#stage-rail"><span class="nav-icon" aria-hidden="true">S</span><span>Stages</span></a>
       <a href="#portfolio"><span class="nav-icon" aria-hidden="true">G</span><span>Gaps</span></a>
-      <a href="#metric-trend"><span class="nav-icon" aria-hidden="true">M</span><span>Metric</span></a>
-      <a href="#ledger"><span class="nav-icon" aria-hidden="true">L</span><span>Ledger</span></a>
-      <a href="#command-drawer"><span class="nav-icon" aria-hidden="true">T</span><span>Terminal</span></a>
     </nav>
     <div class="side-status">
       <strong><span class="live-dot" aria-hidden="true"></span><span id="side-mode-title">Snapshot</span></strong>
@@ -950,43 +882,6 @@ th {
   </section>
 
   <section class="top-grid" aria-label="Cockpit">
-  <section class="panel next-rail primary-decision" aria-label="Primary decision">
-    <div class="panel-head">
-      <h2 class="panel-title">Next best action</h2>
-      <span class="panel-note" id="next-best-note">Evidence-backed recommendation</span>
-    </div>
-    <div class="next-action-body">
-      <div class="next-action-copy">
-        <span class="priority-badge" id="next-best-priority">Recommended</span>
-        <h3 id="next-best-title">Choose next hypothesis</h3>
-        <p id="next-best-detail">Run and log a baseline before optimizing.</p>
-        <p id="next-best-evidence">No run evidence yet.</p>
-        <dl class="decision-explain" aria-label="Decision explanation">
-          <div>
-            <dt>Why</dt>
-            <dd id="next-best-why">Need a measured next step.</dd>
-          </div>
-          <div>
-            <dt>Avoids</dt>
-            <dd id="next-best-avoids">Avoids ungrounded iteration.</dd>
-          </div>
-          <div>
-            <dt>Proof</dt>
-            <dd id="next-best-proof">A logged packet changes the run state.</dd>
-          </div>
-        </dl>
-      </div>
-      <div class="next-action-command">
-        <div class="inline-command">
-          <span id="next-best-command-label">Command</span>
-          <code id="next-best-command">-</code>
-        </div>
-        <button class="tool-button" id="copy-next-best" type="button">Copy command</button>
-        <button class="tool-button" id="run-next-best-action" type="button" hidden></button>
-      </div>
-    </div>
-  </section>
-
     <article class="panel chart-panel" id="metric-trend">
       <div class="panel-head">
         <h2 class="panel-title">Metric trajectory</h2>
@@ -997,6 +892,87 @@ th {
         <svg id="trend-chart" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-labelledby="trend-chart-title trend-chart-desc"></svg>
       </div>
     </article>
+
+    <section class="panel ledger" id="ledger" aria-label="Virtualized experiment log">
+      <div class="panel-head">
+        <h2 class="panel-title">Run log</h2>
+        <span class="panel-note" id="ledger-note">Virtualized append-only history</span>
+      </div>
+      <div class="ledger-scroll" id="ledger-scroll" role="region" aria-label="Virtualized run log" tabindex="0">
+        <div class="ledger-header" role="row">
+          <span>Run</span>
+          <span>Status</span>
+          <span id="metric-heading">Metric</span>
+          <span>Delta</span>
+          <span>Confidence</span>
+          <span>Commit</span>
+          <span>Description</span>
+          <span>ASI</span>
+        </div>
+        <div class="ledger-body" id="ledger-body"></div>
+      </div>
+    </section>
+  </section>
+
+  <section class="panel codex-brief" id="evidence" aria-label="Codex generated summary">
+    <div class="panel-head">
+      <h2 class="panel-title">Codex brief</h2>
+      <span class="panel-note" id="ai-summary-note">Generated from runs, ASI, gaps, and finalization state</span>
+    </div>
+    <div class="brief-grid">
+      <article class="ai-summary-main">
+        <span class="readout-label">Generated summary</span>
+        <strong id="ai-summary-title">Waiting for session evidence.</strong>
+        <p id="ai-summary-subtitle">Codex will summarize what happened and what it plans to do next once runs are available.</p>
+        <div class="ai-summary-columns">
+          <div>
+            <h3>What happened</h3>
+            <ul class="ai-summary-list" id="ai-summary-happened"></ul>
+          </div>
+          <div>
+            <h3>Codex plans</h3>
+            <ul class="ai-summary-list" id="ai-summary-plan"></ul>
+          </div>
+        </div>
+      </article>
+      <aside class="ai-summary-side">
+        <div>
+          <span>Blockers</span>
+          <p id="ai-summary-blockers">-</p>
+        </div>
+        <div>
+          <span>Based on</span>
+          <p id="ai-summary-source">-</p>
+        </div>
+      </aside>
+    </div>
+    <div class="readout-grid">
+      <article class="readout-card">
+        <span class="readout-label">Best kept change</span>
+        <strong id="best-kept-title">-</strong>
+        <p id="best-kept-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Recent failures</span>
+        <strong id="failure-title">-</strong>
+        <p id="failure-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Next action</span>
+        <strong id="next-action-title">-</strong>
+        <p id="next-action-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Confidence read</span>
+        <strong id="confidence-title">-</strong>
+        <p id="confidence-detail">-</p>
+      </article>
+      <article class="readout-card">
+        <span class="readout-label">Ready to finalize</span>
+        <strong id="finalize-title">-</strong>
+        <p id="finalize-detail">-</p>
+      </article>
+    </div>
   </section>
 
   <section class="panel readout trust-panel" aria-label="Trust floor detail">
@@ -1041,40 +1017,6 @@ th {
     </div>
   </section>
 
-  <section class="panel readout" id="evidence" aria-label="Operator readout evidence packet">
-    <div class="panel-head">
-      <h2 class="panel-title">Evidence packet</h2>
-      <span class="panel-note" id="readout-note">lower is better</span>
-    </div>
-    <div class="readout-grid">
-      <article class="readout-card">
-        <span class="readout-label">Best kept change</span>
-        <strong id="best-kept-title">-</strong>
-        <p id="best-kept-detail">-</p>
-      </article>
-      <article class="readout-card">
-        <span class="readout-label">Recent failures</span>
-        <strong id="failure-title">-</strong>
-        <p id="failure-detail">-</p>
-      </article>
-      <article class="readout-card">
-        <span class="readout-label">Next action</span>
-        <strong id="next-action-title">-</strong>
-        <p id="next-action-detail">-</p>
-      </article>
-      <article class="readout-card">
-        <span class="readout-label">Confidence read</span>
-        <strong id="confidence-title">-</strong>
-        <p id="confidence-detail">-</p>
-      </article>
-      <article class="readout-card">
-        <span class="readout-label">Ready to finalize</span>
-        <strong id="finalize-title">-</strong>
-        <p id="finalize-detail">-</p>
-      </article>
-    </div>
-  </section>
-
   <section class="panel mission-control" id="stage-rail" aria-label="Mission control loop stage rail">
     <div class="panel-head">
       <h2 class="panel-title">Loop stage rail</h2>
@@ -1098,7 +1040,6 @@ th {
         <span>ASI JSON</span>
         <textarea id="log-decision-asi" spellcheck="false" aria-label="Log decision ASI JSON"></textarea>
       </div>
-      <button class="tool-button" id="copy-log-command" type="button" hidden>Copy log command</button>
       <button class="tool-button" id="run-log-decision" type="button" hidden>Live log decision</button>
     </div>
   </section>
@@ -1135,14 +1076,6 @@ th {
 
   </section>
 
-  <details class="panel terminal-fallback" id="command-drawer">
-    <summary>
-      <span class="panel-title">Terminal fallback</span>
-      <span class="panel-note" id="command-note">Copy and run from a terminal</span>
-    </summary>
-    <div class="command-grid" id="command-grid"></div>
-  </details>
-
   <section class="panel" id="live-actions-panel" aria-label="Live actions" hidden>
     <div class="panel-head">
       <h2 class="panel-title">Guarded live actions</h2>
@@ -1159,27 +1092,6 @@ th {
     </div>
   </section>
 
-  <details class="panel ledger" id="ledger" aria-label="Experiment ledger">
-    <summary>
-      <span class="panel-title">Ledger</span>
-      <span class="panel-note">Append-only audit trail of every decision and run</span>
-    </summary>
-    <table>
-      <thead>
-        <tr>
-          <th>Run</th>
-          <th>Status</th>
-          <th id="metric-heading">Metric</th>
-          <th>Delta</th>
-          <th>Confidence</th>
-          <th>Commit</th>
-          <th>Description</th>
-          <th>ASI</th>
-        </tr>
-      </thead>
-      <tbody id="ledger-body"></tbody>
-    </table>
-  </details>
   </section>
 </main>
 
@@ -1200,6 +1112,8 @@ const palette = {
   crash: "#8a5a05",
   best: "#4f46e5"
 };
+const ledgerRowHeight = 82;
+const ledgerOverscan = 6;
 
 function isServedPage() {
   const protocol = typeof location !== "undefined" ? String(location.protocol || "") : "";
@@ -1323,16 +1237,15 @@ function render() {
     ? "Best " + formatMetric(best ? best.metric : null) + " / latest " + formatMetric(latestMetricRun.metric)
     : "Waiting for metrics";
   document.getElementById("decision-note").textContent = countKept() + " kept";
-  document.getElementById("readout-note").textContent = metricSignature();
+  setText("ai-summary-note", "Generated from " + metricSignature());
   renderSegmentSelector();
   renderReadout();
+  renderAiSummary();
   renderProductCockpit();
-  renderNextBestAction();
   renderMissionControl();
   renderChart();
   renderRail();
   renderPortfolio();
-  renderCommands();
   renderLiveActions();
   renderLedger();
 }
@@ -1454,7 +1367,7 @@ function renderProductCockpit() {
   ];
 
   document.getElementById("setup-status-title").textContent = guided.stage ? "Guide: " + guided.stage : (setup.ok === false ? "Needs setup" : "Setup readable");
-  document.getElementById("setup-status-detail").textContent = guided.nextAction || setup.nextCommand || "Run setup-plan for a guided first-run command.";
+  document.getElementById("setup-status-detail").textContent = guided.nextAction || "Prepare a measurable session before running a baseline.";
   document.getElementById("recipe-title").textContent = recipeId || setup.recommendedRecipe?.id || "No recipe locked";
   document.getElementById("recipe-detail").textContent = setup.recommendedRecipe?.title || "Use recipes list to choose a benchmark starting point.";
   document.getElementById("quality-gap-title").textContent = qualityGap ? qualityGap.open + " open / " + qualityGap.total + " total" : "No gap file";
@@ -1477,39 +1390,6 @@ function warningText(warning) {
   return String(warning || "");
 }
 
-function renderNextBestAction() {
-  const action = resolvedNextBestAction();
-  const command = action.primaryCommand?.command || action.command || "";
-  const safeAction = action.safeAction || "";
-  const explanation = action.explanation || fallbackActionExplanation(action);
-  document.getElementById("next-best-note").textContent = action.source ? "Source: " + action.source : "Evidence-backed recommendation";
-  document.getElementById("next-best-priority").textContent = action.priority || "Recommended";
-  document.getElementById("next-best-title").textContent = action.title || "Choose next hypothesis";
-  document.getElementById("next-best-detail").textContent = action.detail || "Run and log a baseline before optimizing.";
-  document.getElementById("next-best-evidence").textContent = explanation.evidence || action.utilityCopy || action.reason || "No run evidence yet.";
-  document.getElementById("next-best-why").textContent = explanation.why || action.detail || "This is the highest-priority action in the current loop state.";
-  document.getElementById("next-best-avoids").textContent = explanation.avoids || "Avoids acting without a clear operator reason.";
-  document.getElementById("next-best-proof").textContent = explanation.proof || "The next run produces evidence that updates the dashboard state.";
-  document.getElementById("next-best-command-label").textContent = action.primaryCommand?.label || action.commandLabel || "Command";
-  document.getElementById("next-best-command").textContent = command || "No command embedded";
-  const copyButton = document.getElementById("copy-next-best");
-  if (copyButton) {
-    copyButton.disabled = !command;
-    copyButton.textContent = command ? commandCopyButtonText("Copy command") : "No command";
-    copyButton.setAttribute("aria-label", command ? "Copy primary decision command" : "No primary decision command available");
-    copyButton.onclick = command ? () => copyText(command, copyButton, "Copy command", document.getElementById("next-best-command")) : null;
-  }
-  const liveButton = document.getElementById("run-next-best-action");
-  if (liveButton) {
-    const canRunLive = safeAction && liveActionsAvailable();
-    liveButton.hidden = !canRunLive;
-    liveButton.textContent = canRunLive ? actionLabel(safeAction) : "";
-    liveButton.disabled = false;
-    liveButton.title = "";
-    liveButton.onclick = canRunLive ? () => runLiveAction(safeAction, liveButton) : null;
-  }
-}
-
 function renderMissionControl() {
   const mission = viewModel.missionControl || fallbackMissionControl();
   const steps = Array.isArray(mission.steps) ? mission.steps : [];
@@ -1520,19 +1400,11 @@ function renderMissionControl() {
     note.textContent = active ? "Active: " + active.title : (mission.staticFallback || "Static fallback ready");
   }
   if (grid) {
-    grid.innerHTML = steps.length ? steps.map((step, index) => {
-      const command = step.primaryCommand?.command || step.command || "";
+    grid.innerHTML = steps.length ? steps.map((step) => {
       const safeAction = step.safeAction || "";
       const canRunLive = safeAction && liveActionsAvailable();
-      const buttons = [];
-      if (command) {
-        buttons.push('<button class="tool-button mission-copy" type="button" data-mission-index="' + index + '" aria-label="Copy ' + escapeHtml(step.title || "stage") + ' command">' + escapeHtml(commandCopyButtonText("Copy command", true)) + '</button>');
-      }
-      if (canRunLive) {
-        buttons.push('<button class="tool-button mission-run" type="button" data-mission-action="' + escapeHtml(safeAction) + '">' + escapeHtml(actionLabel(safeAction)) + '</button>');
-      }
-      const actions = buttons.length
-        ? '<div class="mission-step-actions' + (buttons.length === 1 ? " single" : "") + '">' + buttons.join("") + '</div>'
+      const actions = canRunLive
+        ? '<button class="tool-button mission-run" type="button" data-mission-action="' + escapeHtml(safeAction) + '">' + escapeHtml(actionLabel(safeAction)) + '</button>'
         : "";
       return '<article class="mission-step ' + escapeHtml(step.state || "idle") + '">' +
         '<span class="mission-state">' + escapeHtml(stateLabel(step.state)) + '</span>' +
@@ -1541,12 +1413,6 @@ function renderMissionControl() {
         actions +
         '</article>';
     }).join("") : '<div class="empty">No mission-control steps were embedded in this export.</div>';
-    for (const button of grid.querySelectorAll ? grid.querySelectorAll(".mission-copy") : []) {
-      button.onclick = () => {
-        const step = steps[Number(button.dataset.missionIndex)] || {};
-        copyText(step.primaryCommand?.command || step.command || "", button, "Copy command");
-      };
-    }
     for (const button of grid.querySelectorAll ? grid.querySelectorAll(".mission-run") : []) {
       button.onclick = liveActionsAvailable() ? () => runLiveAction(button.dataset.missionAction, button) : null;
     }
@@ -1563,11 +1429,9 @@ function renderLogDecision(logDecision) {
   const status = document.getElementById("log-decision-status");
   const description = document.getElementById("log-decision-description");
   const asi = document.getElementById("log-decision-asi");
-  const copy = document.getElementById("copy-log-command");
   const run = document.getElementById("run-log-decision");
   const packetKey = [available, suggested, logDecision.metric, allowed.join("|")].join(":");
   const canRunLive = available && liveActionsAvailable();
-  const canCopyCommand = available && Boolean(logDecision.command || logDecision.commandsByStatus?.[suggested]);
 
   if (title) title.textContent = available ? "Packet ready" : "No packet";
   if (detail) {
@@ -1596,13 +1460,6 @@ function renderLogDecision(logDecision) {
     asi.dataset.packetKey = packetKey;
   }
   if (asi) asi.disabled = !available;
-  if (copy) {
-    copy.hidden = !canCopyCommand;
-    copy.disabled = false;
-    copy.textContent = commandCopyButtonText("Copy log command");
-    copy.setAttribute("aria-label", "Copy log decision command");
-    copy.onclick = () => copyText(logCommandForSelectedStatus(logDecision), copy, "Copy log command");
-  }
   if (run) {
     run.hidden = !canRunLive;
     run.disabled = false;
@@ -1613,25 +1470,19 @@ function renderLogDecision(logDecision) {
 }
 
 function fallbackMissionControl() {
-  const commandMap = new Map((Array.isArray(meta.commands) ? meta.commands : []).map((item) => [String(item.label || "").toLowerCase(), item.command || ""]));
   const hasRuns = session.runs.length > 0;
   const finalizeReady = countKept() > 0 && hasRuns;
   return {
     activeStep: hasRuns ? "finalize" : "setup",
-    staticFallback: "Derived from embedded commands.",
+    staticFallback: "Static snapshot ready.",
     steps: [
-      { id: "setup", title: "Setup", state: hasRuns ? "done" : "ready", detail: hasRuns ? "Session has recorded runs." : "Prepare a measurable session.", command: commandMap.get("setup plan"), safeAction: "setup-plan" },
-      { id: "gaps", title: "Gap review", state: "idle", detail: "Review research gaps from the exported command set.", command: commandMap.get("gap candidates"), safeAction: "gap-candidates" },
-      { id: "log", title: "Log decision", state: "idle", detail: "No fresh last-run packet is embedded in this static export.", command: commandMap.get("keep last") },
-      { id: "finalize", title: "Finalize", state: finalizeReady ? "ready" : "idle", detail: finalizeReady ? "Preview the review packet." : "Keep evidence before finalization.", command: commandMap.get("finalize preview"), safeAction: "finalize-preview" },
+      { id: "setup", title: "Setup", state: hasRuns ? "done" : "ready", detail: hasRuns ? "Session has recorded runs." : "Prepare a measurable session.", safeAction: "setup-plan" },
+      { id: "gaps", title: "Gap review", state: "idle", detail: "Review research gaps from the current session.", safeAction: "gap-candidates" },
+      { id: "log", title: "Log decision", state: "idle", detail: "No fresh last-run packet is embedded in this static export." },
+      { id: "finalize", title: "Finalize", state: finalizeReady ? "ready" : "idle", detail: finalizeReady ? "Preview the review packet." : "Keep evidence before finalization.", safeAction: "finalize-preview" },
     ],
-    logDecision: { available: false, allowedStatuses: [], suggestedStatus: "", commandsByStatus: {} },
+    logDecision: { available: false, allowedStatuses: [], suggestedStatus: "" },
   };
-}
-
-function logCommandForSelectedStatus(logDecision) {
-  const status = document.getElementById("log-decision-status")?.value || logDecision.suggestedStatus || "";
-  return logDecision.commandsByStatus?.[status] || logDecision.command || "";
 }
 
 async function runLogDecision(button) {
@@ -1663,67 +1514,6 @@ function stateLabel(state) {
   if (state === "ready") return "Ready";
   if (state === "blocked") return "Blocked";
   return "Idle";
-}
-
-function resolvedNextBestAction() {
-  const action = viewModel.nextBestAction || (Array.isArray(viewModel.actionRail) ? viewModel.actionRail[0] : null);
-  if (action) return action;
-  const latestHint = [...session.runs]
-    .reverse()
-    .map((run) => asiText(run, ["next_action_hint", "nextAction", "next_action"], ""))
-    .find(Boolean);
-  if (!session.runs.length) {
-    return {
-      kind: "baseline",
-      title: "Capture the baseline",
-      detail: "Run and log a baseline before optimizing.",
-      utilityCopy: "Static export fallback derived this from an empty run ledger.",
-      source: "static-ledger",
-    };
-  }
-  return {
-    kind: "continue",
-    title: "Run the next measured hypothesis",
-    detail: latestHint || "Choose the next measured hypothesis.",
-    utilityCopy: latestHint ? "Uses the latest ASI hint as the next loop input." : "Static export fallback derived this from the run ledger.",
-    source: "static-ledger",
-  };
-}
-
-function fallbackActionExplanation(action) {
-  const kind = action.kind || "continue";
-  return {
-    why: action.detail || action.title || "This is the highest-priority action in the current loop state.",
-    evidence: action.utilityCopy || action.reason || (action.source ? "Derived from " + action.source + "." : "Derived from the latest run state and ASI."),
-    avoids: fallbackAvoidance(kind),
-    proof: fallbackProof(kind),
-  };
-}
-
-function fallbackAvoidance(kind) {
-  if (kind === "setup") return "Avoids a baseline built on incomplete session metadata.";
-  if (kind === "stale-packet") return "Avoids logging an old metric against newer run history.";
-  if (kind === "log-decision") return "Avoids piling new experiments on top of an unrecorded packet.";
-  if (kind === "benchmark-command") return "Avoids running an optimization loop with no repeatable measurement.";
-  if (kind === "fix-blocker") return "Avoids trusting a loop while doctor or drift warnings are unresolved.";
-  if (kind === "baseline") return "Avoids optimizing before a comparison floor exists.";
-  if (kind === "plateau") return "Avoids repeating the same experiment family after signal has flattened.";
-  if (kind === "finalize-preview") return "Avoids creating review branches before the evidence packet is understood.";
-  if (kind === "continue") return "Avoids losing the next ASI hint or repeating the latest rejected path.";
-  return "Avoids acting without a clear operator reason.";
-}
-
-function fallbackProof(kind) {
-  if (kind === "setup") return "The session has setup files, a configured metric, and a doctorable command.";
-  if (kind === "stale-packet") return "A fresh next packet replaces the stale one and becomes loggable.";
-  if (kind === "log-decision") return "The last-run packet is consumed and the ledger shows the decision.";
-  if (kind === "benchmark-command") return "Doctor confirms the command emits the configured primary metric.";
-  if (kind === "fix-blocker") return "Doctor returns without blocking issues or drift warnings.";
-  if (kind === "baseline") return "Run 1 is logged and future changes compare against its metric.";
-  if (kind === "plateau") return "A different lane produces new evidence or a better metric.";
-  if (kind === "finalize-preview") return "Finalize preview reports a ready review packet with no unresolved blockers.";
-  if (kind === "continue") return "The next packet is logged with metric evidence and ASI for the following run.";
-  return "The next run produces evidence that updates the dashboard state.";
 }
 
 function renderPortfolio() {
@@ -1923,6 +1713,50 @@ function renderReadout() {
     : "A review packet needs at least one kept change and enough context to explain it.";
 }
 
+function renderAiSummary() {
+  const summary = viewModel.aiSummary || fallbackAiSummary();
+  setText("ai-summary-title", summary.title || "Waiting for session evidence.");
+  setText("ai-summary-subtitle", summary.subtitle || "Codex will summarize what happened and what it plans to do next once runs are available.");
+  renderSummaryList("ai-summary-happened", summary.happened || []);
+  renderSummaryList("ai-summary-plan", summary.plan || []);
+  const blockers = Array.isArray(summary.blockers) && summary.blockers.length ? summary.blockers.join("; ") : "No blockers in the current dashboard state.";
+  setText("ai-summary-blockers", blockers);
+  const source = summary.generatedFrom || {};
+  const sourceParts = [
+    `${source.runs ?? session.runs.length} run${(source.runs ?? session.runs.length) === 1 ? "" : "s"}`,
+    source.latestRun ? `latest #${source.latestRun}` : "",
+    source.latestActionHint ? "ASI hint present" : "",
+  ].filter(Boolean);
+  setText("ai-summary-source", sourceParts.join(" / ") || "Run ledger and dashboard state.");
+}
+
+function renderSummaryList(id, items) {
+  const element = document.getElementById(id);
+  if (!element) return;
+  const list = Array.isArray(items) && items.length ? items : ["No summary available yet."];
+  element.innerHTML = list.slice(0, 3).map((item) => '<li>' + escapeHtml(item) + '</li>').join("");
+}
+
+function fallbackAiSummary() {
+  const latest = session.runs.at(-1);
+  const kept = countKept();
+  const failed = failedRuns().length;
+  return {
+    title: session.runs.length ? "Codex summarized the current run ledger." : "Codex is waiting for the first measured packet.",
+    subtitle: "Generated locally from the dashboard state.",
+    happened: session.runs.length
+      ? [`${session.runs.length} runs are logged: ${kept} kept and ${failed} rejected or failed.`]
+      : ["No experiments have been logged yet."],
+    plan: [
+      viewModel.readout?.nextAction
+        || viewModel.nextBestAction?.detail
+        || asiText(latest, ["next_action_hint", "nextAction", "next_action"], "Capture the next measured packet and log the decision."),
+    ],
+    blockers: [],
+    generatedFrom: { runs: session.runs.length, latestRun: latest?.run || null, latestActionHint: "" },
+  };
+}
+
 function statusClass(status) {
   return status === "keep" || status === "discard" ? status : "crash";
 }
@@ -1931,18 +1765,18 @@ function renderChart() {
   const svg = document.getElementById("trend-chart");
   if (!metricValues.length) {
     setChartSummary("No metric values recorded.");
-    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><text x="500" y="160" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
+    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><rect class="plot-frame" x="44" y="22" width="912" height="252" rx="12"></rect><text x="500" y="160" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
     return;
   }
 
   const width = 1000;
   const height = 320;
-  const pad = { left: 70, right: 32, top: 24, bottom: 42 };
+  const pad = { left: 58, right: 44, top: 28, bottom: 44 };
   const min = Math.min(...metricValues);
   const max = Math.max(...metricValues);
   const spread = max - min || Math.max(1, Math.abs(max) * .1);
-  const low = min === 0 ? 0 : min - spread * .18;
-  const high = max === 0 ? spread * .18 : max + spread * .18;
+  const low = min === 0 ? 0 : min - spread * .24;
+  const high = max === 0 ? spread * .24 : max + spread * .22;
   const range = high - low || 1;
   const usableW = width - pad.left - pad.right;
   const usableH = height - pad.top - pad.bottom;
@@ -1957,32 +1791,78 @@ function renderChart() {
     return { run, index, x: xFor(index), y: yFor(run.metric) };
   }).filter(Boolean);
 
-  const grid = [0, .25, .5, .75, 1].map((part) => {
+  const grid = [0, .333, .667, 1].map((part) => {
     const y = pad.top + usableH * part;
     const value = high - range * part;
     return '<line class="axis" x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '"></line>' +
       '<text class="axis-label" x="' + (pad.left - 12) + '" y="' + (y + 4) + '" text-anchor="end">' + escapeHtml(formatMetric(value)) + '</text>';
   }).join("");
 
-  const path = points.length
-    ? "M " + points.map((point) => point.x.toFixed(1) + " " + point.y.toFixed(1)).join(" L ")
+  const path = smoothPath(points);
+  const bottomY = height - pad.bottom;
+  const areaPath = points.length
+    ? path + " L " + points.at(-1).x.toFixed(1) + " " + bottomY + " L " + points[0].x.toFixed(1) + " " + bottomY + " Z"
     : "";
   const baselineY = baseline == null ? null : yFor(baseline);
-  const baselineLine = baselineY == null ? "" : '<line class="baseline-line" x1="' + pad.left + '" y1="' + baselineY + '" x2="' + (width - pad.right) + '" y2="' + baselineY + '"></line>';
+  const baselineLine = baselineY == null ? "" : '<line class="baseline-line" x1="' + pad.left + '" y1="' + baselineY + '" x2="' + (width - pad.right) + '" y2="' + baselineY + '"></line>' +
+    '<text class="axis-label" x="' + (width - pad.right - 4) + '" y="' + (baselineY - 7) + '" text-anchor="end">baseline ' + escapeHtml(formatMetric(baseline)) + '</text>';
+  const latestPoint = points.at(-1);
+  const bestPoint = best ? points.find((point) => point.index === best.index) : null;
+  const sampleEvery = Math.max(1, Math.ceil(points.length / 36));
   const circles = points.map((point) => {
+    const important = point === latestPoint || point === bestPoint || point.run.status !== "keep" || point.index === 0 || point.index % sampleEvery === 0;
+    if (!important) return "";
     const label = "#" + point.run.run + " " + formatMetric(point.run.metric) + " " + point.run.status;
-    const ring = best && point.index === best.index ? '<circle class="best-ring" cx="' + point.x + '" cy="' + point.y + '" r="11"></circle>' : "";
-    return ring + '<circle class="run-dot ' + statusClass(point.run.status) + '" cx="' + point.x + '" cy="' + point.y + '" r="6"><title>' + escapeHtml(label) + '</title></circle>';
+    const ring = point === bestPoint ? '<circle class="best-ring" cx="' + point.x + '" cy="' + point.y + '" r="11"></circle>' : "";
+    const radius = point === latestPoint || point === bestPoint ? 6.5 : 4.6;
+    const muted = point.run.status === "keep" && point !== latestPoint && point !== bestPoint ? " muted-dot" : "";
+    return ring + '<circle class="run-dot ' + statusClass(point.run.status) + muted + '" cx="' + point.x + '" cy="' + point.y + '" r="' + radius + '"><title>' + escapeHtml(label) + '</title></circle>';
   }).join("");
   const latest = session.runs.at(-1);
   const failures = failedRuns().length;
   const summary = "Metric trend for " + session.runs.length + " runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatMetric(best.metric) : "not available") + ". Latest " + (latest ? "#" + latest.run + " at " + formatMetric(latest.metric) + " with status " + latest.status : "not available") + ". " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
   setChartSummary(summary);
 
+  const latestLine = latestPoint ? '<line class="latest-line" x1="' + latestPoint.x + '" y1="' + pad.top + '" x2="' + latestPoint.x + '" y2="' + bottomY + '"></line>' : "";
+  const callouts = [
+    bestPoint && chartCallout(bestPoint.x, bestPoint.y, "Best", "#" + bestPoint.run.run + " " + formatMetric(bestPoint.run.metric), "left"),
+    latestPoint && chartCallout(latestPoint.x, latestPoint.y, "Latest", "#" + latestPoint.run.run + " " + formatMetric(latestPoint.run.metric), "right"),
+  ].filter(Boolean).join("");
+
   svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">' + escapeHtml(summary) + '</desc>' +
-    grid + baselineLine + '<path class="trend-line" d="' + path + '"></path>' + circles +
+    '<defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#08766c" stop-opacity=".18"></stop><stop offset="72%" stop-color="#08766c" stop-opacity=".04"></stop><stop offset="100%" stop-color="#08766c" stop-opacity="0"></stop></linearGradient></defs>' +
+    '<rect class="plot-frame" x="' + (pad.left - 14) + '" y="' + (pad.top - 10) + '" width="' + (usableW + 28) + '" height="' + (usableH + 20) + '" rx="12"></rect>' +
+    grid + baselineLine + latestLine + '<path class="trend-fill" d="' + areaPath + '"></path><path class="trend-shadow" d="' + path + '"></path><path class="trend-line" d="' + path + '"></path>' + circles + callouts +
     '<text class="axis-label" x="' + pad.left + '" y="' + (height - 14) + '">first</text>' +
     '<text class="axis-label" x="' + (width - pad.right) + '" y="' + (height - 14) + '" text-anchor="end">latest</text>';
+}
+
+function smoothPath(points) {
+  if (!points.length) return "";
+  if (points.length === 1) return "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+  let path = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const p0 = points[Math.max(0, index - 1)];
+    const p1 = points[index];
+    const p2 = points[index + 1];
+    const p3 = points[Math.min(points.length - 1, index + 2)];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    path += " C " + cp1x.toFixed(1) + " " + cp1y.toFixed(1) + ", " + cp2x.toFixed(1) + " " + cp2y.toFixed(1) + ", " + p2.x.toFixed(1) + " " + p2.y.toFixed(1);
+  }
+  return path;
+}
+
+function chartCallout(x, y, title, value, anchor) {
+  const width = 92;
+  const height = 38;
+  const xPos = Math.max(58, Math.min(1000 - width - 44, anchor === "right" ? x - width - 10 : x + 12));
+  const yPos = Math.max(24, Math.min(320 - height - 44, y - height - 12));
+  return '<g><rect class="chart-callout" x="' + xPos + '" y="' + yPos + '" width="' + width + '" height="' + height + '" rx="8"></rect>' +
+    '<text class="chart-callout-title" x="' + (xPos + 10) + '" y="' + (yPos + 15) + '">' + escapeHtml(title) + '</text>' +
+    '<text class="chart-callout-value" x="' + (xPos + 10) + '" y="' + (yPos + 30) + '">' + escapeHtml(value) + '</text></g>';
 }
 
 function setChartSummary(summary) {
@@ -2010,82 +1890,6 @@ function renderRail() {
       '<div class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</div>' +
       '</div>';
   }).join("");
-}
-
-function renderCommands() {
-  const grid = document.getElementById("command-grid");
-  const commands = Array.isArray(meta.commands) ? meta.commands : [];
-  const note = document.getElementById("command-note");
-  const drawer = document.getElementById("command-drawer");
-  if (!grid) return;
-  if (note) {
-    note.textContent = liveActionsAvailable()
-      ? "Terminal fallback for audit and recovery"
-      : "Snapshot mode uses terminal commands";
-  }
-  if (drawer) drawer.open = !liveActionsAvailable();
-  if (!commands.length) {
-    grid.innerHTML = '<div class="empty">No command shortcuts were embedded in this export.</div>';
-    return;
-  }
-  grid.innerHTML = commands.map((item, index) => {
-    const label = item.label || "Command";
-    const command = item.command || "";
-    const disabled = command ? "" : " disabled";
-    return '<div class="command-row">' +
-      '<span class="command-label">' + escapeHtml(label) + '</span>' +
-      '<code class="command-code" title="' + escapeHtml(command) + '">' + escapeHtml(command || "No command embedded") + '</code>' +
-      '<button class="tool-button copy-command" type="button" data-command-index="' + index + '" aria-label="Copy command: ' + escapeHtml(label) + '"' + disabled + '>' + escapeHtml(command ? commandCopyButtonText("Copy", true) : "No command") + '</button>' +
-      '</div>';
-  }).join("");
-  for (const button of grid.querySelectorAll ? grid.querySelectorAll(".copy-command") : []) {
-    button.onclick = async () => {
-      const command = commands[Number(button.dataset.commandIndex)]?.command || "";
-      await copyText(command, button, "Copy");
-    };
-  }
-}
-
-function commandCopyButtonText(label, compact = false) {
-  const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
-  if (clipboard?.writeText) return label;
-  return compact ? "Select" : "Select command text";
-}
-
-async function copyText(value, button, resetText, sourceElement = null) {
-  try {
-    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
-    if (!value || !clipboard?.writeText) {
-      selectCommandText(sourceElement || nearestCommandText(button));
-      button.textContent = commandCopyButtonText(resetText, resetText === "Copy");
-      return;
-    }
-    await clipboard.writeText(value);
-    button.textContent = "Copied";
-    if (typeof setTimeout === "function") {
-      setTimeout(() => { button.textContent = resetText; }, 1200);
-    }
-  } catch {
-    selectCommandText(sourceElement || nearestCommandText(button));
-    button.textContent = commandCopyButtonText(resetText, resetText === "Copy");
-  }
-}
-
-function nearestCommandText(button) {
-  if (!button || typeof button.closest !== "function") return null;
-  const container = button.closest(".command-row, .next-action-command, .inline-command");
-  if (!container || typeof container.querySelector !== "function") return null;
-  return container.querySelector("code");
-}
-
-function selectCommandText(element) {
-  if (!element || typeof document === "undefined" || typeof window === "undefined") return;
-  if (typeof document.createRange !== "function" || typeof window.getSelection !== "function") return;
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
 }
 
 function focusElement(element) {
@@ -2177,24 +1981,62 @@ function actionLabel(action) {
 
 function renderLedger() {
   const body = document.getElementById("ledger-body");
+  const scroller = document.getElementById("ledger-scroll");
   if (!session.runs.length) {
-    body.innerHTML = '<tr><td colspan="8" class="empty">No runs logged yet</td></tr>';
+    body.innerHTML = '<div class="empty">No runs logged yet</div>';
+    setText("ledger-note", "No runs logged yet");
     return;
   }
-  body.innerHTML = session.runs.map((run, index) => {
-    const delta = deltaFor(run.metric);
-    const rowClass = best && index === best.index ? ' class="best-row"' : "";
-    return '<tr' + rowClass + '>' +
-      '<td class="mono">#' + run.run + '</td>' +
-      '<td><span class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</span></td>' +
-      '<td class="mono">' + escapeHtml(formatMetric(run.metric)) + '</td>' +
-      '<td class="' + usefulDelta(delta) + '">' + escapeHtml(formatDelta(delta)) + '</td>' +
-      '<td class="mono">' + escapeHtml(formatConfidence(run.confidence)) + '</td>' +
-      '<td class="mono muted">' + escapeHtml(run.commit) + '</td>' +
-      '<td>' + escapeHtml(run.description) + '</td>' +
-      '<td>' + renderAsi(run.asi) + '</td>' +
-      '</tr>';
-  }).join("");
+  if (scroller && !scroller.dataset.boundLedgerScroll) {
+    scroller.dataset.boundLedgerScroll = "true";
+    if (typeof scroller.addEventListener === "function") {
+      scroller.addEventListener("scroll", () => renderLedgerWindow());
+    }
+  }
+  renderLedgerWindow();
+}
+
+function renderLedgerWindow() {
+  const body = document.getElementById("ledger-body");
+  const scroller = document.getElementById("ledger-scroll");
+  if (!body) return;
+  const ledgerRuns = orderedLedgerRuns();
+  const total = ledgerRuns.length;
+  if (!total) {
+    body.innerHTML = '<div class="empty">No runs logged yet</div>';
+    return;
+  }
+  const scrollTop = Number(scroller?.scrollTop || 0);
+  const viewportHeight = Number(scroller?.clientHeight || 316);
+  const start = Math.max(0, Math.floor(scrollTop / ledgerRowHeight) - ledgerOverscan);
+  const visibleRows = Math.ceil(viewportHeight / ledgerRowHeight) + ledgerOverscan * 2;
+  const end = Math.min(total, start + visibleRows);
+  setText("ledger-note", `${total} run${total === 1 ? "" : "s"} / newest first / showing ${start + 1}-${end}`);
+  const rows = [];
+  for (let position = start; position < end; position += 1) {
+    const item = ledgerRuns[position];
+    rows.push(renderLedgerRow(item.run, item.index, position));
+  }
+  body.innerHTML = '<div class="ledger-spacer" style="height: ' + (total * ledgerRowHeight) + 'px;">' + rows.join("") + '</div>';
+}
+
+function orderedLedgerRuns() {
+  return session.runs.map((run, index) => ({ run, index })).reverse();
+}
+
+function renderLedgerRow(run, index, position) {
+  const delta = deltaFor(run.metric);
+  const rowClass = best && index === best.index ? " best-row" : "";
+  return '<div class="ledger-row' + rowClass + '" role="row" style="transform: translateY(' + (position * ledgerRowHeight) + 'px);">' +
+    '<div class="ledger-cell mono" role="cell">#' + run.run + '</div>' +
+    '<div class="ledger-cell" role="cell"><span class="status-pill ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</span></div>' +
+    '<div class="ledger-cell mono" role="cell">' + escapeHtml(formatMetric(run.metric)) + '</div>' +
+    '<div class="ledger-cell ' + usefulDelta(delta) + '" role="cell">' + escapeHtml(formatDelta(delta)) + '</div>' +
+    '<div class="ledger-cell mono" role="cell">' + escapeHtml(formatConfidence(run.confidence)) + '</div>' +
+    '<div class="ledger-cell mono muted" role="cell">' + escapeHtml(run.commit) + '</div>' +
+    '<div class="ledger-cell" role="cell">' + escapeHtml(run.description) + '</div>' +
+    '<div class="ledger-cell" role="cell">' + renderAsi(run.asi) + '</div>' +
+    '</div>';
 }
 
 function renderAsi(asi) {
@@ -2213,11 +2055,13 @@ function renderAsi(asi) {
     if (asi[key]) {
       rendered.push('<div><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(asi[key]) + '</dd></div>');
       used.add(key);
+      if (rendered.length >= 2) break;
     }
   }
   for (const [key, value] of entries) {
     if (used.has(key)) continue;
     rendered.push('<div><dt>' + escapeHtml(key.replaceAll("_", " ")) + '</dt><dd>' + escapeHtml(typeof value === "object" ? JSON.stringify(value) : value) + '</dd></div>');
+    if (rendered.length >= 2) break;
   }
   return '<dl class="asi-list">' + rendered.join("") + '</dl>';
 }

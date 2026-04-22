@@ -46,6 +46,20 @@ export function buildDashboardViewModel({
     actionRail,
     commands,
   });
+  const aiSummary = buildAiSummary({
+    state,
+    current,
+    kept,
+    failures,
+    bestKept,
+    latestFailure,
+    nextAction: actionRail[0]?.detail || nextAction,
+    nextTitle: actionRail[0]?.title || "",
+    qualityGap,
+    finalizePreview,
+    experimentMemory,
+    warnings,
+  });
   return {
     setup: setupPlan,
     guidedSetup,
@@ -56,6 +70,7 @@ export function buildDashboardViewModel({
     experimentMemory,
     portfolio,
     missionControl,
+    aiSummary,
     nextBestAction: actionRail[0],
     actionRail,
     drift,
@@ -193,7 +208,7 @@ function buildActionRail({
       kind: "baseline",
       priority: "Start",
       title: guidedSetup?.stage ? `Run ${guidedSetup.stage}` : "Capture the baseline",
-      detail: guidedSetup?.nextAction || setupPlan?.nextCommand || "Run the first measured packet so future changes have a floor.",
+      detail: guidedSetup?.nextAction || "Run the first measured packet so future changes have a floor.",
       utilityCopy: "Establish the benchmark floor before tuning.",
       command: guidedSetup?.commands?.baseline || commandMap.get("next run"),
       commandLabel: "Next",
@@ -370,7 +385,7 @@ function buildMissionControl({
 
   return {
     activeStep,
-    staticFallback: "Every mission-control action keeps a copyable command; live actions require the local serve mode.",
+    staticFallback: "Serve the dashboard locally for guarded live actions; static snapshots stay read-only.",
     steps: [
       missionStep({
         id: "setup",
@@ -542,6 +557,109 @@ function commandLookup(commands) {
 function warningMessage(warning) {
   if (warning && typeof warning === "object") return String(warning.message || warning.code || "Warning");
   return String(warning || "");
+}
+
+function buildAiSummary({
+  state,
+  current,
+  kept,
+  failures,
+  bestKept,
+  latestFailure,
+  nextAction,
+  nextTitle,
+  qualityGap,
+  finalizePreview,
+  experimentMemory,
+  warnings,
+}) {
+  const metricName = state.config.metricName || "metric";
+  const unit = state.config.metricUnit ? ` ${state.config.metricUnit}` : "";
+  const direction = state.config.bestDirection === "higher" ? "higher is better" : "lower is better";
+  const baseline = finiteMetric(state.baseline);
+  const bestMetric = finiteMetric(state.best);
+  const latest = current.at(-1) || null;
+  const latestMetric = finiteMetric(latest?.metric);
+  const delta = baseline != null && bestMetric != null
+    ? percentChange(bestMetric, baseline, state.config.bestDirection)
+    : null;
+  const happened = [];
+  const plan = [];
+  const blockers = [
+    ...(Array.isArray(warnings) ? warnings.map(warningMessage) : []),
+    ...(Array.isArray(finalizePreview?.warnings) ? finalizePreview.warnings : []),
+  ].filter(Boolean);
+
+  if (!current.length) {
+    happened.push("No experiments have been logged yet; Codex is still waiting for a measured baseline.");
+  } else {
+    happened.push(`Codex logged ${current.length} run${current.length === 1 ? "" : "s"}: ${kept.length} kept and ${failures.length} rejected or failed.`);
+    if (baseline != null && bestMetric != null) {
+      const movement = delta == null ? "" : ` (${delta >= 0 ? "+" : ""}${round(delta)}%)`;
+      happened.push(`The best ${metricName} is ${formatSummaryMetric(bestMetric, unit)} against a ${formatSummaryMetric(baseline, unit)} baseline${movement}; ${direction}.`);
+    }
+    if (latest) {
+      happened.push(`Most recent run #${latest.run} was ${latest.status}${latestMetric == null ? "" : ` at ${formatSummaryMetric(latestMetric, unit)}`}.`);
+    }
+  }
+
+  if (bestKept) {
+    plan.push(`Use kept run #${bestKept.run} as the comparison anchor unless the next packet beats it.`);
+  }
+  if (latestFailure) {
+    plan.push(`Avoid repeating #${latestFailure.run}: ${latestFailure.asi?.rollback_reason || latestFailure.description || "it did not improve the primary metric"}.`);
+  }
+  if (qualityGap) {
+    plan.push(qualityGap.open > 0
+      ? `Work the next accepted gap in ${qualityGap.slug}; ${qualityGap.open} remain open.`
+      : `Treat ${qualityGap.slug} as closed unless a fresh gap pass finds credible new work.`);
+  }
+  if (nextAction) {
+    plan.push(nextAction);
+  }
+  if (finalizePreview?.ready) {
+    plan.push("Preview finalization and package the kept evidence for review.");
+  }
+  if (!plan.length) {
+    plan.push("Capture a clean baseline, then log the decision with ASI before the next experiment.");
+  }
+
+  return {
+    title: current.length ? "Codex has enough evidence to decide the next move." : "Codex is waiting for the first measured packet.",
+    subtitle: nextTitle || "Generated from the run ledger, ASI, gap state, and finalization preview.",
+    happened: happened.slice(0, 3),
+    plan: unique(plan).slice(0, 3),
+    blockers: blockers.slice(0, 2),
+    generatedFrom: {
+      runs: current.length,
+      latestRun: latest?.run || null,
+      latestActionHint: experimentMemory?.latestNextAction || "",
+    },
+  };
+}
+
+function percentChange(best, baseline, direction) {
+  if (baseline === 0) return null;
+  const raw = ((best - baseline) / Math.abs(baseline)) * 100;
+  return direction === "higher" ? raw : -raw;
+}
+
+function round(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function formatSummaryMetric(value, unit) {
+  return `${round(value)}${unit}`;
+}
+
+function unique(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = String(item || "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildPortfolio(memory, direction) {

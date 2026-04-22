@@ -1900,7 +1900,7 @@ async function clearSession(args) {
 
 function dashboardHtml(entries, meta = {}) {
   const data = JSON.stringify(entries).replace(/</g, "\\u003c");
-  const metaData = JSON.stringify(meta).replace(/</g, "\\u003c");
+  const metaData = JSON.stringify(stripDashboardCommandFields(meta)).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
     throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
@@ -1908,6 +1908,25 @@ function dashboardHtml(entries, meta = {}) {
   return template
     .replace(DASHBOARD_DATA_PLACEHOLDER, data)
     .replace("__AUTORESEARCH_META__", metaData);
+}
+
+function stripDashboardCommandFields(value) {
+  const commandKeys = new Set([
+    "baselineCommand",
+    "command",
+    "commandLabel",
+    "commands",
+    "commandsByStatus",
+    "guideCommand",
+    "guidedFlow",
+    "nextCommand",
+    "primaryCommand",
+  ]);
+  if (Array.isArray(value)) return value.map((item) => stripDashboardCommandFields(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !commandKeys.has(key))
+    .map(([key, item]) => [key, stripDashboardCommandFields(item)]));
 }
 
 async function resolveLastRunPath(workDir) {
@@ -2432,7 +2451,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.3.1" },
+        serverInfo: { name: "codex-autoresearch", version: "0.3.2" },
       },
     });
     return;

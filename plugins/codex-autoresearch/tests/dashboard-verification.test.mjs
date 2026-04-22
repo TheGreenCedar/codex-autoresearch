@@ -105,9 +105,6 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.notEqual(rail.includes("No decisions yet"), true);
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
-  assert.match(getById("next-best-why").textContent, /Run the next measured hypothesis|Try reducing startup overhead/i);
-  assert.match(getById("next-best-avoids").textContent, /Avoids/);
-  assert.match(getById("next-best-proof").textContent, /evidence|logged packet|run/i);
 });
 
 test("dashboard family/plateau display marks best row and zero-delta plateau clearly", async () => {
@@ -134,6 +131,61 @@ test("dashboard family/plateau display marks best row and zero-delta plateau cle
   assert.match(ledgerHtml, /0%/);
   assert.match(ledgerHtml, /#3/);
   assert.match(readout, /Warm cache enabled/);
+});
+
+test("dashboard renders the run log as a virtualized top-of-page scroll area", async () => {
+  const entries = [
+    { type: "config", name: "long log path", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    ...Array.from({ length: 100 }, (_, index) => ({
+      type: "run",
+      run: index + 1,
+      metric: 100 - index,
+      status: index % 5 === 0 ? "discard" : "keep",
+      description: `Experiment ${index + 1}`,
+      confidence: 1,
+      asi: { hypothesis: `Hypothesis ${index + 1}` },
+    })),
+  ];
+
+  const { getById } = await runDashboard(entries, { commands: [] });
+  const ledgerHtml = getById("ledger-body").innerHTML;
+  const renderedRows = ledgerHtml.match(/ledger-row/g) || [];
+
+  assert.equal(getById("ledger").hidden, false);
+  assert.match(getById("ledger-note").textContent, /100 runs \/ newest first \/ showing 1-16/);
+  assert.equal(renderedRows.length < 30, true);
+  assert.match(ledgerHtml, /height: 8200px/);
+  assert.match(ledgerHtml, /#100/);
+  assert.doesNotMatch(ledgerHtml, /#1<\/div>/);
+});
+
+test("dashboard renders a generated Codex summary of history and plan", async () => {
+  const entries = [
+    { type: "config", name: "summary path", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 8, status: "keep", description: "Baseline", confidence: 1, asi: { hypothesis: "Baseline." } },
+    { type: "run", run: 2, metric: 6, status: "keep", description: "Faster cache", confidence: 2, asi: { next_action_hint: "Stress the cache path." } },
+    { type: "run", run: 3, metric: 7, status: "discard", description: "Noisy branch", confidence: 1, asi: { rollback_reason: "Regressed latency." } },
+  ];
+
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: { name: "summary path", metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
+      segment: 0,
+      current: entries.filter((entry) => entry.type === "run"),
+      baseline: 8,
+      best: 6,
+      confidence: 2,
+    },
+    finalizePreview: { ready: true, nextAction: "Preview finalization." },
+    experimentMemory: { latestNextAction: "Stress the cache path." },
+  });
+
+  const { getById } = await runDashboard(entries, { viewModel, commands: [] });
+
+  assert.match(getById("ai-summary-title").textContent, /Codex has enough evidence/);
+  assert.match(getById("ai-summary-happened").innerHTML, /3 runs/);
+  assert.match(getById("ai-summary-plan").innerHTML, /Stress the cache path|finalization/i);
+  assert.match(getById("ai-summary-source").textContent, /latest #3/);
 });
 
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
@@ -230,9 +282,6 @@ test("stale last-run handling remains visible in dashboard guidance", async () =
   assert.equal(staleTimestamp <= Date.now(), true);
   assert.equal(viewModel.guidedSetup.stage, "stale-last-run");
   assert.equal(viewModel.lastRun.freshness.fresh, false);
-  assert.match(getById("next-best-title").textContent, /Replace the stale packet/);
-  assert.match(getById("next-best-avoids").textContent, /old metric|stale/i);
-  assert.match(getById("next-best-proof").textContent, /fresh next packet/i);
   assert.match(getById("next-action-detail").textContent, /Last-run packet is stale/);
   assert.equal(getById("decision-rail").innerHTML.includes("No decisions yet"), false);
 });
@@ -241,7 +290,7 @@ test("dashboard mission control renders explicit log-decision controls", async (
   const viewModel = {
     missionControl: {
       activeStep: "log",
-      staticFallback: "Commands remain copyable.",
+      staticFallback: "Serve locally for live actions.",
       steps: [
         { id: "setup", title: "Setup", state: "done", detail: "Session setup is readable.", command: "node scripts/autoresearch.mjs setup-plan --cwd .", safeAction: "setup-plan" },
         { id: "gaps", title: "Gap review", state: "ready", detail: "1 open / 4 total.", command: "node scripts/autoresearch.mjs gap-candidates --cwd .", safeAction: "gap-candidates" },
@@ -402,13 +451,11 @@ test("dashboard distinguishes static snapshot controls from live actions", async
   assert.match(getById("live-detail").textContent, /Read-only export/);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
-  assert.equal(getById("run-next-best-action").hidden, true);
   assert.doesNotMatch(getById("mission-control-grid").innerHTML, /mission-run|Serve to run/);
   assert.equal(getById("live-actions-panel").hidden, true);
   assert.equal(getById("log-status-field").hidden, true);
   assert.equal(getById("log-description-field").hidden, true);
   assert.equal(getById("log-asi-field").hidden, true);
-  assert.equal(getById("copy-log-command").hidden, true);
   assert.equal(getById("run-log-decision").hidden, true);
 });
 
@@ -446,7 +493,5 @@ test("served dashboard keeps live action controls executable", async () => {
   assert.equal(getById("live-toggle").hidden, false);
   assert.match(getById("action-note").textContent, /Guarded actions/);
   assert.equal(getById("live-actions-panel").hidden, false);
-  assert.equal(getById("run-next-best-action").disabled, false);
-  assert.equal(getById("run-next-best-action").hidden, false);
-  assert.equal(getById("run-next-best-action").textContent, "Finalize Preview");
+  assert.match(getById("mission-control-grid").innerHTML, /mission-run/);
 });

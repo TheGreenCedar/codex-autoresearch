@@ -244,7 +244,7 @@ async function serveCommand(args, deps) {
       url: serveResult.url,
       modeGuidance: {
         deliveryMode: "live-server",
-        difference: "This served URL can run guarded dashboard actions; exported file:// dashboards are read-only snapshots with copyable commands.",
+        difference: "This served URL can run guarded dashboard actions; exported file:// dashboards are read-only snapshots.",
       },
     },
   };

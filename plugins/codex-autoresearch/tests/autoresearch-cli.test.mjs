@@ -171,8 +171,8 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.match(dashboard, /"deliveryMode":"static-export"/);
     assert.match(dashboard, /Read-only snapshot/);
-    assert.match(dashboard, /Serve dashboard/);
-    assert.match(dashboard, /--research-slug \\"project-study\\"/);
+    assert.doesNotMatch(dashboard, /Serve dashboard/);
+    assert.doesNotMatch(dashboard, /--research-slug \\"project-study\\"/);
     assert.match(dashboard, /activeResearchSlug/);
   });
 });
@@ -299,15 +299,22 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
 
     assert.match(dashboard, /id="segment-select"/);
     assert.match(dashboard, /id="live-toggle"/);
-    assert.match(dashboard, /id="command-grid"/);
+    assert.doesNotMatch(dashboard, /id="command-grid"/);
     assert.match(dashboard, /Mission control/);
     assert.match(dashboard, /id="mission-control-grid"/);
+    assert.match(dashboard, /Run log/);
+    assert.match(dashboard, /id="ledger-scroll"/);
+    assert.match(dashboard, /Codex brief/);
+    assert.match(dashboard, /id="ai-summary-title"/);
     assert.match(dashboard, /id="run-log-decision"/);
     assert.match(dashboard, /const meta = \{/);
-    assert.match(dashboard, /!clipboard\?\.writeText/);
+    assert.doesNotMatch(dashboard, /clipboard\?\.writeText/);
+    assert.doesNotMatch(dashboard, /autoresearch\.mjs/);
     assert.match(dashboard, /Ready to finalize/);
     assert.match(dashboard, /renderSegmentSelector/);
     assert.ok(dashboard.indexOf('id="metric-trend"') < dashboard.indexOf('id="stage-rail"'));
+    assert.ok(dashboard.indexOf('id="metric-trend"') < dashboard.indexOf('id="ledger"'));
+    assert.ok(dashboard.indexOf('id="ledger"') < dashboard.indexOf('id="stage-rail"'));
   });
 });
 
@@ -1350,12 +1357,10 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     const payload = JSON.parse(exportResult.stdout);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
 
-    assert.match(dashboard, /Operator readout/);
+    assert.match(dashboard, /Codex brief/);
     assert.match(dashboard, /Best kept change/);
     assert.match(dashboard, /Recent failures/);
     assert.match(dashboard, /Next action/);
-    assert.match(dashboard, /Next best action/);
-    assert.match(dashboard, /Decision explanation/);
     assert.match(dashboard, /Experiment portfolio/);
     assert.match(dashboard, /lower is better/);
     assert.ok(payload.viewModel.nextBestAction.detail);
@@ -1363,6 +1368,8 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.ok(payload.viewModel.nextBestAction.explanation.avoids);
     assert.ok(payload.viewModel.nextBestAction.explanation.proof);
     assert.ok(payload.viewModel.nextBestAction.command || payload.viewModel.nextBestAction.safeAction);
+    assert.match(payload.viewModel.aiSummary.happened.join(" "), /runs/);
+    assert.match(payload.viewModel.aiSummary.plan.join(" "), /avoid parser inlining|comparison anchor/i);
     assert.equal(payload.viewModel.experimentMemory.latestNextAction, "avoid parser inlining");
     assert.equal(payload.viewModel.portfolio.families.length > 0, true);
     assert.equal(payload.viewModel.portfolio.lanes.some((lane) => lane.id === "measurement-quality"), true);

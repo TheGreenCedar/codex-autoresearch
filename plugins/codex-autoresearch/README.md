@@ -123,7 +123,7 @@ finalize Split the kept fixture change into a review branch when the noisy loop 
 | MCP tools | `setup_plan`, `list_recipes`, `setup_session`, `setup_research_session`, `configure_session`, `init_experiment`, `run_experiment`, `next_experiment`, `log_experiment`, `read_state`, `measure_quality_gap`, `gap_candidates`, `finalize_preview`, `integrations`, `doctor_session`, `serve_dashboard`, `export_dashboard`, `clear_session` |
 | Skills | Create/resume loops, turn deep research into quality gaps, open live dashboards, finalize noisy branches |
 | Commands | `/autoresearch` and `/autoresearch-finalize` workflow docs |
-| Dashboard | Live operator cockpit generated from `autoresearch.jsonl`, with a next-best-action rail, compact metric trajectory, experiment-family and lane-portfolio panels, copyable commands, setup/readiness/gap/finalization panels, and safe local refresh/actions |
+| Dashboard | Live operator cockpit generated from `autoresearch.jsonl`, with a compact top metric trajectory, experiment-family and lane-portfolio panels, setup/readiness/gap/finalization panels, and safe local refresh/actions |
 | Templates | Starter `autoresearch.md`, shell/PowerShell benchmark scripts, and checks scripts |
 | Recipes and integrations | Built-in benchmark recipes, local/remote recipe catalogs, model-command gap candidates, and live dashboard action providers |
 
@@ -318,15 +318,14 @@ The dashboard shows:
 - improvement percentage
 - kept run count
 - compact metric trajectory in the top cockpit
-- the next best action, including evidence, command text, and any safe live action when served
+- a generated Codex brief with what happened and what Codex plans next
 - experiment families, plateau risk, novelty signal, and lane-portfolio guidance
 - served live status with guarded action buttons, plus a static snapshot fallback when exported
-- copyable operator commands for doctor, next, keep/discard last packet, export, and extend
 - operator readout with best kept change, recent failures, next action, and confidence explanation
 - segment selector for multi-phase sessions
 - ready-to-finalize readout
-- metric chart
-- run table with status, commit, description, confidence, and ASI
+- metric chart with the virtualized newest-first run log directly underneath
+- run log with status, commit, description, confidence, and compact ASI
 
 The template lives at:
 
