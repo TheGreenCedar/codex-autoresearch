@@ -41,7 +41,7 @@ Make Codex Autoresearch delightful by turning its existing measured-loop primiti
 
 ```mermaid
 graph TD
-    A["Operator request or /autoresearch command"] --> B["GuidedSetupFlow"]
+    A["Operator request or Codex Autoresearch skill"] --> B["GuidedSetupFlow"]
     B --> C["DriftDoctor"]
     B --> D["ToolContractCatalog"]
     B --> E["RunProgressAdapter"]

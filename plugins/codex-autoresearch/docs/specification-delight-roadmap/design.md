@@ -188,7 +188,7 @@ export function validateToolContracts(toolSchemas) {
 
 - Keep descriptions short and specific.
 - Use output contracts in tests even if the MCP host does not yet consume output schemas.
-- Adjacent-tool contrast should cover at least `setup_plan` vs `setup_session`, `run_experiment` vs `next_experiment`, `measure_quality_gap` vs `gap_candidates`, and `finalize_preview` vs `autoresearch-finalize`.
+- Adjacent-tool contrast should cover at least `setup_plan` vs `setup_session`, `run_experiment` vs `next_experiment`, `measure_quality_gap` vs `gap_candidates`, and `finalize_preview` vs finalization branch creation.
 
 #### Component: DriftDoctor
 

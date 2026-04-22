@@ -649,7 +649,7 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 - Gather evidence first.
 - Synthesize findings into \`synthesis.md\`.
 - Convert actionable findings into \`quality-gaps.md\`.
-- Iterate with \`/autoresearch next\` until \`quality_gap=0\`.
+- Iterate with the Codex Autoresearch skill until \`quality_gap=0\`.
 `,
   "tasks.md": ({ title }) => `# Research Tasks: ${title}
 
@@ -2164,7 +2164,7 @@ function loopContinuation(workDir, state, config = {}, stage = "state", options 
     nextAction: ownerAutonomous
       ? (memory.plateau?.detected
           ? `Keep the floor: run the ${topLane?.label || "distant scout"} lane next because the current search is plateauing.`
-          : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to restart the create skill.")
+          : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to invoke another subskill.")
       : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
     commands,
     stopConditions,

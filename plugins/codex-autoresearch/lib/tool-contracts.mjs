@@ -92,7 +92,7 @@ const CONTRACTS = {
   },
   finalize_preview: {
     purpose: "Preview review-branch readiness without creating branches.",
-    whenToUse: "Use before autoresearch-finalize.",
+    whenToUse: "Use before finalizing kept autoresearch work into review branches.",
     contrast: "Use the finalizer command to create review branches.",
     safety: "Read-only.",
     outputSchema: basicOutputSchema(["ok", "ready", "warnings", "nextAction"]),

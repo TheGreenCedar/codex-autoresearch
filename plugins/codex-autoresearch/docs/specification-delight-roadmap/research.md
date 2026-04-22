@@ -17,11 +17,11 @@ Codex Autoresearch already has the primitives for accountable autonomous experim
 
 | Source | Claim Supported |
 |---|---|
-| `plugins/codex-autoresearch/README.md` | Product promise: try ideas, measure them, keep/discard, leave resumable state; dashboard, MCP tools, ASI, and quality-gap research are already first-class. |
-| `plugins/codex-autoresearch/commands/autoresearch.md` | Canonical local routing and active-loop continuation contract already exist. |
+| `README.md` | Codex-first product promise, AX/UX golden paths, root-only docs, dashboard contract, and Mermaid concept maps. |
+| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Single Codex-facing skill for start/resume, active-loop continuation, deep research, dashboard, and finalization. |
 | `plugins/codex-autoresearch/lib/mcp-interface.mjs` | MCP tool schemas expose setup, research setup, configure, run, next, log, state, quality gap, candidates, finalize preview, integrations, doctor, export, and clear. |
 | `plugins/codex-autoresearch/lib/live-server.mjs` | Live dashboard actions are intentionally limited to safe local commands. |
-| `plugins/codex-autoresearch/assets/template.html` | Static/live dashboard already has cockpit panels, safe action buttons, copyable commands, quality-gap state, finalization state, and an experiment ledger. |
+| `plugins/codex-autoresearch/assets/template.html` | Static/live dashboard has cockpit panels, safe action buttons, practical run chart, quality-gap state, finalization state, and an experiment ledger. |
 | `plugins/codex-autoresearch/lib/research-gaps.mjs` | Candidate extraction and dedupe exist, but apply writes appended candidate sections. |
 | `plugins/codex-autoresearch/lib/recipes.mjs` | Built-in recipes exist, but recipes are flat and the `quality-gap` recipe defaults to the `research` slug. |
 | `plugins/codex-autoresearch/scripts/autoresearch.mjs` | CLI owns setup, run, next, log, state, doctor, export, serve, config, quality-gap, gap-candidates, finalization preview, and MCP framing. |

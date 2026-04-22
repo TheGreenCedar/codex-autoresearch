@@ -1,4 +1,0 @@
-interface:
-  display_name: "Autoresearch Dashboard"
-  short_description: "Export an autoresearch.jsonl dashboard"
-  default_prompt: "Export the autoresearch dashboard and summarize baseline, best metric, kept runs, confidence, active segment, ready-to-finalize status, and remaining iteration limit."

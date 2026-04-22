@@ -3,8 +3,9 @@
 ## Project Shape
 
 - This repository is a wrapper for the Codex Autoresearch plugin. The active product code lives under `plugins/codex-autoresearch`.
-- Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, commands, skills, MCP server code, and dashboard assets.
-- The root `README.md` mirrors public-facing plugin docs with root-relative links. When plugin docs change, keep the root docs aligned without breaking the `plugins/codex-autoresearch/...` link shape.
+- Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, the main plugin skill, MCP server code, and dashboard assets.
+- The root `README.md` is the only README and the public-facing documentation surface. Keep root-relative links valid.
+- The root `CHANGELOG.md` is the release-note surface. Update it for user-facing behavior, docs, skill, command-surface, dashboard, MCP, migration, or version changes.
 - Do not assume root-level npm scripts exist. The package scripts live in `plugins/codex-autoresearch/package.json`.
 
 ## Product Intent
@@ -28,7 +29,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 ```
 
 - From `plugins/codex-autoresearch`, use `node scripts/autoresearch.mjs ...` and pass the target project with `--cwd`.
-- The canonical local routing doc is `plugins/codex-autoresearch/commands/autoresearch.md`. Update it when command flow, safety rules, or dashboard reporting behavior changes.
+- The canonical agent workflow doc is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`. Update it when command flow, safety rules, dashboard reporting behavior, or finalization behavior changes.
 
 ## Implementation Map
 
@@ -39,7 +40,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 - Runner behavior lives in `lib/runner.mjs`; recipes and research-gap logic live in `lib/recipes.mjs` and `lib/research-gaps.mjs`.
 - Finalization behavior lives in `scripts/finalize-autoresearch.mjs` and related tests.
 - Product-quality expectations are encoded in `scripts/perfection-benchmark.mjs`. Update this benchmark when public commands, docs, MCP contracts, or session hygiene expectations intentionally change.
-- Keep skill docs under `skills/*/SKILL.md`, command docs under `commands/`, READMEs, tests, and MCP schemas synchronized when user-facing contracts change.
+- Keep `skills/codex-autoresearch/SKILL.md`, the root README, the root changelog, tests, and MCP schemas synchronized when user-facing contracts change.
 
 ## MCP And Cache Drift
 
@@ -65,7 +66,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 
 ## Dashboard Rules
 
-- Be explicit about dashboard mode. `autoresearch-dashboard.html` is a static read-only export with embedded data and copyable commands.
+- Be explicit about dashboard mode. `autoresearch-dashboard.html` is a static read-only export with embedded data and no inert live controls or command-copy panel.
 - The served dashboard from `node scripts/autoresearch.mjs serve --cwd <project>` is the live-action surface.
 - Keep live dashboard actions local-only and bounded to safe operations such as doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions.
 - Mutating finalization stays outside the dashboard surface.
@@ -78,7 +79,9 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
   - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
   - `plugins/codex-autoresearch/scripts/autoresearch.mjs` `serverInfo.version`
   - `plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs` `VERSION`
+  - `CHANGELOG.md`
   - any tests or docs that intentionally assert or display the version
+- For non-versioned user-facing changes, add or refresh the newest dated or versioned `CHANGELOG.md` entry. Removed invocation surfaces need migration notes.
 - Run the plugin verification gate before committing or publishing a release.
 - If the user says `bump`, `push`, `publish`, `promote`, or asks whether the release is live, treat it as an end-to-end request when credentials and risk allow: update, verify, commit, push, refresh or inspect the installed runtime, and report the live evidence.
 

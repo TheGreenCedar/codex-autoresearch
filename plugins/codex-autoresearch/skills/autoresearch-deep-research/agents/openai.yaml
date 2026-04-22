@@ -1,4 +1,0 @@
-interface:
-  display_name: "Autoresearch Deep Research"
-  short_description: "Turn research into quality_gap loops"
-  default_prompt: "Create a deep-research quality_gap loop for this project."

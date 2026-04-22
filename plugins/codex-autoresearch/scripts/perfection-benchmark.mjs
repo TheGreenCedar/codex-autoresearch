@@ -4,17 +4,52 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(pluginRoot, "..", "..");
 
 async function readText(file) {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
 async function readRootText(file) {
-  return await fsp.readFile(path.resolve(pluginRoot, "..", "..", file), "utf8");
+  return await fsp.readFile(path.join(repoRoot, file), "utf8");
 }
 
 async function readJson(file) {
   return JSON.parse(await readText(file));
+}
+
+async function fileExists(file) {
+  try {
+    await fsp.access(path.join(pluginRoot, file));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function markdownFilesUnder(dir) {
+  const absolute = path.join(pluginRoot, dir);
+  try {
+    const entries = await fsp.readdir(absolute, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".md")).map((entry) => path.join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+async function skillFiles() {
+  const skillsRoot = path.join(pluginRoot, "skills");
+  const found = [];
+  async function walk(dir) {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const next = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.name === "SKILL.md") found.push(path.relative(pluginRoot, next).replaceAll(path.sep, "/"));
+    }
+  }
+  await walk(skillsRoot);
+  return found.sort();
 }
 
 function includesAll(text, values) {
@@ -69,147 +104,174 @@ const checks = [
       ) {
         return pass();
       }
-      return fail("MCP config should use cwd='.', the lightweight startup script, startup_timeout_sec, and mention next_experiment plus research tools");
+      return fail("MCP config should use cwd='.', the lightweight startup script, startup_timeout_sec, and mention next_experiment plus research tools.");
     },
   },
   {
-    id: "local-plugin-readme",
-    file: "README.md",
-    description: "README explains how to force the repo-local plugin over a globally installed/cache copy.",
+    id: "single-skill-surface",
+    file: "skills/codex-autoresearch/SKILL.md, skills/codex-autoresearch/agents/openai.yaml, commands/",
+    description: "The plugin exposes one Codex-facing skill and no duplicate command docs.",
     run: async () => {
-      const readme = await readText("README.md");
-      return includesAll(readme, [
-        "## Local Plugin Iteration",
-        "repo-local plugin",
-        "globally installed",
-        "node scripts/autoresearch.mjs",
-      ])
-        ? pass()
-        : fail("Missing local-over-global workflow guidance.");
+      const files = await skillFiles();
+      const commandMarkdown = await markdownFilesUnder("commands");
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const agents = await readText("skills/codex-autoresearch/agents/openai.yaml");
+      if (
+        files.length === 1
+        && files[0] === "skills/codex-autoresearch/SKILL.md"
+        && commandMarkdown.length === 0
+        && skill.includes("name: codex-autoresearch")
+        && skill.includes("only Codex-facing skill")
+        && agents.includes("display_name: \"Codex Autoresearch\"")
+      ) {
+        return pass();
+      }
+      return fail(`skillFiles=${files.join(",")}; commandMarkdown=${commandMarkdown.join(",")}`);
     },
   },
   {
-    id: "gpt54-operating-profile",
-    file: "README.md",
-    description: "README gives Codex + GPT-5.4 a bounded, measurable operating profile.",
+    id: "root-readme-only",
+    file: "../../README.md, README.md",
+    description: "Public docs live at the repository root instead of a duplicate plugin README.",
     run: async () => {
-      const readme = await readText("README.md");
-      return includesAll(readme, [
-        "## Codex + GPT-5.4 Operating Profile",
-        "quality_gap",
-        "autoresearch-deep-research",
-        "1.05M context",
-      ])
+      const root = await readRootText("README.md");
+      const pluginReadmeExists = await fileExists("README.md");
+      return !pluginReadmeExists
+        && includesAll(root, [
+          "## Start With Codex",
+          "Use Codex Autoresearch",
+          "## Golden Paths",
+          "## Docs",
+          "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
+        ])
         ? pass()
-        : fail("Missing GPT-5.4-specific operating profile and quality_gap stop rule.");
+        : fail(pluginReadmeExists ? "Plugin README still exists." : "Root README is missing the Codex-first workflow.");
     },
   },
   {
-    id: "research-prompt-loop",
-    file: "README.md",
-    description: "README documents how qualitative deep-research prompts become measurable autoresearch loops.",
+    id: "root-changelog-maintained",
+    file: "../../CHANGELOG.md, ../../README.md, AGENTS.md",
+    description: "User-facing plugin changes are recorded in a root changelog with migration notes.",
     run: async () => {
-      const readme = await readText("README.md");
-      return includesAll(readme, [
-        "## Deep Research Autoresearch",
-        "Research-heavy prompts",
-        "Study my project",
-        "delightful",
-        "autoresearch.research/<slug>/",
-        "METRIC quality_total",
-        "one research round",
-        "filter hallucinations",
-        "quality_gap=0 closes the accepted checklist",
-      ])
+      const changelog = await readRootText("CHANGELOG.md");
+      const readme = await readRootText("README.md");
+      const agents = await readRootText("AGENTS.md");
+      return !changelog.includes("## Unreleased")
+        && includesAll(changelog, [
+          "## 2026-04-22",
+          "single Codex-facing `codex-autoresearch` skill",
+          "root `README.md` is now the only README",
+          "Removed separate command docs",
+          "Users should ask Codex to use Codex Autoresearch directly",
+        ])
+        && includesAll(readme, [
+          "## Changelog",
+          "CHANGELOG.md",
+          "Surface removals",
+        ])
+        && includesAll(agents, [
+          "root `CHANGELOG.md`",
+          "Removed invocation surfaces need migration notes",
+        ])
         ? pass()
-        : fail("Missing the qualitative prompt-to-metric loop.");
+        : fail("Root changelog or changelog guidance is missing the current user-facing migration notes.");
     },
   },
   {
-    id: "root-readme-research-loop",
+    id: "readme-mermaid-docs",
     file: "../../README.md",
-    description: "The repository README mirrors the public deep-research quality_gap workflow.",
+    description: "Root docs use Mermaid diagrams for the loop, state, research, and runtime concepts.",
     run: async () => {
       const readme = await readRootText("README.md");
       return includesAll(readme, [
-        "## Deep Research Autoresearch",
-        "autoresearch-deep-research",
-        "plugins/codex-autoresearch/scripts/autoresearch.mjs research-setup",
-        "autoresearch.research/<slug>/",
-        "METRIC quality_closed",
-        "setup_research_session",
-        "measure_quality_gap",
-        "one research round",
-        "filter hallucinations",
+        "```mermaid",
+        "flowchart LR",
+        "stateDiagram-v2",
+        "flowchart TD",
+        "flowchart TB",
+        "continuation.shouldContinue",
+        "quality_gap benchmark",
       ])
         ? pass()
-        : fail("Root README is missing the deep-research quality_gap workflow.");
+        : fail("Root README is missing one or more Mermaid concept graphs.");
     },
   },
   {
-    id: "command-local-routing",
-    file: "commands/autoresearch.md",
-    description: "Slash-command docs protect local-plugin routing and quality-gap usage.",
+    id: "ax-ux-golden-path",
+    file: "../../README.md, skills/codex-autoresearch/SKILL.md",
+    description: "Docs make AX and UX first-class plugin paths.",
     run: async () => {
-      const command = await readText("commands/autoresearch.md");
-      return includesAll(command, [
-        "local plugin over any globally installed copy",
-        "plugins/codex-autoresearch",
-        "autoresearch-deep-research",
-        "quality_gap",
-        "one research round",
-        "filter hallucinations",
+      const readme = await readRootText("README.md");
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      return includesAll(`${readme}\n${skill}`, [
+        "AX",
+        "AI experience",
+        "UX",
+        "user experience",
+        "one skill surface",
+        "live dashboard URL",
       ])
         ? pass()
-        : fail("Command docs do not explicitly prefer the local plugin and quality_gap loops.");
+        : fail("AX/UX golden path guidance is incomplete.");
     },
   },
   {
-    id: "create-skill-research-loop",
-    file: "skills/autoresearch-create/SKILL.md",
-    description: "Create skill routes broad qualitative work to the dedicated research skill.",
+    id: "main-skill-start-resume",
+    file: "skills/codex-autoresearch/SKILL.md",
+    description: "The main skill owns start/resume setup, dashboard handoff, active loop, and Git safety.",
     run: async () => {
-      const skill = await readText("skills/autoresearch-create/SKILL.md");
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(skill, [
-        "## Broad Research Loops",
-        "autoresearch-deep-research",
-        "quality_gap",
-        "repo-local plugin",
-      ])
-        ? pass()
-        : fail("Create skill does not route qualitative work to autoresearch-deep-research.");
-    },
-  },
-  {
-    id: "create-skill-live-dashboard-link",
-    file: "skills/autoresearch-create/SKILL.md, commands/autoresearch.md",
-    description: "Start and resume workflow guidance requires a direct live dashboard URL.",
-    run: async () => {
-      const skill = await readText("skills/autoresearch-create/SKILL.md");
-      const command = await readText("commands/autoresearch.md");
-      return includesAll(`${skill}\n${command}`, [
+        "## Start Or Resume",
+        "setup_plan",
+        "setup_session",
+        "doctor_session",
         "directly provide the live dashboard URL",
         "session start and resume",
-        "serve_dashboard",
         "http://127.0.0.1:<port>/",
+        "## Active Loop Contract",
+        "continuation.shouldContinue",
+        "continuation.forbidFinalAnswer",
+        "commitPaths",
       ])
         ? pass()
-        : fail("Create and command docs must require a direct live dashboard URL at start and resume.");
+        : fail("Main skill is missing setup, dashboard, continuation, or scoped Git guidance.");
+    },
+  },
+  {
+    id: "main-skill-research-dashboard-finalize",
+    file: "skills/codex-autoresearch/SKILL.md",
+    description: "The main skill includes deep research, dashboard, and finalization workflows.",
+    run: async () => {
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      return includesAll(skill, [
+        "## Deep Research Loops",
+        "autoresearch.research/<slug>/",
+        "sources.md",
+        "synthesis.md",
+        "quality_gap=0 only means",
+        "filter hallucinations",
+        "## Dashboard",
+        "serve_dashboard",
+        "static HTML as read-only",
+        "## Finalize",
+        "finalize_preview",
+        "Runway order",
+      ])
+        ? pass()
+        : fail("Main skill is missing research, dashboard, or finalization guidance.");
     },
   },
   {
     id: "active-loop-continuation-contract",
-    file: "README.md, ../../README.md, skills/autoresearch-create/SKILL.md, commands/autoresearch.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs",
+    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs",
     description: "Owner-autonomous loops expose and document a machine-readable continuation contract after each packet.",
     run: async () => {
-      const readme = await readText("README.md");
-      const rootReadme = await readRootText("README.md");
-      const skill = await readText("skills/autoresearch-create/SKILL.md");
-      const command = await readText("commands/autoresearch.md");
+      const readme = await readRootText("README.md");
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
       const cli = await readText("scripts/autoresearch.mjs");
       const mcp = await readText("lib/mcp-interface.mjs");
-      return includesAll(`${readme}\n${rootReadme}\n${skill}\n${command}\n${cli}\n${mcp}`, [
-        "Active Loop Contract",
+      return includesAll(`${readme}\n${skill}\n${cli}\n${mcp}`, [
         "continuation.shouldContinue",
         "continuation.forbidFinalAnswer",
         "loopContinuation",
@@ -217,27 +279,6 @@ const checks = [
       ])
         ? pass()
         : fail("Missing active-loop continuation docs or CLI/MCP continuation output.");
-    },
-  },
-  {
-    id: "deep-research-skill",
-    file: "skills/autoresearch-deep-research/SKILL.md",
-    description: "Plugin-local deep research skill preserves orchestration ideas and converts them into quality_gap loops.",
-    run: async () => {
-      const skill = await readText("skills/autoresearch-deep-research/SKILL.md");
-      return includesAll(skill, [
-        "autoresearch.research/<slug>/",
-        "sources.md",
-        "synthesis.md",
-        "ASI",
-        "quality_gap",
-        "confidence",
-        "Round Protocol",
-        "filter hallucinations",
-        "quality_gap=0 only means",
-      ])
-        ? pass()
-        : fail("Deep research skill is missing scratchpad, source, synthesis, ASI, confidence, or quality_gap guidance.");
     },
   },
   {
@@ -274,9 +315,9 @@ const checks = [
     },
   },
   {
-    id: "manifest-research-prompts",
+    id: "manifest-single-skill-prompts",
     file: ".codex-plugin/plugin.json",
-    description: "Marketplace default prompts stay concise and include the deep-research quality_gap workflow.",
+    description: "Marketplace prompts point to the plugin, not subskills or slash commands.",
     run: async () => {
       const manifest = await readJson(".codex-plugin/plugin.json");
       const prompts = manifest.interface?.defaultPrompt || [];
@@ -284,12 +325,13 @@ const checks = [
       return prompts.length <= 3
         && prompts.every((prompt) => prompt.length < 128)
         && includesAll(promptText, [
-          "Start autoresearch for this project.",
-          "Create a deep-research quality_gap loop.",
-          "Finalize kept experiments into review branches.",
+          "Use Codex Autoresearch on this project.",
+          "Run a deep-research quality_gap loop.",
+          "Open the live dashboard and continue.",
         ])
+        && manifest.interface?.longDescription?.includes("one skill surface")
         ? pass()
-        : fail("Default prompts must be three concise starters including the deep-research quality_gap workflow.");
+        : fail("Default prompts should be concise plugin-level starters.");
     },
   },
   {
@@ -384,6 +426,53 @@ const checks = [
     },
   },
   {
+    id: "dashboard-practical-chart",
+    file: "assets/template.html",
+    description: "The chart is a practical run chart with status legend, baseline, best, latest, run ticks, and accessible summary.",
+    run: async () => {
+      const template = await readText("assets/template.html");
+      return includesAll(template, [
+        "chart-legend",
+        "legend-swatch keep",
+        "win-zone",
+        "best-line",
+        "latest-halo",
+        "chartRunTicks",
+        "linePath",
+        "canNormalizeChart",
+        "Baseline-normalized metric trend",
+        "formatChartRunValue",
+        "trend-chart-summary",
+      ])
+        ? pass()
+        : fail("Dashboard chart is missing practical run-chart affordances.");
+    },
+  },
+  {
+    id: "dashboard-does-not-narrate-itself",
+    file: "assets/template.html, lib/dashboard-view-model.mjs",
+    description: "Dashboard copy is operational, not explanatory placeholder text.",
+    run: async () => {
+      const template = await readText("assets/template.html");
+      const viewModel = await readText("lib/dashboard-view-model.mjs");
+      const combined = `${template}\n${viewModel}`;
+      const banned = [
+        "Codex will summarize",
+        "Generated from runs, ASI",
+        "Generated summary",
+        "what happened and what it plans",
+      ];
+      return banned.every((phrase) => !combined.includes(phrase))
+        && includesAll(combined, [
+          "Current readout",
+          "Next move",
+          "Ledger, ASI",
+        ])
+        ? pass()
+        : fail("Dashboard still contains placeholder or explanatory narration.");
+    },
+  },
+  {
     id: "dashboard-next-action-and-portfolio",
     file: "assets/template.html, lib/dashboard-view-model.mjs",
     description: "The dashboard keeps the chart, operator readout, and experiment portfolio guidance visible.",
@@ -398,7 +487,7 @@ const checks = [
         "aiSummary",
         "Next action",
         "nextBestAction",
-        "Experiment portfolio",
+        "Strategy memory",
         "lanePortfolio",
         "plateau",
       ])
@@ -425,7 +514,7 @@ const checks = [
   },
   {
     id: "full-product-cli-surface",
-    file: "scripts/autoresearch.mjs",
+    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs",
     description: "CLI and MCP expose guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.mjs");
@@ -450,7 +539,7 @@ const checks = [
   {
     id: "full-product-lib-boundaries",
     file: "lib/*.mjs",
-    description: "New product tracks live behind explicit lib module boundaries.",
+    description: "Product tracks live behind explicit lib module boundaries.",
     run: async () => {
       const files = [
         "lib/session-core.mjs",
@@ -470,20 +559,19 @@ const checks = [
   },
   {
     id: "full-product-docs",
-    file: "README.md, commands/autoresearch.md, skills/*.md",
-    description: "Public docs describe recipes, setup-plan, gap candidates, finalization preview, live actions, and integrations.",
+    file: "../../README.md, skills/codex-autoresearch/SKILL.md",
+    description: "Public docs describe recipes, setup-plan, gap candidates, finalization preview, live actions, and integrations through the single skill.",
     run: async () => {
-      const readme = await readText("README.md");
-      const command = await readText("commands/autoresearch.md");
-      const dashboard = await readText("skills/autoresearch-dashboard/SKILL.md");
-      return includesAll(readme + command + dashboard, [
+      const readme = await readRootText("README.md");
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      return includesAll(readme + skill, [
         "setup-plan",
         "gap-candidates",
         "finalize-preview",
-        "safe live actions",
+        "guarded local actions",
         "confirmed log decisions",
         "serve_dashboard",
-        "Recipes and integrations",
+        "recipes",
       ])
         ? pass()
         : fail("Docs are missing full-product workflow terms.");

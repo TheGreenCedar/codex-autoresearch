@@ -182,7 +182,7 @@ test("dashboard renders a generated Codex summary of history and plan", async ()
 
   const { getById } = await runDashboard(entries, { viewModel, commands: [] });
 
-  assert.match(getById("ai-summary-title").textContent, /Codex has enough evidence/);
+  assert.match(getById("ai-summary-title").textContent, /Next move is ready/);
   assert.match(getById("ai-summary-happened").innerHTML, /3 runs/);
   assert.match(getById("ai-summary-plan").innerHTML, /Stress the cache path|finalization/i);
   assert.match(getById("ai-summary-source").textContent, /latest #3/);

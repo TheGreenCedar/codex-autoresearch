@@ -595,30 +595,72 @@ summary:focus-visible {
 .chart-panel {
   min-height: 100%;
 }
-.chart-box { padding: 6px 12px 14px; }
-svg { display: block; width: 100%; height: 330px; }
-.plot-frame { fill: #fbfcfd; stroke: var(--soft-line); stroke-width: 1; }
-.axis { stroke: #e7ece8; stroke-width: 1; }
+.chart-box {
+  padding: 8px 12px 14px;
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin: 0 2px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+.legend-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 999px;
+  vertical-align: -1px;
+}
+.legend-swatch.keep { background: var(--teal); }
+.legend-swatch.discard { background: var(--rose); }
+.legend-swatch.crash { background: #f0c36b; border: 1px solid #d9a946; }
+.legend-rule {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 5px;
+  border-top: 2px dashed var(--amber);
+  vertical-align: 3px;
+}
+svg { display: block; width: 100%; height: 310px; }
+.plot-frame { fill: #ffffff; stroke: var(--soft-line); stroke-width: 1; }
+.win-zone { fill: rgba(8, 118, 108, .06); }
+.axis { stroke: #e4ebe7; stroke-width: 1; }
+.axis.major { stroke: #d6dfda; }
 .trend-fill { fill: url(#trend-fill); }
-.trend-shadow { fill: none; stroke: rgba(25, 75, 69, .14); stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
-.trend-line { fill: none; stroke: var(--graph); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
-.baseline-line { stroke: var(--amber); stroke-width: 1.6; stroke-dasharray: 7 9; }
+.trend-shadow { fill: none; stroke: rgba(21, 32, 28, .10); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+.trend-line { fill: none; stroke: var(--graph); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.baseline-line { stroke: var(--amber); stroke-width: 1.7; stroke-dasharray: 6 8; }
+.best-line { stroke: rgba(79, 70, 229, .72); stroke-width: 1.6; stroke-dasharray: 2 6; }
 .latest-line { stroke: rgba(79, 70, 229, .22); stroke-width: 1.4; stroke-dasharray: 4 7; }
-.run-dot { stroke: #fff; stroke-width: 2.2; }
+.run-stem { stroke: rgba(101, 112, 107, .25); stroke-width: 1; }
+.run-dot { stroke: #fff; stroke-width: 2.1; }
 .run-dot.keep { fill: var(--teal); }
 .run-dot.discard { fill: var(--rose); }
 .run-dot.crash, .run-dot.checks_failed { fill: var(--amber); }
-.muted-dot { opacity: .52; }
-.best-ring { fill: none; stroke: var(--indigo); stroke-width: 3.2; }
+.muted-dot { opacity: .58; }
+.latest-halo { fill: rgba(79, 70, 229, .13); }
+.best-ring { fill: none; stroke: var(--indigo); stroke-width: 3; }
 .axis-label {
   fill: var(--muted);
   font-size: 11px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+.axis-title {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
 .chart-callout {
   fill: #fff;
   stroke: #dce3df;
   stroke-width: 1;
+  filter: drop-shadow(0 5px 10px rgba(21, 32, 28, .08));
 }
 .chart-callout-title {
   fill: var(--muted);
@@ -888,6 +930,12 @@ svg { display: block; width: 100%; height: 330px; }
         <span class="panel-note" id="chart-note">-</span>
       </div>
       <div class="chart-box">
+        <div class="chart-legend" aria-hidden="true">
+          <span><i class="legend-swatch keep"></i>Kept</span>
+          <span><i class="legend-swatch discard"></i>Rejected</span>
+          <span><i class="legend-swatch crash"></i>Failed</span>
+          <span><i class="legend-rule"></i>Baseline</span>
+        </div>
         <p id="trend-chart-summary" class="sr-only">No metric values recorded.</p>
         <svg id="trend-chart" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-labelledby="trend-chart-title trend-chart-desc"></svg>
       </div>
@@ -917,20 +965,20 @@ svg { display: block; width: 100%; height: 330px; }
   <section class="panel codex-brief" id="evidence" aria-label="Codex generated summary">
     <div class="panel-head">
       <h2 class="panel-title">Codex brief</h2>
-      <span class="panel-note" id="ai-summary-note">Generated from runs, ASI, gaps, and finalization state</span>
+      <span class="panel-note" id="ai-summary-note">Ledger, ASI, gaps, and finalization state</span>
     </div>
     <div class="brief-grid">
       <article class="ai-summary-main">
-        <span class="readout-label">Generated summary</span>
-        <strong id="ai-summary-title">Waiting for session evidence.</strong>
-        <p id="ai-summary-subtitle">Codex will summarize what happened and what it plans to do next once runs are available.</p>
+        <span class="readout-label">Current readout</span>
+        <strong id="ai-summary-title">Run a baseline.</strong>
+        <p id="ai-summary-subtitle">Log the first packet, then follow the next ASI hint.</p>
         <div class="ai-summary-columns">
           <div>
-            <h3>What happened</h3>
+            <h3>History</h3>
             <ul class="ai-summary-list" id="ai-summary-happened"></ul>
           </div>
           <div>
-            <h3>Codex plans</h3>
+            <h3>Next move</h3>
             <ul class="ai-summary-list" id="ai-summary-plan"></ul>
           </div>
         </div>
@@ -1234,10 +1282,10 @@ function render() {
   document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
   const latestMetricRun = [...session.runs].reverse().find((run) => Number.isFinite(run.metric));
   document.getElementById("chart-note").textContent = latestMetricRun
-    ? "Best " + formatMetric(best ? best.metric : null) + " / latest " + formatMetric(latestMetricRun.metric)
+    ? "Best " + formatChartRunValue(best ? best.metric : null) + " / latest " + formatChartRunValue(latestMetricRun.metric)
     : "Waiting for metrics";
   document.getElementById("decision-note").textContent = countKept() + " kept";
-  setText("ai-summary-note", "Generated from " + metricSignature());
+  setText("ai-summary-note", "Evidence: " + metricSignature());
   renderSegmentSelector();
   renderReadout();
   renderAiSummary();
@@ -1643,6 +1691,32 @@ function formatDelta(delta) {
   return (delta > 0 ? "+" : "") + delta.toFixed(1) + "%";
 }
 
+function canNormalizeChart() {
+  return Number.isFinite(baseline) && baseline !== 0;
+}
+
+function chartValueFor(metric) {
+  if (!Number.isFinite(metric)) return null;
+  if (!canNormalizeChart()) return metric;
+  const delta = deltaFor(metric);
+  if (delta == null) return null;
+  return session.config.bestDirection === "higher" ? delta : -delta;
+}
+
+function formatChartValue(value) {
+  if (!Number.isFinite(value)) return "-";
+  if (!canNormalizeChart()) return formatMetric(value);
+  if (Math.abs(value) < .005) return "0%";
+  const places = Math.abs(value) >= 10 ? 1 : 2;
+  return (value > 0 ? "+" : "") + value.toFixed(places) + "%";
+}
+
+function formatChartRunValue(metric) {
+  if (!canNormalizeChart()) return formatMetric(metric);
+  const chartValue = chartValueFor(metric);
+  return formatMetric(metric) + " (" + formatChartValue(chartValue) + ")";
+}
+
 function formatConfidence(value) {
   return typeof value === "number" ? value.toFixed(1) + "x" : "-";
 }
@@ -1709,14 +1783,14 @@ function renderReadout() {
   const ready = kept > 0 && session.runs.length >= 2;
   document.getElementById("finalize-title").textContent = ready ? "Ready to finalize" : "Keep more evidence";
   document.getElementById("finalize-detail").textContent = ready
-    ? "Review kept runs and use /autoresearch-finalize when the branch is done."
+    ? "Review kept runs and finalize when the branch is done."
     : "A review packet needs at least one kept change and enough context to explain it.";
 }
 
 function renderAiSummary() {
   const summary = viewModel.aiSummary || fallbackAiSummary();
-  setText("ai-summary-title", summary.title || "Waiting for session evidence.");
-  setText("ai-summary-subtitle", summary.subtitle || "Codex will summarize what happened and what it plans to do next once runs are available.");
+  setText("ai-summary-title", summary.title || "Run a baseline.");
+  setText("ai-summary-subtitle", summary.subtitle || "Log the first packet, then follow the next ASI hint.");
   renderSummaryList("ai-summary-happened", summary.happened || []);
   renderSummaryList("ai-summary-plan", summary.plan || []);
   const blockers = Array.isArray(summary.blockers) && summary.blockers.length ? summary.blockers.join("; ") : "No blockers in the current dashboard state.";
@@ -1742,8 +1816,8 @@ function fallbackAiSummary() {
   const kept = countKept();
   const failed = failedRuns().length;
   return {
-    title: session.runs.length ? "Codex summarized the current run ledger." : "Codex is waiting for the first measured packet.",
-    subtitle: "Generated locally from the dashboard state.",
+    title: session.runs.length ? "Next move is ready." : "Run a baseline.",
+    subtitle: "Ledger, ASI, gaps, and finalization state.",
     happened: session.runs.length
       ? [`${session.runs.length} runs are logged: ${kept} kept and ${failed} rejected or failed.`]
       : ["No experiments have been logged yet."],
@@ -1765,18 +1839,20 @@ function renderChart() {
   const svg = document.getElementById("trend-chart");
   if (!metricValues.length) {
     setChartSummary("No metric values recorded.");
-    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><rect class="plot-frame" x="44" y="22" width="912" height="252" rx="12"></rect><text x="500" y="160" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text>';
+    svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><rect class="plot-frame" x="54" y="24" width="892" height="242" rx="10"></rect><text x="500" y="148" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text><text class="axis-label" x="500" y="174" text-anchor="middle">Run a baseline to start the chart</text>';
     return;
   }
 
   const width = 1000;
   const height = 320;
-  const pad = { left: 58, right: 44, top: 28, bottom: 44 };
-  const min = Math.min(...metricValues);
-  const max = Math.max(...metricValues);
+  const pad = { left: 76, right: 54, top: 26, bottom: 48 };
+  const chartValues = session.runs.map((run) => chartValueFor(run.metric)).filter((value) => Number.isFinite(value));
+  if (canNormalizeChart()) chartValues.push(0);
+  const min = Math.min(...chartValues);
+  const max = Math.max(...chartValues);
   const spread = max - min || Math.max(1, Math.abs(max) * .1);
-  const low = min === 0 ? 0 : min - spread * .24;
-  const high = max === 0 ? spread * .24 : max + spread * .22;
+  const low = canNormalizeChart() ? min - spread * .18 : (min === 0 ? 0 : min - spread * .24);
+  const high = canNormalizeChart() ? max + spread * .18 : (max === 0 ? spread * .24 : max + spread * .22);
   const range = high - low || 1;
   const usableW = width - pad.left - pad.right;
   const usableH = height - pad.top - pad.bottom;
@@ -1787,78 +1863,96 @@ function renderChart() {
   const yFor = (value) => pad.top + usableH - ((value - low) / range) * usableH;
 
   const points = session.runs.map((run, index) => {
-    if (!Number.isFinite(run.metric)) return null;
-    return { run, index, x: xFor(index), y: yFor(run.metric) };
+    const chartValue = chartValueFor(run.metric);
+    if (!Number.isFinite(chartValue)) return null;
+    return { run, index, chartValue, x: xFor(index), y: yFor(chartValue) };
   }).filter(Boolean);
 
-  const grid = [0, .333, .667, 1].map((part) => {
+  const grid = [0, .25, .5, .75, 1].map((part, index) => {
     const y = pad.top + usableH * part;
     const value = high - range * part;
-    return '<line class="axis" x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '"></line>' +
-      '<text class="axis-label" x="' + (pad.left - 12) + '" y="' + (y + 4) + '" text-anchor="end">' + escapeHtml(formatMetric(value)) + '</text>';
+    return '<line class="axis' + (index === 2 ? " major" : "") + '" x1="' + pad.left + '" y1="' + y + '" x2="' + (width - pad.right) + '" y2="' + y + '"></line>' +
+      '<text class="axis-label" x="' + (pad.left - 12) + '" y="' + (y + 4) + '" text-anchor="end">' + escapeHtml(formatChartValue(value)) + '</text>';
   }).join("");
 
-  const path = smoothPath(points);
+  const runTicks = chartRunTicks(points).map((point) => {
+    return '<line class="axis" x1="' + point.x + '" y1="' + (height - pad.bottom) + '" x2="' + point.x + '" y2="' + (height - pad.bottom + 6) + '"></line>' +
+      '<text class="axis-label" x="' + point.x + '" y="' + (height - 18) + '" text-anchor="middle">#' + point.run.run + '</text>';
+  }).join("");
+
+  const path = linePath(points);
   const bottomY = height - pad.bottom;
   const areaPath = points.length
     ? path + " L " + points.at(-1).x.toFixed(1) + " " + bottomY + " L " + points[0].x.toFixed(1) + " " + bottomY + " Z"
     : "";
-  const baselineY = baseline == null ? null : yFor(baseline);
+  const baselineY = baseline == null ? null : yFor(canNormalizeChart() ? 0 : baseline);
+  const winZone = baselineY == null ? "" : (canNormalizeChart() || session.config.bestDirection === "higher")
+    ? '<rect class="win-zone" x="' + pad.left + '" y="' + pad.top + '" width="' + usableW + '" height="' + Math.max(0, baselineY - pad.top) + '"></rect>'
+    : '<rect class="win-zone" x="' + pad.left + '" y="' + baselineY + '" width="' + usableW + '" height="' + Math.max(0, bottomY - baselineY) + '"></rect>';
   const baselineLine = baselineY == null ? "" : '<line class="baseline-line" x1="' + pad.left + '" y1="' + baselineY + '" x2="' + (width - pad.right) + '" y2="' + baselineY + '"></line>' +
-    '<text class="axis-label" x="' + (width - pad.right - 4) + '" y="' + (baselineY - 7) + '" text-anchor="end">baseline ' + escapeHtml(formatMetric(baseline)) + '</text>';
+    '<text class="axis-label" x="' + (width - pad.right - 4) + '" y="' + (baselineY - 7) + '" text-anchor="end">baseline ' + escapeHtml(canNormalizeChart() ? "0%" : formatMetric(baseline)) + '</text>';
   const latestPoint = points.at(-1);
   const bestPoint = best ? points.find((point) => point.index === best.index) : null;
-  const sampleEvery = Math.max(1, Math.ceil(points.length / 36));
+  const bestLine = bestPoint ? '<line class="best-line" x1="' + pad.left + '" y1="' + bestPoint.y + '" x2="' + (width - pad.right) + '" y2="' + bestPoint.y + '"></line>' : "";
+  const sampleEvery = Math.max(1, Math.ceil(points.length / 44));
+  const stems = points.map((point) => {
+    const important = point === latestPoint || point === bestPoint || point.run.status !== "keep" || point.index === 0 || point.index % sampleEvery === 0;
+    return important ? '<line class="run-stem" x1="' + point.x + '" y1="' + point.y + '" x2="' + point.x + '" y2="' + bottomY + '"></line>' : "";
+  }).join("");
   const circles = points.map((point) => {
     const important = point === latestPoint || point === bestPoint || point.run.status !== "keep" || point.index === 0 || point.index % sampleEvery === 0;
     if (!important) return "";
-    const label = "#" + point.run.run + " " + formatMetric(point.run.metric) + " " + point.run.status;
+    const label = "#" + point.run.run + " " + formatChartRunValue(point.run.metric) + " " + point.run.status + (point.run.description ? " - " + point.run.description : "");
     const ring = point === bestPoint ? '<circle class="best-ring" cx="' + point.x + '" cy="' + point.y + '" r="11"></circle>' : "";
-    const radius = point === latestPoint || point === bestPoint ? 6.5 : 4.6;
+    const halo = point === latestPoint ? '<circle class="latest-halo" cx="' + point.x + '" cy="' + point.y + '" r="15"></circle>' : "";
+    const radius = point === latestPoint || point === bestPoint ? 6.2 : 4.4;
     const muted = point.run.status === "keep" && point !== latestPoint && point !== bestPoint ? " muted-dot" : "";
-    return ring + '<circle class="run-dot ' + statusClass(point.run.status) + muted + '" cx="' + point.x + '" cy="' + point.y + '" r="' + radius + '"><title>' + escapeHtml(label) + '</title></circle>';
+    return halo + ring + '<circle class="run-dot ' + statusClass(point.run.status) + muted + '" cx="' + point.x + '" cy="' + point.y + '" r="' + radius + '"><title>' + escapeHtml(label) + '</title></circle>';
   }).join("");
   const latest = session.runs.at(-1);
   const failures = failedRuns().length;
-  const summary = "Metric trend for " + session.runs.length + " runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatMetric(best.metric) : "not available") + ". Latest " + (latest ? "#" + latest.run + " at " + formatMetric(latest.metric) + " with status " + latest.status : "not available") + ". " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
+  const summary = (canNormalizeChart() ? "Baseline-normalized metric trend" : "Metric trend") + " for " + session.runs.length + " runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatChartRunValue(best.metric) : "not available") + ". Latest " + (latest ? "#" + latest.run + " at " + formatChartRunValue(latest.metric) + " with status " + latest.status : "not available") + ". " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
   setChartSummary(summary);
 
   const latestLine = latestPoint ? '<line class="latest-line" x1="' + latestPoint.x + '" y1="' + pad.top + '" x2="' + latestPoint.x + '" y2="' + bottomY + '"></line>' : "";
-  const callouts = [
-    bestPoint && chartCallout(bestPoint.x, bestPoint.y, "Best", "#" + bestPoint.run.run + " " + formatMetric(bestPoint.run.metric), "left"),
-    latestPoint && chartCallout(latestPoint.x, latestPoint.y, "Latest", "#" + latestPoint.run.run + " " + formatMetric(latestPoint.run.metric), "right"),
-  ].filter(Boolean).join("");
+  const sameBestAndLatest = bestPoint && latestPoint && bestPoint.index === latestPoint.index;
+  const callouts = sameBestAndLatest
+    ? chartCallout(bestPoint.x, bestPoint.y, "Best + latest", "#" + bestPoint.run.run + " " + formatChartRunValue(bestPoint.run.metric), "right")
+    : [
+      bestPoint && chartCallout(bestPoint.x, bestPoint.y, "Best", "#" + bestPoint.run.run + " " + formatChartRunValue(bestPoint.run.metric), "left"),
+      latestPoint && chartCallout(latestPoint.x, latestPoint.y, "Latest", "#" + latestPoint.run.run + " " + formatChartRunValue(latestPoint.run.metric), "right"),
+    ].filter(Boolean).join("");
 
   svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">' + escapeHtml(summary) + '</desc>' +
-    '<defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#08766c" stop-opacity=".18"></stop><stop offset="72%" stop-color="#08766c" stop-opacity=".04"></stop><stop offset="100%" stop-color="#08766c" stop-opacity="0"></stop></linearGradient></defs>' +
-    '<rect class="plot-frame" x="' + (pad.left - 14) + '" y="' + (pad.top - 10) + '" width="' + (usableW + 28) + '" height="' + (usableH + 20) + '" rx="12"></rect>' +
-    grid + baselineLine + latestLine + '<path class="trend-fill" d="' + areaPath + '"></path><path class="trend-shadow" d="' + path + '"></path><path class="trend-line" d="' + path + '"></path>' + circles + callouts +
-    '<text class="axis-label" x="' + pad.left + '" y="' + (height - 14) + '">first</text>' +
-    '<text class="axis-label" x="' + (width - pad.right) + '" y="' + (height - 14) + '" text-anchor="end">latest</text>';
+    '<defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#194b45" stop-opacity=".16"></stop><stop offset="74%" stop-color="#194b45" stop-opacity=".04"></stop><stop offset="100%" stop-color="#194b45" stop-opacity="0"></stop></linearGradient></defs>' +
+    '<rect class="plot-frame" x="' + (pad.left - 16) + '" y="' + (pad.top - 10) + '" width="' + (usableW + 32) + '" height="' + (usableH + 20) + '" rx="10"></rect>' +
+    winZone + grid + runTicks + baselineLine + bestLine + latestLine + '<path class="trend-fill" d="' + areaPath + '"></path><path class="trend-shadow" d="' + path + '"></path><path class="trend-line" d="' + path + '"></path>' + stems + circles + callouts +
+    '<text class="axis-title" x="' + pad.left + '" y="15">' + escapeHtml(canNormalizeChart() ? "progress vs baseline" : session.config.metricName) + '</text>' +
+    '<text class="axis-label" x="' + (width - pad.right) + '" y="' + (height - 4) + '" text-anchor="end">runs</text>';
 }
 
-function smoothPath(points) {
+function linePath(points) {
   if (!points.length) return "";
   if (points.length === 1) return "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
-  let path = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const p0 = points[Math.max(0, index - 1)];
-    const p1 = points[index];
-    const p2 = points[index + 1];
-    const p3 = points[Math.min(points.length - 1, index + 2)];
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-    path += " C " + cp1x.toFixed(1) + " " + cp1y.toFixed(1) + ", " + cp2x.toFixed(1) + " " + cp2y.toFixed(1) + ", " + p2.x.toFixed(1) + " " + p2.y.toFixed(1);
+  return points.map((point, index) => {
+    return (index === 0 ? "M " : " L ") + point.x.toFixed(1) + " " + point.y.toFixed(1);
+  }).join("");
+}
+
+function chartRunTicks(points) {
+  if (!points.length) return [];
+  const indexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
+  if (points.length > 6) {
+    indexes.add(Math.floor((points.length - 1) * .25));
+    indexes.add(Math.floor((points.length - 1) * .75));
   }
-  return path;
+  return [...indexes].sort((a, b) => a - b).map((index) => points[index]).filter(Boolean);
 }
 
 function chartCallout(x, y, title, value, anchor) {
-  const width = 92;
+  const width = title.length > 8 ? 126 : 104;
   const height = 38;
-  const xPos = Math.max(58, Math.min(1000 - width - 44, anchor === "right" ? x - width - 10 : x + 12));
+  const xPos = Math.max(76, Math.min(1000 - width - 54, anchor === "right" ? x - width - 10 : x + 12));
   const yPos = Math.max(24, Math.min(320 - height - 44, y - height - 12));
   return '<g><rect class="chart-callout" x="' + xPos + '" y="' + yPos + '" width="' + width + '" height="' + height + '" rx="8"></rect>' +
     '<text class="chart-callout-title" x="' + (xPos + 10) + '" y="' + (yPos + 15) + '">' + escapeHtml(title) + '</text>' +

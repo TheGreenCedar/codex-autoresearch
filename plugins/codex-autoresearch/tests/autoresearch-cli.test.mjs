@@ -255,7 +255,9 @@ test("state supports negative metrics when lower is better", async () => {
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
-    assert.match(dashboard, /const low = min === 0/);
+    assert.match(dashboard, /function canNormalizeChart/);
+    assert.match(dashboard, /const low = canNormalizeChart\(\) \? min - spread \* \.18 : \(min === 0 \? 0 : min - spread \* \.24\)/);
+    assert.match(dashboard, /formatChartRunValue/);
     assert.doesNotMatch(dashboard, /run\.metric <= 0/);
     assert.match(dashboard, /Math\.abs\(baseline\)/);
   });

@@ -591,9 +591,9 @@ function buildAiSummary({
   ].filter(Boolean);
 
   if (!current.length) {
-    happened.push("No experiments have been logged yet; Codex is still waiting for a measured baseline.");
+    happened.push("No experiments have been logged yet; the loop needs a measured baseline.");
   } else {
-    happened.push(`Codex logged ${current.length} run${current.length === 1 ? "" : "s"}: ${kept.length} kept and ${failures.length} rejected or failed.`);
+    happened.push(`${current.length} run${current.length === 1 ? "" : "s"} logged: ${kept.length} kept and ${failures.length} rejected or failed.`);
     if (baseline != null && bestMetric != null) {
       const movement = delta == null ? "" : ` (${delta >= 0 ? "+" : ""}${round(delta)}%)`;
       happened.push(`The best ${metricName} is ${formatSummaryMetric(bestMetric, unit)} against a ${formatSummaryMetric(baseline, unit)} baseline${movement}; ${direction}.`);
@@ -625,8 +625,8 @@ function buildAiSummary({
   }
 
   return {
-    title: current.length ? "Codex has enough evidence to decide the next move." : "Codex is waiting for the first measured packet.",
-    subtitle: nextTitle || "Generated from the run ledger, ASI, gap state, and finalization preview.",
+    title: current.length ? "Next move is ready." : "Run a baseline.",
+    subtitle: nextTitle || "Ledger, ASI, gap state, and finalization preview.",
     happened: happened.slice(0, 3),
     plan: unique(plan).slice(0, 3),
     blockers: blockers.slice(0, 2),

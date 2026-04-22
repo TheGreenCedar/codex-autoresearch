@@ -1,4 +1,0 @@
-interface:
-  display_name: "Autoresearch Finalize"
-  short_description: "Split kept experiments into reviewable branches"
-  default_prompt: "Draft finalization groups from autoresearch history, review them, then create clean review branches with a generated review packet and union verification."

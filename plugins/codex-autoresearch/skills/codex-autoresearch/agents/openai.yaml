@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Autoresearch"
+  short_description: "Run measured Codex optimization loops"
+  default_prompt: "Use Codex Autoresearch on this project. Set up or resume the loop, open the live dashboard, run measured packets, log decisions with ASI, and finalize kept work when ready."
