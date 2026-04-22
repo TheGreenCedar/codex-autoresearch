@@ -1263,9 +1263,9 @@ function selectSegment(segment) {
 
 function refreshDerived() {
   session = selectSegment(activeSegment);
-  metricValues = session.runs.map((run) => run.metric).filter((value) => Number.isFinite(value));
+  metricValues = session.runs.filter(isMetricEvidenceRun).map((run) => run.metric);
   baseline = metricValues.length ? metricValues[0] : null;
-  best = findBestRun(session.runs, session.config.bestDirection);
+  best = findBestRun(session.runs, session.config.bestDirection, isMetricEvidenceRun);
 }
 
 function render() {
@@ -1280,9 +1280,11 @@ function render() {
   document.getElementById("confidence-value").textContent = formatConfidence(latestConfidence());
   setText("confidence-contract-value", formatConfidence(latestConfidence()));
   document.getElementById("kept-value").textContent = countKept() + " / " + session.runs.length;
-  const latestMetricRun = [...session.runs].reverse().find((run) => Number.isFinite(run.metric));
+  const visibleChartRuns = chartVisibleRuns();
+  const latestMetricRun = visibleChartRuns.at(-1);
+  const clippedCrashCount = chartClippedCrashCount();
   document.getElementById("chart-note").textContent = latestMetricRun
-    ? "Best " + formatChartRunValue(best ? best.metric : null) + " / latest " + formatChartRunValue(latestMetricRun.metric)
+    ? "Best " + formatChartRunValue(best ? best.metric : null) + " / latest plotted " + formatChartRunValue(latestMetricRun.metric) + (clippedCrashCount ? " / clipped " + clippedCrashCount + " crash" + (clippedCrashCount === 1 ? "" : "es") : "")
     : "Waiting for metrics";
   document.getElementById("decision-note").textContent = countKept() + " kept";
   setText("ai-summary-note", "Evidence: " + metricSignature());
@@ -1617,10 +1619,10 @@ function renderSegmentSelector() {
     : "Single segment";
 }
 
-function findBestRun(runs, direction) {
+function findBestRun(runs, direction, isEligible = (run) => Number.isFinite(run.metric)) {
   let bestRun = null;
   runs.forEach((run, index) => {
-    if (!Number.isFinite(run.metric)) return;
+    if (!isEligible(run)) return;
     if (!bestRun || isBetter(run.metric, bestRun.metric, direction)) bestRun = { ...run, index };
   });
   return bestRun;
@@ -1715,6 +1717,25 @@ function formatChartRunValue(metric) {
   if (!canNormalizeChart()) return formatMetric(metric);
   const chartValue = chartValueFor(metric);
   return formatMetric(metric) + " (" + formatChartValue(chartValue) + ")";
+}
+
+function isMetricEvidenceRun(run) {
+  // Crash runs can carry legacy/sentinel metrics, so they are not baseline,
+  // best, or trajectory evidence. checks_failed stays eligible when measured:
+  // the metric is real, even though validation rejected the change.
+  return run?.status !== "crash" && Number.isFinite(run?.metric);
+}
+
+function isChartVisibleRun(run) {
+  return isMetricEvidenceRun(run) && Number.isFinite(chartValueFor(run.metric));
+}
+
+function chartVisibleRuns() {
+  return session.runs.filter(isChartVisibleRun);
+}
+
+function chartClippedCrashCount() {
+  return session.runs.filter((run) => run.status === "crash").length;
 }
 
 function formatConfidence(value) {
@@ -1837,7 +1858,9 @@ function statusClass(status) {
 
 function renderChart() {
   const svg = document.getElementById("trend-chart");
-  if (!metricValues.length) {
+  const plottedRuns = chartVisibleRuns();
+  const clippedCrashCount = chartClippedCrashCount();
+  if (!plottedRuns.length) {
     setChartSummary("No metric values recorded.");
     svg.innerHTML = '<title id="trend-chart-title">Experiment metric trend</title><desc id="trend-chart-desc">No metric values recorded.</desc><rect class="plot-frame" x="54" y="24" width="892" height="242" rx="10"></rect><text x="500" y="148" text-anchor="middle" fill="' + palette.muted + '">No metric values recorded</text><text class="axis-label" x="500" y="174" text-anchor="middle">Run a baseline to start the chart</text>';
     return;
@@ -1846,7 +1869,7 @@ function renderChart() {
   const width = 1000;
   const height = 320;
   const pad = { left: 76, right: 54, top: 26, bottom: 48 };
-  const chartValues = session.runs.map((run) => chartValueFor(run.metric)).filter((value) => Number.isFinite(value));
+  const chartValues = plottedRuns.map((run) => chartValueFor(run.metric)).filter((value) => Number.isFinite(value));
   if (canNormalizeChart()) chartValues.push(0);
   const min = Math.min(...chartValues);
   const max = Math.max(...chartValues);
@@ -1857,12 +1880,12 @@ function renderChart() {
   const usableW = width - pad.left - pad.right;
   const usableH = height - pad.top - pad.bottom;
 
-  const xFor = (index) => session.runs.length <= 1
+  const xFor = (index) => plottedRuns.length <= 1
     ? pad.left + usableW / 2
-    : pad.left + (index / (session.runs.length - 1)) * usableW;
+    : pad.left + (index / (plottedRuns.length - 1)) * usableW;
   const yFor = (value) => pad.top + usableH - ((value - low) / range) * usableH;
 
-  const points = session.runs.map((run, index) => {
+  const points = plottedRuns.map((run, index) => {
     const chartValue = chartValueFor(run.metric);
     if (!Number.isFinite(chartValue)) return null;
     return { run, index, chartValue, x: xFor(index), y: yFor(chartValue) };
@@ -1892,7 +1915,7 @@ function renderChart() {
   const baselineLine = baselineY == null ? "" : '<line class="baseline-line" x1="' + pad.left + '" y1="' + baselineY + '" x2="' + (width - pad.right) + '" y2="' + baselineY + '"></line>' +
     '<text class="axis-label" x="' + (width - pad.right - 4) + '" y="' + (baselineY - 7) + '" text-anchor="end">baseline ' + escapeHtml(canNormalizeChart() ? "0%" : formatMetric(baseline)) + '</text>';
   const latestPoint = points.at(-1);
-  const bestPoint = best ? points.find((point) => point.index === best.index) : null;
+  const bestPoint = best ? points.find((point) => point.run.run === best.run) : null;
   const bestLine = bestPoint ? '<line class="best-line" x1="' + pad.left + '" y1="' + bestPoint.y + '" x2="' + (width - pad.right) + '" y2="' + bestPoint.y + '"></line>' : "";
   const sampleEvery = Math.max(1, Math.ceil(points.length / 44));
   const stems = points.map((point) => {
@@ -1910,8 +1933,10 @@ function renderChart() {
     return halo + ring + '<circle class="run-dot ' + statusClass(point.run.status) + muted + '" cx="' + point.x + '" cy="' + point.y + '" r="' + radius + '"><title>' + escapeHtml(label) + '</title></circle>';
   }).join("");
   const latest = session.runs.at(-1);
+  const latestPlotted = plottedRuns.at(-1);
   const failures = failedRuns().length;
-  const summary = (canNormalizeChart() ? "Baseline-normalized metric trend" : "Metric trend") + " for " + session.runs.length + " runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatChartRunValue(best.metric) : "not available") + ". Latest " + (latest ? "#" + latest.run + " at " + formatChartRunValue(latest.metric) + " with status " + latest.status : "not available") + ". " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
+  const clippedSummary = clippedCrashCount ? " " + clippedCrashCount + " crash run" + (clippedCrashCount === 1 ? " is" : "s are") + " clipped out of the chart scale." : "";
+  const summary = (canNormalizeChart() ? "Baseline-normalized metric trend" : "Metric trend") + " for " + plottedRuns.length + " plotted run" + (plottedRuns.length === 1 ? "" : "s") + " out of " + session.runs.length + " logged runs. Baseline " + formatMetric(baseline) + ". Best " + (best ? "#" + best.run + " at " + formatChartRunValue(best.metric) : "not available") + ". Latest plotted " + (latestPlotted ? "#" + latestPlotted.run + " at " + formatChartRunValue(latestPlotted.metric) + " with status " + latestPlotted.status : "not available") + ". Latest logged " + (latest ? "#" + latest.run + " with status " + latest.status : "not available") + "." + clippedSummary + " " + failures + " failed or discarded run" + (failures === 1 ? "" : "s") + ".";
   setChartSummary(summary);
 
   const latestLine = latestPoint ? '<line class="latest-line" x1="' + latestPoint.x + '" y1="' + pad.top + '" x2="' + latestPoint.x + '" y2="' + bottomY + '"></line>' : "";

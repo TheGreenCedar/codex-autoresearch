@@ -234,6 +234,48 @@ test("dashboard handles zero and negative metrics without unsafe percent or sign
   assert.match(getById("next-action-detail").textContent, /Track stability/);
 });
 
+test("dashboard clips crash runs out of the metric trajectory scale", async () => {
+  const entries = [
+    { type: "config", name: "crash clip path", metricName: "score", bestDirection: "higher", metricUnit: "points" },
+    { type: "run", run: 1, metric: 100, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 0, status: "crash", description: "Crashed packet", confidence: 1 },
+    { type: "run", run: 3, metric: 104, status: "discard", description: "Measured regression", confidence: 1 },
+    { type: "run", run: 4, metric: 106, status: "keep", description: "Recovered", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, { commands: [] });
+  const chart = getById("trend-chart").innerHTML;
+  const note = getById("chart-note").textContent;
+  const summary = getById("trend-chart-summary").textContent;
+
+  assert.match(note, /latest plotted/);
+  assert.match(note, /clipped 1 crash/);
+  assert.match(summary, /3 plotted runs out of 4 logged runs/);
+  assert.match(summary, /1 crash run is clipped out of the chart scale/);
+  assert.match(chart, /#4/);
+  assert.doesNotMatch(chart, /#2/);
+  assert.doesNotMatch(chart, /Infinity|NaN/);
+});
+
+test("dashboard does not let clipped crash metrics become best evidence", async () => {
+  const entries = [
+    { type: "config", name: "lower crash clip path", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 100, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 0, status: "crash", description: "Crashed packet", confidence: 1 },
+    { type: "run", run: 3, metric: 95, status: "keep", description: "Recovered", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, { commands: [] });
+  const note = getById("chart-note").textContent;
+  const summary = getById("trend-chart-summary").textContent;
+
+  assert.equal(getById("best-value").textContent, "95s");
+  assert.equal(getById("improvement-value").textContent, "+5.0%");
+  assert.match(note, /Best 95s/);
+  assert.doesNotMatch(note, /Best 0s/);
+  assert.match(summary, /Best #3 at 95s/);
+});
+
 test("stale last-run handling remains visible in dashboard guidance", async () => {
   const staleReason = "Last-run packet is stale: expected next log run #2, but current history would log #3.";
   const viewModel = {
