@@ -34,7 +34,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 ## Implementation Map
 
 - CLI command handling is split between `scripts/autoresearch.mjs` and `lib/cli-handlers.mjs`.
-- MCP schemas, dispatch, and validation live in `lib/mcp-interface.mjs`; the lightweight stdio wrapper lives in `scripts/autoresearch-mcp.mjs`.
+- MCP tool schemas and argument validation live in `lib/mcp-tool-schemas.mjs`; in-process dispatch lives in `lib/mcp-interface.mjs`; stdio CLI bridging lives in `lib/mcp-cli-adapter.mjs`; the lightweight wrapper lives in `scripts/autoresearch-mcp.mjs`.
 - Session state and metrics logic live in `lib/session-core.mjs`; keep script-facing and library-facing behavior in sync.
 - Dashboard data shaping lives in `lib/dashboard-view-model.mjs`; dashboard HTML/CSS/JS lives in `assets/template.html`.
 - Runner behavior lives in `lib/runner.mjs`; recipes and research-gap logic live in `lib/recipes.mjs` and `lib/research-gaps.mjs`.

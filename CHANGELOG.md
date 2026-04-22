@@ -16,8 +16,11 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Released `0.5.0` with MCP module splitting, React dashboard orchestration cleanup, lightweight stdio adapter parity fixes, Apache 2.0 licensing, and regression coverage for schema-to-CLI option forwarding.
 - Released `0.4.1` with the React dashboard migration, live/static dashboard mode fixes, automatic live refresh restoration, segment-local readouts, and newest-first decision history.
 - Released `0.4.0` with synchronized package, plugin manifest, full CLI MCP, and lightweight MCP version surfaces.
+- Split MCP internals into schema, dispatch, and stdio CLI-adapter modules, and moved dashboard orchestration into React hooks/components without changing the public tool or dashboard contracts.
+- Fixed the lightweight MCP stdio adapter so `guided_setup` and schema-supported options for log, export, and doctor calls reach the CLI fallback.
 - Reworked the dashboard into an operator cockpit with a dominant next-action lane, compact metric readout, guided-flow controls, strategy memory, quality-gap status, and a virtualized run ledger.
 - Rethemed the dashboard with a Flip7-inspired teal/coral/gold visual system and moved the metric chart into the primary workspace using a Recharts-backed rendering surface.
 - Rewrote the root README around Codex-first interaction rather than command-line-first operation.

@@ -88,6 +88,34 @@ async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
   throw new Error(`No MCP response for ${id}\nstdout=${stdoutFn()}\nstderr=${stderrFn()}`);
 }
 
+async function callMcpTool(name, args) {
+  const child = spawn(process.execPath, [mcpServer], {
+    cwd: pluginRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const send = (message) => {
+    child.stdin.write(mcpFrame(message));
+  };
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } });
+    send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } });
+    return await waitForMcpResponseById(() => stdout, () => stderr, 2);
+  } finally {
+    child.kill();
+  }
+}
+
 async function renderExportedDashboard(html) {
   const dom = new JSDOM(html, {
     pretendToBeVisual: true,
@@ -1188,6 +1216,56 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
   assert.equal(payload.ok, true);
   assert.equal(payload.workDir, pluginRoot);
   assert.equal(stderr, "");
+});
+
+test("mcp server dispatches guided setup through the CLI wrapper", async () => {
+  await withTempDir("mcp-guided-setup", async (dir) => {
+    const response = await callMcpTool("guided_setup", { working_dir: dir });
+    assert.equal(response.result?.isError, undefined);
+
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.workDir, dir);
+    assert.equal(payload.setup.ok, true);
+  });
+});
+
+test("mcp CLI adapter forwards schema-supported options that need CLI flags", async () => {
+  const { createCliToolCaller } = await import("../lib/mcp-cli-adapter.mjs");
+  await withTempDir("mcp-cli-adapter", async (dir) => {
+    const fakeCli = path.join(dir, "fake-cli.mjs");
+    await writeFile(fakeCli, "console.log(JSON.stringify({ args: process.argv.slice(2) }));\n", "utf8");
+    const callTool = createCliToolCaller({ cliScript: fakeCli, pluginRoot: dir, toolTimeoutSeconds: 5 });
+
+    const guided = await callTool("guided_setup", {
+      working_dir: dir,
+      recipe_id: "node-test-runtime",
+      metric_name: "seconds",
+    });
+    assert.deepEqual(guided.args.slice(0, 3), ["guide", "--cwd", dir]);
+    assert.ok(guided.args.includes("--recipe"));
+    assert.ok(guided.args.includes("--metric-name"));
+
+    const log = await callTool("log_experiment", {
+      working_dir: dir,
+      metric: 1,
+      status: "keep",
+      description: "Keep broad change",
+      allow_add_all: true,
+    });
+    assert.ok(log.args.includes("--allow-add-all"));
+
+    const exported = await callTool("export_dashboard", { working_dir: dir, full: true });
+    assert.ok(exported.args.includes("--json-full"));
+
+    const doctor = await callTool("doctor_session", {
+      working_dir: dir,
+      check_benchmark: true,
+      check_installed: true,
+    });
+    assert.ok(doctor.args.includes("--check-benchmark"));
+    assert.ok(doctor.args.includes("--check-installed"));
+  });
 });
 
 test("mcp server rejects oversized frames before parsing", async () => {

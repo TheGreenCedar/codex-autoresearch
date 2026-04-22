@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   CartesianGrid,
   LabelList,
@@ -22,8 +23,8 @@ const STATUS_COLORS = {
 };
 
 export function TrendPanel({ session, readout }) {
-  const chart = buildChart(session, readout);
-  const chartData = chart.points.map((point) => ({
+  const chart = useMemo(() => buildChart(session, readout), [readout, session]);
+  const chartData = useMemo(() => chart.points.map((point) => ({
     runLabel: `#${point.run.run}`,
     runNumber: point.run.run,
     metric: point.run.metric,
@@ -33,7 +34,7 @@ export function TrendPanel({ session, readout }) {
     best: point.best,
     latest: point.latest,
     label: `#${point.run.run} ${formatChartRunValue(point.run.metric, session.config.metricUnit)} ${point.run.status}`,
-  }));
+  })), [chart.points, session.config.metricUnit]);
   return (
     <section className="panel trend-panel" id="trend-panel" aria-label="Metric trajectory">
       <div className="panel-head">

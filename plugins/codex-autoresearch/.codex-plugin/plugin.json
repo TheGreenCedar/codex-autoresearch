@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
   "repository": "https://github.com/TheGreenCedar/codex-autoresearch",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "codex",
     "autoresearch",

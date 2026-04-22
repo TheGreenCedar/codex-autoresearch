@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { boolOption, createCliToolCaller } from "../lib/mcp-cli-adapter.mjs";
 import { mcpToolSchemas, validateToolArguments } from "../lib/mcp-interface.mjs";
 
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
-const TOOL_TIMEOUT_SECONDS = 15 * 60;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CLI_SCRIPT = path.join(SCRIPT_DIR, "autoresearch.mjs");
-const VERSION = "0.4.1";
-const liveDashboardProcesses = new Map();
+const VERSION = "0.5.0";
+const callCliTool = createCliToolCaller({ cliScript: CLI_SCRIPT, pluginRoot: PLUGIN_ROOT });
 
 let buffer = Buffer.alloc(0);
 
@@ -122,153 +121,4 @@ function requireUnsafeCommandGate(toolName, args) {
   if (hasCustomCommand && !boolOption(args.allow_unsafe_command ?? args.allowUnsafeCommand, false)) {
     throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
   }
-}
-
-async function callCliTool(name, args) {
-  if (name === "serve_dashboard") return await startLiveDashboard(args);
-  const cliArgs = cliArgsForTool(name, args);
-  const result = await runCli(cliArgs);
-  if (result.code !== 0) {
-    throw new Error(`autoresearch CLI failed (${result.code})\n${result.stderr || result.stdout}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return { ok: true, output: result.stdout.trim() };
-  }
-}
-
-async function startLiveDashboard(args) {
-  const workDir = path.resolve(args.working_dir ?? args.workingDir ?? args.cwd);
-  const port = args.port == null || args.port === "" ? null : Number(args.port);
-  const key = `${workDir}:${port ?? "auto"}`;
-  const existing = liveDashboardProcesses.get(key);
-  if (existing && !existing.child.killed) return existing.payload;
-
-  const cliArgs = ["serve", "--cwd", workDir];
-  if (port != null) cliArgs.push("--port", String(port));
-  const child = spawn(process.execPath, [CLI_SCRIPT, ...cliArgs], {
-    cwd: PLUGIN_ROOT,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
-  child.on("close", () => {
-    liveDashboardProcesses.delete(key);
-  });
-  child.on("error", () => {
-    liveDashboardProcesses.delete(key);
-  });
-
-  const payload = await waitForServePayload(child, () => stdout, () => stderr);
-  liveDashboardProcesses.set(key, { child, payload });
-  return payload;
-}
-
-async function waitForServePayload(child, stdoutFn, stderrFn) {
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    const stdout = stdoutFn().trim();
-    if (stdout.endsWith("}")) {
-      try {
-        return JSON.parse(stdout);
-      } catch {
-        // Keep waiting for a complete JSON object.
-      }
-    }
-    if (child.exitCode != null) {
-      throw new Error(`autoresearch live dashboard exited (${child.exitCode})\n${stderrFn() || stdoutFn()}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  child.kill();
-  throw new Error(`autoresearch live dashboard did not start\n${stderrFn() || stdoutFn()}`);
-}
-
-function cliArgsForTool(name, args) {
-  if (name === "setup_plan") return compactArgs(["setup-plan", cwdFlag(args), option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe), option("--catalog", args.catalog), option("--name", args.name), option("--metric-name", args.metric_name ?? args.metricName), option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand)]);
-  if (name === "list_recipes") return compactArgs(["recipes", "list", option("--catalog", args.catalog)]);
-  if (name === "setup_session") return compactArgs(["setup", cwdFlag(args), option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe), option("--catalog", args.catalog), option("--name", args.name), option("--goal", args.goal), option("--metric-name", args.metric_name ?? args.metricName), option("--metric-unit", args.metric_unit ?? args.metricUnit), option("--direction", args.direction), option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand), option("--checks-command", args.checks_command ?? args.checksCommand), option("--shell", args.shell), listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope), listOption("--off-limits", args.off_limits ?? args.offLimits), listOption("--constraints", args.constraints), listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics), listOption("--commit-paths", args.commit_paths ?? args.commitPaths), option("--max-iterations", args.max_iterations ?? args.maxIterations), option("--autonomy-mode", args.autonomy_mode ?? args.autonomyMode), option("--checks-policy", args.checks_policy ?? args.checksPolicy), option("--keep-policy", args.keep_policy ?? args.keepPolicy), option("--dashboard-refresh-seconds", args.dashboard_refresh_seconds ?? args.dashboardRefreshSeconds), flag("--overwrite", args.overwrite), flag("--create-checks", args.create_checks ?? args.createChecks), flag("--skip-init", args.skip_init ?? args.skipInit)]);
-  if (name === "setup_research_session") return compactArgs(["research-setup", cwdFlag(args), option("--slug", args.slug), option("--goal", args.goal), option("--name", args.name), option("--checks-command", args.checks_command ?? args.checksCommand), option("--shell", args.shell), listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope), listOption("--constraints", args.constraints), listOption("--commit-paths", args.commit_paths ?? args.commitPaths), option("--max-iterations", args.max_iterations ?? args.maxIterations), option("--autonomy-mode", args.autonomy_mode ?? args.autonomyMode), option("--checks-policy", args.checks_policy ?? args.checksPolicy), option("--keep-policy", args.keep_policy ?? args.keepPolicy), option("--dashboard-refresh-seconds", args.dashboard_refresh_seconds ?? args.dashboardRefreshSeconds), flag("--overwrite", args.overwrite), flag("--create-checks", args.create_checks ?? args.createChecks), flag("--skip-init", args.skip_init ?? args.skipInit)]);
-  if (name === "configure_session") return compactArgs(["config", cwdFlag(args), option("--autonomy-mode", args.autonomy_mode ?? args.autonomyMode), option("--checks-policy", args.checks_policy ?? args.checksPolicy), option("--keep-policy", args.keep_policy ?? args.keepPolicy), option("--dashboard-refresh-seconds", args.dashboard_refresh_seconds ?? args.dashboardRefreshSeconds), option("--max-iterations", args.max_iterations ?? args.maxIterations), option("--extend", args.extend), listOption("--commit-paths", args.commit_paths ?? args.commitPaths)]);
-  if (name === "init_experiment") return compactArgs(["init", cwdFlag(args), option("--name", args.name), option("--metric-name", args.metric_name ?? args.metricName), option("--metric-unit", args.metric_unit ?? args.metricUnit), option("--direction", args.direction)]);
-  if (name === "run_experiment") return compactArgs(["run", cwdFlag(args), option("--command", args.command), option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds), option("--checks-command", args.checks_command ?? args.checksCommand), option("--checks-timeout-seconds", args.checks_timeout_seconds ?? args.checksTimeoutSeconds), option("--checks-policy", args.checks_policy ?? args.checksPolicy)]);
-  if (name === "next_experiment") return compactArgs(["next", cwdFlag(args), option("--command", args.command), option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds), option("--checks-command", args.checks_command ?? args.checksCommand), option("--checks-timeout-seconds", args.checks_timeout_seconds ?? args.checksTimeoutSeconds), option("--checks-policy", args.checks_policy ?? args.checksPolicy)]);
-  if (name === "log_experiment") return compactArgs(["log", cwdFlag(args), option("--commit", args.commit), option("--metric", args.metric), option("--status", args.status), option("--description", args.description), option("--metrics", jsonOption(args.metrics)), option("--asi", jsonOption(args.asi)), listOption("--commit-paths", args.commit_paths ?? args.commitPaths), listOption("--revert-paths", args.revert_paths ?? args.revertPaths), flag("--allow-dirty-revert", args.allow_dirty_revert ?? args.allowDirtyRevert), flag("--from-last", args.from_last ?? args.fromLast)]);
-  if (name === "read_state") return compactArgs(["state", cwdFlag(args)]);
-  if (name === "measure_quality_gap") return compactArgs(["quality-gap", cwdFlag(args), option("--research-slug", args.research_slug ?? args.researchSlug), "--list"]);
-  if (name === "gap_candidates") return compactArgs(["gap-candidates", cwdFlag(args), option("--research-slug", args.research_slug ?? args.researchSlug), flag("--apply", args.apply), option("--model-command", args.model_command ?? args.modelCommand)]);
-  if (name === "finalize_preview") return compactArgs(["finalize-preview", cwdFlag(args), option("--trunk", args.trunk)]);
-  if (name === "integrations") return compactArgs(["integrations", args.subcommand || "list", option("--catalog", args.catalog)]);
-  if (name === "export_dashboard") return compactArgs(["export", cwdFlag(args), option("--output", args.output)]);
-  if (name === "serve_dashboard") return compactArgs(["serve", cwdFlag(args), option("--port", args.port)]);
-  if (name === "doctor_session") return compactArgs(["doctor", cwdFlag(args), option("--command", args.command), flag("--check-benchmark", args.check_benchmark ?? args.checkBenchmark), option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds)]);
-  if (name === "clear_session") return compactArgs(["clear", cwdFlag(args), flag("--yes", args.confirm ?? args.yes)]);
-  throw new Error(`Unknown tool: ${name}`);
-}
-
-function cwdFlag(args) {
-  return option("--cwd", args.working_dir ?? args.workingDir ?? args.cwd);
-}
-
-function option(name, value) {
-  if (value == null || value === "") return [];
-  return [name, String(value)];
-}
-
-function listOption(name, value) {
-  if (value == null || value === "") return [];
-  if (Array.isArray(value)) return option(name, value.join(","));
-  return option(name, value);
-}
-
-function jsonOption(value) {
-  if (value == null || value === "") return null;
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function flag(name, value) {
-  return boolOption(value, false) ? [name] : [];
-}
-
-function boolOption(value, fallback = false) {
-  if (value == null || value === "") return fallback;
-  if (typeof value === "boolean") return value;
-  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
-}
-
-function compactArgs(items) {
-  return items.flat().filter((item) => item != null && item !== "");
-}
-
-async function runCli(args) {
-  return await new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      cwd: PLUGIN_ROOT,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill();
-    }, TOOL_TIMEOUT_SECONDS * 1000);
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      resolve({ code: 1, stdout, stderr: error.stack || error.message || String(error) });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve({ code, stdout, stderr });
-    });
-  });
 }

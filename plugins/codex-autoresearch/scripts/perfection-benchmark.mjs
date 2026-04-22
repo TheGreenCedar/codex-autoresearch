@@ -295,13 +295,13 @@ const checks = [
   },
   {
     id: "active-loop-continuation-contract",
-    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs",
+    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.mjs",
     description: "Owner-autonomous loops expose and document a machine-readable continuation contract after each packet.",
     run: async () => {
       const readme = await readRootText("README.md");
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       const cli = await readText("scripts/autoresearch.mjs");
-      const mcp = await readText("lib/mcp-interface.mjs");
+      const mcp = `${await readText("lib/mcp-interface.mjs")}\n${await readText("lib/mcp-tool-schemas.mjs")}`;
       return includesAll(`${readme}\n${skill}\n${cli}\n${mcp}`, [
         "continuation.shouldContinue",
         "continuation.forbidFinalAnswer",
@@ -314,11 +314,11 @@ const checks = [
   },
   {
     id: "research-cli-and-mcp",
-    file: "scripts/autoresearch.mjs, lib/mcp-interface.mjs",
+    file: "scripts/autoresearch.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.mjs",
     description: "CLI help and MCP schema expose research setup and quality-gap measurement.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.mjs");
-      const mcp = await readText("lib/mcp-interface.mjs");
+      const mcp = `${await readText("lib/mcp-interface.mjs")}\n${await readText("lib/mcp-tool-schemas.mjs")}`;
       return includesAll(`${cli}\n${mcp}`, [
         "research-setup --cwd <project>",
         "quality-gap --cwd <project>",
@@ -548,12 +548,12 @@ const checks = [
   },
   {
     id: "full-product-cli-surface",
-    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs",
+    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.mjs",
     description: "CLI and MCP expose guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.mjs");
       const cliHandlers = await readText("lib/cli-handlers.mjs");
-      const mcpInterface = await readText("lib/mcp-interface.mjs");
+      const mcpInterface = `${await readText("lib/mcp-interface.mjs")}\n${await readText("lib/mcp-tool-schemas.mjs")}`;
       return includesAll(cli + cliHandlers + mcpInterface, [
         "setup-plan --cwd <project>",
         "recipes list|show",
@@ -580,6 +580,8 @@ const checks = [
         "lib/runner.mjs",
         "lib/cli-handlers.mjs",
         "lib/mcp-interface.mjs",
+        "lib/mcp-tool-schemas.mjs",
+        "lib/mcp-cli-adapter.mjs",
         "lib/recipes.mjs",
         "lib/dashboard-view-model.mjs",
         "lib/research-gaps.mjs",

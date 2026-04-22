@@ -210,4 +210,4 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 
 ## License
 
-MIT. Copyright (c) 2026 Albert Najjar.
+Apache License 2.0. Copyright (c) 2026 Albert Najjar.

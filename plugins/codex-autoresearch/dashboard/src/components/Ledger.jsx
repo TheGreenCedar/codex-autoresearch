@@ -1,9 +1,10 @@
+import { useMemo } from "react";
 import { LEDGER_ROW_HEIGHT, LEDGER_VISIBLE_ROWS, STATUS_LABELS } from "../constants.js";
 import { asiPreview, formatDelta, formatMetric } from "../model.js";
 
 export function Ledger({ session, readout }) {
-  const newest = [...session.runs].reverse();
-  const rows = newest.slice(0, LEDGER_VISIBLE_ROWS);
+  const newest = useMemo(() => [...session.runs].reverse(), [session.runs]);
+  const rows = useMemo(() => newest.slice(0, LEDGER_VISIBLE_ROWS), [newest]);
   const totalHeight = Math.max(newest.length * LEDGER_ROW_HEIGHT, rows.length * LEDGER_ROW_HEIGHT);
   return (
     <section className="panel ledger-panel" id="ledger" aria-label="Run log" hidden={!session.runs.length}>
