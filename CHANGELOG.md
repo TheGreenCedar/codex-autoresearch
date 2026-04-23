@@ -32,6 +32,7 @@ This project uses a root-only changelog because the root README is the public do
 - Reordered the dashboard around a decision-first runway: trust state, current next action, evidence, metric chart, mission control, and finalization context.
 - Added live dashboard copy affordances for the dashboard URL and next CLI command while keeping static exports read-only.
 - Added a rich internal MCP schema export for tool annotations and output contracts while preserving the conservative `tools/list` metadata required by older clients.
+- Added a shared tool registry for MCP/CLI mutation metadata, unsafe command fields, and CLI command names so new tools have one operational metadata surface to keep in sync.
 - Surfaced source-versus-installed Codex MCP runtime drift in doctor and live dashboard trust state, including the active installed cache path and restart/cache-refresh guidance while keeping static exports portable.
 
 ### Migration Notes

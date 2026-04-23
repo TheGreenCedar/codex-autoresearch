@@ -44,6 +44,8 @@ Tool arguments are validated before dispatch. Unknown arguments fail loudly so m
 
 The public `tools/list` response stays conservative for compatibility with older MCP clients: `name`, `description`, and `inputSchema`. The source also exposes richer internal tool metadata with `outputSchema` and safety annotations so tests, docs, and future modern clients can use the same contracts without weakening lightweight startup.
 
+Operational metadata such as CLI command name, mutation status, and command-bearing argument fields lives in the shared tool registry. When adding a tool, update the schema, contract, registry, dispatch handler, CLI fallback, docs, and parity tests together.
+
 Command-bearing fields require `allow_unsafe_command: true` over MCP:
 
 - `command`

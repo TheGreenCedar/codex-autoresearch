@@ -1,32 +1,11 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { runProcess } from "./runner.js";
+import { toolMutates, unsafeCommandFieldsForArgs } from "./tool-registry.js";
 
 type LooseObject = Record<string, any>;
 
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 15 * 60;
-const MUTATING_TOOLS = new Set([
-  "setup_session",
-  "setup_research_session",
-  "configure_session",
-  "init_experiment",
-  "run_experiment",
-  "next_experiment",
-  "log_experiment",
-  "gap_candidates",
-  "export_dashboard",
-  "serve_dashboard",
-  "clear_session",
-]);
-const COMMAND_FIELDS = [
-  "command",
-  "benchmark_command",
-  "benchmarkCommand",
-  "checks_command",
-  "checksCommand",
-  "model_command",
-  "modelCommand",
-];
 
 export function createCliToolCaller({
   cliScript,
@@ -138,8 +117,8 @@ export function buildCliInvocationForTool(name, args, options: LooseObject = {})
     command: process.execPath,
     args: cliScript ? [cliScript, ...cliArgs] : cliArgs,
     cwd: options.cwd || options.pluginRoot || process.cwd(),
-    mutates: MUTATING_TOOLS.has(name),
-    unsafeFields: COMMAND_FIELDS.filter((field) => args?.[field] != null && args[field] !== ""),
+    mutates: toolMutates(name),
+    unsafeFields: unsafeCommandFieldsForArgs(args),
     timeoutSeconds: options.timeoutSeconds || DEFAULT_TOOL_TIMEOUT_SECONDS,
   };
 }

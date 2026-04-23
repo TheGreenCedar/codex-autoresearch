@@ -2075,10 +2075,19 @@ test("mcp tools/list uses conservative 2024-compatible tool metadata", async () 
 });
 
 test("mcp tools expose guidance and output contracts", async () => {
-  const [{ mcpToolSchemasWithContracts, toolSchemas }, { validateToolContracts }] =
-    await Promise.all([import("../lib/mcp-interface.js"), import("../lib/tool-contracts.js")]);
+  const [
+    { mcpToolSchemasWithContracts, toolSchemas },
+    { validateToolContracts },
+    { cliCommandForTool, toolMutates, validateToolRegistry },
+  ] = await Promise.all([
+    import("../lib/mcp-interface.js"),
+    import("../lib/tool-contracts.js"),
+    import("../lib/tool-registry.js"),
+  ]);
   const contractCheck = validateToolContracts(toolSchemas);
   assert.equal(contractCheck.ok, true, contractCheck.issues.join("\n"));
+  const registryCheck = validateToolRegistry(toolSchemas);
+  assert.equal(registryCheck.ok, true, JSON.stringify(registryCheck));
 
   const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
@@ -2103,6 +2112,9 @@ test("mcp tools expose guidance and output contracts", async () => {
     richDoctor.annotations.safety,
     "Read-only unless benchmark check runs configured commands.",
   );
+  assert.equal(cliCommandForTool("next_experiment"), "next");
+  assert.equal(toolMutates("next_experiment"), true);
+  assert.equal(toolMutates("read_state"), false);
 });
 
 test("plugin MCP registration uses the lightweight startup entrypoint", async () => {
