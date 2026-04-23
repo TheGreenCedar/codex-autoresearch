@@ -42,6 +42,8 @@ Use `finalize_preview` for readiness. Branch creation stays in the finalizer CLI
 
 Tool arguments are validated before dispatch. Unknown arguments fail loudly so misspelled options do not become silent no-ops.
 
+The public `tools/list` response stays conservative for compatibility with older MCP clients: `name`, `description`, and `inputSchema`. The source also exposes richer internal tool metadata with `outputSchema` and safety annotations so tests, docs, and future modern clients can use the same contracts without weakening lightweight startup.
+
 Command-bearing fields require `allow_unsafe_command: true` over MCP:
 
 - `command`
@@ -73,4 +75,3 @@ Verify MCP startup with:
 ```bash
 node scripts/autoresearch.mjs mcp-smoke
 ```
-

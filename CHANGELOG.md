@@ -29,6 +29,10 @@ This project uses a root-only changelog because the root README is the public do
 - Normalized invalid metric values before CLI state and experiment-memory ranking so unknown metrics cannot become best evidence.
 - Restored MCP parity for `setup_plan` and `guided_setup` setup inputs such as checks commands, commit paths, and iteration limits while keeping custom command materialization behind `allow_unsafe_command: true`.
 - Made publishable package artifacts explicitly include the built `dist/` runtime, and taught the package gate to fail if `npm pack --dry-run` drops runtime shims or accidentally ships authored source and tests.
+- Reordered the dashboard around a decision-first runway: trust state, current next action, evidence, metric chart, mission control, and finalization context.
+- Added live dashboard copy affordances for the dashboard URL and next CLI command while keeping static exports read-only.
+- Added a rich internal MCP schema export for tool annotations and output contracts while preserving the conservative `tools/list` metadata required by older clients.
+- Surfaced source-versus-installed Codex MCP runtime drift in doctor and live dashboard trust state, including the active installed cache path and restart/cache-refresh guidance while keeping static exports portable.
 
 ### Migration Notes
 

@@ -58,7 +58,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
   });
 
   return (
-    <div className="runboard-shell">
+    <div
+      className={`runboard-shell ${mode.liveActions || mode.showcase ? "mode-live" : "mode-static"}`}
+    >
       <nav className="skip-links" aria-label="Skip links">
         <a href="#decision-rail">Current decision</a>
         <a href="#mission-panel">Mission control</a>
@@ -86,13 +88,13 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
         <TrustStrip mode={mode} meta={meta} viewModel={viewModel} />
 
+        <section className="decision-layout" aria-label="Current operator decision">
+          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
+        </section>
+
         <section className="metric-layout" aria-label="Metric evidence">
           <TrendPanel session={session} readout={readout} />
           <ScoreStrip session={session} readout={readout} />
-        </section>
-
-        <section className="decision-layout" aria-label="Current operator decision">
-          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
         </section>
 
         <section className="workspace-grid">

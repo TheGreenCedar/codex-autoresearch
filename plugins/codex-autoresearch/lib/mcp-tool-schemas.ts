@@ -338,7 +338,10 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-export const mcpToolSchemas = toolSchemas.map(toMcpToolSchema);
+export const mcpToolSchemas = toolSchemas.map((tool) => toMcpToolSchema(tool));
+export const mcpToolSchemasWithContracts = toolSchemas.map((tool) =>
+  toMcpToolSchema(tool, { includeContracts: true }),
+);
 
 export function validateToolArguments(name, args, options: LooseObject = {}) {
   const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
@@ -425,12 +428,16 @@ function isObjectArgument(value) {
   return typeof value === "object" && !Array.isArray(value);
 }
 
-function toMcpToolSchema(tool) {
-  return {
+export function toMcpToolSchema(tool, options: LooseObject = {}) {
+  const schema: LooseObject = {
     name: tool.name,
     description: tool.description,
     inputSchema: tool.inputSchema,
   };
+  if (!options.includeContracts) return schema;
+  if (tool.outputSchema) schema.outputSchema = tool.outputSchema;
+  if (tool.annotations) schema.annotations = tool.annotations;
+  return schema;
 }
 
 function toCamel(value) {

@@ -2075,10 +2075,8 @@ test("mcp tools/list uses conservative 2024-compatible tool metadata", async () 
 });
 
 test("mcp tools expose guidance and output contracts", async () => {
-  const [{ toolSchemas }, { validateToolContracts }] = await Promise.all([
-    import("../lib/mcp-interface.js"),
-    import("../lib/tool-contracts.js"),
-  ]);
+  const [{ mcpToolSchemasWithContracts, toolSchemas }, { validateToolContracts }] =
+    await Promise.all([import("../lib/mcp-interface.js"), import("../lib/tool-contracts.js")]);
   const contractCheck = validateToolContracts(toolSchemas);
   assert.equal(contractCheck.ok, true, contractCheck.issues.join("\n"));
 
@@ -2096,6 +2094,13 @@ test("mcp tools expose guidance and output contracts", async () => {
   assert.match(serve.description, /live local dashboard/);
   assert.equal(
     doctor.annotations.safety,
+    "Read-only unless benchmark check runs configured commands.",
+  );
+
+  const richDoctor = mcpToolSchemasWithContracts.find((tool) => tool.name === "doctor_session");
+  assert.equal(richDoctor.outputSchema.type, "object");
+  assert.equal(
+    richDoctor.annotations.safety,
     "Read-only unless benchmark check runs configured commands.",
   );
 });
@@ -2880,6 +2885,27 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
     assert.match(payload.issues.join("\n"), /primary metric/);
     assert.match(payload.nextAction, /benchmark/i);
   });
+});
+
+test("drift report warns when installed Codex MCP runtime lags source", async () => {
+  const { buildDriftReport } = await import("../lib/drift-doctor.js");
+  const report = await buildDriftReport({
+    pluginRoot,
+    includeInstalled: true,
+    inspectInstalled: async () => ({
+      ok: true,
+      available: true,
+      pluginName: "codex-autoresearch",
+      path: "C:\\Users\\alber\\.codex\\plugins\\cache\\thegreencedar-autoresearch\\codex-autoresearch\\0.5.1\\.",
+      version: "0.5.1",
+    }),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.local.version, "0.6.0");
+  assert.equal(report.installed.version, "0.5.1");
+  assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
+  assert.match(report.warnings.join("\n"), /restart Codex/);
 });
 
 test("runShell configures a POSIX process group for timeout cleanup", async () => {

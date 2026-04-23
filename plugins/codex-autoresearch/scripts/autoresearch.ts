@@ -1908,6 +1908,15 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
   const state = currentState(workDir);
   const warnings = await operatorWarningsForWorkDir(workDir);
   const settings = dashboardSettings(config, context);
+  const drift =
+    context.runtimeDrift ||
+    (await buildDriftReport({
+      pluginRoot: PLUGIN_ROOT,
+      includeInstalled: Boolean(context.includeInstalledRuntime),
+    }).catch((error) => ({
+      ok: false,
+      warnings: [error.message],
+    })));
   return buildDashboardViewModel({
     state,
     settings,
@@ -1937,10 +1946,7 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
       direction: state.config.bestDirection,
       settings,
     }),
-    drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({
-      ok: false,
-      warnings: [error.message],
-    })),
+    drift,
     warnings,
   });
 }
@@ -2359,11 +2365,19 @@ async function exportDashboard(args) {
   const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
   const commands = dashboardCommands(workDir);
   const generatedAt = new Date().toISOString();
+  const runtimeDrift = await buildDriftReport({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: false,
+  }).catch((error) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
   const dashboardContext = {
     deliveryMode: "static-export",
     generatedAt,
     sourceCwd: workDir,
     pluginVersion: PLUGIN_VERSION,
+    runtimeDrift,
   };
   const viewModel = await dashboardViewModel(workDir, config, dashboardContext);
   const html = dashboardHtml(entries, {
@@ -2417,6 +2431,13 @@ async function serveDashboard(args) {
   const startedAt = Date.now();
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   let liveUrl = "";
+  const runtimeDrift = await buildDriftReport({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: true,
+  }).catch((error) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
   const serveResult = await serveAutoresearch({
     cwd: workDir,
     port: args.port,
@@ -2430,6 +2451,7 @@ async function serveDashboard(args) {
         generatedAt,
         sourceCwd: workDir,
         pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
       };
       return dashboardHtml(entries, {
         workDir,
@@ -2456,6 +2478,7 @@ async function serveDashboard(args) {
         generatedAt: new Date().toISOString(),
         sourceCwd: workDir,
         pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
       }),
   });
   liveUrl = serveResult.url;
@@ -2818,7 +2841,10 @@ function dashboardCommands(workDir, qualityGap = null) {
   return [
     { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
-    { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
+    {
+      label: "Doctor",
+      command: `node ${script} doctor --cwd ${cwd} --check-benchmark --check-installed`,
+    },
     { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
     {
       label: "Keep last",
@@ -3447,6 +3473,7 @@ async function main() {
     return;
   }
   const handlers = createCliCommandHandlers({
+    buildDriftReport,
     buildDashboardViewModel,
     clearSession,
     configureSession,

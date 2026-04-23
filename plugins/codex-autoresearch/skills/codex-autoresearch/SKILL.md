@@ -121,11 +121,13 @@ Prefer the served dashboard:
 Read dashboard evidence in this order:
 
 1. Trust state: live versus static, stale-packet warnings, dirty Git or drift warnings, corrupt ledger warnings, and action receipts.
-2. Top metric trajectory and latest/best/baseline markers.
-3. Run log for status, metric, delta, commit, description, and ASI.
-4. Current readout for best kept change, recent failures, next action, confidence, and finalization readiness.
+2. Current decision: next safe action, why it is safe, supporting evidence, best kept change, recent failures, and confidence.
+3. Top metric trajectory and latest/best/baseline markers.
+4. Run log for status, metric, delta, commit, description, and ASI.
 5. Loop runway for setup, gap review, packet readiness, log decision, and finalization.
 6. Strategy memory for plateau and lane guidance.
+
+Live runboards may offer copy buttons for the dashboard URL and next CLI command. Static exports stay review-only and must not present inert command-copy or mutation controls.
 
 When a session config declares `metricDefinition.mode: "weighted_cost"`, read the chart as a composite score instead of a raw metric. The demo uses:
 

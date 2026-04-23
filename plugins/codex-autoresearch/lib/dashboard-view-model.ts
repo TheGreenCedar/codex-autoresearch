@@ -239,6 +239,7 @@ function buildTrustState({
         cleanText(
           firstValue(settings.pluginVersion, settings.version, state?.config?.pluginVersion),
         ) || UNKNOWN,
+      runtimeDrift: summarizeRuntimeDrift(firstValue(settings.runtimeDrift, drift)),
       generatedAt:
         cleanText(
           firstValue(settings.generatedAt, settings.exportedAt, settings.snapshotGeneratedAt),
@@ -257,6 +258,18 @@ function buildTrustState({
     decisionWarnings: unique(
       taggedReasons.filter((reason) => reason.decisionRelevant).map((reason) => reason.text),
     ),
+  };
+}
+
+function summarizeRuntimeDrift(drift) {
+  if (!drift) return null;
+  return {
+    ok: drift.ok === true,
+    sourceVersion: cleanText(drift.local?.version) || null,
+    installedVersion: cleanText(drift.installed?.version) || null,
+    installedPath: cleanText(drift.installed?.path) || null,
+    installedAvailable:
+      typeof drift.installed?.available === "boolean" ? drift.installed.available : null,
   };
 }
 

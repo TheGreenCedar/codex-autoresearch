@@ -30,7 +30,13 @@ export function TrustStrip({
   const modeLabel = showcase
     ? "Live runboard"
     : trust.modeLabel || trustModeLabel(trust.mode, mode);
-  const detail = showcase ? "100 embedded packets." : trust.detail || trust.summary || mode.detail;
+  const detail = showcase
+    ? "100 embedded packets."
+    : trust.detail ||
+      trust.summary ||
+      (mode.liveActions
+        ? mode.detail
+        : `${mode.detail} Snapshot mode is read-only; live controls are intentionally absent.`);
   const actionState = showcase
     ? "Guarded local actions enabled."
     : trust.actionState ||

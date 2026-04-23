@@ -7,6 +7,7 @@ import {
 
 export {
   mcpToolSchemas,
+  mcpToolSchemasWithContracts,
   normalizeToolArguments,
   requireUnsafeCommandGate,
   toolSchemas,

@@ -357,6 +357,13 @@ p {
   white-space: nowrap;
 }
 
+.status-strip em {
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
+}
+
 .status-strip {
   flex: 1 1 320px;
 }
@@ -405,7 +412,9 @@ p {
 
 .trust-strip.trust-static {
   border-left-color: var(--coral);
-  background: linear-gradient(180deg, #ffffff 0%, #fff0eb 100%);
+  border-width: 2px;
+  background: linear-gradient(180deg, #fff0eb 0%, #ffffff 100%);
+  box-shadow: var(--shadow-coral-glow);
 }
 
 .trust-strip.trust-showcase {
@@ -488,6 +497,10 @@ p {
   padding: 18px;
 }
 
+.mode-static .decision-panel {
+  border-left-color: var(--coral-dark);
+}
+
 .decision-copy h2 {
   max-width: 760px;
   font-size: 34px;
@@ -501,6 +514,47 @@ p {
   color: #354039;
   font-size: 15px;
   line-height: 1.45;
+}
+
+.next-command-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  max-width: 780px;
+  margin-top: 12px;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 9px;
+}
+
+.next-command-copy div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.next-command-copy span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.next-command-copy code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next-command-copy .copy-status {
+  grid-column: 1 / -1;
+  color: var(--teal-dark);
 }
 
 .evidence-chips {
@@ -1168,6 +1222,29 @@ p {
   padding-top: 10px;
 }
 
+.mission-step {
+  border: 1px solid transparent;
+  border-top: 3px dashed var(--soft-line);
+  border-radius: 8px;
+}
+
+.mission-step.inactive-step {
+  opacity: 0.62;
+}
+
+.mission-step.active-step {
+  border: 1px solid var(--teal);
+  border-left: 6px solid var(--teal);
+  background: var(--primary-bg);
+  box-shadow: var(--shadow-teal-glow);
+  padding: 12px;
+  opacity: 1;
+}
+
+.mission-step.active-step strong {
+  font-size: 16px;
+}
+
 .mission-step span,
 .memory-lane span {
   color: var(--muted);
@@ -1759,7 +1836,8 @@ p {
   .header-controls,
   .score-strip,
   .trust-cells,
-  .action-grid {
+  .action-grid,
+  .next-command-copy {
     grid-template-columns: 1fr;
   }
 

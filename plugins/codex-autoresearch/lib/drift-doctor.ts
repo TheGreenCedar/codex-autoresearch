@@ -38,8 +38,16 @@ export async function inspectVersionSurfaces({ pluginRoot }) {
 export async function inspectInstalledRouting({
   pluginName = "codex-autoresearch",
   timeoutMs = 5000,
+  run = runCodex,
 }: LooseObject = {}) {
-  const result = await runCodex(["mcp", "get", pluginName], timeoutMs);
+  if (!/^[a-z0-9._-]+$/i.test(String(pluginName))) {
+    return {
+      ok: false,
+      available: false,
+      warning: `Unable to inspect installed MCP routing: unsafe plugin name ${pluginName}`,
+    };
+  }
+  const result = await run(["mcp", "get", pluginName], timeoutMs);
   if (result.code !== 0) {
     return {
       ok: false,
@@ -60,11 +68,14 @@ export async function inspectInstalledRouting({
     pluginName,
     path: pathMatch?.[0] || "",
     version: versionMatch?.[1] || "",
-    raw: output.trim().slice(0, 4000),
   };
 }
 
-export async function buildDriftReport({ pluginRoot, includeInstalled = false }: LooseObject = {}) {
+export async function buildDriftReport({
+  pluginRoot,
+  includeInstalled = false,
+  inspectInstalled = inspectInstalledRouting,
+}: LooseObject = {}) {
   const local = await inspectVersionSurfaces({ pluginRoot });
   const report = {
     ok: local.ok,
@@ -73,13 +84,13 @@ export async function buildDriftReport({ pluginRoot, includeInstalled = false }:
     warnings: [...local.warnings],
   };
   if (includeInstalled) {
-    const installed = await inspectInstalledRouting();
+    const installed = await inspectInstalled();
     report.installed = installed;
     if (!installed.available) {
       report.warnings.push(installed.warning);
     } else if (installed.version && local.version && installed.version !== local.version) {
       report.warnings.push(
-        `Installed codex-autoresearch appears to be ${installed.version}, while local source is ${local.version}.`,
+        `Installed Codex MCP runtime is ${installed.version}, while local source is ${local.version}. Run codex mcp get codex-autoresearch for the active route, refresh the plugin cache, then restart Codex before trusting live MCP behavior.`,
       );
     }
   }
@@ -107,7 +118,27 @@ async function readRegexVersion(filePath, regex) {
 
 async function runCodex(args, timeoutMs) {
   return await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn("codex", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let child;
+    try {
+      if (process.platform === "win32") {
+        child = spawn("cmd.exe", ["/d", "/s", "/c", ["codex", ...args].join(" ")], {
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } else {
+        child = spawn("codex", args, {
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      }
+    } catch (error) {
+      resolve({
+        code: -1,
+        stdout: "",
+        stderr: String((error as Error)?.message || error),
+      });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     const timeout = setTimeout(() => {

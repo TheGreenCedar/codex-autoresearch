@@ -20,7 +20,7 @@ It is adapted from [pi-autoresearch](https://github.com/davebcn87/pi-autoresearc
 3. Each packet is logged as keep, discard, crash, or checks failed, with the reason preserved in the ledger.
 4. When the loop has useful kept work, Codex previews and creates clean review branches.
 
-The live dashboard stays beside the loop so you can see the metric trend, latest decision, best kept change, blockers, and next action.
+The live dashboard stays beside the loop so you can see whether the session is trustworthy, what the next safe action is, why it is safe, which evidence supports it, and how the metric trend is moving.
 
 ## Install
 

@@ -623,6 +623,64 @@ test("stale last-run handling remains visible in dashboard guidance", async () =
   assert.equal(getById("decision-rail").innerHTML.includes("No decisions yet"), false);
 });
 
+test("dashboard copy buttons expose the current URL and next CLI command", async () => {
+  const writes = [];
+  const viewModel = {
+    nextBestAction: {
+      title: "Replace the stale packet",
+      detail: "Run a fresh packet before logging.",
+      command: "node scripts/autoresearch.mjs next --cwd .",
+    },
+  };
+  const entries = [
+    {
+      type: "config",
+      name: "copy affordances",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById, dom } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveActionsAvailable: true,
+      liveUrl: "http://127.0.0.1:61234/",
+      viewModel,
+      commands: [],
+    },
+    {
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async (value) => {
+              writes.push(value);
+            },
+          },
+        });
+      },
+    },
+  );
+
+  assert.match(getById("next-cli-command").textContent, /autoresearch\.mjs next/);
+  getById("copy-dashboard-url").click();
+  getById("copy-next-cli-command").click();
+  await waitFor(() => writes.length === 2, "Copy buttons did not write both values.");
+  assert.deepEqual(writes, [
+    "http://127.0.0.1:61234/",
+    "node scripts/autoresearch.mjs next --cwd .",
+  ]);
+  await waitFor(
+    () => getById("copy-dashboard-url-status").hidden === false,
+    "Copy URL status did not become visible.",
+  );
+  dom.window.close();
+});
+
 test("dashboard mission control renders explicit log-decision controls", async () => {
   const viewModel = {
     missionControl: {
@@ -1079,6 +1137,13 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
       },
     },
     drift: {
+      ok: false,
+      local: { version: "0.6.0" },
+      installed: {
+        available: true,
+        version: "0.5.1",
+        path: "C:/Users/alber/.codex/plugins/cache/thegreencedar-autoresearch/codex-autoresearch/0.5.1",
+      },
       warnings: ["Cache drift warning."],
     },
     warnings: [
@@ -1091,6 +1156,8 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "0.6.0");
+  assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
 });
@@ -1187,6 +1254,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
         nextBestAction: {
           title: "Preview finalization",
           detail: "Review the packet.",
+          command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
           safeAction: "finalize-preview",
         },
       },
@@ -1200,6 +1268,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
   assert.equal(getById("live-actions-panel").hidden, true);
+  assert.equal(getById("next-command-copy").hidden, true);
   dom.window.close();
 });
 
@@ -1297,7 +1366,7 @@ test("served dashboard keeps live action controls executable", async () => {
   assert.equal(getById("trust-title").textContent, "Live local runboard");
   assert.match(getById("trust-cells").textContent, /Guarded local actions are enabled/);
   assert.equal(getById("refresh-now").textContent, "Refresh live data");
-  assert.equal(getById("live-toggle").textContent, "Live off");
+  assert.equal(getById("live-toggle").textContent, "Auto-refresh off");
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-toggle").hidden, false);
   assert.match(getById("action-note").textContent, /Guarded actions/);

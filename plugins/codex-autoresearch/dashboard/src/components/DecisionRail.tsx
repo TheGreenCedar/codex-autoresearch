@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { STATUS_LABELS, TONES } from "../constants";
 import type {
   DashboardMode,
@@ -18,6 +19,9 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const chips = evidenceChipsFor(viewModel, action, readout);
+  const [copiedCommand, setCopiedCommand] = useState(false);
+  const nextCommand = nextCommandFor(viewModel, action);
+  const canCopyNextCommand = Boolean(mode.liveActions && nextCommand);
   const suspiciousWarning = suspiciousPerfectMessage(viewModel.researchTruth || {});
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
@@ -50,6 +54,28 @@ export function DecisionRail({
             action.detail ||
             "Add ASI next_action_hint to make the next session obvious."}
         </p>
+        <div id="next-command-copy" className="next-command-copy" hidden={!canCopyNextCommand}>
+          <div>
+            <span>Next CLI command</span>
+            <code id="next-cli-command">{nextCommand}</code>
+          </div>
+          <button
+            id="copy-next-cli-command"
+            type="button"
+            className="tool-button subtle"
+            onClick={async () => {
+              if (!nextCommand) return;
+              const copied = await copyText(nextCommand);
+              setCopiedCommand(copied);
+              if (copied) window.setTimeout(() => setCopiedCommand(false), 1600);
+            }}
+          >
+            {copiedCommand ? "Copied command" : "Copy command"}
+          </button>
+          <span className="copy-status" aria-live="polite" hidden={!copiedCommand}>
+            Next CLI command copied.
+          </span>
+        </div>
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
@@ -94,6 +120,20 @@ export function DecisionRail({
         ))}
       </div>
     </section>
+  );
+}
+
+function nextCommandFor(viewModel: DashboardViewModel, action: NextBestAction) {
+  const primary = recordFrom(action.primaryCommand);
+  const guidedSetup = recordFrom(viewModel.guidedSetup);
+  const commands = recordFrom(guidedSetup.commands);
+  return firstString(
+    action.command,
+    primary.command,
+    commands.replaceLast,
+    commands.next,
+    commands.baseline,
+    commands.logLast,
   );
 }
 
@@ -156,4 +196,26 @@ function toList(value: unknown) {
       return String(item || "");
     })
     .filter(Boolean);
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function recordFrom(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 }

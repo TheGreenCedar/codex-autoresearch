@@ -227,6 +227,17 @@ export async function runCliCommand(
 async function serveCommand(args: LooseObject, deps: LooseObject) {
   const resolved = deps.resolveWorkDir(args.cwd);
   let liveUrl = "";
+  const runtimeDrift = deps.buildDriftReport
+    ? await deps
+        .buildDriftReport({
+          pluginRoot: deps.pluginRoot,
+          includeInstalled: true,
+        })
+        .catch((error) => ({
+          ok: false,
+          warnings: [error.message],
+        }))
+    : null;
   const serveResult = await deps.serveAutoresearch({
     cwd: resolved.workDir,
     port: args.port,
@@ -242,6 +253,7 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
         generatedAt,
         sourceCwd: workDir,
         pluginVersion: deps.pluginVersion || "unknown",
+        runtimeDrift,
       };
       return deps.dashboardHtml(entries, {
         workDir,
@@ -269,6 +281,7 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
         generatedAt: new Date().toISOString(),
         sourceCwd: workDir,
         pluginVersion: deps.pluginVersion || "unknown",
+        runtimeDrift,
       });
     },
   });
