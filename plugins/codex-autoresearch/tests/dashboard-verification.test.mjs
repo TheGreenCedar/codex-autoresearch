@@ -520,6 +520,11 @@ test("dashboard view model emits trust, evidence, research truth, and finalizati
       warnings: [],
     },
     finalizePreview: null,
+    warnings: [
+      "Working tree is dirty.",
+      "Corrupt autoresearch.jsonl.",
+      "Last-run packet is stale.",
+    ],
   });
 
   assert.equal(viewModel.trustState.mode, "static-export");
@@ -563,6 +568,11 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
       warnings: [],
     },
     finalizePreview: null,
+    warnings: [
+      "Working tree is dirty.",
+      "Corrupt autoresearch.jsonl.",
+      "Last-run packet is stale.",
+    ],
   });
 
   const { getById } = await runDashboard(entries, {
@@ -573,7 +583,11 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
   });
 
   assert.equal(getById("trust-title").textContent, "Static read-only export");
-  assert.match(getById("trust-warnings").textContent, /Static export is read-only|Benchmark command is missing/);
+  const warnings = getById("trust-warnings").textContent;
+  assert.match(warnings, /Static export is read-only/);
+  assert.match(warnings, /Working tree is dirty/);
+  assert.match(warnings, /Corrupt autoresearch\.jsonl/);
+  assert.match(warnings, /Last-run packet is stale/);
 });
 
 test("dashboard view model marks perfect quality metrics suspicious without freshness, breadth, or promotion evidence", () => {

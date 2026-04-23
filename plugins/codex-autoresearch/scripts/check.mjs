@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import fsp from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -20,8 +22,17 @@ const productChecks = [
   ["tests", node, ["--test", "tests/*.test.mjs"]],
 ];
 
+const dashboardBuildChecks = [
+  ["build:dashboard", node, ["node_modules/vite/bin/vite.js", "build", "--config", "vite.dashboard.config.mjs", "--logLevel", "warn"]],
+];
+
+const dashboardAssets = [
+  "assets/dashboard-build/dashboard-app.js",
+  "assets/dashboard-build/dashboard-app.css",
+];
+
 const ok = await runPhase("syntax", syntaxChecks)
-  && await runPhase("dashboard", [["build:dashboard", node, ["node_modules/vite/bin/vite.js", "build", "--config", "vite.dashboard.config.mjs", "--logLevel", "warn"]]])
+  && await runDashboardBuildWithParity()
   && await runPhase("product", productChecks);
 
 process.exit(ok ? 0 : 1);
@@ -38,6 +49,31 @@ async function runPhase(name, commands) {
     }
   }
   return results.every((result) => result.code === 0);
+}
+
+async function runDashboardBuildWithParity() {
+  const before = await dashboardAssetHashes();
+  const buildOk = await runPhase("dashboard", dashboardBuildChecks);
+  if (!buildOk) return false;
+  const after = await dashboardAssetHashes();
+  const changed = dashboardAssets.filter((file) => before[file] !== after[file]);
+  console.log("\n== dashboard parity ==");
+  if (changed.length) {
+    console.log("fail dashboard-asset-parity");
+    console.log(indent(`Dashboard build changed generated assets:\n${changed.join("\n")}\nRun npm run build:dashboard and include the rebuilt assets.`));
+    return false;
+  }
+  console.log("ok dashboard-asset-parity");
+  return true;
+}
+
+async function dashboardAssetHashes() {
+  const hashes = {};
+  for (const file of dashboardAssets) {
+    const bytes = await fsp.readFile(path.join(ROOT, file));
+    hashes[file] = createHash("sha256").update(bytes).digest("hex");
+  }
+  return hashes;
 }
 
 function runCommand([label, command, args]) {

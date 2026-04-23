@@ -129,7 +129,7 @@ Finalization has a fixed checklist:
 6. Verify the branch union, session-artifact exclusion, and generated review summary.
 7. Merge to trunk, then clean up source branches and session artifacts.
 
-Dry-run and preview output must say exactly what would happen and leave branches, refs, and the worktree unchanged.
+Preview output must say exactly what would happen and leave branches, refs, and the worktree unchanged. For branch finalization, use `finalize_preview` and `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` as the read-only planning surfaces before creating review branches.
 
 ## Docs
 
@@ -216,7 +216,7 @@ flowchart TB
 | `doctor_session` | Check setup, Git state, and benchmark metric output |
 | `clear_session` | Preview deletion targets with `dry_run`; delete session artifacts only after explicit confirmation |
 
-MCP tools reject unknown arguments before dispatch so misspelled options fail loudly. Custom command-bearing fields such as `command`, `benchmark_command`, `checks_command`, and `model_command` require `allow_unsafe_command: true`; configured benchmark scripts are preferred.
+MCP tools reject unknown arguments before dispatch so misspelled options fail loudly. Custom command-bearing fields such as `command`, `benchmark_command`, `checks_command`, and `model_command` require `allow_unsafe_command: true`; setup guidance that reads an external recipe `catalog` requires the same gate because catalog recipes can materialize benchmark/check commands. Configured benchmark scripts are preferred.
 
 ## Changelog
 

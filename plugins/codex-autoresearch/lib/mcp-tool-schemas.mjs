@@ -2,7 +2,6 @@ import { applyToolContracts } from "./tool-contracts.mjs";
 import { resolveResearchSlugForQualityGapSync } from "./research-gaps.mjs";
 
 const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
-const READ_ONLY_COMMAND_MATERIALIZATION_TOOLS = new Set(["setup_plan", "guided_setup"]);
 
 export const toolSchemas = applyToolContracts([
   {
@@ -375,13 +374,14 @@ export function normalizeToolArguments(name, args = {}) {
 }
 
 export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
-  if (READ_ONLY_COMMAND_MATERIALIZATION_TOOLS.has(toolName)) return;
   const normalized = normalizeToolArguments(toolName, args);
+  const setupCatalogCanMaterializeCommands = (toolName === "setup_plan" || toolName === "guided_setup") && Boolean(normalized.catalog);
   const hasCustomCommand = Boolean(
     normalized.command
       || normalized.benchmark_command
       || normalized.checks_command
       || normalized.model_command
+      || setupCatalogCanMaterializeCommands
   );
   if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
     throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);

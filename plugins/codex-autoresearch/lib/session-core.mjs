@@ -100,7 +100,7 @@ export function readJsonl(workDir) {
       try {
         return JSON.parse(line);
       } catch (error) {
-        throw new Error(`Invalid JSONL at line ${index + 1}: ${error.message}`);
+        throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: ${error.message}`);
       }
     });
 }

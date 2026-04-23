@@ -115,6 +115,9 @@ function validateRepoRelativePath(file, cwd) {
   if (parts.some((part) => !part || part === "." || part === "..")) {
     throw new Error(`Unsafe finalizer file path must not contain empty, dot, or parent segments: ${file}`);
   }
+  if (parts.some((part) => part.toLowerCase() === ".git")) {
+    throw new Error(`Unsafe finalizer file path must not target Git metadata: ${file}`);
+  }
   const root = path.resolve(cwd);
   const resolved = path.resolve(root, ...parts);
   const relative = path.relative(root, resolved);
@@ -249,6 +252,40 @@ async function assertNoExcludedFileConflicts(config, groups, cwd) {
     })
     .join("\n");
   throw new Error(`Finalization stopped because excluded commits touch planned kept files. Rework the kept commits or finalization plan so unkept state cannot enter review branches.\n${details}`);
+}
+
+function normalizedExcludedCommits(plan) {
+  return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : [])
+    .map((item) => ({
+      commit: String(item?.commit || ""),
+      status: String(item?.status || ""),
+      subject: String(item?.subject || ""),
+    }));
+}
+
+function assertGeneratedPlanMetadata(config) {
+  const hasExcludedCount = Object.hasOwn(config, "excluded_commit_count");
+  const looksGenerated = Boolean(
+    config.source_branch
+      || config.planned_at
+      || config.plan_fingerprint
+      || hasExcludedCount
+      || Object.hasOwn(config, "kept_run_count")
+      || Object.hasOwn(config, "kept_commits")
+  );
+  if (hasExcludedCount) {
+    const count = Number(config.excluded_commit_count);
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error("Stale finalization plan: excluded_commit_count must be a non-negative integer. Rerun finalizer plan.");
+    }
+    const excluded = normalizedExcludedCommits(config);
+    if (count !== excluded.length) {
+      throw new Error("Stale finalization plan: excluded_commit_count does not match excluded_commits. Rerun finalizer plan.");
+    }
+  }
+  if (looksGenerated && !config.plan_fingerprint) {
+    throw new Error("Stale finalization plan: generated plan fingerprint is missing. Rerun finalizer plan.");
+  }
 }
 
 function safeSlug(value) {
@@ -767,6 +804,7 @@ async function main() {
     if (currentHead !== config.final_tree) throw new Error("Stale finalization plan: current HEAD differs from planned final_tree. Rerun finalizer plan.");
     const currentBase = (await git(["merge-base", config.trunk, "HEAD"], cwd)).stdout.trim();
     if (currentBase !== config.base) throw new Error("Stale finalization plan: trunk merge-base differs from planned base. Rerun finalizer plan.");
+    assertGeneratedPlanMetadata(config);
     if (config.plan_fingerprint && config.plan_fingerprint !== planFingerprint(config)) throw new Error("Stale finalization plan: plan fingerprint does not match contents. Rerun finalizer plan.");
     return branch;
   });
@@ -838,6 +876,7 @@ function planFingerprint(plan) {
     goal: plan.goal || "",
     kept_commits: plan.kept_commits || [],
     kept_run_count: plan.kept_run_count || 0,
+    excluded_commits: normalizedExcludedCommits(plan),
     excluded_commit_count: plan.excluded_commit_count || 0,
     overlap_files: plan.overlap_files || [],
     groups: (plan.groups || []).map((group) => ({

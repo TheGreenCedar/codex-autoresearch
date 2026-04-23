@@ -37,10 +37,11 @@ UX, the user experience:
 1. Read existing `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 2. Prefer MCP `setup_plan` for a read-only packet. Use `setup_session` when essentials are known.
 3. If MCP is unavailable, use `scripts/autoresearch.mjs setup-plan`, `recipes list`, `setup`, and `doctor` from the plugin root.
-4. Require a benchmark that prints the primary metric as `METRIC name=value`. Secondary metrics can explain tradeoffs.
-5. Run `doctor_session` or `doctor --check-benchmark` before trusting a first packet.
-6. Start the live dashboard with MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the served URL.
-7. Run and log the baseline immediately.
+4. Over MCP, pass `allow_unsafe_command: true` before materializing custom benchmark/check commands or external recipe-catalog commands in setup guidance.
+5. Require a benchmark that prints the primary metric as `METRIC name=value`. Secondary metrics can explain tradeoffs.
+6. Run `doctor_session` or `doctor --check-benchmark` before trusting a first packet.
+7. Start the live dashboard with MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the served URL.
+8. Run and log the baseline immediately.
 
 Required session files:
 
@@ -138,7 +139,7 @@ Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize_preview` or `scripts/autoresearch.mjs finalize-preview --cwd <project>`.
 2. Read `autoresearch.jsonl` and keep only `status: "keep"`.
-3. Treat preview and dry-run output as read-only. They must describe planned branch/ref/worktree effects and leave the repo unchanged.
+3. Treat `finalize_preview` and `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` output as read-only. They must describe planned branch/ref/worktree effects and leave the repo unchanged.
 4. Use `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` to draft non-overlapping groups. By default the plan is stored under Git metadata, not the feature branch.
 5. Review excluded commits. Unkept, discarded, crash, checks-failed, and unknown-history commits do not belong in review branches.
 6. Review groups for dependency and file overlap. Use collapse-overlap only when kept commits can be replayed without excluded commits touching planned files; otherwise the finalizer must fail closed and the kept work needs to be reworked.

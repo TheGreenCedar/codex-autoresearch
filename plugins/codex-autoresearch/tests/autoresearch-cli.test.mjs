@@ -280,6 +280,20 @@ test("state supports negative metrics when lower is better", async () => {
   });
 });
 
+test("state reports corrupt JSONL with the ledger path", async () => {
+  await withTempDir("state-corrupt-jsonl", async (dir) => {
+    await writeFile(path.join(dir, "autoresearch.jsonl"), [
+      JSON.stringify({ type: "config", name: "corrupt state", metricName: "seconds" }),
+      "{ not valid json",
+    ].join("\n") + "\n", "utf8");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.notEqual(state.code, 0);
+    assert.match(state.stderr, /autoresearch\.jsonl/);
+    assert.match(state.stderr, /line 2/);
+  });
+});
+
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "discarded best", "--metric-name", "seconds", "--direction", "lower"]);
@@ -1533,6 +1547,13 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.match(unknown.result.content[0].text, /Unknown argument/);
     assert.doesNotMatch(unknown.result.content[0].text, /\n\s+at\s/);
 
+    const gatedPlan = await callMcpTool("setup_plan", {
+      working_dir: dir,
+      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
+    });
+    assert.equal(gatedPlan.result.isError, true);
+    assert.match(gatedPlan.result.content[0].text, /allow_unsafe_command=true/);
+
     const readOnlyPlan = await callMcpTool("setup_plan", {
       working_dir: dir,
       name: "read only command plan",
@@ -1541,6 +1562,7 @@ test("mcp server rejects unknown arguments and gated command materialization", a
       checks_command: "node -e \"process.exit(0)\"",
       commit_paths: ["src", "tests"],
       max_iterations: 7,
+      allow_unsafe_command: true,
     });
     assert.equal(readOnlyPlan.result?.isError, undefined, readOnlyPlan.result?.content?.[0]?.text);
     const readOnlyPayload = JSON.parse(readOnlyPlan.result.content[0].text);
@@ -1555,6 +1577,33 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.equal(fractionalPlan.result.isError, true);
     assert.match(fractionalPlan.result.content[0].text, /max_iterations must be an integer/);
 
+    const gatedGuide = await callMcpTool("guided_setup", {
+      working_dir: dir,
+      checks_command: "node -e \"process.exit(0)\"",
+    });
+    assert.equal(gatedGuide.result.isError, true);
+    assert.match(gatedGuide.result.content[0].text, /allow_unsafe_command=true/);
+
+    const catalog = path.join(dir, "recipes.json");
+    await writeFile(catalog, JSON.stringify({
+      recipes: [{
+        id: "external-runtime",
+        title: "External Runtime",
+        metricName: "seconds",
+        metricUnit: "s",
+        direction: "lower",
+        benchmarkCommand: "node -e \"console.log('METRIC seconds=1')\"",
+        checksCommand: "node -e \"process.exit(0)\"",
+      }],
+    }), "utf8");
+    const gatedCatalog = await callMcpTool("setup_plan", {
+      working_dir: dir,
+      recipe_id: "external-runtime",
+      catalog,
+    });
+    assert.equal(gatedCatalog.result.isError, true);
+    assert.match(gatedCatalog.result.content[0].text, /allow_unsafe_command=true/);
+
     const readOnlyGuide = await callMcpTool("guided_setup", {
       working_dir: dir,
       name: "read only guide",
@@ -1563,12 +1612,24 @@ test("mcp server rejects unknown arguments and gated command materialization", a
       checks_command: "node -e \"process.exit(0)\"",
       commit_paths: ["src"],
       max_iterations: 3,
+      allow_unsafe_command: true,
     });
     assert.equal(readOnlyGuide.result?.isError, undefined, readOnlyGuide.result?.content?.[0]?.text);
     const guidePayload = JSON.parse(readOnlyGuide.result.content[0].text);
     assert.match(guidePayload.setup.nextCommand, /--checks-command/);
     assert.match(guidePayload.setup.nextCommand, /--commit-paths "src"/);
     assert.match(guidePayload.setup.nextCommand, /--max-iterations "3"/);
+
+    const allowedCatalog = await callMcpTool("setup_plan", {
+      working_dir: dir,
+      recipe_id: "external-runtime",
+      catalog,
+      allow_unsafe_command: true,
+    });
+    assert.equal(allowedCatalog.result?.isError, undefined, allowedCatalog.result?.content?.[0]?.text);
+    const catalogPayload = JSON.parse(allowedCatalog.result.content[0].text);
+    assert.match(catalogPayload.nextCommand, /--benchmark-command/);
+    assert.match(catalogPayload.nextCommand, /--checks-command/);
 
     const fractionalExtend = await callMcpTool("configure_session", {
       working_dir: dir,
@@ -1794,6 +1855,49 @@ test("large no-newline benchmark tails do not hide early metrics", async () => {
     assert.equal(payload.outputTruncated, true);
     assert.ok(payload.tailOutput.length < 9000);
     assert.equal(payload.parsedPrimary, 2);
+  });
+});
+
+test("large metric streams retain bounded metrics and primary evidence", async () => {
+  await withTempDir("large-metric-stream", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "large metric stream", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
+    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricsTruncated, true);
+    assert.equal(payload.parsedPrimary, 1);
+    assert.equal(payload.parsedMetrics.seconds, 1);
+    assert.ok(Object.keys(payload.parsedMetrics).length <= 513);
+  });
+});
+
+test("large metric streams keep a primary metric outside retained output tails", async () => {
+  await withTempDir("large-metric-primary-middle", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "large primary stream", "--metric-name", "seconds"]);
+    const emitter = path.join(dir, "emit-metrics.mjs");
+    await writeFile(emitter, [
+      "function writeMetrics(prefix, count) {",
+      "  let chunk = '';",
+      "  for (let i = 0; i < count; i += 1) {",
+      "    chunk += `METRIC ${prefix}${i}=${i}\\n`;",
+      "    if (chunk.length > 65536) { process.stdout.write(chunk); chunk = ''; }",
+      "  }",
+      "  if (chunk) process.stdout.write(chunk);",
+      "}",
+      "writeMetrics('pre', 12000);",
+      "process.stdout.write('METRIC seconds=7\\n');",
+      "writeMetrics('post', 90000);",
+    ].join("\n"), "utf8");
+    const command = `${quoteForShell(process.execPath)} ${quoteForShell(emitter)}`;
+    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.metricsTruncated, true);
+    assert.equal(payload.parsedPrimary, 7);
+    assert.equal(payload.parsedMetrics.seconds, 7);
+    assert.ok(Object.keys(payload.parsedMetrics).length <= 513);
   });
 });
 

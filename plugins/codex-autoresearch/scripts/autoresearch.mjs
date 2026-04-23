@@ -45,6 +45,8 @@ const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
 const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
 const METRIC_LINE_MAX_CHARS = 4096;
+const METRIC_OUTPUT_CAPTURE_BYTES = 64 * 1024;
+const MAX_PARSED_METRICS = 512;
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -794,7 +796,7 @@ function readJsonl(workDir) {
       try {
         return JSON.parse(line);
       } catch (error) {
-        throw new Error(`Invalid JSONL at line ${index + 1}: ${error.message}`);
+        throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: ${error.message}`);
       }
     });
 }
@@ -890,17 +892,50 @@ function computeConfidence(runs, direction) {
   return Math.abs(best - baseline) / mad;
 }
 
-function parseMetricLines(output) {
+function parseMetricLines(output, options = {}) {
   const metrics = {};
+  const maxMetrics = Number.isInteger(options.maxMetrics) && options.maxMetrics > 0
+    ? options.maxMetrics
+    : Infinity;
+  const primaryMetricName = options.primaryMetricName ? String(options.primaryMetricName) : "";
+  const withTruncation = Boolean(options.withTruncation);
+  let truncated = false;
+  let retainedCount = 0;
   const regex = /^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/gim;
   let match;
   while ((match = regex.exec(output)) !== null) {
     const name = match[1];
     if (DENIED_METRIC_NAMES.has(name)) continue;
     const value = Number(match[2]);
-    if (Number.isFinite(value)) metrics[name] = value;
+    if (!Number.isFinite(value)) continue;
+    if (Object.hasOwn(metrics, name)) {
+      metrics[name] = value;
+    } else if (name === primaryMetricName || retainedCount < maxMetrics) {
+      metrics[name] = value;
+      retainedCount += 1;
+    } else {
+      truncated = true;
+    }
   }
-  return metrics;
+  return withTruncation ? { metrics, truncated } : metrics;
+}
+
+function metricParseSource(result) {
+  if (!result) return "";
+  const retained = result.retainedMetricOutput || "";
+  if (result.metricOutput) {
+    return [
+      result.metricOutput,
+      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
+      retained,
+    ].filter(Boolean).join("\n");
+  }
+  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
+}
+
+function metricLineName(line) {
+  const match = String(line || "").trim().match(/^METRIC\s+([^=\s]+)=/i);
+  return match && !DENIED_METRIC_NAMES.has(match[1]) ? match[1] : "";
 }
 
 function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
@@ -914,7 +949,7 @@ function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES
   return trimmed;
 }
 
-async function runShell(command, cwd, timeoutSeconds) {
+async function runShell(command, cwd, timeoutSeconds, options = {}) {
   const startedAt = Date.now();
   return await new Promise((resolve) => {
     const child = spawn(command, {
@@ -927,10 +962,28 @@ async function runShell(command, cwd, timeoutSeconds) {
     let output = "";
     let fullOutput = "";
     let metricOutput = "";
+    let metricOutputBytes = 0;
     let pendingMetricText = "";
+    const retainedMetricNames = new Set((options.retainMetricNames || []).map(String).filter(Boolean));
+    const retainedMetricLines = new Map();
     let outputTruncated = false;
     let fullOutputTruncated = false;
+    let metricOutputTruncated = false;
     let timedOut = false;
+    const appendMetricLine = (line) => {
+      const name = metricLineName(line);
+      if (name && retainedMetricNames.has(name)) {
+        retainedMetricLines.set(name, line);
+      }
+      const text = `${line}\n`;
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (metricOutputBytes + bytes > METRIC_OUTPUT_CAPTURE_BYTES) {
+        metricOutputTruncated = true;
+        return;
+      }
+      metricOutput += text;
+      metricOutputBytes += bytes;
+    };
     const appendMetricLines = (text) => {
       pendingMetricText += text;
       const lines = pendingMetricText.split(/\r?\n/);
@@ -939,7 +992,7 @@ async function runShell(command, cwd, timeoutSeconds) {
         pendingMetricText = pendingMetricText.slice(-METRIC_LINE_MAX_CHARS);
       }
       for (const line of lines) {
-        if (/^METRIC\s+/i.test(line.trim())) metricOutput += `${line}\n`;
+        if (/^METRIC\s+/i.test(line.trim())) appendMetricLine(line);
       }
     };
     const appendOutput = (text) => {
@@ -969,7 +1022,8 @@ async function runShell(command, cwd, timeoutSeconds) {
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
-      if (/^METRIC\s+/i.test(pendingMetricText.trim())) metricOutput += `${pendingMetricText}\n`;
+      if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
+      const retainedMetricOutput = [...retainedMetricLines.values()].map((line) => `${line}\n`).join("");
       resolve({
         command,
         exitCode: null,
@@ -978,13 +1032,16 @@ async function runShell(command, cwd, timeoutSeconds) {
         output: String(error.stack || error.message || error),
         fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${String(error.stack || error.message || error)}`,
         metricOutput,
+        retainedMetricOutput,
+        metricOutputTruncated,
         outputTruncated,
         fullOutputTruncated,
       });
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
-      if (/^METRIC\s+/i.test(pendingMetricText.trim())) metricOutput += `${pendingMetricText}\n`;
+      if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
+      const retainedMetricOutput = [...retainedMetricLines.values()].map((line) => `${line}\n`).join("");
       resolve({
         command,
         exitCode: code,
@@ -993,6 +1050,8 @@ async function runShell(command, cwd, timeoutSeconds) {
         output,
         fullOutput,
         metricOutput,
+        retainedMetricOutput,
+        metricOutputTruncated,
         outputTruncated,
         fullOutputTruncated,
       });
@@ -1711,9 +1770,16 @@ async function runExperiment(args) {
     throw new Error(`maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`);
   }
   const command = args.command || await defaultBenchmarkCommand(workDir);
-  const benchmark = await runShell(command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS));
+  const benchmark = await runShell(command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS), {
+    retainMetricNames: [state.config.metricName],
+  });
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
-  const parsedMetrics = parseMetricLines(benchmark.metricOutput || benchmark.fullOutput || benchmark.output);
+  const parsedMetricResult = parseMetricLines(metricParseSource(benchmark), {
+    primaryMetricName: state.config.metricName,
+    maxMetrics: MAX_PARSED_METRICS,
+    withTruncation: true,
+  });
+  const parsedMetrics = parsedMetricResult.metrics;
   const primary = parsedMetrics[state.config.metricName] ?? null;
   const primaryPresent = finiteMetric(primary) != null;
   const primaryMetric = finiteMetric(primary);
@@ -1759,7 +1825,8 @@ async function runExperiment(args) {
     metricError,
     checksPolicy,
     improvesPrimary,
-    outputTruncated: Boolean(benchmark.outputTruncated || benchmark.fullOutputTruncated || checks?.outputTruncated || checks?.fullOutputTruncated),
+    outputTruncated: Boolean(benchmark.outputTruncated || benchmark.fullOutputTruncated || benchmark.metricOutputTruncated || checks?.outputTruncated || checks?.fullOutputTruncated || checks?.metricOutputTruncated),
+    metricsTruncated: Boolean(parsedMetricResult.truncated || benchmark.metricOutputTruncated),
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
     progress,
@@ -2568,10 +2635,12 @@ async function doctorSession(args) {
       benchmark.metricError = "No benchmark command was provided and no autoresearch script was found.";
       issues.push(benchmark.metricError);
     } else {
-      const run = await runShell(benchmark.command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
+      const run = await runShell(benchmark.command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60), {
+        retainMetricNames: [state.config.metricName],
+      });
       benchmark.exitCode = run.exitCode;
       benchmark.timedOut = run.timedOut;
-      benchmark.parsedMetrics = parseMetricLines(run.metricOutput || run.fullOutput || run.output);
+      benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
       benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
       benchmark.progress = buildRunProgress({
         benchmark: run,

@@ -10,14 +10,17 @@ This project uses a root-only changelog because the root README is the public do
 
 - Documented the evidence-integrity contract for metric parsing, missing metrics, no-change keeps, last-run freshness, and corrupt JSONL surfacing.
 - Documented live/static dashboard trust state, including serve-or-restart guidance, read-only static exports, suspicious perfect-score handling, and the `quality_gap=0` research-round boundary.
-- Documented the finalization checklist from preview through merge and cleanup, including clear dry-run expectations and collapse-overlap guidance for coupled kept commits.
+- Documented the finalization checklist from preview through merge and cleanup, including read-only plan expectations and collapse-overlap guidance for coupled kept commits.
 
 ### Fixed
 
 - Preserved the full union file set when executing collapsed finalizer plans for overlapping kept commits.
 - Hardened follow-up evidence fixes so finalizer plans reject unsafe paths, collapsed plans replay kept sources without excluded-file leakage, last-run freshness sees untracked directory edits, raw ASI JSON stays authoritative when edited, and integer limits reject fractional values.
+- Hardened generated finalizer plan fingerprints against excluded-commit tampering and rejected inconsistent excluded-commit metadata before branch creation.
+- Made dashboard trust reasons fully visible, bounded retained CLI metric maps while preserving the primary metric in large streams, surfaced corrupt JSONL file paths in state readers, and made `npm run check` fail when rebuilt dashboard assets are stale.
+- Rejected finalizer plan paths that target `.git` metadata and required `allow_unsafe_command: true` for MCP setup guidance backed by external recipe catalogs.
 - Normalized invalid metric values before CLI state and experiment-memory ranking so unknown metrics cannot become best evidence.
-- Restored MCP parity for `setup_plan` and `guided_setup` read-only setup inputs such as checks commands, commit paths, and iteration limits.
+- Restored MCP parity for `setup_plan` and `guided_setup` setup inputs such as checks commands, commit paths, and iteration limits while keeping custom command materialization behind `allow_unsafe_command: true`.
 
 ### Migration Notes
 

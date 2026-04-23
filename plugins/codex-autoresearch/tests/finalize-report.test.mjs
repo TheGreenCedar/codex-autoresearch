@@ -156,6 +156,26 @@ test("finalizer rejects crafted plan paths before filesystem deletion", async ()
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /Unsafe finalizer file path/);
   assert.equal(await fsp.readFile(sentinel, "utf8"), "outside repo\n");
+
+  await fsp.writeFile(groupsPath, JSON.stringify({
+    base,
+    trunk: "main",
+    final_tree: head,
+    goal: "metadata-safety",
+    groups: [
+      {
+        title: "Unsafe metadata path",
+        last_commit: head,
+        files: [".git/config"],
+        slug: "unsafe-git",
+      },
+    ],
+  }, null, 2), "utf8");
+
+  const metadataResult = await run(process.execPath, [finalizer, groupsPath], repo, true);
+  assert.notEqual(metadataResult.code, 0);
+  assert.match(metadataResult.stderr, /Git metadata/);
+  assert.equal((await git(["config", "user.email"], repo)).stdout.trim(), "codex@example.invalid");
 });
 
 test("finalizer plan keeps only kept commits and flags excluded history", async () => {
@@ -351,6 +371,15 @@ test("collapsed finalizer fails closed when excluded commits touch planned kept 
     "--collapse-overlap",
   ], repo);
   assert.match(preview.stdout, /Groups: 1/);
+
+  const tamperedOutput = path.join(root, "tampered-groups.json");
+  const tamperedPlan = JSON.parse(await fsp.readFile(output, "utf8"));
+  assert.ok(tamperedPlan.excluded_commit_count > 0);
+  tamperedPlan.excluded_commits = [];
+  await fsp.writeFile(tamperedOutput, JSON.stringify(tamperedPlan, null, 2) + "\n", "utf8");
+  const tamperedResult = await run(process.execPath, [finalizer, tamperedOutput], repo, true);
+  assert.notEqual(tamperedResult.code, 0);
+  assert.match(tamperedResult.stderr, /excluded_commit_count does not match excluded_commits/);
 
   const result = await run(process.execPath, [finalizer, output], repo, true);
   assert.notEqual(result.code, 0);
