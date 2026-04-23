@@ -94,6 +94,8 @@ test("finalizer writes an ignored review summary and preserves verification", as
   assert.match(summary, /## Finalization Runway/);
   assert.match(summary, /Final file set: .*scripts\/autoresearch\.mjs.*src\/space path\.txt|Final file set: .*src\/space path\.txt.*scripts\/autoresearch\.mjs/);
   assert.match(summary, /Do not run cleanup until the review branch merge has succeeded/);
+  assert.match(summary, /autoresearch\.last-run\.json/);
+  assert.match(summary, /autoresearch-dashboard\.html/);
   const runwayOrder = [
     "Preview groups and risks",
     "Approve the review branch plan",
@@ -111,6 +113,49 @@ test("finalizer writes an ignored review summary and preserves verification", as
 
   const status = (await git(["status", "--porcelain"], repo)).stdout.trim();
   assert.equal(status, "");
+});
+
+test("finalizer rejects crafted plan paths before filesystem deletion", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-path-"));
+  const repo = path.join(root, "repo");
+  const sentinel = path.join(root, "sentinel.txt");
+  await fsp.mkdir(repo, { recursive: true });
+  await fsp.writeFile(sentinel, "outside repo\n", "utf8");
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+  const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await git(["switch", "-c", "codex/autoresearch-path"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "keep value"], repo);
+  const head = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  const groupsPath = path.join(root, "groups.json");
+  await fsp.writeFile(groupsPath, JSON.stringify({
+    base,
+    trunk: "main",
+    final_tree: head,
+    goal: "path-safety",
+    groups: [
+      {
+        title: "Unsafe crafted path",
+        last_commit: head,
+        files: ["../sentinel.txt"],
+        slug: "unsafe",
+      },
+    ],
+  }, null, 2), "utf8");
+
+  const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Unsafe finalizer file path/);
+  assert.equal(await fsp.readFile(sentinel, "utf8"), "outside repo\n");
 });
 
 test("finalizer plan keeps only kept commits and flags excluded history", async () => {
@@ -251,6 +296,67 @@ test("finalizer plan recommends collapsing overlap and can collapse on request",
   const branchFiles = (await git(["show", "--name-only", "--format=", "autoresearch-review/overlap-loop/01-overlap-loop-changes"], repo)).stdout;
   assert.match(branchFiles, /src\/value\.txt/);
   assert.match(branchFiles, /src\/other\.txt/);
+  assert.equal((await git(["show", "autoresearch-review/overlap-loop/01-overlap-loop-changes:src/value.txt"], repo)).stdout, "second\n");
+  assert.equal((await git(["show", "autoresearch-review/overlap-loop/01-overlap-loop-changes:src/other.txt"], repo)).stdout, "first other\n");
+});
+
+test("collapsed finalizer fails closed when excluded commits touch planned kept files", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-collapse-conflict-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+
+  await writeFile(path.join(repo, "src", "a.txt"), "base a\n");
+  await writeFile(path.join(repo, "src", "x.txt"), "base x\n");
+  await writeFile(path.join(repo, "src", "c.txt"), "base c\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-collapse-conflict"], repo);
+  await writeFile(path.join(repo, "src", "a.txt"), "kept a\n");
+  await writeFile(path.join(repo, "src", "x.txt"), "first x\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "first kept"], repo);
+  const firstHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "a.txt"), "discarded a\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "discarded a"], repo);
+  const discardedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "x.txt"), "second x\n");
+  await writeFile(path.join(repo, "src", "c.txt"), "kept c\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "second kept"], repo);
+  const secondHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "autoresearch.jsonl"), [
+    JSON.stringify({ type: "config", name: "collapse conflict", metricName: "seconds", bestDirection: "lower" }),
+    JSON.stringify({ run: 1, status: "keep", metric: 10, description: "First kept", commit: firstHash, asi: { hypothesis: "first" } }),
+    JSON.stringify({ run: 2, status: "discard", metric: 11, description: "Discarded a", commit: discardedHash, asi: { evidence: "bad" } }),
+    JSON.stringify({ run: 3, status: "keep", metric: 9, description: "Second kept", commit: secondHash, asi: { hypothesis: "second" } }),
+  ].join("\n") + "\n");
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "session log"], repo);
+
+  const output = path.join(root, "groups.json");
+  const preview = await run(process.execPath, [
+    finalizer,
+    "plan",
+    "--output", output,
+    "--goal", "collapse-conflict",
+    "--collapse-overlap",
+  ], repo);
+  assert.match(preview.stdout, /Groups: 1/);
+
+  const result = await run(process.execPath, [finalizer, output], repo, true);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /excluded commits touch planned kept files/);
+  const reviewBranches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
+  assert.equal(reviewBranches, "");
 });
 
 test("finalizer surfaces corrupt autoresearch.jsonl with an actionable error", async () => {

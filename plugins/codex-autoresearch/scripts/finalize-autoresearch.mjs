@@ -42,6 +42,7 @@ const SESSION_FILES = new Set([
   "autoresearch.checks.ps1",
 ]);
 const RESEARCH_DIR = "autoresearch.research";
+const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b) => a.localeCompare(b));
 const REPORT_DIRNAME = "autoresearch-finalize";
 
 function parseCliArgs(argv) {
@@ -103,6 +104,26 @@ function isSessionFile(file) {
   return SESSION_FILES.has(normalized) || normalized === RESEARCH_DIR || normalized.startsWith(`${RESEARCH_DIR}/`);
 }
 
+function validateRepoRelativePath(file, cwd) {
+  const normalized = String(file || "").trim().replace(/\\/g, "/");
+  if (!normalized) throw new Error("Unsafe finalizer file path: empty path.");
+  if (normalized.includes("\0")) throw new Error(`Unsafe finalizer file path contains NUL: ${file}`);
+  if (path.posix.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized) || normalized.startsWith("//")) {
+    throw new Error(`Unsafe finalizer file path must be repo-relative: ${file}`);
+  }
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`Unsafe finalizer file path must not contain empty, dot, or parent segments: ${file}`);
+  }
+  const root = path.resolve(cwd);
+  const resolved = path.resolve(root, ...parts);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Unsafe finalizer file path resolves outside the repo: ${file}`);
+  }
+  return parts.join("/");
+}
+
 async function currentBranch(cwd) {
   return (await git(["branch", "--show-current"], cwd)).stdout.trim();
 }
@@ -128,7 +149,7 @@ async function isDirty(cwd) {
 
 async function changedFiles(fromRef, toRef, cwd) {
   const result = await git(["diff", "--name-only", fromRef, toRef], cwd);
-  return cleanLines(result.stdout).filter((file) => !isSessionFile(file));
+  return normalizePlanFiles(cleanLines(result.stdout), cwd);
 }
 
 async function pathExistsAt(ref, file, cwd) {
@@ -137,12 +158,26 @@ async function pathExistsAt(ref, file, cwd) {
 }
 
 async function applyFileFromCommit(ref, file, cwd) {
-  if (await pathExistsAt(ref, file, cwd)) {
-    await git(["checkout", ref, "--", file], cwd);
+  const safeFile = validateRepoRelativePath(file, cwd);
+  if (await pathExistsAt(ref, safeFile, cwd)) {
+    await git(["checkout", ref, "--", safeFile], cwd);
     return;
   }
-  await fsp.rm(path.join(cwd, file), { recursive: true, force: true });
-  await git(["rm", "-r", "--ignore-unmatch", "--", file], cwd, true);
+  await fsp.rm(path.resolve(cwd, safeFile), { recursive: true, force: true });
+  await git(["rm", "-r", "--ignore-unmatch", "--", safeFile], cwd, true);
+}
+
+function sourceStepsForGroup(group) {
+  if (Array.isArray(group.source_groups) && group.source_groups.length) return group.source_groups;
+  return [{ last_commit: group.last_commit, parent_commit: group.parent_commit, files: group.files || [] }];
+}
+
+async function applyGroupSources(group, cwd) {
+  for (const source of sourceStepsForGroup(group)) {
+    for (const file of source.files || []) {
+      await applyFileFromCommit(source.last_commit, file, cwd);
+    }
+  }
 }
 
 async function collectGroups(config, cwd) {
@@ -154,18 +189,66 @@ async function collectGroups(config, cwd) {
     const parent = group.parent_commit
       ? await fullHash(group.parent_commit, cwd)
       : await commitParent(last, config.base, cwd);
-    const files = Array.isArray(group.files) && group.files.length
-      ? normalizePlanFiles(group.files)
-      : await changedFiles(parent, last, cwd);
+    const sourceGroups = Array.isArray(group.source_groups) && group.source_groups.length
+      ? await collectSourceGroups(group.source_groups, config, cwd)
+      : [{
+        last_commit: last,
+        parent_commit: parent,
+        files: Array.isArray(group.files) && group.files.length
+          ? normalizePlanFiles(group.files, cwd)
+          : await changedFiles(parent, last, cwd),
+      }];
+    const files = normalizePlanFiles(sourceGroups.flatMap((source) => source.files || []), cwd);
     for (const file of files) {
       if (seen.has(file)) {
         throw new Error(`File appears in multiple groups: ${file}. Merge those groups and retry.`);
       }
       seen.add(file);
     }
-    groups.push({ ...group, last_commit: last, files, parent_commit: parent });
+    groups.push({ ...group, last_commit: last, files, parent_commit: parent, source_groups: sourceGroups });
   }
+  await assertNoExcludedFileConflicts(config, groups, cwd);
   return groups;
+}
+
+async function collectSourceGroups(sources, config, cwd) {
+  const collected = [];
+  for (const source of sources) {
+    const last = await fullHash(source.last_commit, cwd);
+    const parent = source.parent_commit
+      ? await fullHash(source.parent_commit, cwd)
+      : await commitParent(last, config.base, cwd);
+    const files = Array.isArray(source.files) && source.files.length
+      ? normalizePlanFiles(source.files, cwd)
+      : await changedFiles(parent, last, cwd);
+    collected.push({ ...source, last_commit: last, parent_commit: parent, files });
+  }
+  return collected;
+}
+
+async function assertNoExcludedFileConflicts(config, groups, cwd) {
+  const plannedFiles = new Set(groups.flatMap((group) => group.files || []));
+  if (!plannedFiles.size || !Array.isArray(config.excluded_commits) || !config.excluded_commits.length) return;
+  const conflicts = [];
+  for (const item of config.excluded_commits) {
+    if (!item?.commit) continue;
+    const commit = await fullHash(item.commit, cwd);
+    const parent = await commitParent(commit, config.base, cwd);
+    const files = await changedFiles(parent, commit, cwd);
+    const overlapping = files.filter((file) => plannedFiles.has(file));
+    if (overlapping.length) {
+      conflicts.push({ commit, subject: item.subject || "", files: overlapping });
+    }
+  }
+  if (!conflicts.length) return;
+  const details = conflicts
+    .slice(0, 6)
+    .map((conflict) => {
+      const subject = conflict.subject ? ` ${conflict.subject}` : "";
+      return `${shortHash(conflict.commit)}${subject}: ${conflict.files.slice(0, 8).join(", ")}`;
+    })
+    .join("\n");
+  throw new Error(`Finalization stopped because excluded commits touch planned kept files. Rework the kept commits or finalization plan so unkept state cannot enter review branches.\n${details}`);
 }
 
 function safeSlug(value) {
@@ -261,10 +344,10 @@ function quotePathspecs(files) {
   return files.map((file) => posixQuote(file)).join(" ");
 }
 
-function normalizePlanFiles(files) {
+function normalizePlanFiles(files, cwd) {
   return [...new Set((Array.isArray(files) ? files : [])
-    .map((file) => String(file || "").trim().replace(/\\/g, "/"))
-    .filter((file) => file && !isSessionFile(file)))]
+    .map((file) => validateRepoRelativePath(file, cwd))
+    .filter((file) => !isSessionFile(file)))]
     .sort((a, b) => a.localeCompare(b));
 }
 
@@ -404,17 +487,7 @@ function renderRunwayText(groups, results) {
 }
 
 function renderCleanupNotes(sourceBranch) {
-  const psPaths = [
-    "autoresearch.research",
-    "autoresearch.jsonl",
-    "autoresearch.md",
-    "autoresearch.ideas.md",
-    "autoresearch.config.json",
-    "autoresearch.sh",
-    "autoresearch.ps1",
-    "autoresearch.checks.sh",
-    "autoresearch.checks.ps1",
-  ];
+  const psPaths = CLEANUP_SESSION_PATHS;
   return [
     "",
     "## Cleanup After Merge",
@@ -483,18 +556,22 @@ async function createBranchForGroup(config, group, index, cwd) {
   if (await branchExists(branch, cwd)) throw new Error(`Branch already exists: ${branch}`);
   await git(["switch", "--detach", config.base], cwd);
   await git(["switch", "-c", branch], cwd);
-  for (const file of group.files) {
-    await applyFileFromCommit(group.last_commit, file, cwd);
-  }
-  await git(["add", "-A"], cwd);
-  const diff = await git(["diff", "--cached", "--quiet"], cwd, true);
-  if (diff.code === 0) {
+  try {
+    await applyGroupSources(group, cwd);
+    await git(["add", "-A"], cwd);
+    const diff = await git(["diff", "--cached", "--quiet"], cwd, true);
+    if (diff.code === 0) {
+      await git(["switch", "--detach", config.base], cwd, true);
+      await git(["branch", "-D", branch], cwd, true);
+      return { branch, skipped: true, deleted: true, stat: "" };
+    }
+    await git(["commit", "-m", group.title, "-m", group.body || ""], cwd);
+    return { branch, skipped: false, deleted: false, stat: await branchStat(branch, cwd) };
+  } catch (error) {
     await git(["switch", "--detach", config.base], cwd, true);
     await git(["branch", "-D", branch], cwd, true);
-    return { branch, skipped: true, deleted: true, stat: "" };
+    throw error;
   }
-  await git(["commit", "-m", group.title, "-m", group.body || ""], cwd);
-  return { branch, skipped: false, deleted: false, stat: await branchStat(branch, cwd) };
 }
 
 async function verifyUnion(config, groups, sourceBranch, createdBranches, cwd) {
@@ -507,9 +584,7 @@ async function verifyUnion(config, groups, sourceBranch, createdBranches, cwd) {
     await git(["switch", "--detach", config.base], cwd);
     await git(["switch", "-c", verifyBranch], cwd);
     for (const group of groups) {
-      for (const file of group.files) {
-        await applyFileFromCommit(group.last_commit, file, cwd);
-      }
+      await applyGroupSources(group, cwd);
     }
     await git(["add", "-A"], cwd);
     await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
@@ -600,7 +675,14 @@ async function collapseOverlappingDraftGroups(plan, cwd) {
   if (overlapping.size === 0) return plan;
   const lastGroup = plan.groups.at(-1);
   const overlapList = [...overlapping].sort().slice(0, 12);
-  const files = normalizePlanFiles(plan.groups.flatMap((group) => group.files || []));
+  const sourceGroups = await collectSourceGroups(plan.groups.map((group) => ({
+    title: group.title,
+    slug: group.slug,
+    last_commit: group.last_commit,
+    parent_commit: group.parent_commit,
+    files: group.files || [],
+  })), plan, cwd);
+  const files = normalizePlanFiles(sourceGroups.flatMap((group) => group.files || []), cwd);
   return {
     ...plan,
     groups: [{
@@ -613,6 +695,7 @@ async function collapseOverlappingDraftGroups(plan, cwd) {
       last_commit: lastGroup.last_commit,
       parent_commit: plan.base,
       files,
+      source_groups: sourceGroups,
       slug: safeSlug(`${plan.goal}-changes`),
       collapsed: true,
     }],
@@ -762,6 +845,11 @@ function planFingerprint(plan) {
       last_commit: group.last_commit || "",
       slug: group.slug || "",
       files: group.files || [],
+      source_groups: (group.source_groups || []).map((source) => ({
+        last_commit: source.last_commit || "",
+        parent_commit: source.parent_commit || "",
+        files: source.files || [],
+      })),
     })),
   };
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");

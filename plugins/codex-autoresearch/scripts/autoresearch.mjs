@@ -44,6 +44,7 @@ const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
 const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
+const METRIC_LINE_MAX_CHARS = 4096;
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -63,8 +64,8 @@ function usage() {
 Usage:
   node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
-  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>]
+  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs recipes list|show [recipe-id] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
@@ -139,21 +140,19 @@ function numberOption(value, fallback) {
 function positiveIntegerOption(value, fallback, optionName) {
   const parsed = numberOption(value, fallback);
   if (parsed == null) return parsed;
-  const integer = Math.floor(parsed);
-  if (!Number.isFinite(integer) || integer <= 0) {
+  if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${optionName} must be a positive integer. Got ${value}`);
   }
-  return integer;
+  return parsed;
 }
 
 function nonNegativeIntegerOption(value, fallback, optionName) {
   const parsed = numberOption(value, fallback);
   if (parsed == null) return parsed;
-  const integer = Math.floor(parsed);
-  if (!Number.isFinite(integer) || integer < 0) {
+  if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`${optionName} must be a non-negative integer. Got ${value}`);
   }
-  return integer;
+  return parsed;
 }
 
 function boolOption(value, fallback = false) {
@@ -936,6 +935,9 @@ async function runShell(command, cwd, timeoutSeconds) {
       pendingMetricText += text;
       const lines = pendingMetricText.split(/\r?\n/);
       pendingMetricText = lines.pop() || "";
+      if (pendingMetricText.length > METRIC_LINE_MAX_CHARS) {
+        pendingMetricText = pendingMetricText.slice(-METRIC_LINE_MAX_CHARS);
+      }
       for (const line of lines) {
         if (/^METRIC\s+/i.test(line.trim())) metricOutput += `${line}\n`;
       }
@@ -1132,7 +1134,7 @@ function shouldWarnEmptyCommitPaths({ inGit, commitPaths = [], explicitCommit = 
 }
 
 async function gitStatusShort(cwd) {
-  const result = await git(["status", "--porcelain"], cwd);
+  const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
   if (result.code !== 0) throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
   return result.stdout.trim();
 }
@@ -1185,9 +1187,14 @@ async function fileFingerprintsForPaths(workDir, paths = []) {
   for (const file of [...new Set(paths)].sort((a, b) => a.localeCompare(b))) {
     const filePath = path.join(workDir, file);
     try {
-      const stats = await fsp.stat(filePath);
+      const stats = await fsp.lstat(filePath);
       if (stats.isDirectory()) {
-        fingerprints.push({ path: file, directory: true });
+        const children = await directoryFingerprints(workDir, file);
+        fingerprints.push({ path: file, directory: true, files: children });
+        continue;
+      }
+      if (stats.isSymbolicLink()) {
+        fingerprints.push({ path: file, symlink: await fsp.readlink(filePath) });
         continue;
       }
       const bytes = await fsp.readFile(filePath);
@@ -1197,6 +1204,36 @@ async function fileFingerprintsForPaths(workDir, paths = []) {
     }
   }
   return fingerprints;
+}
+
+async function directoryFingerprints(workDir, rootPath) {
+  const root = path.resolve(workDir, rootPath);
+  const base = path.resolve(workDir);
+  const relativeRoot = path.relative(base, root);
+  if (relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) return [];
+  const entries = [];
+  async function visit(relativeDir) {
+    const absoluteDir = path.join(workDir, relativeDir);
+    const dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
+    for (const dirent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+      const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
+      const absolutePath = path.join(workDir, relativePath);
+      if (dirent.isDirectory()) {
+        entries.push({ path: relativePath, directory: true });
+        await visit(relativePath);
+      } else if (dirent.isSymbolicLink()) {
+        entries.push({ path: relativePath, symlink: await fsp.readlink(absolutePath) });
+      } else if (dirent.isFile()) {
+        const bytes = await fsp.readFile(absolutePath);
+        entries.push({ path: relativePath, hash: createHash("sha256").update(bytes).digest("hex") });
+      } else {
+        const stats = await fsp.lstat(absolutePath);
+        entries.push({ path: relativePath, type: stats.isFIFO() ? "fifo" : "other" });
+      }
+    }
+  }
+  await visit(rootPath);
+  return entries;
 }
 
 async function lastRunGitSnapshot(workDir, config = {}) {

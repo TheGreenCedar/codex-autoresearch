@@ -92,7 +92,7 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
     });
   };
   const submit = async () => {
-    const parsed = parseAsi(asi, status, structuredAsi);
+    const parsed = parseAsi(asi, status, structuredAsi, rawDirty);
     if (!parsed.ok) {
       setError(parsed.error);
       return;
@@ -171,7 +171,7 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
   );
 }
 
-function parseAsi(text, status, structuredAsi) {
+function parseAsi(text, status, structuredAsi, rawDirty = false) {
   let value;
   try {
     value = JSON.parse(text || "{}");
@@ -181,10 +181,9 @@ function parseAsi(text, status, structuredAsi) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "ASI must be a JSON object." };
   }
-  value = {
-    ...value,
-    ...cleanAsi(structuredAsi),
-  };
+  value = rawDirty
+    ? cleanAsi(value)
+    : { ...value, ...cleanAsi(structuredAsi) };
   const has = (key) => String(value[key] || "").trim().length > 0;
   if (status === "keep" && (!has("hypothesis") || !has("evidence"))) {
     return { ok: false, error: "Keep decisions require ASI hypothesis and evidence." };

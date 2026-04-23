@@ -535,6 +535,47 @@ test("dashboard view model emits trust, evidence, research truth, and finalizati
   assert.ok(viewModel.finalizationChecklist.some((item) => item.label === "Preview packet" && item.state === "unknown"));
 });
 
+test("dashboard renders actual trust reasons with friendly mode labels", async () => {
+  const entries = [
+    { type: "config", name: "trust reasons", metricName: "quality_gap", bestDirection: "lower", metricUnit: "gaps" },
+  ];
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "trust reasons",
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [],
+      baseline: null,
+      best: null,
+      confidence: null,
+    },
+    settings: {
+      deliveryMode: "static-export",
+      pluginVersion: "0.test",
+      sourceCwd: "C:/repo",
+    },
+    setupPlan: {
+      missing: ["Benchmark command is missing."],
+      warnings: [],
+    },
+    finalizePreview: null,
+  });
+
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    viewModel,
+    commands: [],
+  });
+
+  assert.equal(getById("trust-title").textContent, "Static read-only export");
+  assert.match(getById("trust-warnings").textContent, /Static export is read-only|Benchmark command is missing/);
+});
+
 test("dashboard view model marks perfect quality metrics suspicious without freshness, breadth, or promotion evidence", () => {
   const viewModel = buildDashboardViewModel({
     state: {
@@ -988,6 +1029,79 @@ test("structured ASI editor serializes to the existing asi payload", async () =>
     hypothesis: "Cache the manifest",
     evidence: "METRIC seconds=4.2",
     next_action_hint: "Stress the cached path.",
+  });
+  dom.window.close();
+});
+
+test("raw ASI JSON edits are authoritative on submit", async () => {
+  const viewModel = {
+    missionControl: {
+      activeStep: "log",
+      steps: [
+        { id: "log", title: "Log decision", state: "ready", detail: "Last packet is ready." },
+      ],
+      logDecision: {
+        available: true,
+        allowedStatuses: ["keep"],
+        suggestedStatus: "keep",
+        defaultDescription: "Keep measured change",
+        lastRunFingerprint: "fingerprint-raw",
+        asiTemplate: { hypothesis: "old hypothesis", evidence: "old evidence" },
+        commandsByStatus: {
+          keep: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep",
+        },
+      },
+    },
+  };
+  const entries = [
+    { type: "config", name: "raw asi path", metricName: "seconds", bestDirection: "lower", metricUnit: "s" },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { getById, dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveActionsAvailable: true,
+    actionNonce: "nonce-raw",
+    viewModel,
+  }, {
+    beforeParse(window) {
+      window.__actionBodies = [];
+      window.fetch = async (url, options = {}) => {
+        if (String(url).includes("actions/log-keep")) {
+          window.__actionBodies.push(JSON.parse(options.body || "{}"));
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              receipt: {
+                ok: true,
+                action: "log-keep",
+                status: "completed",
+                ledgerRun: 2,
+                receiptId: "receipt-raw",
+                nextStep: "Logged raw ASI.",
+              },
+            }),
+          };
+        }
+        if (String(url).includes("view-model")) return { ok: true, json: async () => viewModel };
+        return { ok: true, text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n") };
+      };
+    },
+  });
+
+  setInputValue(dom.window, getById("log-decision-asi"), JSON.stringify({
+    hypothesis: "raw hypothesis",
+    evidence: "raw evidence",
+    extra: "preserved",
+  }, null, 2));
+  getById("run-log-decision").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => dom.window.__actionBodies.length === 1, "Raw ASI log action was not called.");
+
+  const [body] = dom.window.__actionBodies;
+  assert.deepEqual(body.asi, {
+    hypothesis: "raw hypothesis",
+    evidence: "raw evidence",
+    extra: "preserved",
   });
   dom.window.close();
 });

@@ -19,7 +19,7 @@ export const toolSchemas = applyToolContracts([
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
         commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
+        max_iterations: { type: "integer" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -39,7 +39,7 @@ export const toolSchemas = applyToolContracts([
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
         commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
+        max_iterations: { type: "integer" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -78,7 +78,7 @@ export const toolSchemas = applyToolContracts([
         constraints: { type: "array", items: { type: "string" } },
         secondary_metrics: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
+        max_iterations: { type: "integer" },
         autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
         checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
         keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
@@ -106,7 +106,7 @@ export const toolSchemas = applyToolContracts([
         files_in_scope: { type: "array", items: { type: "string" } },
         constraints: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "number" },
+        max_iterations: { type: "integer" },
         autonomy_mode: { type: "string", enum: ["guarded", "owner-autonomous", "manual"] },
         checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
         keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
@@ -130,8 +130,8 @@ export const toolSchemas = applyToolContracts([
         checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
         keep_policy: { type: "string", enum: ["primary-only", "primary-or-risk-reduction"] },
         dashboard_refresh_seconds: { type: "number" },
-        max_iterations: { type: "number" },
-        extend: { type: "number" },
+        max_iterations: { type: "integer" },
+        extend: { type: "integer" },
         commit_paths: { type: "array", items: { type: "string" } },
       },
       required: ["working_dir"],
@@ -346,6 +346,7 @@ export function validateToolArguments(name, args, options = {}) {
     if (property.type === "array" && !Array.isArray(value)) throw new Error(`Argument ${key} must be an array.`);
     if (property.type === "object" && !isObjectArgument(value)) throw new Error(`Argument ${key} must be an object.`);
     if (property.type === "number" && typeof value !== "number") throw new Error(`Argument ${key} must be a number.`);
+    if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value))) throw new Error(`Argument ${key} must be an integer.`);
     if (property.type === "boolean" && typeof value !== "boolean") throw new Error(`Argument ${key} must be a boolean.`);
     if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
     if (property.enum && !property.enum.includes(value)) throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);

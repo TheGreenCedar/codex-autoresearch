@@ -567,6 +567,44 @@ test("stale last-run packets are rejected when dirty file contents change withou
   });
 });
 
+test("stale last-run packets are rejected when untracked directory contents change", async () => {
+  await withTempDir("stale-last-run-untracked-dir", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "untracked dir packet", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await mkdir(path.join(dir, "scratch"), { recursive: true });
+    await writeFile(path.join(dir, "scratch", "thing.txt"), "before packet\n", "utf8");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd", dir,
+      "--command", command,
+      "--checks-policy", "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+
+    await writeFile(path.join(dir, "scratch", "thing.txt"), "after packet\n", "utf8");
+    const stale = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Old packet after untracked dir edit",
+      "--allow-add-all",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /dirty file contents changed|Git dirty state changed/);
+  });
+});
+
 test("last-run packets are rejected when config changes before logging", async () => {
   await withTempDir("config-stale-last-run", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first config", "--metric-name", "seconds"]);
@@ -1248,10 +1286,24 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
     assert.notEqual(setup.code, 0);
     assert.match(setup.stderr, /maxIterations must be a positive integer/);
 
+    const fractionalSetup = await runCli([
+      "setup",
+      "--cwd", dir,
+      "--name", "fractional limit",
+      "--metric-name", "seconds",
+      "--max-iterations", "1.5",
+    ]);
+    assert.notEqual(fractionalSetup.code, 0);
+    assert.match(fractionalSetup.stderr, /maxIterations must be a positive integer/);
+
     await runCli(["init", "--cwd", dir, "--name", "config limit", "--metric-name", "seconds"]);
     const config = await runCli(["config", "--cwd", dir, "--extend", "-1"]);
     assert.notEqual(config.code, 0);
     assert.match(config.stderr, /extend must be a non-negative integer/);
+
+    const fractionalExtend = await runCli(["config", "--cwd", dir, "--extend", "1.5"]);
+    assert.notEqual(fractionalExtend.code, 0);
+    assert.match(fractionalExtend.stderr, /extend must be a non-negative integer/);
   });
 });
 
@@ -1496,6 +1548,13 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.match(readOnlyPayload.nextCommand, /--commit-paths "src,tests"/);
     assert.match(readOnlyPayload.nextCommand, /--max-iterations "7"/);
 
+    const fractionalPlan = await callMcpTool("setup_plan", {
+      working_dir: dir,
+      max_iterations: 1.5,
+    });
+    assert.equal(fractionalPlan.result.isError, true);
+    assert.match(fractionalPlan.result.content[0].text, /max_iterations must be an integer/);
+
     const readOnlyGuide = await callMcpTool("guided_setup", {
       working_dir: dir,
       name: "read only guide",
@@ -1510,6 +1569,13 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.match(guidePayload.setup.nextCommand, /--checks-command/);
     assert.match(guidePayload.setup.nextCommand, /--commit-paths "src"/);
     assert.match(guidePayload.setup.nextCommand, /--max-iterations "3"/);
+
+    const fractionalExtend = await callMcpTool("configure_session", {
+      working_dir: dir,
+      extend: 1.5,
+    });
+    assert.equal(fractionalExtend.result.isError, true);
+    assert.match(fractionalExtend.result.content[0].text, /extend must be an integer/);
 
     const gated = await callMcpTool("setup_session", {
       working_dir: dir,
@@ -1715,6 +1781,19 @@ test("large benchmark output is capped and marked truncated", async () => {
     assert.equal(payload.outputTruncated, true);
     assert.ok(payload.tailOutput.length < 9000);
     assert.equal(payload.parsedPrimary, 1);
+  });
+});
+
+test("large no-newline benchmark tails do not hide early metrics", async () => {
+  await withTempDir("large-no-newline-output", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "large no newline", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
+    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.outputTruncated, true);
+    assert.ok(payload.tailOutput.length < 9000);
+    assert.equal(payload.parsedPrimary, 2);
   });
 });
 

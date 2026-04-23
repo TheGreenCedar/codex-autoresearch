@@ -141,7 +141,7 @@ Use finalization when noisy loop history has useful kept commits.
 3. Treat preview and dry-run output as read-only. They must describe planned branch/ref/worktree effects and leave the repo unchanged.
 4. Use `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` to draft non-overlapping groups. By default the plan is stored under Git metadata, not the feature branch.
 5. Review excluded commits. Unkept, discarded, crash, checks-failed, and unknown-history commits do not belong in review branches.
-6. Review groups for dependency and file overlap. Merge overlapping or dependent groups; use collapse-overlap guidance when kept commits share files.
+6. Review groups for dependency and file overlap. Use collapse-overlap only when kept commits can be replayed without excluded commits touching planned files; otherwise the finalizer must fail closed and the kept work needs to be reworked.
 7. Ask for approval before creating branches unless the user already approved finalization.
 8. Run the finalizer from the autoresearch source branch. If branch, `HEAD`, merge-base, final tree, plan fingerprint, or worktree cleanliness differs from the plan, refresh the preview instead of forcing it.
 9. Verify branch union, session-artifact exclusion, generated review summary, and cleanup order before merging.

@@ -214,7 +214,7 @@ flowchart TB
 | `serve_dashboard` | Start the live dashboard and return the operator URL |
 | `export_dashboard` | Write a read-only fallback dashboard snapshot |
 | `doctor_session` | Check setup, Git state, and benchmark metric output |
-| `clear_session` | Delete session artifacts after explicit confirmation |
+| `clear_session` | Preview deletion targets with `dry_run`; delete session artifacts only after explicit confirmation |
 
 MCP tools reject unknown arguments before dispatch so misspelled options fail loudly. Custom command-bearing fields such as `command`, `benchmark_command`, `checks_command`, and `model_command` require `allow_unsafe_command: true`; configured benchmark scripts are preferred.
 

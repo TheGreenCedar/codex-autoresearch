@@ -3,12 +3,13 @@ import { actionLabel, fallbackAiSummary, formatDisplayTime } from "../model.js";
 export function TrustStrip({ mode, meta, viewModel }) {
   const trust = viewModel.trustState || viewModel.trust || meta.trustState || {};
   const warnings = [
+    ...toList(trust.reasons),
     ...toList(trust.warnings),
     ...toList(viewModel.trustWarnings),
     ...toList(viewModel.warnings),
   ].slice(0, 2);
   const generated = trust.generatedAt || meta.generatedAt || "";
-  const modeLabel = trust.modeLabel || trust.mode || (mode.liveActions ? "Live local runboard" : "Static read-only export");
+  const modeLabel = trust.modeLabel || trustModeLabel(trust.mode, mode);
   const detail = trust.detail || trust.summary || mode.detail;
   const actionState = trust.actionState || trust.actions || (mode.liveActions
     ? "Guarded local actions are enabled."
@@ -33,6 +34,13 @@ export function TrustStrip({ mode, meta, viewModel }) {
       </div>
     </section>
   );
+}
+
+function trustModeLabel(value, mode) {
+  const key = String(value || "").toLowerCase();
+  if (key === "static-export" || key === "static" || key === "snapshot") return "Static read-only export";
+  if (key === "live-server" || key === "live") return "Live local runboard";
+  return mode.liveActions ? "Live local runboard" : "Static read-only export";
 }
 
 function TrustCell({ label, value }) {

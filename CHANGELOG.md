@@ -15,6 +15,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Fixed
 
 - Preserved the full union file set when executing collapsed finalizer plans for overlapping kept commits.
+- Hardened follow-up evidence fixes so finalizer plans reject unsafe paths, collapsed plans replay kept sources without excluded-file leakage, last-run freshness sees untracked directory edits, raw ASI JSON stays authoritative when edited, and integer limits reject fractional values.
 - Normalized invalid metric values before CLI state and experiment-memory ranking so unknown metrics cannot become best evidence.
 - Restored MCP parity for `setup_plan` and `guided_setup` read-only setup inputs such as checks commands, commit paths, and iteration limits.
 
