@@ -8,7 +8,15 @@ import { DecisionRail } from "./components/DecisionRail.jsx";
 import { ScoreStrip } from "./components/ScoreStrip.jsx";
 import { TrendPanel } from "./components/TrendPanel.jsx";
 import { MissionPanel } from "./components/MissionPanel.jsx";
-import { CodexBrief, LiveActions, QualityGapPanel, StrategyMemory } from "./components/ContextPanels.jsx";
+import {
+  CodexBrief,
+  FinalizationChecklist,
+  LiveActions,
+  QualityGapPanel,
+  ResearchTruthMeter,
+  StrategyMemory,
+  TrustStrip,
+} from "./components/ContextPanels.jsx";
 import { Ledger } from "./components/Ledger.jsx";
 import { ActionReceiptPanel } from "./components/ActionReceiptPanel.jsx";
 
@@ -48,6 +56,8 @@ export function Dashboard({ initialEntries, initialMeta }) {
       <nav className="skip-links" aria-label="Skip links">
         <a href="#decision-rail">Current decision</a>
         <a href="#mission-panel">Mission control</a>
+        <a href="#log-decision-panel">Log form</a>
+        <a href="#action-receipt">Receipt</a>
         <a href="#trend-panel">Run chart</a>
         <a href="#ledger">Ledger</a>
       </nav>
@@ -67,6 +77,8 @@ export function Dashboard({ initialEntries, initialMeta }) {
           refreshLiveData={refreshLiveData}
         />
 
+        <TrustStrip mode={mode} meta={meta} viewModel={viewModel} />
+
         <section className="metric-layout" aria-label="Metric evidence">
           <TrendPanel session={session} readout={readout} />
           <ScoreStrip session={session} readout={readout} />
@@ -79,6 +91,8 @@ export function Dashboard({ initialEntries, initialMeta }) {
         <section className="workspace-grid">
           <MissionPanel viewModel={viewModel} mode={mode} runLiveAction={runLiveAction} actionsById={actionsById} lastReceipt={lastReceipt} />
           <ActionReceiptPanel receipt={lastReceipt} />
+          <ResearchTruthMeter viewModel={viewModel} />
+          <FinalizationChecklist viewModel={viewModel} />
           <CodexBrief session={session} viewModel={viewModel} />
           <StrategyMemory viewModel={viewModel} />
           <QualityGapPanel viewModel={viewModel} />

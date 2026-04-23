@@ -4,6 +4,27 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2026-04-23
+
+### Added
+
+- Documented the evidence-integrity contract for metric parsing, missing metrics, no-change keeps, last-run freshness, and corrupt JSONL surfacing.
+- Documented live/static dashboard trust state, including serve-or-restart guidance, read-only static exports, suspicious perfect-score handling, and the `quality_gap=0` research-round boundary.
+- Documented the finalization checklist from preview through merge and cleanup, including clear dry-run expectations and collapse-overlap guidance for coupled kept commits.
+
+### Fixed
+
+- Preserved the full union file set when executing collapsed finalizer plans for overlapping kept commits.
+- Normalized invalid metric values before CLI state and experiment-memory ranking so unknown metrics cannot become best evidence.
+- Restored MCP parity for `setup_plan` and `guided_setup` read-only setup inputs such as checks commands, commit paths, and iteration limits.
+
+### Migration Notes
+
+- Treat old dashboard exports as snapshots only; regenerate or serve a fresh dashboard before trusting packet freshness, live actions, or finalization readiness.
+- Do not interpret missing metrics or missing deltas as zero. Rerun the packet or repair the benchmark so it prints the required primary `METRIC name=value`.
+- Rerun stale last-run packets after Git, file, command, config, or ledger changes instead of logging from old evidence.
+- Use the single `codex-autoresearch` skill surface for all setup, dashboard, deep-research, logging, and finalization guidance. Existing CLI and MCP helpers remain implementation surfaces behind that skill.
+
 ## 2026-04-22
 
 ### Added

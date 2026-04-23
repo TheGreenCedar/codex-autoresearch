@@ -126,11 +126,11 @@ const CONTRACTS = {
     outputSchema: basicOutputSchema(["ok", "workDir", "issues", "warnings", "drift"]),
   },
   clear_session: {
-    purpose: "Delete session artifacts after confirmation.",
-    whenToUse: "Use only when the operator explicitly wants to clear a session.",
+    purpose: "Preview or delete session artifacts after confirmation.",
+    whenToUse: "Use dry_run first to preview targets; use confirmed clear only when the operator explicitly wants to clear a session.",
     contrast: "Use off/stop behavior to pause without deleting files.",
-    safety: "Destructive; requires confirmation.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "deleted", "missing"]),
+    safety: "Dry-run is read-only; destructive clear requires confirmation.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "wouldDelete", "deleted", "missing"]),
   },
 };
 

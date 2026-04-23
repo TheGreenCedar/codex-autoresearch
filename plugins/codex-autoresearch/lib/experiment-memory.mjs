@@ -1,3 +1,5 @@
+import { finiteMetric } from "./session-core.mjs";
+
 const FAILURE_STATUSES = new Set(["discard", "crash", "checks_failed"]);
 const FAMILY_IGNORE_KEYS = new Set(["attempt", "attempts", "run", "trial", "trials", "seed", "repeat", "repeats", "r"]);
 
@@ -12,7 +14,7 @@ export function buildExperimentMemory({ runs = [], direction = "lower", settings
     const asi = run.asi || {};
     const compact = {
       run: run.run,
-      metric: run.metric,
+      metric: finiteMetric(run.metric),
       status: run.status,
       description: run.description || "",
       hypothesis: asi.hypothesis || "",
@@ -134,10 +136,13 @@ function summarizeFamilies(runs, direction) {
     family.statuses[run.status] = (family.statuses[run.status] || 0) + 1;
     if (run.status === "keep") family.kept += 1;
     if (FAILURE_STATUSES.has(run.status)) family.rejected += 1;
-    if (Number.isFinite(Number(run.metric)) && (!family.bestRun || isBetter(Number(run.metric), Number(family.bestRun.metric), direction))) {
+    const metric = finiteMetric(run.metric);
+    const bestMetric = finiteMetric(family.bestRun?.metric);
+    const bestKeptMetric = finiteMetric(family.bestKeptRun?.metric);
+    if (metric != null && (bestMetric == null || isBetter(metric, bestMetric, direction))) {
       family.bestRun = compactFamilyRun(run);
     }
-    if (run.status === "keep" && Number.isFinite(Number(run.metric)) && (!family.bestKeptRun || isBetter(Number(run.metric), Number(family.bestKeptRun.metric), direction))) {
+    if (run.status === "keep" && metric != null && (bestKeptMetric == null || isBetter(metric, bestKeptMetric, direction))) {
       family.bestKeptRun = compactFamilyRun(run);
     }
   }
@@ -317,9 +322,9 @@ function bestIncumbentFamily(families, direction) {
   let best = null;
   for (const family of families) {
     if (!family.kept || !family.bestKeptRun) continue;
-    const metric = Number(family.bestKeptRun.metric);
-    const bestMetric = Number(best?.bestKeptRun?.metric);
-    if (!best || (Number.isFinite(metric) && (!Number.isFinite(bestMetric) || isBetter(metric, bestMetric, direction)))) {
+    const metric = finiteMetric(family.bestKeptRun.metric);
+    const bestMetric = finiteMetric(best?.bestKeptRun?.metric);
+    if (metric != null && (!best || bestMetric == null || isBetter(metric, bestMetric, direction))) {
       best = family;
     }
   }
@@ -369,7 +374,7 @@ function canonicalFamilyKey(value) {
 function compactFamilyRun(run) {
   return {
     run: run.run,
-    metric: run.metric,
+    metric: finiteMetric(run.metric),
     status: run.status,
     description: run.description || "",
     nextActionHint: run.asi?.next_action_hint || run.asi?.nextAction || run.asi?.next_action || "",
@@ -379,9 +384,10 @@ function compactFamilyRun(run) {
 function bestRun(runs, direction) {
   let best = null;
   for (const run of runs) {
-    const metric = Number(run.metric);
-    if (!Number.isFinite(metric)) continue;
-    if (!best || isBetter(metric, Number(best.metric), direction)) best = run;
+    const metric = finiteMetric(run.metric);
+    if (metric == null) continue;
+    const bestMetric = finiteMetric(best?.metric);
+    if (!best || bestMetric == null || isBetter(metric, bestMetric, direction)) best = run;
   }
   return best;
 }

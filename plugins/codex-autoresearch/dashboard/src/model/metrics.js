@@ -1,8 +1,12 @@
 export function finiteMetric(value) {
-  return Number.isFinite(Number(value));
+  return numericOrNull(value) != null;
 }
 
 export function numericOrNull(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || !/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }

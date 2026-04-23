@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -30,9 +31,14 @@ export function shellQuote(value) {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
+const METRIC_VALUE_PATTERN = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
 export function finiteMetric(value) {
-  if (value == null || value === "") return null;
-  const metric = Number(value);
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || !METRIC_VALUE_PATTERN.test(trimmed)) return null;
+  const metric = Number(trimmed);
   return Number.isFinite(metric) ? metric : null;
 }
 
@@ -160,7 +166,9 @@ export function currentState(workDir) {
       continue;
     }
     if (entry.run != null) {
-      results.push({ ...entry, segment: entry.segment ?? segment });
+      const run = { ...entry, segment: entry.segment ?? segment };
+      if (Object.hasOwn(entry, "metric")) run.metric = finiteMetric(entry.metric);
+      results.push(run);
     }
   }
   const current = results.filter((run) => run.segment === segment);
@@ -168,6 +176,145 @@ export function currentState(workDir) {
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   return { config, segment, results, current, baseline, best, confidence };
+}
+
+export function lastRunConfigSnapshot(config = {}) {
+  return {
+    name: config.name || null,
+    metricName: config.metricName || "metric",
+    metricUnit: config.metricUnit ?? "",
+    bestDirection: config.bestDirection === "higher" ? "higher" : "lower",
+  };
+}
+
+export function statusHash(value) {
+  return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+export function normalizeScopedFileFingerprints(fingerprints) {
+  if (!fingerprints || typeof fingerprints !== "object" || Array.isArray(fingerprints)) {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(fingerprints)
+    .filter(([key, value]) => key && value != null)
+    .map(([key, value]) => [String(key).replace(/\\/g, "/"), String(value)])
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+export function buildLastRunFreshnessSnapshot(workDir, context = {}) {
+  const state = context.state || currentState(workDir);
+  const snapshot = {
+    segment: state.segment,
+    config: context.configSnapshot || lastRunConfigSnapshot(state.config),
+    currentRuns: state.current.length,
+    totalRuns: state.results.length,
+    nextRun: state.results.length + 1,
+  };
+  addSnapshotString(snapshot, "command", context.command);
+  addSnapshotPath(snapshot, "cwd", context.cwd);
+  addSnapshotPath(snapshot, "workingDir", context.workingDir);
+  addSnapshotString(snapshot, "gitHead", context.gitHead);
+  addSnapshotString(snapshot, "dirtyStatusHash", context.dirtyStatusHash);
+  if (context.scopedFileFingerprints != null) {
+    snapshot.scopedFileFingerprints = normalizeScopedFileFingerprints(context.scopedFileFingerprints);
+  }
+  return snapshot;
+}
+
+export function lastRunPacketFreshness(workDir, packet, context = {}) {
+  const expected = packet?.history;
+  if (!expected || typeof expected !== "object") {
+    return {
+      fresh: false,
+      reason: "Last-run packet is missing history metadata. Run next again before logging.",
+    };
+  }
+  const actual = buildLastRunFreshnessSnapshot(workDir, context);
+  if (!Number.isFinite(Number(expected.nextRun))) {
+    return {
+      fresh: false,
+      reason: "Last-run packet is missing history metadata. Run next again before logging.",
+    };
+  }
+  if (Number.isFinite(Number(expected.segment)) && actual.segment !== Number(expected.segment)) {
+    return {
+      fresh: false,
+      expectedSegment: Number(expected.segment),
+      actualSegment: actual.segment,
+      reason: `Last-run packet is stale: expected segment #${Number(expected.segment)}, but current segment is #${actual.segment}. Run next again before logging.`,
+    };
+  }
+  if (!expected.config || typeof expected.config !== "object") {
+    return {
+      fresh: false,
+      reason: "Last-run packet is missing config metadata. Run next again before logging.",
+    };
+  }
+  if (JSON.stringify(expected.config) !== JSON.stringify(actual.config)) {
+    return {
+      fresh: false,
+      expectedConfig: expected.config,
+      actualConfig: actual.config,
+      reason: "Last-run packet is stale: session config changed since the packet was created. Run next again before logging.",
+    };
+  }
+  if (Number(expected.nextRun) !== actual.nextRun) {
+    return {
+      fresh: false,
+      expectedNextRun: Number(expected.nextRun),
+      actualNextRun: actual.nextRun,
+      reason: `Last-run packet is stale: expected next log run #${Number(expected.nextRun)}, but current history would log #${actual.nextRun}. Run next again before logging.`,
+    };
+  }
+  const contextualMismatch = firstFreshnessContextMismatch(expected, actual);
+  if (contextualMismatch) return contextualMismatch;
+  return {
+    fresh: true,
+    expectedNextRun: Number(expected.nextRun),
+    actualNextRun: actual.nextRun,
+    reason: "Last-run packet matches the current ledger.",
+  };
+}
+
+export function assertFreshLastRunPacket(workDir, packet, context = {}) {
+  const freshness = lastRunPacketFreshness(workDir, packet, context);
+  if (!freshness.fresh) throw new Error(freshness.reason);
+  return freshness;
+}
+
+function addSnapshotString(snapshot, key, value) {
+  if (value != null && value !== "") snapshot[key] = String(value);
+}
+
+function addSnapshotPath(snapshot, key, value) {
+  if (value != null && value !== "") snapshot[key] = path.resolve(String(value));
+}
+
+function firstFreshnessContextMismatch(expected, actual) {
+  for (const key of ["command", "cwd", "workingDir", "gitHead", "dirtyStatusHash"]) {
+    if (!Object.hasOwn(expected, key)) continue;
+    if (expected[key] !== actual[key]) {
+      return {
+        fresh: false,
+        expectedValue: expected[key],
+        actualValue: actual[key] ?? null,
+        reason: `Last-run packet is stale: ${key} changed since the packet was created. Run next again before logging.`,
+      };
+    }
+  }
+  if (Object.hasOwn(expected, "scopedFileFingerprints")) {
+    const expectedFingerprints = normalizeScopedFileFingerprints(expected.scopedFileFingerprints);
+    const actualFingerprints = normalizeScopedFileFingerprints(actual.scopedFileFingerprints);
+    if (JSON.stringify(expectedFingerprints) !== JSON.stringify(actualFingerprints)) {
+      return {
+        fresh: false,
+        expectedValue: expectedFingerprints,
+        actualValue: actualFingerprints,
+        reason: "Last-run packet is stale: scoped file fingerprints changed since the packet was created. Run next again before logging.",
+      };
+    }
+  }
+  return null;
 }
 
 export function iterationLimitInfo(state, runtimeConfig) {

@@ -64,6 +64,14 @@ After `next_experiment`, log the packet. After `log_experiment`, read the return
 - `crash` and `checks_failed` can be logged without a metric. Never invent sentinel metrics.
 - Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, and `next_action_hint`.
 
+Evidence integrity:
+
+- Parse decisions from actual `METRIC name=value` output, not from dashboard snippets, tails, summaries, or clipped logs.
+- Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
+- Treat last-run packets as stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next_experiment` before logging.
+- When a keep has no source changes, record that as no-change evidence instead of assigning an old `HEAD` as a new result.
+- Surface corrupt `autoresearch.jsonl` with the failing file and line. Do not silently continue from a partial ledger.
+
 Git safety:
 
 - Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
@@ -102,19 +110,27 @@ Prefer the served dashboard:
 
 - Use MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`.
 - Share the served `http://127.0.0.1:<port>/` URL by default.
+- If the server process ended, live refresh fails, or the user is looking at a `file://` export but needs actions, restart `serve_dashboard` and share the new URL.
 - Use `export_dashboard` or `export` only for offline snapshots or when live serving is unavailable.
 - Treat static HTML as read-only. It should not expose inert live controls or command-copy panels.
 - Treat served-dashboard actions as guarded local adapters: nonce-bound, same-origin, JSON-only, bounded-output, and backed by fresh session fingerprints.
 
 Read dashboard evidence in this order:
 
-1. Top metric trajectory and latest/best/baseline markers.
-2. Run log for status, metric, delta, commit, description, and ASI.
-3. Current readout for best kept change, recent failures, next action, confidence, and finalization readiness.
-4. Loop runway for setup, gap review, packet readiness, log decision, and finalization.
-5. Strategy memory for plateau and lane guidance.
+1. Trust state: live versus static, stale-packet warnings, dirty Git or drift warnings, corrupt ledger warnings, and action receipts.
+2. Top metric trajectory and latest/best/baseline markers.
+3. Run log for status, metric, delta, commit, description, and ASI.
+4. Current readout for best kept change, recent failures, next action, confidence, and finalization readiness.
+5. Loop runway for setup, gap review, packet readiness, log decision, and finalization.
+6. Strategy memory for plateau and lane guidance.
 
 Safe live actions stay bounded to doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions. Branch creation, broad staging, arbitrary commands, custom finalizer args, and finalizer mutation stay outside the dashboard.
+
+Suspicious-perfect rule:
+
+- `quality_gap=0` closes only the accepted checklist for this round. Rerun the project-study prompt or gap preview before claiming broader discovery is complete.
+- Perfect or zero-gap states still need fresh packet evidence, clean checks, ASI, and enough comparison history. If any are missing, explain the trust gap and choose the next verification action.
+- Missing metric deltas are unknown, not `0%`.
 
 ## Finalize
 
@@ -122,11 +138,14 @@ Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize_preview` or `scripts/autoresearch.mjs finalize-preview --cwd <project>`.
 2. Read `autoresearch.jsonl` and keep only `status: "keep"`.
-3. Use `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` to draft non-overlapping groups. By default the plan is stored under Git metadata, not the feature branch.
-4. Review groups for dependency and file overlap. Merge overlapping or dependent groups.
-5. Ask for approval before creating branches unless the user already approved finalization.
-6. Run the finalizer from the autoresearch source branch. If branch, `HEAD`, merge-base, final tree, plan fingerprint, or worktree cleanliness differs from the plan, refresh the preview instead of forcing it.
-7. Report created review branches, files, metric improvement, generated review summary path, verification status, and cleanup order.
+3. Treat preview and dry-run output as read-only. They must describe planned branch/ref/worktree effects and leave the repo unchanged.
+4. Use `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` to draft non-overlapping groups. By default the plan is stored under Git metadata, not the feature branch.
+5. Review excluded commits. Unkept, discarded, crash, checks-failed, and unknown-history commits do not belong in review branches.
+6. Review groups for dependency and file overlap. Merge overlapping or dependent groups; use collapse-overlap guidance when kept commits share files.
+7. Ask for approval before creating branches unless the user already approved finalization.
+8. Run the finalizer from the autoresearch source branch. If branch, `HEAD`, merge-base, final tree, plan fingerprint, or worktree cleanliness differs from the plan, refresh the preview instead of forcing it.
+9. Verify branch union, session-artifact exclusion, generated review summary, and cleanup order before merging.
+10. Report created review branches, files, metric improvement, generated review summary path, verification status, and cleanup order.
 
 Runway order: preview, approve, create review branches, verify, merge into trunk, then cleanup.
 

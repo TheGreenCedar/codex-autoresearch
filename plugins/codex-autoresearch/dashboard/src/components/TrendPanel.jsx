@@ -36,7 +36,7 @@ export function TrendPanel({ session, readout }) {
     label: `#${point.run.run} ${formatChartRunValue(point.run.metric, session.config.metricUnit)} ${point.run.status}`,
   })), [chart.points, session.config.metricUnit]);
   return (
-    <section className="panel trend-panel" id="trend-panel" aria-label="Metric trajectory">
+    <section className="panel trend-panel" id="trend-panel" aria-label="Metric trajectory" tabIndex="-1">
       <div className="panel-head">
         <div>
           <p className="eyebrow"><Activity aria-hidden="true" size={14} />Metric trajectory</p>

@@ -5,18 +5,44 @@ const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
 const PROCESS_OUTPUT_CAPTURE_BYTES = 32768;
+const METRIC_LINE_MAX_CHARS = 4096;
 
 export function parseMetricLines(output) {
   const metrics = Object.create(null);
-  const regex = /^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/gim;
-  let match;
-  while ((match = regex.exec(output)) !== null) {
-    const name = match[1];
-    if (DENIED_METRIC_NAMES.has(name)) continue;
-    const value = Number(match[2]);
-    if (Number.isFinite(value)) metrics[name] = value;
+  for (const line of String(output || "").split(/\r?\n/)) {
+    collectMetricLine(metrics, line);
   }
   return metrics;
+}
+
+function createMetricCollector() {
+  const metrics = Object.create(null);
+  let pending = "";
+  return {
+    append(text) {
+      pending += text;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      if (pending.length > METRIC_LINE_MAX_CHARS) pending = pending.slice(-METRIC_LINE_MAX_CHARS);
+      for (const line of lines) collectMetricLine(metrics, line);
+    },
+    finish() {
+      if (pending) {
+        collectMetricLine(metrics, pending);
+        pending = "";
+      }
+      return metrics;
+    },
+  };
+}
+
+function collectMetricLine(metrics, line) {
+  const match = String(line).match(/^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/i);
+  if (!match) return;
+  const name = match[1];
+  if (DENIED_METRIC_NAMES.has(name)) return;
+  const value = Number(match[2]);
+  if (Number.isFinite(value)) metrics[name] = value;
 }
 
 export function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
@@ -43,7 +69,9 @@ export async function runShell(command, cwd, timeoutSeconds = 600) {
     let output = "";
     let outputTruncated = false;
     let timedOut = false;
+    const metricCollector = createMetricCollector();
     const appendOutput = (text) => {
+      metricCollector.append(text);
       output += text;
       if (Buffer.byteLength(output, "utf8") > OUTPUT_CAPTURE_BYTES) {
         const buf = Buffer.from(output, "utf8");
@@ -70,6 +98,7 @@ export async function runShell(command, cwd, timeoutSeconds = 600) {
         durationSeconds: (Date.now() - startedAt) / 1000,
         output: String(error.stack || error.message || error),
         outputTruncated,
+        parsedMetrics: metricCollector.finish(),
       });
     });
     child.on("close", (code) => {
@@ -81,6 +110,7 @@ export async function runShell(command, cwd, timeoutSeconds = 600) {
         durationSeconds: (Date.now() - startedAt) / 1000,
         output,
         outputTruncated,
+        parsedMetrics: metricCollector.finish(),
       });
     });
   });
@@ -106,7 +136,9 @@ export async function runProcess(command, args = [], {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    const metricCollector = createMetricCollector();
     const appendOutput = (target, text) => {
+      metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
       let truncated = target === "stdout" ? stdoutTruncated : stderrTruncated;
       value += text;
@@ -144,6 +176,7 @@ export async function runProcess(command, args = [], {
         stderrTruncated,
         timedOut,
         startedAt,
+        parsedMetrics: metricCollector.finish(),
       }));
     });
     child.on("close", (code) => {
@@ -157,6 +190,7 @@ export async function runProcess(command, args = [], {
         stderrTruncated,
         timedOut,
         startedAt,
+        parsedMetrics: metricCollector.finish(),
       }));
     });
   });
@@ -171,6 +205,7 @@ function processResult({
   stderrTruncated,
   timedOut,
   startedAt,
+  parsedMetrics = Object.create(null),
 }) {
   const durationSeconds = (Date.now() - startedAt) / 1000;
   return {
@@ -187,6 +222,7 @@ function processResult({
     outputTruncated: Boolean(stdoutTruncated || stderrTruncated),
     stdoutTruncated,
     stderrTruncated,
+    parsedMetrics,
   };
 }
 

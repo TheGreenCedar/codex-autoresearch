@@ -18,6 +18,22 @@ export function buildDashboardViewModel({
   const failures = current.filter((run) => ["discard", "crash", "checks_failed"].includes(run.status));
   const bestKept = bestRun(kept, state.config.bestDirection);
   const latestFailure = failures.at(-1) || null;
+  const trustContext = buildTrustState({
+    state,
+    settings,
+    setupPlan,
+    guidedSetup,
+    finalizePreview,
+    drift,
+    warnings,
+  });
+  const researchTruth = buildResearchTruth({
+    state,
+    settings,
+    current,
+    qualityGap,
+    experimentMemory,
+  });
   const nextAction = [...current].reverse()
     .map((run) => run.asi?.next_action_hint || run.asi?.nextAction || run.asi?.next_action)
     .find(Boolean) || (current.length ? "Choose the next measured hypothesis." : "Run and log a baseline.");
@@ -33,6 +49,7 @@ export function buildDashboardViewModel({
     experimentMemory,
     drift,
     warnings,
+    trustWarnings: trustContext.decisionWarnings,
     commands,
   });
   const portfolio = buildPortfolio(experimentMemory, state.config.bestDirection);
@@ -45,6 +62,19 @@ export function buildDashboardViewModel({
     experimentMemory,
     actionRail,
     commands,
+  });
+  const evidenceChips = buildEvidenceChips({
+    state,
+    current,
+    bestKept,
+    latestFailure,
+    researchTruth,
+    trustState: trustContext.trustState,
+  });
+  const finalizationChecklist = buildFinalizationChecklist({
+    current,
+    kept,
+    finalizePreview,
   });
   const aiSummary = buildAiSummary({
     state,
@@ -69,6 +99,10 @@ export function buildDashboardViewModel({
     recipes,
     experimentMemory,
     portfolio,
+    trustState: trustContext.trustState,
+    researchTruth,
+    evidenceChips,
+    finalizationChecklist,
     missionControl,
     aiSummary,
     nextBestAction: actionRail[0],
@@ -108,6 +142,348 @@ export function buildDashboardViewModel({
   };
 }
 
+const UNKNOWN = "unknown";
+const NO_DATA = "No data";
+
+function buildTrustState({
+  state,
+  settings = {},
+  setupPlan = null,
+  guidedSetup = null,
+  finalizePreview = null,
+  drift = null,
+  warnings = [],
+}) {
+  const taggedReasons = [];
+  const mode = normalizeMode(firstValue(settings.deliveryMode, settings.mode, settings.dashboardMode));
+  const addReasons = (source, values, decisionRelevant = false, classifyDecisionReason = true) => {
+    for (const value of Array.isArray(values) ? values : []) {
+      const text = warningMessage(value);
+      if (text) {
+        taggedReasons.push({
+          source,
+          text,
+          decisionRelevant: decisionRelevant || (classifyDecisionReason && isTrustDecisionReason(text)),
+        });
+      }
+    }
+  };
+
+  if (mode === "static-export") {
+    taggedReasons.push({
+      source: "mode",
+      text: "Static export is read-only; serve the dashboard locally for guarded actions.",
+      decisionRelevant: false,
+    });
+  }
+  if (setupPlan?.ok === false) {
+    taggedReasons.push({ source: "setup", text: "Setup plan could not be verified.", decisionRelevant: true });
+  }
+  if (guidedSetup?.ok === false) {
+    taggedReasons.push({ source: "guided-setup", text: "Guided setup could not be verified.", decisionRelevant: true });
+  }
+  if (guidedSetup?.lastRun?.freshness?.fresh === false) {
+    taggedReasons.push({
+      source: "last-run",
+      text: guidedSetup.lastRun.freshness.reason || "Last-run packet is stale.",
+      decisionRelevant: true,
+    });
+  }
+  addReasons("setup", currentHasRuns(state) ? [] : setupPlan?.missing, true);
+  addReasons("setup", setupPlan?.warnings, true);
+  addReasons("guided-setup", guidedSetup?.warnings, true);
+  addReasons("drift", drift?.warnings, true);
+  addReasons("operator", warnings, true);
+  addReasons("finalize", finalizePreview?.warnings, false, false);
+
+  const uniqueReasons = unique(taggedReasons.map((reason) => reason.text));
+  const attention = taggedReasons.some((reason) => reason.decisionRelevant || isTrustDecisionReason(reason.text));
+  const status = attention
+    ? "needs-attention"
+    : mode === "static-export"
+      ? "read-only"
+      : mode === UNKNOWN
+        ? UNKNOWN
+        : "trusted";
+
+  return {
+    trustState: {
+      mode,
+      status,
+      reasons: uniqueReasons,
+      liveUrl: cleanText(firstValue(settings.liveUrl, settings.url, settings.dashboardUrl)) || null,
+      pluginVersion: cleanText(firstValue(settings.pluginVersion, settings.version, state?.config?.pluginVersion)) || UNKNOWN,
+      generatedAt: cleanText(firstValue(settings.generatedAt, settings.exportedAt, settings.snapshotGeneratedAt)) || null,
+      sourceCwd: cleanText(firstValue(settings.sourceCwd, settings.workDir, settings.cwd, state?.workDir, state?.cwd)) || UNKNOWN,
+    },
+    decisionWarnings: unique(taggedReasons
+      .filter((reason) => reason.decisionRelevant)
+      .map((reason) => reason.text)),
+  };
+}
+
+function buildResearchTruth({
+  state,
+  settings = {},
+  current = [],
+  qualityGap = null,
+  experimentMemory = null,
+}) {
+  const latest = current.at(-1) || null;
+  const latestMetrics = latest?.metrics || {};
+  const source = {
+    ...(state?.researchTruth || {}),
+    ...(experimentMemory?.researchTruth || {}),
+    ...(qualityGap?.researchTruth || {}),
+    ...(settings.researchTruth || {}),
+  };
+  const queryCount = countValue(source.queryCount, source.query_count, source.queries, latestMetrics.queryCount, latestMetrics.query_count);
+  const holdoutCount = countValue(source.holdoutCount, source.holdout_count, source.holdouts, latestMetrics.holdoutCount, latestMetrics.holdout_count);
+  const adversarialCount = countValue(source.adversarialCount, source.adversarial_count, source.adversarial, latestMetrics.adversarialCount, latestMetrics.adversarial_count);
+  const externalRepoCount = countValue(source.externalRepoCount, source.external_repo_count, source.externalRepos, source.external_repos, latestMetrics.externalRepoCount, latestMetrics.external_repo_count);
+  const promotionGrade = boolOrNull(firstValue(source.promotionGrade, source.promotion_grade, latestMetrics.promotionGrade, latestMetrics.promotion_grade));
+  const suspiciousReasons = unique([
+    ...stringList(source.suspiciousReasons),
+    ...stringList(source.suspicious_reasons),
+    ...perfectMetricSuspicion({
+      state,
+      settings,
+      current,
+      qualityGap,
+      queryCount,
+      holdoutCount,
+      adversarialCount,
+      externalRepoCount,
+      promotionGrade,
+    }),
+  ]);
+  return {
+    queryCount,
+    holdoutCount,
+    adversarialCount,
+    externalRepoCount,
+    promotionGrade,
+    suspiciousReasons,
+  };
+}
+
+function buildEvidenceChips({
+  state,
+  current = [],
+  bestKept = null,
+  latestFailure = null,
+  researchTruth,
+  trustState,
+}) {
+  const latest = current.at(-1) || null;
+  const unit = state.config.metricUnit ? ` ${state.config.metricUnit}` : "";
+  const baseline = finiteMetric(state.baseline);
+  const best = finiteMetric(state.best);
+  const delta = percentChange(best, baseline, state.config.bestDirection);
+  return [
+    evidenceChip({
+      label: "Trust",
+      value: trustState.status === "trusted" ? "Trusted" : trustState.status === "read-only" ? "Read-only" : trustState.status === UNKNOWN ? UNKNOWN : "Needs attention",
+      tone: trustState.status === "trusted" ? "good" : trustState.status === "read-only" ? "neutral" : "warn",
+      detail: trustState.reasons[0] || "No trust warnings reported by the model.",
+    }),
+    evidenceChip({
+      label: "Baseline",
+      value: baseline == null ? NO_DATA : formatSummaryMetric(baseline, unit),
+      tone: baseline == null ? "neutral" : "info",
+      detail: baseline == null ? "No finite baseline metric has been logged." : "First baseline-eligible metric in the active segment.",
+    }),
+    evidenceChip({
+      label: "Best",
+      value: best == null ? NO_DATA : formatSummaryMetric(best, unit),
+      tone: bestKept ? "good" : "neutral",
+      detail: bestKept ? `Best kept run #${bestKept.run}: ${bestKept.description || "No description"}.` : "No kept metric anchor yet.",
+    }),
+    evidenceChip({
+      label: "Delta",
+      value: delta == null ? UNKNOWN : `${delta >= 0 ? "+" : ""}${round(delta)}%`,
+      tone: delta == null ? "neutral" : delta > 0 ? "good" : delta < 0 ? "warn" : "neutral",
+      detail: delta == null ? "No comparable baseline and best metric yet." : "Percent movement from baseline to best in the configured direction.",
+    }),
+    evidenceChip({
+      label: "Latest",
+      value: latest ? `#${latest.run} ${latest.status || "run"}` : NO_DATA,
+      tone: latest?.status === "keep" ? "good" : latest?.status ? "warn" : "neutral",
+      detail: latest ? `${formatChipMetric(latest.metric, unit)}. ${latest.description || "No description"}.` : "No logged runs yet.",
+    }),
+    evidenceChip({
+      label: "Research truth",
+      value: researchTruth.suspiciousReasons.length ? "Suspicious" : truthBreadthLabel(researchTruth),
+      tone: researchTruth.suspiciousReasons.length ? "warn" : "neutral",
+      detail: researchTruth.suspiciousReasons[0] || "Research breadth metadata is available when the benchmark reports it.",
+    }),
+    evidenceChip({
+      label: "Recent failure",
+      value: latestFailure ? `#${latestFailure.run}` : NO_DATA,
+      tone: latestFailure ? "warn" : "neutral",
+      detail: latestFailure?.asi?.rollback_reason || latestFailure?.description || "No rejected or failed run in this segment.",
+    }),
+  ];
+}
+
+function buildFinalizationChecklist({
+  current = [],
+  kept = [],
+  finalizePreview = null,
+}) {
+  const warnings = Array.isArray(finalizePreview?.warnings) ? finalizePreview.warnings.map(warningMessage).filter(Boolean) : [];
+  const dirtyWarning = warnings.find((warning) => /dirty|clean/i.test(warning));
+  return [
+    checklistItem({
+      label: "Kept evidence",
+      state: kept.length ? "done" : current.length ? "blocked" : UNKNOWN,
+      detail: kept.length
+        ? `${kept.length} kept run${kept.length === 1 ? "" : "s"} can anchor review packaging.`
+        : current.length ? "No kept run is available for review branches." : "No run data yet.",
+    }),
+    checklistItem({
+      label: "Clean source tree",
+      state: dirtyWarning ? "blocked" : finalizePreview ? "done" : UNKNOWN,
+      detail: dirtyWarning || (finalizePreview ? "No dirty-tree warning was reported by finalize preview." : "No finalize preview has been generated."),
+    }),
+    checklistItem({
+      label: "Preview packet",
+      state: finalizePreview?.ready ? "ready" : finalizePreview ? (warnings.length ? "blocked" : "idle") : UNKNOWN,
+      detail: finalizePreview?.nextAction || (warnings[0] || "Run finalize-preview when kept evidence is ready."),
+    }),
+    checklistItem({
+      label: "Review branches",
+      state: finalizePreview?.ready ? "ready" : "blocked",
+      detail: finalizePreview?.ready
+        ? "Preview is ready; branch creation still stays outside the dashboard."
+        : "Branch creation should wait for a ready preview packet.",
+    }),
+  ];
+}
+
+function currentHasRuns(state) {
+  return Array.isArray(state?.current) && state.current.length > 0;
+}
+
+function normalizeMode(value) {
+  const text = cleanText(value);
+  if (!text) return UNKNOWN;
+  if (/live/i.test(text)) return "live-server";
+  if (/static|export|snapshot|read-only/i.test(text)) return "static-export";
+  return text;
+}
+
+function isTrustDecisionReason(value) {
+  return /dirty|corrupt|stale|drift|missing|invalid|parse|failed|error|refusing|changed/i.test(String(value || ""));
+}
+
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
+function countValue(...values) {
+  for (const value of values) {
+    const count = Number(value);
+    if (Number.isFinite(count) && count >= 0) return Math.floor(count);
+  }
+  return null;
+}
+
+function boolOrNull(value) {
+  if (value === true || value === false) return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    if (/^(true|yes|1)$/i.test(value.trim())) return true;
+    if (/^(false|no|0)$/i.test(value.trim())) return false;
+  }
+  return null;
+}
+
+function stringList(value) {
+  if (Array.isArray(value)) return value.map((item) => warningMessage(item)).filter(Boolean);
+  const text = cleanText(value);
+  return text ? [text] : [];
+}
+
+function perfectMetricSuspicion({
+  state,
+  settings = {},
+  current = [],
+  qualityGap = null,
+  queryCount,
+  holdoutCount,
+  adversarialCount,
+  externalRepoCount,
+  promotionGrade,
+}) {
+  if (!isPerfectMetricState({ state, qualityGap })) return [];
+  const latest = current.at(-1) || null;
+  const reasons = [];
+  const hasFreshness = Boolean(
+    settings.researchTruth?.fresh
+      || settings.researchTruth?.freshAt
+      || settings.researchTruth?.generatedAt
+      || settings.generatedAt
+      || latest?.timestamp
+      || latest?.generatedAt
+  );
+  const hasBreadth = [queryCount, holdoutCount, adversarialCount, externalRepoCount]
+    .some((value) => Number.isFinite(value) && value > 0);
+  if (!hasFreshness) reasons.push("Perfect metrics have no freshness evidence.");
+  if (!hasBreadth) reasons.push("Perfect metrics have no breadth evidence.");
+  if (promotionGrade !== true) reasons.push("Perfect metrics are not marked promotion-grade.");
+  return reasons;
+}
+
+function isPerfectMetricState({ state, qualityGap }) {
+  const best = finiteMetric(state?.best);
+  const metricName = String(state?.config?.metricName || "").toLowerCase();
+  if (qualityGap && Number(qualityGap.open) === 0 && Number(qualityGap.total) > 0) return true;
+  if (metricName === "quality_gap" && best === 0) return true;
+  if (state?.config?.bestDirection === "lower" && best === 0 && /gap|error|fail|defect|issue/.test(metricName)) return true;
+  return false;
+}
+
+function evidenceChip({ label, value, tone = "neutral", detail = "" }) {
+  return {
+    label,
+    value: value == null || value === "" ? NO_DATA : String(value),
+    tone,
+    detail: detail || NO_DATA,
+  };
+}
+
+function checklistItem({ label, state = UNKNOWN, detail = "" }) {
+  return {
+    label,
+    state: state || UNKNOWN,
+    detail: detail || NO_DATA,
+  };
+}
+
+function formatChipMetric(value, unit) {
+  const metric = finiteMetric(value);
+  return metric == null ? NO_DATA : formatSummaryMetric(metric, unit || "");
+}
+
+function truthBreadthLabel(truth) {
+  const counts = [
+    truth.queryCount,
+    truth.holdoutCount,
+    truth.adversarialCount,
+    truth.externalRepoCount,
+  ].filter((value) => Number.isFinite(value));
+  if (!counts.length) return NO_DATA;
+  return `${counts.reduce((sum, value) => sum + value, 0)} checks`;
+}
+
 function buildActionRail({
   current,
   bestKept,
@@ -120,6 +496,7 @@ function buildActionRail({
   experimentMemory,
   drift,
   warnings: operatorWarnings = [],
+  trustWarnings = [],
   commands,
 }) {
   const commandMap = commandLookup(commands);
@@ -128,6 +505,7 @@ function buildActionRail({
     ...(Array.isArray(setupPlan?.warnings) ? setupPlan.warnings : []),
     ...(Array.isArray(drift?.warnings) ? drift.warnings : []),
     ...operatorWarnings,
+    ...trustWarnings,
   ];
   const lastMemoryAction = experimentMemory?.latestNextAction || "";
   const qualityGapOpen = Number(qualityGap?.open);
@@ -640,6 +1018,7 @@ function buildAiSummary({
 }
 
 function percentChange(best, baseline, direction) {
+  if (!Number.isFinite(best) || !Number.isFinite(baseline)) return null;
   if (baseline === 0) return null;
   const raw = ((best - baseline) / Math.abs(baseline)) * 100;
   return direction === "higher" ? raw : -raw;

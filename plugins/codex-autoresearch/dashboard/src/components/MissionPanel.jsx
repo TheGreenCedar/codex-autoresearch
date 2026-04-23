@@ -6,7 +6,7 @@ export function MissionPanel({ viewModel, mode, runLiveAction, actionsById = {},
   const active = mission.steps?.find((step) => step.id === mission.activeStep) || mission.steps?.[0];
   const canRunLive = mode.liveActions;
   return (
-    <section className="panel mission-panel" id="mission-panel" aria-label="Mission control">
+    <section className="panel mission-panel" id="mission-panel" aria-label="Mission control" tabIndex="-1">
       <div className="panel-head">
         <div>
           <p className="eyebrow">Mission control</p>
@@ -21,10 +21,22 @@ export function MissionPanel({ viewModel, mode, runLiveAction, actionsById = {},
             <strong>{step.title}</strong>
             <p>{step.detail}</p>
             {canRunLive && step.safeAction && (
-              <button className="tool-button mission-run" type="button" data-mission-action={step.safeAction} disabled={Boolean(actionsById[step.safeAction]?.pending)} onClick={() => runLiveAction(step.safeAction)}>
+              <button
+                className="tool-button mission-run"
+                type="button"
+                data-mission-action={step.safeAction}
+                aria-describedby={`${step.id || step.safeAction}-disabled-reason`}
+                disabled={Boolean(actionsById[step.safeAction]?.pending)}
+                onClick={() => runLiveAction(step.safeAction)}
+              >
                 {actionsById[step.safeAction]?.pending ? "Running..." : actionLabel(step.safeAction)}
               </button>
             )}
+            {canRunLive && step.safeAction ? (
+              <small className="disabled-reason" id={`${step.id || step.safeAction}-disabled-reason`}>
+                {actionsById[step.safeAction]?.pending ? `${actionLabel(step.safeAction)} is already running.` : "Guarded local action; no finalizer mutation."}
+              </small>
+            ) : null}
           </div>
         ))}
       </div>
@@ -41,7 +53,9 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
     : ["keep", "discard"];
   const [status, setStatus] = useState(logDecision.suggestedStatus || statuses[0] || "keep");
   const [description, setDescription] = useState(logDecision.defaultDescription || "");
-  const [asi, setAsi] = useState(() => logDecision.asiTemplate ? JSON.stringify(logDecision.asiTemplate, null, 2) : "");
+  const [structuredAsi, setStructuredAsi] = useState(() => structuredAsiFrom(logDecision.asiTemplate));
+  const [asi, setAsi] = useState(() => stringifyAsi(logDecision.asiTemplate));
+  const [rawDirty, setRawDirty] = useState(false);
   const [error, setError] = useState("");
   const action = `log-${String(status || "").replaceAll("_", "-")}`;
   const pending = Boolean(actionsById[action]?.pending);
@@ -54,20 +68,31 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
   useEffect(() => {
     setStatus(logDecision.suggestedStatus || statuses[0] || "keep");
     setDescription(logDecision.defaultDescription || "");
-    setAsi(logDecision.asiTemplate ? JSON.stringify(logDecision.asiTemplate, null, 2) : "");
+    setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
+    setAsi(stringifyAsi(logDecision.asiTemplate));
+    setRawDirty(false);
     setError("");
   }, [formKey]);
   useEffect(() => {
     if (lastReceipt?.ok && String(lastReceipt.action || "").startsWith("log-")) {
       setDescription("");
-      setAsi(logDecision.asiTemplate ? JSON.stringify(logDecision.asiTemplate, null, 2) : "");
+      setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
+      setAsi(stringifyAsi(logDecision.asiTemplate));
+      setRawDirty(false);
       setError("");
     }
   }, [lastReceipt?.receiptId, lastReceipt?.ok, lastReceipt?.action, logDecision.asiTemplate]);
   const liveAvailable = mode.liveActions && available;
   const hidden = !mode.liveActions;
+  const updateStructuredAsi = (key, value) => {
+    setStructuredAsi((current) => {
+      const next = { ...current, [key]: value };
+      if (!rawDirty) setAsi(stringifyAsi(cleanAsi(next)));
+      return next;
+    });
+  };
   const submit = async () => {
-    const parsed = parseAsi(asi, status);
+    const parsed = parseAsi(asi, status, structuredAsi);
     if (!parsed.ok) {
       setError(parsed.error);
       return;
@@ -82,7 +107,7 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
     if (!result?.ok && result?.receipt?.stderrSummary) setError(result.receipt.stderrSummary);
   };
   return (
-    <div className="log-decision-panel">
+    <div className="log-decision-panel" id="log-decision-panel" tabIndex="-1">
       <div className="log-field" id="log-status-field" hidden={hidden}>
         <label htmlFor="log-decision-status">Status</label>
         <select id="log-decision-status" value={status} disabled={!liveAvailable || pending} onChange={(event) => setStatus(event.target.value)}>
@@ -93,16 +118,43 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
         <label htmlFor="log-decision-description">Description</label>
         <input id="log-decision-description" type="text" autoComplete="off" value={description} disabled={!liveAvailable || pending} onChange={(event) => setDescription(event.target.value)} />
       </div>
-      <div className="log-field" id="log-asi-field" hidden={hidden}>
-        <label htmlFor="log-decision-asi">ASI</label>
-        <textarea
-          id="log-decision-asi"
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? "log-decision-error" : undefined}
-          value={asi}
-          disabled={!liveAvailable || pending}
-          onChange={(event) => setAsi(event.target.value)}
-        />
+      <fieldset className="asi-structured" id="log-asi-field" hidden={hidden}>
+        <legend>ASI</legend>
+        <label className="log-field" htmlFor="asi-hypothesis">
+          <span>Hypothesis</span>
+          <input id="asi-hypothesis" type="text" value={structuredAsi.hypothesis} disabled={!liveAvailable || pending} onChange={(event) => updateStructuredAsi("hypothesis", event.target.value)} />
+        </label>
+        <label className="log-field" htmlFor="asi-evidence">
+          <span>Evidence</span>
+          <textarea id="asi-evidence" value={structuredAsi.evidence} disabled={!liveAvailable || pending} onChange={(event) => updateStructuredAsi("evidence", event.target.value)} />
+        </label>
+        <label className="log-field" htmlFor="asi-rollback-reason">
+          <span>Rollback reason</span>
+          <input id="asi-rollback-reason" type="text" value={structuredAsi.rollback_reason} disabled={!liveAvailable || pending} onChange={(event) => updateStructuredAsi("rollback_reason", event.target.value)} />
+        </label>
+        <label className="log-field" htmlFor="asi-next-action-hint">
+          <span>Next action hint</span>
+          <input id="asi-next-action-hint" type="text" value={structuredAsi.next_action_hint} disabled={!liveAvailable || pending} onChange={(event) => updateStructuredAsi("next_action_hint", event.target.value)} />
+        </label>
+        <details className="raw-asi-panel">
+          <summary>Raw JSON</summary>
+          <label htmlFor="log-decision-asi">ASI JSON</label>
+          <textarea
+            id="log-decision-asi"
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? "log-decision-error" : undefined}
+            value={asi}
+            disabled={!liveAvailable || pending}
+            onChange={(event) => {
+              setRawDirty(true);
+              setAsi(event.target.value);
+            }}
+          />
+        </details>
+      </fieldset>
+      <div className="command-preview" hidden={hidden || !logDecision.commandsByStatus?.[status]}>
+        <span>Command preview</span>
+        <code>{logDecision.commandsByStatus?.[status]}</code>
       </div>
       <p id="log-decision-error" className="form-error" role="alert" hidden={!error}>{error}</p>
       <button
@@ -119,7 +171,7 @@ function LogDecision({ mission, mode, runLiveAction, actionsById, lastReceipt })
   );
 }
 
-function parseAsi(text, status) {
+function parseAsi(text, status, structuredAsi) {
   let value;
   try {
     value = JSON.parse(text || "{}");
@@ -129,6 +181,10 @@ function parseAsi(text, status) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "ASI must be a JSON object." };
   }
+  value = {
+    ...value,
+    ...cleanAsi(structuredAsi),
+  };
   const has = (key) => String(value[key] || "").trim().length > 0;
   if (status === "keep" && (!has("hypothesis") || !has("evidence"))) {
     return { ok: false, error: "Keep decisions require ASI hypothesis and evidence." };
@@ -137,4 +193,23 @@ function parseAsi(text, status) {
     return { ok: false, error: "Rejected or failed decisions require ASI evidence or rollback_reason." };
   }
   return { ok: true, value };
+}
+
+function structuredAsiFrom(template = {}) {
+  return {
+    hypothesis: String(template?.hypothesis || ""),
+    evidence: String(template?.evidence || ""),
+    rollback_reason: String(template?.rollback_reason || template?.rollbackReason || ""),
+    next_action_hint: String(template?.next_action_hint || template?.nextAction || template?.next_action || ""),
+  };
+}
+
+function cleanAsi(value = {}) {
+  return Object.fromEntries(Object.entries(value)
+    .map(([key, item]) => [key, typeof item === "string" ? item.trim() : item])
+    .filter(([, item]) => item != null && String(item).trim().length > 0));
+}
+
+function stringifyAsi(value = {}) {
+  return JSON.stringify(cleanAsi(value), null, 2);
 }

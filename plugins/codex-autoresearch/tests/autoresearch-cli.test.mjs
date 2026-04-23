@@ -421,6 +421,30 @@ test("next writes a reusable last-run packet and log can consume it", async () =
   });
 });
 
+test("next parses metrics from the full benchmark output before display truncation", async () => {
+  await withTempDir("full-output-metric", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "full output", "--metric-name", "seconds"]);
+    const script = path.join(dir, "noisy-benchmark.mjs");
+    await writeFile(script, [
+      "console.log('METRIC seconds=7');",
+      "for (let i = 0; i < 3000; i += 1) console.log(`noise ${i} ${'x'.repeat(80)}`);",
+      "",
+    ].join("\n"), "utf8");
+
+    const next = await runCli([
+      "next",
+      "--cwd", dir,
+      "--command", `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      "--checks-policy", "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.decision.metric, 7);
+    assert.equal(packet.run.parsedPrimary, 7);
+    assert.equal(packet.run.outputTruncated, true);
+  });
+});
+
 test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
   await withTempDir("last-run-suggest-discard", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "suggest discard", "--metric-name", "seconds", "--direction", "lower"]);
@@ -468,6 +492,78 @@ test("stale last-run packets are rejected when history advances", async () => {
     ]);
     assert.notEqual(stale.code, 0);
     assert.match(stale.stderr, /Last-run packet is stale/);
+  });
+});
+
+test("stale last-run packets are rejected when scoped git evidence changes", async () => {
+  await withTempDir("stale-last-run-git-evidence", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "git stale packet", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd", dir,
+      "--command", command,
+      "--checks-policy", "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+
+    await writeFile(path.join(dir, "tracked.txt"), "changed after next\n", "utf8");
+    const stale = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "discard",
+      "--description", "Old packet after file edit",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /Git dirty state changed|scoped file fingerprints changed/);
+  });
+});
+
+test("stale last-run packets are rejected when dirty file contents change without status shape changes", async () => {
+  await withTempDir("stale-last-run-dirty-content", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "dirty content packet", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "tracked.txt"), "dirty before packet\n", "utf8");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd", dir,
+      "--command", command,
+      "--checks-policy", "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+
+    await writeFile(path.join(dir, "tracked.txt"), "dirty after packet\n", "utf8");
+    const stale = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Old packet after dirty content edit",
+      "--allow-add-all",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /dirty file contents changed/);
   });
 });
 
@@ -693,6 +789,30 @@ test("keep and discard still require finite metrics", async () => {
   });
 });
 
+test("state normalizes invalid metrics before experiment memory ranking", async () => {
+  await withTempDir("state-invalid-metric-memory", async (dir) => {
+    await writeFile(path.join(dir, "autoresearch.jsonl"), [
+      JSON.stringify({ type: "config", name: "invalid metric memory", metricName: "seconds", bestDirection: "lower" }),
+      JSON.stringify({ run: 1, metric: false, status: "keep", description: "Invalid metric", asi: { family: "same" } }),
+      JSON.stringify({ run: 2, metric: "not-a-number", status: "discard", description: "Invalid string", asi: { family: "same" } }),
+      JSON.stringify({ run: 3, metric: 5, status: "keep", description: "Real metric", asi: { family: "same" } }),
+    ].join("\n") + "\n", "utf8");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    const family = payload.memory.families.find((item) => item.label === "same");
+
+    assert.equal(payload.baseline, 5);
+    assert.equal(payload.best, 5);
+    assert.deepEqual(payload.memory.kept.map((item) => item.metric), [null, 5]);
+    assert.equal(family.bestRun.run, 3);
+    assert.equal(family.bestRun.metric, 5);
+    assert.equal(family.bestKeptRun.run, 3);
+    assert.equal(family.bestKeptRun.metric, 5);
+  });
+});
+
 test("last-run packet does not dirty git worktrees before discard logging", async () => {
   await withTempDir("git-last-run", async (dir) => {
     await git(dir, ["init"]);
@@ -725,6 +845,38 @@ test("last-run packet does not dirty git worktrees before discard logging", asyn
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.experiment.metric, 3);
+  });
+});
+
+test("no-change keep records no fake kept commit", async () => {
+  await withTempDir("no-change-keep", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "no change keep", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--checks-policy", "manual"]);
+    assert.equal(next.code, 0, next.stderr);
+
+    const log = await runCli([
+      "log",
+      "--cwd", dir,
+      "--from-last",
+      "--status", "keep",
+      "--description", "Keep evidence without file changes",
+      "--commit-paths", "tracked.txt",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.experiment.commit, "");
+    assert.match(payload.git, /nothing to commit/);
   });
 });
 
@@ -1023,6 +1175,86 @@ test("clear removes deep research scratchpads", async () => {
   });
 });
 
+test("clear dry-run previews deletion targets without removing files", async () => {
+  await withTempDir("clear-dry-run", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "preview", "--goal", "Preview cleanup"]);
+    const researchRoot = path.join(dir, "autoresearch.research");
+    await access(researchRoot);
+
+    const result = await runCli(["clear", "--cwd", dir, "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.deleted.length, 0);
+    assert.ok(payload.targets.includes(researchRoot));
+    assert.ok(payload.wouldDelete.includes(researchRoot));
+    await access(researchRoot);
+  });
+});
+
+test("mcp clear_session dry-run previews deletion targets without confirmation", async () => {
+  await withTempDir("mcp-clear-dry-run", async (dir) => {
+    await runCli(["research-setup", "--cwd", dir, "--slug", "preview", "--goal", "Preview cleanup"]);
+    const researchRoot = path.join(dir, "autoresearch.research");
+    await access(researchRoot);
+
+    const response = await callMcpTool("clear_session", {
+      working_dir: dir,
+      dry_run: true,
+    });
+    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.deleted.length, 0);
+    assert.ok(payload.wouldDelete.includes(researchRoot));
+    await access(researchRoot);
+  });
+});
+
+test("setup-plan preserves explicit command and state inputs", async () => {
+  await withTempDir("setup-plan-inputs", async (dir) => {
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const result = await runCli([
+      "setup-plan",
+      "--cwd", dir,
+      "--name", "explicit setup",
+      "--metric-name", "seconds",
+      "--benchmark-command", benchmark,
+      "--checks-command", checks,
+      "--commit-paths", "src,tests",
+      "--max-iterations", "7",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.match(payload.nextCommand, /--benchmark-command/);
+    assert.match(payload.nextCommand, /METRIC seconds=1/);
+    assert.match(payload.nextCommand, /--checks-command/);
+    assert.match(payload.nextCommand, /process\.exit\(0\)/);
+    assert.match(payload.nextCommand, /--commit-paths "src,tests"/);
+    assert.match(payload.nextCommand, /--max-iterations "7"/);
+  });
+});
+
+test("invalid iteration limits and negative extensions fail loudly", async () => {
+  await withTempDir("invalid-iteration-limits", async (dir) => {
+    const setup = await runCli([
+      "setup",
+      "--cwd", dir,
+      "--name", "bad limit",
+      "--metric-name", "seconds",
+      "--max-iterations", "0",
+    ]);
+    assert.notEqual(setup.code, 0);
+    assert.match(setup.stderr, /maxIterations must be a positive integer/);
+
+    await runCli(["init", "--cwd", dir, "--name", "config limit", "--metric-name", "seconds"]);
+    const config = await runCli(["config", "--cwd", dir, "--extend", "-1"]);
+    assert.notEqual(config.code, 0);
+    assert.match(config.stderr, /extend must be a non-negative integer/);
+  });
+});
+
 test("broad discard cleanup preserves deep research scratchpads", async () => {
   await withTempDir("preserve-research", async (dir) => {
     await git(dir, ["init"]);
@@ -1249,6 +1481,36 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.match(unknown.result.content[0].text, /Unknown argument/);
     assert.doesNotMatch(unknown.result.content[0].text, /\n\s+at\s/);
 
+    const readOnlyPlan = await callMcpTool("setup_plan", {
+      working_dir: dir,
+      name: "read only command plan",
+      metric_name: "seconds",
+      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
+      checks_command: "node -e \"process.exit(0)\"",
+      commit_paths: ["src", "tests"],
+      max_iterations: 7,
+    });
+    assert.equal(readOnlyPlan.result?.isError, undefined, readOnlyPlan.result?.content?.[0]?.text);
+    const readOnlyPayload = JSON.parse(readOnlyPlan.result.content[0].text);
+    assert.match(readOnlyPayload.nextCommand, /--checks-command/);
+    assert.match(readOnlyPayload.nextCommand, /--commit-paths "src,tests"/);
+    assert.match(readOnlyPayload.nextCommand, /--max-iterations "7"/);
+
+    const readOnlyGuide = await callMcpTool("guided_setup", {
+      working_dir: dir,
+      name: "read only guide",
+      metric_name: "seconds",
+      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
+      checks_command: "node -e \"process.exit(0)\"",
+      commit_paths: ["src"],
+      max_iterations: 3,
+    });
+    assert.equal(readOnlyGuide.result?.isError, undefined, readOnlyGuide.result?.content?.[0]?.text);
+    const guidePayload = JSON.parse(readOnlyGuide.result.content[0].text);
+    assert.match(guidePayload.setup.nextCommand, /--checks-command/);
+    assert.match(guidePayload.setup.nextCommand, /--commit-paths "src"/);
+    assert.match(guidePayload.setup.nextCommand, /--max-iterations "3"/);
+
     const gated = await callMcpTool("setup_session", {
       working_dir: dir,
       name: "unsafe setup",
@@ -1258,6 +1520,50 @@ test("mcp server rejects unknown arguments and gated command materialization", a
     assert.equal(gated.result.isError, true);
     assert.match(gated.result.content[0].text, /allow_unsafe_command=true/);
     assert.doesNotMatch(gated.result.content[0].text, /\n\s+at\s/);
+  });
+});
+
+test("mcp quality-gap tools infer active research slug deterministically", async () => {
+  await withTempDir("mcp-quality-gap-slug", async (dir) => {
+    const alphaDir = path.join(dir, "autoresearch.research", "alpha-study");
+    await mkdir(alphaDir, { recursive: true });
+    await writeFile(path.join(alphaDir, "quality-gaps.md"), "- [ ] Alpha open gap\n- [x] Alpha closed gap\n", "utf8");
+    await writeFile(path.join(alphaDir, "synthesis.md"), [
+      "# Research Synthesis",
+      "",
+      "## High-Impact Findings",
+      "- Add alpha evidence guidance.",
+      "",
+    ].join("\n"), "utf8");
+
+    const measured = await callMcpTool("measure_quality_gap", { working_dir: dir });
+    assert.equal(measured.result?.isError, undefined, measured.result?.content?.[0]?.text);
+    const measuredPayload = JSON.parse(measured.result.content[0].text);
+    assert.equal(measuredPayload.slug, "alpha-study");
+    assert.equal(measuredPayload.open, 1);
+    assert.deepEqual(measuredPayload.openItems, ["Alpha open gap"]);
+
+    const candidates = await callMcpTool("gap_candidates", { working_dir: dir });
+    assert.equal(candidates.result?.isError, undefined, candidates.result?.content?.[0]?.text);
+    const candidatesPayload = JSON.parse(candidates.result.content[0].text);
+    assert.equal(candidatesPayload.slug, "alpha-study");
+    assert.equal(candidatesPayload.candidates.length, 1);
+
+    const betaDir = path.join(dir, "autoresearch.research", "beta-study");
+    await mkdir(betaDir, { recursive: true });
+    await writeFile(path.join(betaDir, "quality-gaps.md"), "- [ ] Beta open gap\n", "utf8");
+
+    const ambiguous = await callMcpTool("measure_quality_gap", { working_dir: dir });
+    assert.equal(ambiguous.result?.isError, true);
+    assert.match(ambiguous.result.content[0].text, /research_slug explicitly/);
+    assert.match(ambiguous.result.content[0].text, /alpha-study/);
+    assert.match(ambiguous.result.content[0].text, /beta-study/);
+
+    const explicit = await callMcpTool("measure_quality_gap", { working_dir: dir, research_slug: "beta-study" });
+    assert.equal(explicit.result?.isError, undefined, explicit.result?.content?.[0]?.text);
+    const explicitPayload = JSON.parse(explicit.result.content[0].text);
+    assert.equal(explicitPayload.slug, "beta-study");
+    assert.equal(explicitPayload.open, 1);
   });
 });
 
@@ -1272,10 +1578,36 @@ test("mcp CLI adapter forwards schema-supported options that need CLI flags", as
       working_dir: dir,
       recipe_id: "node-test-runtime",
       metric_name: "seconds",
+      checks_command: "npm test",
+      commit_paths: ["src"],
+      max_iterations: 3,
     });
     assert.deepEqual(guided.args.slice(0, 3), ["guide", "--cwd", dir]);
     assert.ok(guided.args.includes("--recipe"));
     assert.ok(guided.args.includes("--metric-name"));
+    assert.ok(guided.args.includes("--checks-command"));
+    assert.ok(guided.args.includes("--commit-paths"));
+    assert.ok(guided.args.includes("--max-iterations"));
+
+    const setupPlan = await callTool("setup_plan", {
+      working_dir: dir,
+      metric_name: "seconds",
+      checks_command: "npm test",
+      commit_paths: ["src", "tests"],
+      max_iterations: 7,
+    });
+    assert.deepEqual(setupPlan.args.slice(0, 3), ["setup-plan", "--cwd", dir]);
+    assert.ok(setupPlan.args.includes("--checks-command"));
+    assert.ok(setupPlan.args.includes("src,tests"));
+    assert.ok(setupPlan.args.includes("--max-iterations"));
+
+    const clear = buildCliInvocationForTool("clear_session", {
+      working_dir: dir,
+      dry_run: true,
+    });
+    assert.deepEqual(clear.args.slice(0, 3), ["clear", "--cwd", dir]);
+    assert.ok(clear.args.includes("--dry-run"));
+    assert.equal(clear.args.includes("--yes"), false);
 
     const log = await callTool("log_experiment", {
       working_dir: dir,

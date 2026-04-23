@@ -15,7 +15,7 @@ import { buildExperimentMemory } from "../lib/experiment-memory.mjs";
 import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview.mjs";
 import { integrationsCommand } from "../lib/integrations.mjs";
 import { createMcpInterface } from "../lib/mcp-interface.mjs";
-import { gapCandidates as buildGapCandidates, researchRoundGuidance } from "../lib/research-gaps.mjs";
+import { gapCandidates as buildGapCandidates, researchRoundGuidance, resolveResearchSlugForQualityGapSync } from "../lib/research-gaps.mjs";
 import { applyResolvedRecipeDefaults, findRecipe, getBuiltInRecipe, listBuiltInRecipes, loadRecipeCatalog, recommendRecipe } from "../lib/recipes.mjs";
 import { serveAutoresearch } from "../lib/live-server.mjs";
 import { STATUS_VALUES, FAILURE_STATUSES, finiteMetric, isBaselineEligibleMetricRun } from "../lib/session-core.mjs";
@@ -43,9 +43,11 @@ const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
+const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
+const PLUGIN_VERSION = "0.5.1";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -78,7 +80,7 @@ Usage:
   node scripts/autoresearch.mjs state --cwd <project>
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--json-full|--verbose]
-  node scripts/autoresearch.mjs clear --cwd <project> --yes
+  node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
   node scripts/autoresearch.mjs mcp-smoke
   node scripts/autoresearch.mjs --mcp
 
@@ -132,6 +134,26 @@ function numberOption(value, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
   return parsed;
+}
+
+function positiveIntegerOption(value, fallback, optionName) {
+  const parsed = numberOption(value, fallback);
+  if (parsed == null) return parsed;
+  const integer = Math.floor(parsed);
+  if (!Number.isFinite(integer) || integer <= 0) {
+    throw new Error(`${optionName} must be a positive integer. Got ${value}`);
+  }
+  return integer;
+}
+
+function nonNegativeIntegerOption(value, fallback, optionName) {
+  const parsed = numberOption(value, fallback);
+  if (parsed == null) return parsed;
+  const integer = Math.floor(parsed);
+  if (!Number.isFinite(integer) || integer < 0) {
+    throw new Error(`${optionName} must be a non-negative integer. Got ${value}`);
+  }
+  return integer;
 }
 
 function boolOption(value, fallback = false) {
@@ -298,6 +320,10 @@ async function setupPlan(args) {
     name: args.name || recommended?.title || "Autoresearch session",
   });
   const shellKind = shellKindFromArgs(planArgs);
+  const setupMaxIterations = positiveIntegerOption(planArgs.max_iterations ?? planArgs.maxIterations, null, "maxIterations");
+  const commitPaths = normalizeRelativePaths(planArgs.commit_paths ?? planArgs.commitPaths, "commitPaths");
+  const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
+  const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
   const command = [
     "node",
     shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
@@ -312,6 +338,10 @@ async function setupPlan(args) {
     shellQuote(planArgs.direction || "lower"),
     "--shell",
     shellQuote(shellKind),
+    benchmarkCommand ? `--benchmark-command ${shellQuote(benchmarkCommand)}` : "",
+    checksCommand ? `--checks-command ${shellQuote(checksCommand)}` : "",
+    setupMaxIterations != null ? `--max-iterations ${shellQuote(setupMaxIterations)}` : "",
+    commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
     args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
   ].filter(Boolean).join(" ");
@@ -351,7 +381,7 @@ async function guidedSetup(args) {
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
   const lastRun = await readLastRunPacket(workDir).catch(() => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
-  const lastRunFreshness = lastRun ? lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const lastRunLogStatus = lastRun
     ? (lastRun.decision?.safeSuggestedStatus
         || lastRun.decision?.suggestedStatus
@@ -792,7 +822,9 @@ function currentState(workDir) {
       continue;
     }
     if (entry.run != null) {
-      results.push({ ...entry, segment: entry.segment ?? segment });
+      const run = { ...entry, segment: entry.segment ?? segment };
+      if (Object.hasOwn(entry, "metric")) run.metric = finiteMetric(entry.metric);
+      results.push(run);
     }
   }
   const current = results.filter((run) => run.segment === segment);
@@ -894,9 +926,28 @@ async function runShell(command, cwd, timeoutSeconds) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let fullOutput = "";
+    let metricOutput = "";
+    let pendingMetricText = "";
     let outputTruncated = false;
+    let fullOutputTruncated = false;
     let timedOut = false;
+    const appendMetricLines = (text) => {
+      pendingMetricText += text;
+      const lines = pendingMetricText.split(/\r?\n/);
+      pendingMetricText = lines.pop() || "";
+      for (const line of lines) {
+        if (/^METRIC\s+/i.test(line.trim())) metricOutput += `${line}\n`;
+      }
+    };
     const appendOutput = (text) => {
+      appendMetricLines(text);
+      fullOutput += text;
+      if (Buffer.byteLength(fullOutput, "utf8") > FULL_OUTPUT_CAPTURE_BYTES) {
+        const buf = Buffer.from(fullOutput, "utf8");
+        fullOutput = buf.subarray(Math.max(0, buf.length - FULL_OUTPUT_CAPTURE_BYTES)).toString("utf8");
+        fullOutputTruncated = true;
+      }
       output += text;
       if (Buffer.byteLength(output, "utf8") > OUTPUT_CAPTURE_BYTES) {
         const buf = Buffer.from(output, "utf8");
@@ -916,24 +967,32 @@ async function runShell(command, cwd, timeoutSeconds) {
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
+      if (/^METRIC\s+/i.test(pendingMetricText.trim())) metricOutput += `${pendingMetricText}\n`;
       resolve({
         command,
         exitCode: null,
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
         output: String(error.stack || error.message || error),
+        fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${String(error.stack || error.message || error)}`,
+        metricOutput,
         outputTruncated,
+        fullOutputTruncated,
       });
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      if (/^METRIC\s+/i.test(pendingMetricText.trim())) metricOutput += `${pendingMetricText}\n`;
       resolve({
         command,
         exitCode: code,
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
         output,
+        fullOutput,
+        metricOutput,
         outputTruncated,
+        fullOutputTruncated,
       });
     });
   });
@@ -1076,6 +1135,83 @@ async function gitStatusShort(cwd) {
   const result = await git(["status", "--porcelain"], cwd);
   if (result.code !== 0) throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
   return result.stdout.trim();
+}
+
+function hashText(value) {
+  return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+async function scopedFileFingerprints(workDir, paths = []) {
+  const safePaths = normalizeRelativePaths(paths, "commitPaths");
+  if (safePaths.length === 0) return [];
+  const result = await git(["ls-files", "--", ...safePaths], workDir);
+  if (result.code !== 0) return [];
+  const files = result.stdout
+    .split(/\r?\n/)
+    .map((file) => file.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  const fingerprints = [];
+  for (const file of files) {
+    const filePath = path.join(workDir, file);
+    try {
+      const bytes = await fsp.readFile(filePath);
+      fingerprints.push({ path: file, hash: createHash("sha256").update(bytes).digest("hex") });
+    } catch (error) {
+      fingerprints.push({ path: file, missing: true, error: error?.code || error?.message || String(error) });
+    }
+  }
+  return fingerprints;
+}
+
+function dirtyPathsFromStatus(statusShort) {
+  return String(statusShort || "")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const rawPath = /^.. /.test(line)
+        ? line.slice(3).trim()
+        : line.replace(/^[ MADRCU?!]{1,2}\s+/, "").trim();
+      const renamedPath = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) : rawPath;
+      return renamedPath.replace(/^"|"$/g, "").replace(/\\"/g, "\"").replace(/\\/g, "/");
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function fileFingerprintsForPaths(workDir, paths = []) {
+  const fingerprints = [];
+  for (const file of [...new Set(paths)].sort((a, b) => a.localeCompare(b))) {
+    const filePath = path.join(workDir, file);
+    try {
+      const stats = await fsp.stat(filePath);
+      if (stats.isDirectory()) {
+        fingerprints.push({ path: file, directory: true });
+        continue;
+      }
+      const bytes = await fsp.readFile(filePath);
+      fingerprints.push({ path: file, hash: createHash("sha256").update(bytes).digest("hex") });
+    } catch (error) {
+      fingerprints.push({ path: file, missing: true, error: error?.code || error?.message || String(error) });
+    }
+  }
+  return fingerprints;
+}
+
+async function lastRunGitSnapshot(workDir, config = {}) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) return { inside: false };
+  const scopedPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
+  const statusShort = await gitStatusShort(workDir);
+  return {
+    inside: true,
+    head: await shortHead(workDir),
+    dirty: Boolean(statusShort),
+    statusHash: hashText(statusShort),
+    scopedPaths,
+    fileFingerprints: await scopedFileFingerprints(workDir, scopedPaths),
+    dirtyFileFingerprints: await fileFingerprintsForPaths(workDir, dirtyPathsFromStatus(statusShort)),
+  };
 }
 
 async function preserveSessionFiles(workDir) {
@@ -1265,9 +1401,9 @@ async function setupSession(args) {
     ideasContent: () => `# Autoresearch Ideas: ${args.name}\n\n- Add promising ideas here when they are not tried immediately.\n`,
   });
 
-  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
+  const maxIterations = positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
   const setupConfig = {};
-  if (maxIterations != null) setupConfig.maxIterations = Math.floor(maxIterations);
+  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
   if (args.recipe_id || args.recipeId || args.recipe) setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
   if (Object.keys(setupConfig).length > 0) await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
@@ -1339,12 +1475,12 @@ async function setupResearchSession(args) {
   });
   const researchDir = researchDirPath(workDir, slug);
 
-  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
+  const maxIterations = positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
   if (maxIterations != null || commitPaths.length > 0 || Object.keys(runtimeUpdates).length > 0) {
     const nextConfig = { ...runtimeUpdates };
-    if (maxIterations != null) nextConfig.maxIterations = Math.floor(maxIterations);
+    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
     if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
     await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
   }
@@ -1380,11 +1516,8 @@ async function setupResearchSession(args) {
 
 async function measureQualityGap(args) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const requestedSlug = args.research_slug ?? args.researchSlug ?? args.slug ?? args.name;
-  const slug = requestedSlug ? safeSlug(requestedSlug) : currentQualityGapSlug(workDir);
-  if (!slug) {
-    throw new Error("No research slug was provided and no active quality-gaps.md file was found under autoresearch.research/.");
-  }
+  const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
+  const slug = slugResolution.slug;
   const researchDir = researchDirPath(workDir, slug);
   const gapsPath = path.join(researchDir, "quality-gaps.md");
   if (!(await pathExists(gapsPath))) {
@@ -1402,6 +1535,8 @@ async function measureQualityGap(args) {
     ok: true,
     workDir,
     slug,
+    slugInferred: slugResolution.inferred,
+    slugCandidates: slugResolution.candidates,
     researchDir,
     qualityGapsPath: gapsPath,
     open: counts.open,
@@ -1430,22 +1565,24 @@ async function currentQualityGapSummary(workDir) {
   return null;
 }
 
-function dashboardSettings(config) {
+function dashboardSettings(config, extra = {}) {
   return {
     autonomyMode: config.autonomyMode || "guarded",
     checksPolicy: config.checksPolicy || "always",
     keepPolicy: config.keepPolicy || "primary-only",
     recipeId: config.recipeId || "",
+    ...extra,
   };
 }
 
-async function dashboardViewModel(workDir, config) {
+async function dashboardViewModel(workDir, config, context = {}) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
   const warnings = await operatorWarningsForWorkDir(workDir, config);
+  const settings = dashboardSettings(config, context);
   return buildDashboardViewModel({
     state,
-    settings: dashboardSettings(config),
+    settings,
     commands: dashboardCommands(workDir, qualityGap),
     setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
     guidedSetup: await guidedSetup({ cwd: workDir }).catch((error) => ({ ok: false, warnings: [error.message] })),
@@ -1460,7 +1597,7 @@ async function dashboardViewModel(workDir, config) {
     experimentMemory: buildExperimentMemory({
       runs: state.current,
       direction: state.config.bestDirection,
-      settings: dashboardSettings(config),
+      settings,
     }),
     drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({ ok: false, warnings: [error.message] })),
     warnings,
@@ -1470,21 +1607,31 @@ async function dashboardViewModel(workDir, config) {
 async function operatorWarningsForWorkDir(workDir, config = {}) {
   const inGit = await insideGitRepo(workDir);
   const commitPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
-  return shouldWarnEmptyCommitPaths({ inGit, commitPaths }) ? [emptyCommitPathsWarning()] : [];
+  const warnings = [];
+  if (inGit && (await isGitClean(workDir)) === false) {
+    warnings.push({
+      code: "git_dirty",
+      severity: "warning",
+      message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
+      action: "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
+    });
+  }
+  if (shouldWarnEmptyCommitPaths({ inGit, commitPaths })) warnings.push(emptyCommitPathsWarning());
+  return warnings;
 }
 
 async function configureSession(args) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const updates = runtimeConfigUpdatesFromArgs(args);
-  const maxIterations = numberOption(args.max_iterations ?? args.maxIterations, null);
-  const extend = numberOption(args.extend ?? args.extendLimit, null);
+  const maxIterations = positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
+  const extend = nonNegativeIntegerOption(args.extend ?? args.extendLimit, null, "extend");
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  if (maxIterations != null) updates.maxIterations = Math.floor(maxIterations);
+  if (maxIterations != null) updates.maxIterations = maxIterations;
   if (extend != null) {
     const state = currentState(workDir);
     const activeRuns = state.current.length;
     const currentMax = Number.isFinite(Number(config.maxIterations)) ? Math.floor(Number(config.maxIterations)) : activeRuns;
-    updates.maxIterations = Math.max(currentMax, activeRuns) + Math.floor(extend);
+    updates.maxIterations = Math.max(currentMax, activeRuns) + extend;
   }
   if (commitPaths.length > 0) updates.commitPaths = commitPaths;
   const nextConfig = await writeRuntimeConfig(sessionCwd, updates);
@@ -1529,7 +1676,7 @@ async function runExperiment(args) {
   const command = args.command || await defaultBenchmarkCommand(workDir);
   const benchmark = await runShell(command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS));
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
-  const parsedMetrics = parseMetricLines(benchmark.output);
+  const parsedMetrics = parseMetricLines(benchmark.metricOutput || benchmark.fullOutput || benchmark.output);
   const primary = parsedMetrics[state.config.metricName] ?? null;
   const primaryPresent = finiteMetric(primary) != null;
   const primaryMetric = finiteMetric(primary);
@@ -1575,7 +1722,7 @@ async function runExperiment(args) {
     metricError,
     checksPolicy,
     improvesPrimary,
-    outputTruncated: Boolean(benchmark.outputTruncated || checks?.outputTruncated),
+    outputTruncated: Boolean(benchmark.outputTruncated || benchmark.fullOutputTruncated || checks?.outputTruncated || checks?.fullOutputTruncated),
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
     progress,
@@ -1667,7 +1814,7 @@ function operationProgress({ stage, label, startedAt, status = "completed", outp
 async function logExperiment(args) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false) ? await readLastRunPacket(workDir) : null;
-  if (lastPacket) assertFreshLastRunPacket(workDir, lastPacket);
+  if (lastPacket) await assertFreshLastRunPacket(workDir, lastPacket);
   const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses) ? lastPacket.decision.allowedStatuses : [];
   const status = String(args.status || (packetAllowed.length === 1 ? lastPacket?.decision?.suggestedStatus : "") || "");
   if (!status) throw new Error("status is required; choose keep or discard explicitly for successful packets.");
@@ -1697,7 +1844,7 @@ async function logExperiment(args) {
   let commit = "";
   if (explicitCommit) {
     commit = (await resolveCommitRef(workDir, args.commit)).slice(0, 12);
-  } else if (inGit) {
+  } else if (inGit && status !== "keep") {
     commit = await shortHead(workDir);
   }
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
@@ -1788,10 +1935,17 @@ async function exportDashboard(args) {
   if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
   const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
   const commands = dashboardCommands(workDir);
-  const viewModel = await dashboardViewModel(workDir, config);
+  const generatedAt = new Date().toISOString();
+  const dashboardContext = {
+    deliveryMode: "static-export",
+    generatedAt,
+    sourceCwd: workDir,
+    pluginVersion: PLUGIN_VERSION,
+  };
+  const viewModel = await dashboardViewModel(workDir, config, dashboardContext);
   const html = dashboardHtml(entries, {
     workDir,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     jsonlName: "autoresearch.jsonl",
     deliveryMode: "static-export",
     liveActionsAvailable: false,
@@ -1801,7 +1955,7 @@ async function exportDashboard(args) {
     },
     refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
     commands,
-    settings: dashboardSettings(config),
+    settings: dashboardSettings(config, dashboardContext),
     viewModel,
   });
   await fsp.writeFile(output, html, "utf8");
@@ -1837,15 +1991,24 @@ async function exportDashboard(args) {
 async function serveDashboard(args) {
   const startedAt = Date.now();
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  let liveUrl = "";
   const serveResult = await serveAutoresearch({
     cwd: workDir,
     port: args.port,
     scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
     dashboardHtml: async ({ actionNonce, actionNonceHeader } = {}) => {
       const entries = readJsonl(workDir);
+      const generatedAt = new Date().toISOString();
+      const dashboardContext = {
+        deliveryMode: "live-server",
+        liveUrl,
+        generatedAt,
+        sourceCwd: workDir,
+        pluginVersion: PLUGIN_VERSION,
+      };
       return dashboardHtml(entries, {
         workDir,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
         jsonlName: "autoresearch.jsonl",
         deliveryMode: "live-server",
         liveActionsAvailable: true,
@@ -1857,12 +2020,19 @@ async function serveDashboard(args) {
         },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
         commands: dashboardCommands(workDir),
-        settings: dashboardSettings(config),
-        viewModel: await dashboardViewModel(workDir, config),
+        settings: dashboardSettings(config, dashboardContext),
+        viewModel: await dashboardViewModel(workDir, config, dashboardContext),
       });
     },
-    viewModel: async () => dashboardViewModel(workDir, config),
+    viewModel: async () => dashboardViewModel(workDir, config, {
+      deliveryMode: "live-server",
+      liveUrl,
+      generatedAt: new Date().toISOString(),
+      sourceCwd: workDir,
+      pluginVersion: PLUGIN_VERSION,
+    }),
   });
+  liveUrl = serveResult.url;
   liveDashboardServers.add(serveResult.server);
   serveResult.server.on("close", () => {
     liveDashboardServers.delete(serveResult.server);
@@ -1887,7 +2057,8 @@ async function serveDashboard(args) {
 }
 
 async function clearSession(args) {
-  if (!boolOption(args.confirm ?? args.yes, false)) {
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
+  if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) {
     throw new Error("clear requires confirm=true for MCP or --yes for CLI");
   }
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
@@ -1899,11 +2070,16 @@ async function clearSession(args) {
     path.join(sessionCwd, "autoresearch.config.json"),
   ]);
   const deleted = [];
+  const wouldDelete = [];
   const missing = [];
   for (const filePath of [...targets].sort()) {
     if (await pathExists(filePath)) {
-      await fsp.rm(filePath, { recursive: true, force: true });
-      deleted.push(filePath);
+      if (dryRun) {
+        wouldDelete.push(filePath);
+      } else {
+        await fsp.rm(filePath, { recursive: true, force: true });
+        deleted.push(filePath);
+      }
     } else {
       missing.push(filePath);
     }
@@ -1912,6 +2088,9 @@ async function clearSession(args) {
     ok: true,
     workDir,
     sessionCwd,
+    dryRun,
+    targets: [...targets].sort(),
+    wouldDelete,
     deleted,
     missing,
   };
@@ -1997,12 +2176,12 @@ async function lastRunPacketFingerprint(workDir) {
   return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
 }
 
-function assertFreshLastRunPacket(workDir, packet) {
-  const freshness = lastRunPacketFreshness(workDir, packet);
+async function assertFreshLastRunPacket(workDir, packet) {
+  const freshness = await lastRunPacketFreshness(workDir, packet);
   if (!freshness.fresh) throw new Error(freshness.reason);
 }
 
-function lastRunPacketFreshness(workDir, packet) {
+async function lastRunPacketFreshness(workDir, packet) {
   const expectedNextRun = Number(packet.history?.nextRun);
   const expectedSegment = Number(packet.history?.segment);
   if (!Number.isFinite(expectedNextRun)) {
@@ -2012,6 +2191,15 @@ function lastRunPacketFreshness(workDir, packet) {
     };
   }
   const state = currentState(workDir);
+  const expectedWorkDir = packet.history?.workDir || packet.workDir;
+  if (expectedWorkDir && path.resolve(expectedWorkDir) !== path.resolve(workDir)) {
+    return {
+      fresh: false,
+      expectedWorkDir,
+      actualWorkDir: workDir,
+      reason: "Last-run packet is stale: working directory changed since the packet was created. Run next again before logging.",
+    };
+  }
   const actualNextRun = state.results.length + 1;
   if (Number.isFinite(expectedSegment) && state.segment !== expectedSegment) {
     return {
@@ -2045,10 +2233,65 @@ function lastRunPacketFreshness(workDir, packet) {
       reason: `Last-run packet is stale: expected next log run #${expectedNextRun}, but current history would log #${actualNextRun}. Run next again before logging.`,
     };
   }
+  const expectedGit = packet.history?.git;
+  if (expectedGit?.inside) {
+    const actualGit = await lastRunGitSnapshot(workDir, { commitPaths: expectedGit.scopedPaths || [] });
+    if (!actualGit.inside) {
+      return {
+        fresh: false,
+        expectedGit,
+        actualGit,
+        reason: "Last-run packet is stale: the working directory is no longer a Git worktree. Run next again before logging.",
+      };
+    }
+    if (expectedGit.head && actualGit.head && expectedGit.head !== actualGit.head) {
+      return {
+        fresh: false,
+        expectedGit,
+        actualGit,
+        reason: `Last-run packet is stale: Git HEAD changed from ${expectedGit.head} to ${actualGit.head}. Run next again before logging.`,
+      };
+    }
+    if (expectedGit.statusHash && actualGit.statusHash && expectedGit.statusHash !== actualGit.statusHash) {
+      return {
+        fresh: false,
+        expectedGit,
+        actualGit,
+        reason: "Last-run packet is stale: Git dirty state changed since the packet was created. Run next again before logging.",
+      };
+    }
+    if (expectedGit.fileFingerprints?.length || actualGit.fileFingerprints?.length) {
+      const expectedFiles = JSON.stringify(expectedGit.fileFingerprints || []);
+      const actualFiles = JSON.stringify(actualGit.fileFingerprints || []);
+      if (expectedFiles !== actualFiles) {
+        return {
+          fresh: false,
+          expectedGit,
+          actualGit,
+          reason: "Last-run packet is stale: scoped file fingerprints changed since the packet was created. Run next again before logging.",
+        };
+      }
+    }
+    if (expectedGit.dirtyFileFingerprints?.length || actualGit.dirtyFileFingerprints?.length) {
+      const expectedDirtyFiles = JSON.stringify(expectedGit.dirtyFileFingerprints || []);
+      const actualDirtyFiles = JSON.stringify(actualGit.dirtyFileFingerprints || []);
+      if (expectedDirtyFiles !== actualDirtyFiles) {
+        return {
+          fresh: false,
+          expectedGit,
+          actualGit,
+          reason: "Last-run packet is stale: dirty file contents changed since the packet was created. Run next again before logging.",
+        };
+      }
+    }
+  }
   return {
     fresh: true,
     expectedNextRun,
     actualNextRun,
+    expectedWorkDir: expectedWorkDir || workDir,
+    command: packet.history?.command || packet.run?.command || "",
+    git: packet.history?.git || null,
     reason: "Last-run packet matches the current ledger.",
   };
 }
@@ -2234,7 +2477,7 @@ function continuationCommands(workDir) {
 function currentQualityGapSlug(workDir) {
   const researchRoot = path.join(workDir, RESEARCH_DIR);
   try {
-    for (const entry of fs.readdirSync(researchRoot, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(researchRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue;
       if (fs.existsSync(path.join(researchRoot, entry.name, "quality-gaps.md"))) return entry.name;
     }
@@ -2291,7 +2534,7 @@ async function doctorSession(args) {
       const run = await runShell(benchmark.command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
       benchmark.exitCode = run.exitCode;
       benchmark.timedOut = run.timedOut;
-      benchmark.parsedMetrics = parseMetricLines(run.output);
+      benchmark.parsedMetrics = parseMetricLines(run.metricOutput || run.fullOutput || run.output);
       benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
       benchmark.progress = buildRunProgress({
         benchmark: run,
@@ -2402,9 +2645,15 @@ async function nextExperiment(args) {
     history: {
       segment: stateBeforeLog.segment,
       config: lastRunConfigSnapshot(stateBeforeLog.config),
+      command: run.command,
+      workDir: run.workDir,
       currentRuns: stateBeforeLog.current.length,
       totalRuns: stateBeforeLog.results.length,
       nextRun: stateBeforeLog.results.length + 1,
+      git: await lastRunGitSnapshot(run.workDir, config).catch((error) => ({
+        inside: null,
+        error: error.message || String(error),
+      })),
     },
     doctor,
     run,
@@ -2707,6 +2956,7 @@ async function main() {
     nextExperiment,
     parseJsonOption,
     pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
     publicState,
     readJsonl,
     recipeCommand,

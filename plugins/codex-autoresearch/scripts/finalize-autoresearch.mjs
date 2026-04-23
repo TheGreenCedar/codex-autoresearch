@@ -35,6 +35,7 @@ const SESSION_FILES = new Set([
   "autoresearch.ideas.md",
   "autoresearch.config.json",
   "autoresearch.last-run.json",
+  "autoresearch-dashboard.html",
   "autoresearch.sh",
   "autoresearch.ps1",
   "autoresearch.checks.sh",
@@ -145,21 +146,24 @@ async function applyFileFromCommit(ref, file, cwd) {
 }
 
 async function collectGroups(config, cwd) {
-  let prev = config.base;
   const seen = new Set();
   const groups = [];
   for (let i = 0; i < config.groups.length; i += 1) {
     const group = config.groups[i];
     const last = await fullHash(group.last_commit, cwd);
-    const files = await changedFiles(prev, last, cwd);
+    const parent = group.parent_commit
+      ? await fullHash(group.parent_commit, cwd)
+      : await commitParent(last, config.base, cwd);
+    const files = Array.isArray(group.files) && group.files.length
+      ? normalizePlanFiles(group.files)
+      : await changedFiles(parent, last, cwd);
     for (const file of files) {
       if (seen.has(file)) {
         throw new Error(`File appears in multiple groups: ${file}. Merge those groups and retry.`);
       }
       seen.add(file);
     }
-    groups.push({ ...group, last_commit: last, files });
-    prev = last;
+    groups.push({ ...group, last_commit: last, files, parent_commit: parent });
   }
   return groups;
 }
@@ -181,28 +185,87 @@ function markdownEscape(text) {
 }
 
 async function readKeptRuns(cwd) {
-  try {
-    const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
-    return text.split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((entry) => entry.status === "keep");
-  } catch {
-    return [];
-  }
+  const entries = await readAutoresearchJsonl(cwd);
+  return entries.filter((entry) => entry.status === "keep");
 }
 
 function runEvidenceForCommit(keptRuns, hash) {
-  return keptRuns.find((run) => {
+  for (let index = keptRuns.length - 1; index >= 0; index -= 1) {
+    const run = keptRuns[index];
     const commit = String(run.commit || "");
-    return commitMatchesHash(commit, hash);
-  });
+    if (commitMatchesHash(commit, hash)) return run;
+  }
+  return null;
 }
 
 function commitMatchesHash(commit, hash) {
   if (!commit) return false;
   return hash.startsWith(commit) || commit.startsWith(hash.slice(0, 12));
+}
+
+async function readAutoresearchJsonl(cwd) {
+  const file = path.join(cwd, "autoresearch.jsonl");
+  let text;
+  try {
+    text = await fsp.readFile(file, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw new Error(`Could not read autoresearch.jsonl: ${error.message || error}`);
+  }
+  return text.split(/\r?\n/).map((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    try {
+      return { ...JSON.parse(trimmed), __line: index + 1 };
+    } catch (error) {
+      throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${error.message}`);
+    }
+  }).filter(Boolean);
+}
+
+async function commitHistory(base, cwd) {
+  const result = await git(["log", "--reverse", "--format=%H%x1f%P%x1f%s", `${base}..HEAD`], cwd);
+  return cleanLines(result.stdout).map((line) => {
+    const [hash = "", parents = "", subject = ""] = line.split("\x1f");
+    return {
+      hash,
+      parents: cleanLines(parents.replace(/\s+/g, "\n")),
+      subject,
+    };
+  }).filter((item) => item.hash);
+}
+
+async function commitParent(hash, base, cwd) {
+  const result = await git(["rev-list", "--parents", "-n", "1", hash], cwd);
+  const parts = cleanLines(result.stdout.replace(/\s+/g, "\n"));
+  const parent = parts[1] || base;
+  return parent || base;
+}
+
+function parseCommitStatus(entries, hash) {
+  const matching = [];
+  for (const entry of entries) {
+    const commit = String(entry.commit || "");
+    if (commitMatchesHash(commit, hash)) matching.push(entry);
+  }
+  return matching.at(-1) || null;
+}
+
+function describeCommitStatus(entry) {
+  if (!entry) return "unlogged";
+  if (entry.status === "keep") return "kept";
+  return String(entry.status || "unlogged");
+}
+
+function quotePathspecs(files) {
+  return files.map((file) => posixQuote(file)).join(" ");
+}
+
+function normalizePlanFiles(files) {
+  return [...new Set((Array.isArray(files) ? files : [])
+    .map((file) => String(file || "").trim().replace(/\\/g, "/"))
+    .filter((file) => file && !isSessionFile(file)))]
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function draftBodyForCommit(run) {
@@ -272,6 +335,7 @@ function renderSuggestedPrBlocks(config, groups, results) {
   for (let i = 0; i < groups.length; i += 1) {
     const result = results[i];
     if (!result || result.skipped) continue;
+    const files = groups[i].files || [];
     lines.push(
       `### ${i + 1}. ${groups[i].title}`,
       "",
@@ -292,8 +356,8 @@ function renderSuggestedPrBlocks(config, groups, results) {
       "Review commands:",
       "",
       "```bash",
-      `git show --stat ${result.branch}`,
-      `git diff ${shortHash(config.base)}..${result.branch} -- ${groups[i].files.join(" ")}`,
+      `git show --stat ${posixQuote(result.branch)}`,
+      `git diff ${shortHash(config.base)}..${posixQuote(result.branch)} -- ${quotePathspecs(files)}`,
       "```",
       "",
     );
@@ -477,24 +541,36 @@ async function draftGroupsPlan(args, cwd) {
   const base = (await git(["merge-base", trunk, "HEAD"], cwd)).stdout.trim();
   const finalTree = await fullHash("HEAD", cwd);
   const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
-  const keptRuns = await readKeptRuns(cwd);
-  const log = await git(["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`], cwd);
-  let prev = base;
+  const history = await commitHistory(base, cwd);
+  const entries = await readAutoresearchJsonl(cwd);
+  const keptRuns = entries.filter((entry) => entry.status === "keep");
   const groups = [];
-  for (const line of cleanLines(log.stdout)) {
-    const [hash, subject] = line.split("\x1f");
-    if (!hash) continue;
-    const files = await changedFiles(prev, hash, cwd);
-    prev = hash;
-    if (!files.length) continue;
-    const run = runEvidenceForCommit(keptRuns, hash);
+  const excludedCommits = [];
+  const selectedCommits = new Set();
+  for (const item of history) {
+    const selectedRun = runEvidenceForCommit(keptRuns, item.hash);
+    if (!selectedRun) {
+      const sourceEntry = parseCommitStatus(entries, item.hash);
+      excludedCommits.push({
+        commit: item.hash,
+        subject: item.subject || "",
+        status: describeCommitStatus(sourceEntry),
+      });
+      continue;
+    }
+    selectedCommits.add(item.hash);
+    const parent = item.parents[0] || base;
+    const files = await changedFiles(parent, item.hash, cwd);
     groups.push({
-      title: subject || `Autoresearch change ${groups.length + 1}`,
-      body: draftBodyForCommit(run),
-      last_commit: hash,
-      slug: safeSlug(subject || `change-${groups.length + 1}`),
+      title: item.subject || selectedRun.description || `Autoresearch change ${groups.length + 1}`,
+      body: draftBodyForCommit(selectedRun),
+      last_commit: item.hash,
+      slug: safeSlug(item.subject || selectedRun.description || `change-${groups.length + 1}`),
+      parent_commit: parent,
+      files,
     });
   }
+  const overlapAnalysis = analyzeGroupOverlap(groups);
   const plan = {
     source_branch: sourceBranch,
     planned_at: new Date().toISOString(),
@@ -502,8 +578,14 @@ async function draftGroupsPlan(args, cwd) {
     trunk,
     final_tree: finalTree,
     goal,
-    kept_commits: keptRuns.map((run) => String(run.commit || "")).filter(Boolean),
+    kept_commits: [...selectedCommits],
     kept_run_count: keptRuns.length,
+    excluded_commits: excludedCommits,
+    excluded_commit_count: excludedCommits.length,
+    overlap_files: overlapAnalysis.files,
+    overlap_count: overlapAnalysis.files.length,
+    collapse_overlap_recommended: overlapAnalysis.files.length > 0,
+    warnings: buildPlanWarnings({ excludedCommits, overlapAnalysis }),
     groups,
   };
   return {
@@ -514,32 +596,25 @@ async function draftGroupsPlan(args, cwd) {
 
 async function collapseOverlappingDraftGroups(plan, cwd) {
   if (plan.groups.length <= 1) return plan;
-  let prev = plan.base;
-  const seen = new Set();
-  const overlapping = new Set();
-  for (const group of plan.groups) {
-    const last = await fullHash(group.last_commit, cwd);
-    const files = await changedFiles(prev, last, cwd);
-    for (const file of files) {
-      if (seen.has(file)) overlapping.add(file);
-      seen.add(file);
-    }
-    prev = last;
-  }
+  const overlapping = new Set(plan.overlap_files || []);
   if (overlapping.size === 0) return plan;
   const lastGroup = plan.groups.at(-1);
   const overlapList = [...overlapping].sort().slice(0, 12);
+  const files = normalizePlanFiles(plan.groups.flatMap((group) => group.files || []));
   return {
     ...plan,
     groups: [{
       title: `Consolidated ${plan.goal} changes`,
       body: [
-        "Autoresearch kept changes were collapsed into one review branch because multiple draft groups touched the same files.",
+        "Autoresearch kept changes were collapsed into one review branch because multiple kept commits touched the same files.",
         "",
         `Overlapping files: ${overlapList.join(", ")}${overlapping.size > overlapList.length ? ", ..." : ""}`,
       ].join("\n"),
       last_commit: lastGroup.last_commit,
+      parent_commit: plan.base,
+      files,
       slug: safeSlug(`${plan.goal}-changes`),
+      collapsed: true,
     }],
   };
 }
@@ -555,6 +630,20 @@ async function writeDraftPlan(args, cwd) {
   await fsp.writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   console.log(`Wrote draft groups: ${output}`);
   console.log(`Groups: ${plan.groups.length}`);
+  console.log(`Selected kept commits: ${plan.kept_commits.length}`);
+  if (plan.excluded_commit_count > 0) {
+    console.log(`Excluded commits: ${plan.excluded_commit_count}`);
+    console.log("Excluded commits were flagged and omitted from finalization planning.");
+    for (const item of plan.excluded_commits.slice(0, 5)) {
+      const parts = [shortHash(item.commit), item.status];
+      if (item.subject) parts.push(item.subject);
+      console.log(`  - ${parts.join(" ")}`);
+    }
+    if (plan.excluded_commits.length > 5) console.log("  - ...");
+  }
+  if (plan.collapse_overlap_recommended && !args.collapseOverlap) {
+    console.log("Hint: rerun with --collapse-overlap to consolidate overlapping kept commits.");
+  }
   return plan;
 }
 
@@ -568,7 +657,9 @@ async function main() {
   }
   const cwd = process.cwd();
   if (command === "plan") {
-    await writeDraftPlan(cli, cwd);
+    await withPhase("plan generation", "Fix autoresearch.jsonl and rerun finalizer plan.", async () => {
+      await writeDraftPlan(cli, cwd);
+    });
     return;
   }
   const configPath = path.resolve(file);
@@ -664,13 +755,52 @@ function planFingerprint(plan) {
     goal: plan.goal || "",
     kept_commits: plan.kept_commits || [],
     kept_run_count: plan.kept_run_count || 0,
+    excluded_commit_count: plan.excluded_commit_count || 0,
+    overlap_files: plan.overlap_files || [],
     groups: (plan.groups || []).map((group) => ({
       title: group.title || "",
       last_commit: group.last_commit || "",
       slug: group.slug || "",
+      files: group.files || [],
     })),
   };
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+function analyzeGroupOverlap(groups) {
+  if (!Array.isArray(groups) || groups.length <= 1) {
+    return { files: [], groups: [] };
+  }
+  const seen = new Map();
+  const overlappingFiles = new Set();
+  const overlappingGroups = new Set();
+  for (const group of groups) {
+    for (const file of group.files || []) {
+      if (seen.has(file)) {
+        overlappingFiles.add(file);
+        overlappingGroups.add(seen.get(file));
+        overlappingGroups.add(group.last_commit);
+      } else {
+        seen.set(file, group.last_commit);
+      }
+    }
+  }
+  return {
+    files: [...overlappingFiles],
+    groups: [...overlappingGroups],
+  };
+}
+
+function buildPlanWarnings({ excludedCommits, overlapAnalysis }) {
+  const warnings = [];
+  if (excludedCommits.length > 0) {
+    const sample = excludedCommits.slice(0, 3).map((item) => `${shortHash(item.commit)} ${item.status}${item.subject ? ` ${item.subject}` : ""}`);
+    warnings.push(`Excluded ${excludedCommits.length} unkept commit${excludedCommits.length === 1 ? "" : "s"} from base..HEAD: ${sample.join(", ")}${excludedCommits.length > sample.length ? ", ..." : ""}.`);
+  }
+  if (overlapAnalysis.files.length > 0) {
+    warnings.push(`Kept commits overlap on ${overlapAnalysis.files.length} file${overlapAnalysis.files.length === 1 ? "" : "s"}; rerun with --collapse-overlap to consolidate them.`);
+  }
+  return warnings;
 }
 
 function powershellQuote(value) {

@@ -44,13 +44,15 @@ test("finalizer writes an ignored review summary and preserves verification", as
   await git(["config", "user.name", "Codex Test"], repo);
 
   await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await writeFile(path.join(repo, "src", "other.txt"), "base other\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "base"], repo);
   const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
   await git(["switch", "-c", "codex/autoresearch-test"], repo);
-  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await writeFile(path.join(repo, "src", "space path.txt"), "kept\n");
   await writeFile(path.join(repo, "scripts", "autoresearch.mjs"), "console.log('legitimate source change');\n");
+  await writeFile(path.join(repo, "autoresearch-dashboard.html"), "<html>ignored export</html>\n");
   await writeFile(path.join(repo, "autoresearch.md"), "# session\n");
   await writeFile(path.join(repo, "autoresearch.research", "study", "quality-gaps.md"), "- [ ] session scratchpad\n");
   await git(["add", "-A"], repo);
@@ -83,12 +85,14 @@ test("finalizer writes an ignored review summary and preserves verification", as
 
   assert.match(summary, /Status: verified/);
   assert.match(summary, /autoresearch-review\/ux-test\/01-value-change/);
-  assert.match(summary, /src\/value\.txt/);
+  assert.match(summary, /git show --stat 'autoresearch-review\/ux-test\/01-value-change'/);
+  assert.match(summary, /git diff [^\n]+ -- 'scripts\/autoresearch\.mjs' 'src\/space path\.txt'/);
+  assert.match(summary, /src\/space path\.txt/);
   assert.match(summary, /scripts\/autoresearch\.mjs/);
   assert.match(summary, /Suggested PR/);
   assert.match(summary, /git show --stat/);
   assert.match(summary, /## Finalization Runway/);
-  assert.match(summary, /Final file set: .*scripts\/autoresearch\.mjs.*src\/value\.txt|Final file set: .*src\/value\.txt.*scripts\/autoresearch\.mjs/);
+  assert.match(summary, /Final file set: .*scripts\/autoresearch\.mjs.*src\/space path\.txt|Final file set: .*src\/space path\.txt.*scripts\/autoresearch\.mjs/);
   assert.match(summary, /Do not run cleanup until the review branch merge has succeeded/);
   const runwayOrder = [
     "Preview groups and risks",
@@ -103,12 +107,13 @@ test("finalizer writes an ignored review summary and preserves verification", as
 
   const branchFiles = (await git(["show", "--name-only", "--format=", "autoresearch-review/ux-test/01-value-change"], repo)).stdout;
   assert.doesNotMatch(branchFiles, /autoresearch\.research/);
+  assert.doesNotMatch(branchFiles, /autoresearch-dashboard\.html/);
 
   const status = (await git(["status", "--porcelain"], repo)).stdout.trim();
   assert.equal(status, "");
 });
 
-test("finalizer plan writes draft groups from autoresearch history", async () => {
+test("finalizer plan keeps only kept commits and flags excluded history", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-plan-"));
   const repo = path.join(root, "repo");
   await fsp.mkdir(repo, { recursive: true });
@@ -117,31 +122,62 @@ test("finalizer plan writes draft groups from autoresearch history", async () =>
   await git(["config", "user.email", "codex@example.invalid"], repo);
   await git(["config", "user.name", "Codex Test"], repo);
 
-  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await writeFile(path.join(repo, "src", "base.txt"), "base\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "base"], repo);
 
   await git(["switch", "-c", "codex/autoresearch-test"], repo);
-  await writeFile(path.join(repo, "autoresearch.jsonl"), [
-    JSON.stringify({ type: "config", name: "speed loop", metricName: "seconds", bestDirection: "lower" }),
-    JSON.stringify({ run: 1, status: "keep", metric: 10, description: "Baseline", commit: "HEAD", asi: { hypothesis: "baseline" } }),
-  ].join("\n") + "\n");
-  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await writeFile(path.join(repo, "src", "kept.txt"), "kept\n");
+  await writeFile(path.join(repo, "autoresearch-dashboard.html"), "<html>ignored export</html>\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "keep value change"], repo);
+  const keptHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "discarded.txt"), "discarded\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "discard value change"], repo);
+  const discardHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "crash.txt"), "crash\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "crash value change"], repo);
+  const crashHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "unlogged.txt"), "unlogged\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "unlogged value change"], repo);
+  const unloggedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "autoresearch.jsonl"), [
+    JSON.stringify({ type: "config", name: "speed loop", metricName: "seconds", bestDirection: "lower" }),
+    JSON.stringify({ run: 1, status: "keep", metric: 10, description: "Kept", commit: keptHash, asi: { hypothesis: "keep the source file" } }),
+    JSON.stringify({ run: 2, status: "discard", metric: 11, description: "Discarded", commit: discardHash, asi: { rollback_reason: "Regression" } }),
+    JSON.stringify({ run: 3, status: "crash", description: "Crash", commit: crashHash, asi: { evidence: "crashed" } }),
+  ].join("\n") + "\n");
 
   const output = path.join(root, "groups.json");
   const result = await run(process.execPath, [finalizer, "plan", "--output", output, "--goal", "speed-loop"], repo);
   assert.match(result.stdout, /Wrote draft groups/);
+  assert.match(result.stdout, /Selected kept commits: 1/);
+  assert.match(result.stdout, /Excluded commits: 3/);
+  assert.match(result.stdout, /discard value change/);
+  assert.match(result.stdout, /crash value change/);
+  assert.match(result.stdout, /unlogged/);
 
   const plan = JSON.parse(await fsp.readFile(output, "utf8"));
   assert.equal(plan.goal, "speed-loop");
   assert.equal(plan.groups.length, 1);
-  assert.match(plan.groups[0].title, /keep value change/i);
-  assert.ok(plan.groups[0].last_commit);
+  assert.equal(plan.kept_commits.length, 1);
+  assert.equal(plan.excluded_commit_count, 3);
+  assert.equal(plan.groups[0].last_commit, keptHash);
+  assert.match(plan.groups[0].files.join("\n"), /src\/kept\.txt/);
+  assert.deepEqual(plan.excluded_commits.map((item) => item.status).sort(), ["crash", "discard", "unlogged"]);
+  assert.doesNotMatch(plan.groups[0].files.join("\n"), /autoresearch-dashboard\.html/);
+  assert.match(plan.warnings.join("\n"), /Excluded 3 unkept commits/);
+  assert.ok(unloggedHash);
 });
 
-test("finalizer plan can create nested output paths and collapse overlapping groups", async () => {
+test("finalizer plan recommends collapsing overlap and can collapse on request", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-plan-collapse-"));
   const repo = path.join(root, "repo");
   await fsp.mkdir(repo, { recursive: true });
@@ -156,30 +192,95 @@ test("finalizer plan can create nested output paths and collapse overlapping gro
 
   await git(["switch", "-c", "codex/autoresearch-overlap"], repo);
   await writeFile(path.join(repo, "src", "value.txt"), "first\n");
+  await writeFile(path.join(repo, "src", "other.txt"), "first other\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "first value change"], repo);
+  const firstHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
   await writeFile(path.join(repo, "src", "value.txt"), "second\n");
   await git(["add", "-A"], repo);
   await git(["commit", "-m", "second value change"], repo);
+  const secondHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "autoresearch.jsonl"), [
+    JSON.stringify({ type: "config", name: "overlap loop", metricName: "seconds", bestDirection: "lower" }),
+    JSON.stringify({ run: 1, status: "keep", metric: 10, description: "First kept change", commit: firstHash, asi: { hypothesis: "first" } }),
+    JSON.stringify({ run: 2, status: "keep", metric: 9, description: "Second kept change", commit: secondHash, asi: { hypothesis: "second" } }),
+  ].join("\n") + "\n");
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "session log"], repo);
 
   const output = path.join(root, "plans", "nested", "groups.json");
-  const result = await run(process.execPath, [
+  const preview = await run(process.execPath, [
     finalizer,
     "plan",
     "--output", output,
+    "--goal", "overlap-loop",
+  ], repo);
+  assert.match(preview.stdout, /Hint: rerun with --collapse-overlap to consolidate overlapping kept commits\./);
+
+  const plan = JSON.parse(await fsp.readFile(output, "utf8"));
+  assert.equal(plan.groups.length, 2);
+  assert.equal(plan.collapse_overlap_recommended, true);
+  assert.ok(plan.overlap_count > 0);
+
+  const collapsedOutput = path.join(root, "plans", "nested", "collapsed.groups.json");
+  const result = await run(process.execPath, [
+    finalizer,
+    "plan",
+    "--output", collapsedOutput,
     "--goal", "overlap-loop",
     "--collapse-overlap",
   ], repo);
   assert.match(result.stdout, /Groups: 1/);
 
-  const plan = JSON.parse(await fsp.readFile(output, "utf8"));
-  assert.equal(plan.groups.length, 1);
-  assert.match(plan.groups[0].title, /Consolidated overlap-loop changes/);
-  assert.match(plan.groups[0].body, /src\/value\.txt/);
+  const collapsed = JSON.parse(await fsp.readFile(collapsedOutput, "utf8"));
+  assert.equal(collapsed.groups.length, 1);
+  assert.match(collapsed.groups[0].title, /Consolidated overlap-loop changes/);
+  assert.match(collapsed.groups[0].body, /src\/value\.txt/);
+  assert.match(collapsed.groups[0].files.join("\n"), /src\/value\.txt/);
+  assert.match(collapsed.groups[0].files.join("\n"), /src\/other\.txt/);
+  assert.equal(collapsed.groups[0].parent_commit, collapsed.base);
 
-  const finalized = await run(process.execPath, [finalizer, output], repo);
-  assert.match(finalized.stdout, /Created review branches:/);
+  const finalizeResult = await run(process.execPath, [finalizer, collapsedOutput], repo);
+  assert.match(finalizeResult.stdout, /Created review branches/);
+  const summaryLine = finalizeResult.stdout.split(/\r?\n/).find((line) => line.startsWith("Review summary: "));
+  const summary = await fsp.readFile(summaryLine.slice("Review summary: ".length).trim(), "utf8");
+  assert.match(summary, /Status: verified/);
+
+  const branchFiles = (await git(["show", "--name-only", "--format=", "autoresearch-review/overlap-loop/01-overlap-loop-changes"], repo)).stdout;
+  assert.match(branchFiles, /src\/value\.txt/);
+  assert.match(branchFiles, /src\/other\.txt/);
+});
+
+test("finalizer surfaces corrupt autoresearch.jsonl with an actionable error", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-bad-jsonl-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "keep value change"], repo);
+
+  await writeFile(path.join(repo, "autoresearch.jsonl"), [
+    JSON.stringify({ type: "config", name: "speed loop", metricName: "seconds", bestDirection: "lower" }),
+    "{ not valid json",
+  ].join("\n") + "\n");
+
+  const output = path.join(root, "groups.json");
+  const result = await run(process.execPath, [finalizer, "plan", "--output", output, "--goal", "speed-loop"], repo, true);
+  assert.notEqual(result.code, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /Corrupt autoresearch\.jsonl at line 2/);
+  assert.match(`${result.stdout}\n${result.stderr}`, /Fix autoresearch\.jsonl/i);
 });
 
 test("finalizer removes empty skipped branches and sanitizes branch names", async () => {

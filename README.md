@@ -94,6 +94,43 @@ Served-dashboard actions are local-only and nonce-bound. Mutating log decisions 
 
 Static `autoresearch-dashboard.html` exports are fallback snapshots for offline review. They contain no action nonce and expose no live mutation controls.
 
+### Evidence Integrity
+
+Codex Autoresearch treats evidence as stricter than display:
+
+- `METRIC name=value` lines are the decision input; output tails and dashboard snippets are only display summaries.
+- Missing, null, crashed, or ineligible metrics stay unknown. They must not be coerced into `0`, `0%`, a baseline, a best run, or chart evidence.
+- Last-run packets are loggable only while fresh against the session ledger, config, active working directory, Git/file fingerprint, and packet command. If the packet is stale, rerun `next` before logging.
+- A `keep` with no source changes must be recorded as no-change evidence. It must not borrow an old `HEAD` as if a new result was created.
+- Corrupt `autoresearch.jsonl` should surface the file and line that failed so the operator can repair the ledger instead of trusting a partial dashboard.
+
+### Trust State
+
+The dashboard should make its trust level visible:
+
+- Live dashboards show refresh state, guarded action availability, dirty Git or drift warnings, stale-packet warnings, and action receipts.
+- Static exports say they are read-only snapshots. If the operator needs fresh evidence or actions, Codex should serve or restart the live dashboard.
+- `quality_gap=0` means the accepted checklist for this round is closed, not that product discovery is permanently complete.
+- Perfect-looking results are suspicious when they lack fresh packets, clean checks, ASI, or enough comparison history. Codex should verify freshness and explain the evidence before celebrating.
+
+### Serve Or Restart
+
+Use `serve_dashboard` or `node plugins/codex-autoresearch/scripts/autoresearch.mjs serve --cwd <project>` for the operator URL. If the browser is on a `file://` export, if refresh fails, or if the dashboard process ended, restart serving and hand back the new `http://127.0.0.1:<port>/` URL. Regenerate static exports only for offline review or archival evidence.
+
+### Finalization Safety
+
+Finalization has a fixed checklist:
+
+1. Run `finalize_preview`; it is read-only.
+2. Resolve dirty worktree, stale plan, missing kept evidence, and overlap warnings.
+3. If kept commits overlap across shared files, rerun the plan with collapse-overlap guidance and prefer one consolidated review branch.
+4. Approve the plan.
+5. Create review branches from the clean autoresearch source branch.
+6. Verify the branch union, session-artifact exclusion, and generated review summary.
+7. Merge to trunk, then clean up source branches and session artifacts.
+
+Dry-run and preview output must say exactly what would happen and leave branches, refs, and the worktree unchanged.
+
 ## Docs
 
 ### Loop

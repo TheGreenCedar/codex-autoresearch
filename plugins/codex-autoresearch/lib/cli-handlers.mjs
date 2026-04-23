@@ -51,6 +51,9 @@ export function createCliCommandHandlers(deps) {
         name: args.name,
         metricName: args.metricName,
         benchmarkCommand: args.benchmarkCommand,
+        checksCommand: args.checksCommand,
+        commitPaths: args.commitPaths,
+        maxIterations: args.maxIterations,
       }),
     }),
     guide: async (args) => ({
@@ -62,6 +65,9 @@ export function createCliCommandHandlers(deps) {
         name: args.name,
         metricName: args.metricName,
         benchmarkCommand: args.benchmarkCommand,
+        checksCommand: args.checksCommand,
+        commitPaths: args.commitPaths,
+        maxIterations: args.maxIterations,
       }),
     }),
     recipes: async (args) => ({
@@ -195,7 +201,7 @@ export function createCliCommandHandlers(deps) {
       }),
     }),
     clear: async (args) => ({
-      result: await deps.clearSession({ cwd: args.cwd, yes: args.yes, confirm: args.confirm }),
+      result: await deps.clearSession({ cwd: args.cwd, yes: args.yes, confirm: args.confirm, dryRun: args.dryRun }),
     }),
   };
 }
@@ -207,17 +213,27 @@ export async function runCliCommand(command, args, handlers) {
 }
 
 async function serveCommand(args, deps) {
+  const resolved = deps.resolveWorkDir(args.cwd);
+  let liveUrl = "";
   const serveResult = await deps.serveAutoresearch({
-    cwd: args.cwd,
+    cwd: resolved.workDir,
     port: args.port,
     scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
     dashboardHtml: async ({ actionNonce, actionNonceHeader } = {}) => {
       const { workDir, config } = deps.resolveWorkDir(args.cwd);
       const entries = deps.readJsonl(workDir);
       const commands = deps.dashboardCommands(workDir);
+      const generatedAt = new Date().toISOString();
+      const dashboardContext = {
+        deliveryMode: "live-server",
+        liveUrl,
+        generatedAt,
+        sourceCwd: workDir,
+        pluginVersion: deps.pluginVersion || "unknown",
+      };
       return deps.dashboardHtml(entries, {
         workDir,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
         jsonlName: "autoresearch.jsonl",
         deliveryMode: "live-server",
         liveActionsAvailable: true,
@@ -229,15 +245,22 @@ async function serveCommand(args, deps) {
         },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
         commands,
-        settings: deps.dashboardSettings(config),
-        viewModel: await deps.dashboardViewModel(workDir, config),
+        settings: deps.dashboardSettings(config, dashboardContext),
+        viewModel: await deps.dashboardViewModel(workDir, config, dashboardContext),
       });
     },
     viewModel: async () => {
       const { workDir, config } = deps.resolveWorkDir(args.cwd);
-      return deps.dashboardViewModel(workDir, config);
+      return deps.dashboardViewModel(workDir, config, {
+        deliveryMode: "live-server",
+        liveUrl,
+        generatedAt: new Date().toISOString(),
+        sourceCwd: workDir,
+        pluginVersion: deps.pluginVersion || "unknown",
+      });
     },
   });
+  liveUrl = serveResult.url;
   return {
     keepAlive: true,
     result: {

@@ -24,7 +24,7 @@ export function formatChartRunValue(value, unit = "") {
 }
 
 export function formatDelta(value, baseline, direction = "lower") {
-  if (!finiteMetric(value) || !finiteMetric(baseline) || Number(baseline) === 0) return "0%";
+  if (!finiteMetric(value) || !finiteMetric(baseline) || Number(baseline) === 0) return "-";
   return formatImprovement(improvementPercent(baseline, value, direction));
 }
 
@@ -39,5 +39,19 @@ export function formatDisplayTime(value) {
 }
 
 export function actionLabel(action) {
+  const labels = {
+    doctor: "Run doctor",
+    "setup-plan": "Review setup",
+    guide: "Show guide",
+    recipes: "Show recipes",
+    "gap-candidates": "Preview gaps",
+    "finalize-preview": "Preview finalization",
+    export: "Export snapshot",
+    "log-keep": "Log keep",
+    "log-discard": "Log discard",
+    "log-crash": "Log crash",
+    "log-checks-failed": "Log failed checks",
+  };
+  if (labels[action]) return labels[action];
   return String(action || "Action").split("-").map((part) => part.slice(0, 1).toUpperCase() + part.slice(1)).join(" ");
 }

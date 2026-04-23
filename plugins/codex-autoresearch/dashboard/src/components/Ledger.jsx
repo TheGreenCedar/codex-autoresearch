@@ -7,7 +7,7 @@ export function Ledger({ session, readout }) {
   const rows = useMemo(() => newest.slice(0, LEDGER_VISIBLE_ROWS), [newest]);
   const totalHeight = Math.max(newest.length * LEDGER_ROW_HEIGHT, rows.length * LEDGER_ROW_HEIGHT);
   return (
-    <section className="panel ledger-panel" id="ledger" aria-label="Run log" hidden={!session.runs.length}>
+    <section className="panel ledger-panel" id="ledger" aria-label="Run log" hidden={!session.runs.length} tabIndex="-1">
       <div className="panel-head">
         <div>
           <p className="eyebrow">Run log</p>

@@ -1,4 +1,8 @@
 import { applyToolContracts } from "./tool-contracts.mjs";
+import { resolveResearchSlugForQualityGapSync } from "./research-gaps.mjs";
+
+const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
+const READ_ONLY_COMMAND_MATERIALIZATION_TOOLS = new Set(["setup_plan", "guided_setup"]);
 
 export const toolSchemas = applyToolContracts([
   {
@@ -13,6 +17,9 @@ export const toolSchemas = applyToolContracts([
         name: { type: "string" },
         metric_name: { type: "string" },
         benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
+        commit_paths: { type: "array", items: { type: "string" } },
+        max_iterations: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -30,6 +37,9 @@ export const toolSchemas = applyToolContracts([
         name: { type: "string" },
         metric_name: { type: "string" },
         benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
+        commit_paths: { type: "array", items: { type: "string" } },
+        max_iterations: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -216,7 +226,7 @@ export const toolSchemas = applyToolContracts([
         working_dir: { type: "string" },
         research_slug: { type: "string" },
       },
-      required: ["working_dir", "research_slug"],
+      required: ["working_dir"],
     },
   },
   {
@@ -232,7 +242,7 @@ export const toolSchemas = applyToolContracts([
         model_timeout_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
-      required: ["working_dir", "research_slug"],
+      required: ["working_dir"],
     },
   },
   {
@@ -309,8 +319,9 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         confirm: { type: "boolean" },
+        dry_run: { type: "boolean" },
       },
-      required: ["working_dir", "confirm"],
+      required: ["working_dir"],
     },
   },
 ]);
@@ -339,6 +350,7 @@ export function validateToolArguments(name, args, options = {}) {
     if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
     if (property.enum && !property.enum.includes(value)) throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
   }
+  inferMcpResearchSlug(name, normalized);
   return normalized;
 }
 
@@ -362,6 +374,7 @@ export function normalizeToolArguments(name, args = {}) {
 }
 
 export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
+  if (READ_ONLY_COMMAND_MATERIALIZATION_TOOLS.has(toolName)) return;
   const normalized = normalizeToolArguments(toolName, args);
   const hasCustomCommand = Boolean(
     normalized.command
@@ -372,6 +385,12 @@ export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoo
   if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
     throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
   }
+}
+
+function inferMcpResearchSlug(name, normalized) {
+  if (!MCP_ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
+  if (normalized.research_slug != null && normalized.research_slug !== "") return;
+  normalized.research_slug = resolveResearchSlugForQualityGapSync(normalized, normalized.working_dir).slug;
 }
 
 function isObjectArgument(value) {

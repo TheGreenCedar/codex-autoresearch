@@ -1,14 +1,16 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runShell as runBoundedShell } from "./runner.mjs";
-import { parseQualityGaps, researchDirPath, researchSlugFromArgs } from "./session-core.mjs";
+import { parseQualityGaps, researchDirPath, safeSlug, RESEARCH_DIR } from "./session-core.mjs";
 
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
 
 export async function gapCandidates(args) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
-  const slug = researchSlugFromArgs(args);
+  const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
+  const slug = slugResolution.slug;
   const researchDir = researchDirPath(workDir, slug);
   const modelTimeoutSeconds = numberOption(args.model_timeout_seconds ?? args.modelTimeoutSeconds, 60);
   const candidates = [
@@ -42,6 +44,8 @@ export async function gapCandidates(args) {
     ok: true,
     workDir,
     slug,
+    slugInferred: slugResolution.inferred,
+    slugCandidates: slugResolution.candidates,
     researchDir,
     candidates: deduped,
     applied,
@@ -53,6 +57,56 @@ export async function gapCandidates(args) {
       ? ["Some candidates have no source reference."]
       : [],
   };
+}
+
+export function resolveResearchSlugForQualityGapSync(args = {}, workDir = process.cwd()) {
+  const requestedSlug = args.research_slug ?? args.researchSlug ?? args.slug ?? args.name;
+  if (requestedSlug != null && requestedSlug !== "") {
+    return {
+      slug: safeSlug(requestedSlug),
+      inferred: false,
+      candidates: [],
+    };
+  }
+
+  const candidates = activeQualityGapSlugCandidatesSync(workDir);
+  if (candidates.length === 1) {
+    return {
+      slug: candidates[0].slug,
+      inferred: true,
+      candidates,
+    };
+  }
+  if (candidates.length > 1) {
+    const slugs = candidates.map((candidate) => candidate.slug);
+    const error = new Error(`Ambiguous research slug inference for ${path.resolve(workDir)}; pass research_slug explicitly. Candidates: ${slugs.join(", ")}`);
+    error.code = "ambiguous_research_slug";
+    error.candidates = candidates;
+    throw error;
+  }
+
+  const error = new Error("No research slug was provided and no active quality-gaps.md file was found under autoresearch.research/.");
+  error.code = "missing_research_slug";
+  error.candidates = [];
+  throw error;
+}
+
+export function activeQualityGapSlugCandidatesSync(workDir = process.cwd()) {
+  const researchRoot = path.join(path.resolve(workDir), RESEARCH_DIR);
+  if (!fs.existsSync(researchRoot)) return [];
+  return fs.readdirSync(researchRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const slug = entry.name;
+      const researchDir = path.join(researchRoot, slug);
+      return {
+        slug,
+        researchDir,
+        qualityGapsPath: path.join(researchDir, "quality-gaps.md"),
+      };
+    })
+    .filter((candidate) => fs.existsSync(candidate.qualityGapsPath))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
 export function researchRoundGuidance() {
