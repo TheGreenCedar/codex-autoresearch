@@ -2,13 +2,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { boolOption, createCliToolCaller } from "../lib/mcp-cli-adapter.mjs";
-import { mcpToolSchemas, validateToolArguments } from "../lib/mcp-interface.mjs";
+import { mcpToolSchemas, requireUnsafeCommandGate, validateToolArguments } from "../lib/mcp-interface.mjs";
 
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CLI_SCRIPT = path.join(SCRIPT_DIR, "autoresearch.mjs");
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const callCliTool = createCliToolCaller({ cliScript: CLI_SCRIPT, pluginRoot: PLUGIN_ROOT });
 
 let buffer = Buffer.alloc(0);
@@ -52,7 +52,7 @@ process.stdin.on("data", (chunk) => {
     }
     handleMcpMessage(message).catch((error) => {
       if (message.id != null) {
-        sendMcp({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error.stack || error.message || String(error) } });
+        sendMcp({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error.message || String(error) } });
       }
     });
   }
@@ -83,23 +83,25 @@ async function handleMcpMessage(message) {
     try {
       const name = message.params?.name;
       const args = message.params?.arguments || {};
-      validateToolArguments(name, args);
-      requireUnsafeCommandGate(name, args);
-      const result = await callCliTool(name, args);
+      const normalizedArgs = validateToolArguments(name, args);
+      requireUnsafeCommandGate(name, normalizedArgs, boolOption);
+      const result = await callCliTool(name, normalizedArgs);
+      const payload = mcpSuccessEnvelope(name, result);
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });
     } catch (error) {
+      const payload = mcpErrorEnvelope(message.params?.name, error);
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
         result: {
           isError: true,
-          content: [{ type: "text", text: error.stack || error.message || String(error) }],
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });
     }
@@ -111,14 +113,26 @@ async function handleMcpMessage(message) {
   }
 }
 
+function mcpSuccessEnvelope(tool, result) {
+  const body = result && typeof result === "object" && !Array.isArray(result) ? result : { value: result };
+  return {
+    ...body,
+    ok: body.ok !== false,
+    tool,
+    workDir: body.workDir || body.working_dir,
+    result: body,
+  };
+}
+
+function mcpErrorEnvelope(tool, error) {
+  return {
+    ok: false,
+    tool: tool || "unknown",
+    error: error.message || String(error),
+  };
+}
+
 function sendMcp(message) {
   const body = JSON.stringify(message);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-}
-
-function requireUnsafeCommandGate(toolName, args) {
-  const hasCustomCommand = Boolean(args.command || args.checks_command || args.checksCommand || args.model_command || args.modelCommand);
-  if (hasCustomCommand && !boolOption(args.allow_unsafe_command ?? args.allowUnsafeCommand, false)) {
-    throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
-  }
 }

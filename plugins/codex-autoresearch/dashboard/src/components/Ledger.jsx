@@ -17,14 +17,26 @@ export function Ledger({ session, readout }) {
           {`${session.runs.length} runs / newest first / showing 1-${Math.min(LEDGER_VISIBLE_ROWS, session.runs.length)}`}
         </span>
       </div>
-      <div className="ledger-scroll" id="ledger-scroll">
+      <div
+        className="ledger-scroll"
+        id="ledger-scroll"
+        role="table"
+        aria-label={`Run ledger, newest first, ${session.runs.length} total runs`}
+        aria-rowcount={session.runs.length + 1}
+      >
+        <div className="ledger-header" role="row">
+          <span role="columnheader">Run</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">Metric</span>
+          <span role="columnheader">Description and ASI</span>
+        </div>
         <div id="ledger-body" role="rowgroup" style={{ height: `${totalHeight}px` }}>
           {rows.map((run, index) => {
             const best = readout.bestRun?.run === run.run && run.status === "keep";
             return (
-              <div className={`ledger-row ${best ? "best-row" : ""}`} role="row" style={{ top: `${index * LEDGER_ROW_HEIGHT}px` }} key={`${run.segment}-${run.run}`}>
+              <div className={`ledger-row ${best ? "best-row" : ""}`} role="row" aria-rowindex={index + 2} style={{ top: `${index * LEDGER_ROW_HEIGHT}px` }} key={`${run.segment}-${run.run}`}>
                 <div className="ledger-cell run-index" role="cell">#{run.run}</div>
-                <div className="ledger-cell" role="cell"><StatusPill status={run.status} /></div>
+                <div className="ledger-cell" role="cell"><StatusPill status={run.status} />{best ? <span className="best-label">Best kept</span> : null}</div>
                 <div className="ledger-cell metric-cell" role="cell">
                   <strong>{formatMetric(run.metric, session.config.metricUnit)}</strong>
                   <span>{formatDelta(run.metric, readout.baseline, session.config.bestDirection)}</span>

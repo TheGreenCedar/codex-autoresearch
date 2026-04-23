@@ -13,6 +13,7 @@ export const toolSchemas = applyToolContracts([
         name: { type: "string" },
         metric_name: { type: "string" },
         benchmark_command: { type: "string" },
+        allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -29,6 +30,7 @@ export const toolSchemas = applyToolContracts([
         name: { type: "string" },
         metric_name: { type: "string" },
         benchmark_command: { type: "string" },
+        allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -74,6 +76,7 @@ export const toolSchemas = applyToolContracts([
         overwrite: { type: "boolean" },
         create_checks: { type: "boolean" },
         skip_init: { type: "boolean" },
+        allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -101,6 +104,7 @@ export const toolSchemas = applyToolContracts([
         overwrite: { type: "boolean" },
         create_checks: { type: "boolean" },
         skip_init: { type: "boolean" },
+        allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir", "slug", "goal"],
     },
@@ -225,6 +229,7 @@ export const toolSchemas = applyToolContracts([
         research_slug: { type: "string" },
         apply: { type: "boolean" },
         model_command: { type: "string" },
+        model_timeout_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir", "research_slug"],
@@ -312,21 +317,60 @@ export const toolSchemas = applyToolContracts([
 
 export const mcpToolSchemas = toolSchemas.map(toMcpToolSchema);
 
-export function validateToolArguments(name, args) {
+export function validateToolArguments(name, args, options = {}) {
   const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
   if (!schema) throw new Error(`Unknown tool: ${name}`);
+  const normalized = normalizeToolArguments(name, args);
   for (const required of schema.required || []) {
-    if (args[required] == null || args[required] === "") throw new Error(`Missing required argument: ${required}`);
+    if (normalized[required] == null || normalized[required] === "") throw new Error(`Missing required argument: ${required}`);
   }
-  for (const [key, value] of Object.entries(args)) {
+  const rejectUnknown = options.rejectUnknown !== false;
+  for (const [key, value] of Object.entries(normalized)) {
     const property = schema.properties?.[key];
-    if (!property || value == null) continue;
+    if (!property) {
+      if (rejectUnknown) throw new Error(`Unknown argument for ${name}: ${key}`);
+      continue;
+    }
+    if (value == null) continue;
     if (property.type === "array" && !Array.isArray(value)) throw new Error(`Argument ${key} must be an array.`);
     if (property.type === "object" && !isObjectArgument(value)) throw new Error(`Argument ${key} must be an object.`);
     if (property.type === "number" && typeof value !== "number") throw new Error(`Argument ${key} must be a number.`);
     if (property.type === "boolean" && typeof value !== "boolean") throw new Error(`Argument ${key} must be a boolean.`);
     if (property.type === "string" && typeof value !== "string") throw new Error(`Argument ${key} must be a string.`);
     if (property.enum && !property.enum.includes(value)) throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
+  }
+  return normalized;
+}
+
+export function normalizeToolArguments(name, args = {}) {
+  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  if (!schema) return args || {};
+  const aliases = new Map();
+  for (const key of Object.keys(schema.properties || {})) {
+    aliases.set(key, key);
+    aliases.set(toCamel(key), key);
+  }
+  if (schema.properties?.working_dir) {
+    aliases.set("workingDir", "working_dir");
+    aliases.set("cwd", "working_dir");
+  }
+  const normalized = {};
+  for (const [key, value] of Object.entries(args || {})) {
+    normalized[aliases.get(key) || key] = value;
+  }
+  return normalized;
+}
+
+export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
+  const normalized = normalizeToolArguments(toolName, args);
+  const hasCustomCommand = Boolean(
+    normalized.command
+      || normalized.benchmark_command
+      || normalized.checks_command
+      || normalized.model_command
+  );
+  if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
+    throw new Error(`${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`);
   }
 }
 
@@ -340,4 +384,14 @@ function toMcpToolSchema(tool) {
     description: tool.description,
     inputSchema: tool.inputSchema,
   };
+}
+
+function toCamel(value) {
+  return String(value).replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+function defaultBoolOption(value, fallback = false) {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }

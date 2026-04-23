@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -69,7 +70,7 @@ Usage:
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
-  node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>]
+  node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
@@ -90,11 +91,21 @@ function parseCliArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === "--") {
+      out._.push(...argv.slice(i + 1));
+      break;
+    }
     if (!arg.startsWith("--")) {
       out._.push(arg);
       continue;
     }
-    const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const equalsAt = arg.indexOf("=");
+    const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
+    const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (equalsAt > 2) {
+      out[key] = arg.slice(equalsAt + 1);
+      continue;
+    }
     const next = argv[i + 1];
     if (next == null || next.startsWith("--")) {
       out[key] = true;
@@ -339,6 +350,7 @@ async function guidedSetup(args) {
   const state = await publicState({ cwd: workDir });
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
   const lastRun = await readLastRunPacket(workDir).catch(() => null);
+  const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
   const lastRunFreshness = lastRun ? lastRunPacketFreshness(workDir, lastRun) : null;
   const lastRunLogStatus = lastRun
     ? (lastRun.decision?.safeSuggestedStatus
@@ -396,6 +408,7 @@ async function guidedSetup(args) {
       lanePortfolio: lastRun.decision?.lanePortfolio || state.memory?.lanePortfolio || [],
       metric: lastRun.decision?.metric ?? null,
       path: lastRun.lastRunPath || "",
+      fingerprint: lastRunFingerprint,
       freshness: lastRunFreshness,
     } : null,
     commands: {
@@ -1828,7 +1841,7 @@ async function serveDashboard(args) {
     cwd: workDir,
     port: args.port,
     scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-    dashboardHtml: async () => {
+    dashboardHtml: async ({ actionNonce, actionNonceHeader } = {}) => {
       const entries = readJsonl(workDir);
       return dashboardHtml(entries, {
         workDir,
@@ -1836,6 +1849,8 @@ async function serveDashboard(args) {
         jsonlName: "autoresearch.jsonl",
         deliveryMode: "live-server",
         liveActionsAvailable: true,
+        actionNonce,
+        actionNonceHeader,
         modeGuidance: {
           title: "Live dashboard",
           detail: "Live refresh and guarded actions are available.",
@@ -1972,6 +1987,14 @@ async function readLastRunPacket(workDir) {
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
   if (!fs.existsSync(readablePath)) throw new Error(`No last-run packet found for ${workDir}. Run next before using --from-last.`);
   return JSON.parse(fs.readFileSync(readablePath, "utf8"));
+}
+
+async function lastRunPacketFingerprint(workDir) {
+  const filePath = await resolveLastRunPath(workDir);
+  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
+  if (!fs.existsSync(readablePath)) return "";
+  return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
 }
 
 function assertFreshLastRunPacket(workDir, packet) {
@@ -2474,7 +2497,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.5.0" },
+        serverInfo: { name: "codex-autoresearch", version: "0.5.1" },
       },
     });
     return;
@@ -2488,20 +2511,22 @@ async function handleMcpMessage(message) {
     try {
       validateToolArguments(message.params?.name, message.params?.arguments || {});
       const result = await callTool(message.params.name, message.params.arguments || {});
+      const payload = mcpSuccessEnvelope(message.params.name, result);
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });
     } catch (error) {
+      const payload = mcpErrorEnvelope(message.params?.name, error);
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
         result: {
           isError: true,
-          content: [{ type: "text", text: error.stack || error.message || String(error) }],
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });
     }
@@ -2510,6 +2535,25 @@ async function handleMcpMessage(message) {
   if (message.id != null) {
     sendMcp({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `Unknown method: ${message.method}` } });
   }
+}
+
+function mcpSuccessEnvelope(tool, result) {
+  const body = result && typeof result === "object" && !Array.isArray(result) ? result : { value: result };
+  return {
+    ...body,
+    ok: body.ok !== false,
+    tool,
+    workDir: body.workDir || body.working_dir,
+    result: body,
+  };
+}
+
+function mcpErrorEnvelope(tool, error) {
+  return {
+    ok: false,
+    tool: tool || "unknown",
+    error: error.message || String(error),
+  };
 }
 
 function sendMcp(message) {

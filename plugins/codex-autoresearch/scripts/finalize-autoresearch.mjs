@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
@@ -46,11 +47,21 @@ function parseCliArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === "--") {
+      out._.push(...argv.slice(i + 1));
+      break;
+    }
     if (!arg.startsWith("--")) {
       out._.push(arg);
       continue;
     }
-    const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const equalsAt = arg.indexOf("=");
+    const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
+    const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (equalsAt > 2) {
+      out[key] = arg.slice(equalsAt + 1);
+      continue;
+    }
     const next = argv[i + 1];
     if (next == null || next.startsWith("--")) {
       out[key] = true;
@@ -329,15 +340,35 @@ function renderRunwayText(groups, results) {
 }
 
 function renderCleanupNotes(sourceBranch) {
+  const psPaths = [
+    "autoresearch.research",
+    "autoresearch.jsonl",
+    "autoresearch.md",
+    "autoresearch.ideas.md",
+    "autoresearch.config.json",
+    "autoresearch.sh",
+    "autoresearch.ps1",
+    "autoresearch.checks.sh",
+    "autoresearch.checks.ps1",
+  ];
   return [
     "",
     "## Cleanup After Merge",
     "",
     "Do not run cleanup until the review branch merge has succeeded on trunk.",
     "",
+    "PowerShell:",
+    "",
+    "```powershell",
+    `git branch -D ${powershellQuote(sourceBranch)}`,
+    `Remove-Item -LiteralPath ${psPaths.map(powershellQuote).join(", ")} -Recurse -Force -ErrorAction SilentlyContinue`,
+    "```",
+    "",
+    "POSIX shell:",
+    "",
     "```bash",
-    `git branch -D ${sourceBranch}`,
-    "rm -rf autoresearch.research && rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.config.json autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1",
+    `git branch -D ${posixQuote(sourceBranch)}`,
+    `rm -rf ${psPaths.map(posixQuote).join(" ")}`,
     "```",
     "",
     `This file is generated under Git metadata (\`${REPORT_DIRNAME}\`) so it does not dirty the worktree. Remove it when no longer needed.`
@@ -464,12 +495,20 @@ async function draftGroupsPlan(args, cwd) {
       slug: safeSlug(subject || `change-${groups.length + 1}`),
     });
   }
-  return {
+  const plan = {
+    source_branch: sourceBranch,
+    planned_at: new Date().toISOString(),
     base,
     trunk,
     final_tree: finalTree,
     goal,
+    kept_commits: keptRuns.map((run) => String(run.commit || "")).filter(Boolean),
+    kept_run_count: keptRuns.length,
     groups,
+  };
+  return {
+    ...plan,
+    plan_fingerprint: planFingerprint(plan),
   };
 }
 
@@ -510,7 +549,8 @@ async function writeDraftPlan(args, cwd) {
   if (args.collapseOverlap) {
     plan = await collapseOverlappingDraftGroups(plan, cwd);
   }
-  const output = args.output ? path.resolve(args.output) : path.resolve(cwd, "autoresearch.groups.json");
+  plan = { ...plan, plan_fingerprint: planFingerprint(plan) };
+  const output = args.output ? path.resolve(args.output) : path.join(await gitCommonDir(cwd), REPORT_DIRNAME, `${safeSlug(plan.goal)}.groups.json`);
   await fsp.mkdir(path.dirname(output), { recursive: true });
   await fsp.writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   console.log(`Wrote draft groups: ${output}`);
@@ -548,6 +588,12 @@ async function main() {
     if (!branch) throw new Error("Detached HEAD. Switch to the autoresearch branch first.");
     if (branch === config.trunk) throw new Error(`On trunk (${config.trunk}). Switch to the autoresearch branch first.`);
     if (await isDirty(cwd)) throw new Error("Working tree is dirty. Commit, stash, or clean changes before finalizing.");
+    if (config.source_branch && branch !== config.source_branch) throw new Error(`Stale finalization plan: current branch is ${branch}, but plan was created for ${config.source_branch}. Rerun finalizer plan.`);
+    const currentHead = await fullHash("HEAD", cwd);
+    if (currentHead !== config.final_tree) throw new Error("Stale finalization plan: current HEAD differs from planned final_tree. Rerun finalizer plan.");
+    const currentBase = (await git(["merge-base", config.trunk, "HEAD"], cwd)).stdout.trim();
+    if (currentBase !== config.base) throw new Error("Stale finalization plan: trunk merge-base differs from planned base. Rerun finalizer plan.");
+    if (config.plan_fingerprint && config.plan_fingerprint !== planFingerprint(config)) throw new Error("Stale finalization plan: plan fingerprint does not match contents. Rerun finalizer plan.");
     return branch;
   });
 
@@ -605,8 +651,34 @@ async function main() {
   console.log("");
   console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
   console.log("Cleanup after merge only:");
-  console.log(`  git branch -D ${sourceBranch}`);
-  console.log("  rm -rf autoresearch.research && rm -f autoresearch.jsonl autoresearch.md autoresearch.ideas.md autoresearch.config.json autoresearch.sh autoresearch.ps1 autoresearch.checks.sh autoresearch.checks.ps1");
+  console.log(`  PowerShell: git branch -D ${powershellQuote(sourceBranch)}`);
+  console.log("  POSIX: see the generated review summary for quoted cleanup guidance.");
+}
+
+function planFingerprint(plan) {
+  const stable = {
+    source_branch: plan.source_branch || "",
+    base: plan.base || "",
+    trunk: plan.trunk || "",
+    final_tree: plan.final_tree || "",
+    goal: plan.goal || "",
+    kept_commits: plan.kept_commits || [],
+    kept_run_count: plan.kept_run_count || 0,
+    groups: (plan.groups || []).map((group) => ({
+      title: group.title || "",
+      last_commit: group.last_commit || "",
+      slug: group.slug || "",
+    })),
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function posixQuote(value) {
+  return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
 main().catch((error) => {

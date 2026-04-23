@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export async function finalizePreview(args) {
   const startedAt = Date.now();
@@ -67,6 +70,18 @@ export async function finalizePreview(args) {
   if (overlaps.length) warnings.push("Some kept runs touch the same files; finalization may need collapsed groups.");
 
   const ready = groups.length > 0 && !dirty && branch && branch !== trunk && baseResult.ok;
+  const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
+  const planArgv = [
+    process.execPath,
+    path.join(PLUGIN_ROOT, "scripts", "finalize-autoresearch.mjs"),
+    "plan",
+    "--output",
+    planOutput,
+    "--goal",
+    safeSlug(branch || "autoresearch"),
+    "--trunk",
+    trunk,
+  ];
   return withProgress({
     ok: true,
     workDir,
@@ -77,11 +92,26 @@ export async function finalizePreview(args) {
     groups,
     overlaps,
     warnings,
-    suggestedCommand: `node scripts/finalize-autoresearch.mjs plan --output groups.json --goal ${shellQuote(safeSlug(branch || "autoresearch"))} --trunk ${shellQuote(trunk)}`,
+    suggestedCommand: planArgv.map(shellQuote).join(" "),
+    suggestedCommands: {
+      finalizerPlan: {
+        argv: planArgv,
+        cwd: workDir,
+        display: planArgv.map(shellQuote).join(" "),
+        purpose: "Write a review-branch plan without dirtying the source branch.",
+        mutates: false,
+      },
+    },
     nextAction: ready
       ? "Review the preview, then run the suggested finalizer plan command."
       : "Resolve preview warnings before creating review branches.",
   }, startedAt, ready ? "completed" : "blocked");
+}
+
+async function defaultPlanOutput(workDir, branch) {
+  const gitPath = await gitOk(["rev-parse", "--git-path", `autoresearch-finalize/${safeSlug(branch)}.groups.json`], workDir);
+  if (gitPath.ok && gitPath.stdout.trim()) return path.resolve(workDir, gitPath.stdout.trim());
+  return path.join(workDir, ".git", "autoresearch-finalize", `${safeSlug(branch)}.groups.json`);
 }
 
 function withProgress(result, startedAt, status) {
@@ -143,7 +173,9 @@ function safeSlug(value) {
 }
 
 function shellQuote(value) {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+  const text = String(value);
+  if (/^--[A-Za-z0-9-]+$/.test(text) || text === "plan") return text;
+  return `"${text.replace(/"/g, '\\"')}"`;
 }
 
 async function git(args, cwd) {

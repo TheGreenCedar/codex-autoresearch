@@ -13,6 +13,9 @@ This project uses a root-only changelog because the root README is the public do
 - Added practical dashboard run-chart affordances: status legend, win zone, baseline line, best/latest markers, run ticks, callouts, and screen-reader chart summary wiring.
 - Added dashboard regression coverage for crash-run clipping and best-evidence calculation.
 - Added a Vite-built React dashboard app with committed static assets so exported `autoresearch-dashboard.html` files stay self-contained.
+- Added nonce-bound served-dashboard action receipts with command summaries, duration, ledger focus, and fresh-packet log confirmations.
+- Added dashboard ASI validation, accessible log form labels, skip links, reduced-motion handling, ledger table semantics, and chart text alternatives.
+- Added finalizer plan fingerprints under Git metadata so preview planning does not dirty feature branches.
 
 ### Changed
 
@@ -28,6 +31,11 @@ This project uses a root-only changelog because the root README is the public do
 - Repointed plugin metadata and default prompts at the plugin-level workflow instead of separate subskill names.
 - Updated dashboard evidence calculations so crash/sentinel metrics do not become baseline, best, latest-plotted, or chart-scale evidence while measured `checks_failed` runs remain eligible.
 - Updated the product benchmark to guard the single-skill surface, root-only docs, practical chart, and operational dashboard copy.
+- Hardened served-dashboard actions with nonce, same-origin, content-type, body-size, unknown-field, timeout, and bounded-output checks.
+- Rejected unknown MCP arguments before dispatch and centralized unsafe-command gating across stdio and in-process MCP paths.
+- Extended CLI parsing with `--flag=value` and `--` sentinel support while keeping command-aware validation.
+- Made finalization safer and more portable with stale-plan refusals, structured command suggestions, and separate PowerShell/POSIX cleanup guidance.
+- Released `0.5.1` with review fixes for collapsed finalizer plan fingerprints and direct CLI model-command timeout forwarding.
 
 ### Removed
 
@@ -39,3 +47,5 @@ This project uses a root-only changelog because the root README is the public do
 
 - Users should ask Codex to use Codex Autoresearch directly instead of invoking old subskills or slash-command docs.
 - Existing CLI and MCP helpers remain available as deterministic implementation surfaces behind the main skill.
+- Static dashboard exports are now explicitly read-only. Use the served local dashboard for guarded live actions and use the CLI for branch creation or finalizer mutation.
+- MCP clients that previously sent misspelled or extra arguments must remove them; command-bearing arguments now require explicit `allow_unsafe_command: true`.

@@ -220,7 +220,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.5.0");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.5.1");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
@@ -495,6 +495,16 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     ]);
     assert.notEqual(badModel.code, 0);
     assert.match(badModel.stderr, /model-command must print a JSON array/);
+
+    const timedOutModel = await runCli([
+      "gap-candidates",
+      "--cwd", dir,
+      "--research-slug", "study",
+      "--model-command", `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 2000)"`,
+      "--model-timeout-seconds", "1",
+    ]);
+    assert.notEqual(timedOutModel.code, 0);
+    assert.match(timedOutModel.stderr, /model-command failed \(timed out\)/);
   });
 });
 
@@ -618,9 +628,10 @@ test("live server gap-candidates action uses the active research slug", async ()
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     try {
       const payload = await waitForServerPayload(() => stdout, () => stderr);
+      const headers = await liveActionHeaders(payload.url);
       const action = await fetch(`${payload.url}actions/gap-candidates`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({}),
       }).then((res) => res.json());
       assert.equal(action.ok, true, action.stderr || action.error);
@@ -657,10 +668,18 @@ test("live server log action consumes a fresh last-run packet with confirmation"
       const payload = await waitForServerPayload(() => stdout, () => stderr);
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.missionControl.logDecision.available, true);
+      const headers = await liveActionHeaders(payload.url);
+
+      const missingNonce = await fetch(`${payload.url}actions/log-keep`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ description: "Live kept packet" }),
+      });
+      assert.equal(missingNonce.status, 403);
 
       const rejected = await fetch(`${payload.url}actions/log-keep`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ description: "Live kept packet" }),
       });
       assert.equal(rejected.status, 400);
@@ -669,15 +688,17 @@ test("live server log action consumes a fresh last-run packet with confirmation"
 
       const action = await fetch(`${payload.url}actions/log-keep`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({
-          confirm: true,
+          confirm: "log-keep",
+          lastRunFingerprint: viewModel.missionControl.logDecision.lastRunFingerprint,
           description: "Live kept packet",
-          asi: { evidence: "seconds=2", next_action_hint: "Review finalization." },
+          asi: { hypothesis: "Live packet improved the metric.", evidence: "seconds=2", next_action_hint: "Review finalization." },
         }),
       }).then((res) => res.json());
       assert.equal(action.ok, true, action.stderr || action.error);
       assert.match(action.stdout, /"lastRunCleared": true/);
+      assert.equal(action.receipt.lastRunCleared, true);
 
       const state = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
       assert.equal(state.runs, 1);
@@ -696,4 +717,15 @@ async function waitForServerPayload(stdoutFn, stderrFn) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`serve did not print startup JSON\n${stderrFn()}`);
+}
+
+async function liveActionHeaders(url) {
+  const html = await fetch(url).then((res) => res.text());
+  const match = html.match(/"actionNonce":"([^"]+)"/);
+  assert.ok(match, "served dashboard did not embed action nonce");
+  return {
+    "content-type": "application/json",
+    "X-Autoresearch-Action-Nonce": JSON.parse(`"${match[1]}"`),
+    "Origin": new URL(url).origin,
+  };
 }

@@ -436,6 +436,7 @@ function buildMissionControl({
       allowedStatuses,
       suggestedStatus,
       metric: lastRun?.metric ?? null,
+      lastRunFingerprint: lastRun?.fingerprint || "",
       statusGuidance: lastRun?.statusGuidance || "",
       defaultDescription: suggestedStatus === "discard"
         ? "Describe the discarded packet"

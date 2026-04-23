@@ -1,7 +1,22 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { runProcess } from "./runner.mjs";
 
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 15 * 60;
+const MUTATING_TOOLS = new Set([
+  "setup_session",
+  "setup_research_session",
+  "configure_session",
+  "init_experiment",
+  "run_experiment",
+  "next_experiment",
+  "log_experiment",
+  "gap_candidates",
+  "export_dashboard",
+  "serve_dashboard",
+  "clear_session",
+]);
+const COMMAND_FIELDS = ["command", "benchmark_command", "benchmarkCommand", "checks_command", "checksCommand", "model_command", "modelCommand"];
 
 export function createCliToolCaller({
   cliScript,
@@ -10,32 +25,20 @@ export function createCliToolCaller({
 }) {
   const liveDashboardProcesses = new Map();
 
-  const runCli = async (args) => await new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliScript, ...args], {
-      cwd: pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+  const runCliInvocation = async (invocation) => {
+    const result = await runProcess(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      timeoutSeconds: invocation.timeoutSeconds,
     });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill();
-    }, toolTimeoutSeconds * 1000);
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      resolve({ code: 1, stdout, stderr: `${stderr}${error.stack || error.message || String(error)}` });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve({ code, stdout, stderr });
-    });
-  });
+    return {
+      code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.timedOut
+        ? `${result.stderr || ""}${result.stderr ? "\n" : ""}Timed out after ${toolTimeoutSeconds} seconds.`
+        : result.stderr,
+      timedOut: result.timedOut,
+    };
+  };
 
   const waitForServePayload = async (child, stdoutFn, stderrFn) => {
     const started = Date.now();
@@ -93,8 +96,12 @@ export function createCliToolCaller({
 
   return async function callCliTool(name, args) {
     if (name === "serve_dashboard") return await startLiveDashboard(args);
-    const cliArgs = cliArgsForTool(name, args);
-    const result = await runCli(cliArgs);
+    const invocation = buildCliInvocationForTool(name, args, {
+      cliScript,
+      cwd: pluginRoot,
+      timeoutSeconds: toolTimeoutSeconds,
+    });
+    const result = await runCliInvocation(invocation);
     if (result.code !== 0) {
       throw new Error(`autoresearch CLI failed (${result.code})\n${result.stderr || result.stdout}`);
     }
@@ -103,6 +110,19 @@ export function createCliToolCaller({
     } catch {
       return { ok: true, output: result.stdout.trim() };
     }
+  };
+}
+
+export function buildCliInvocationForTool(name, args, options = {}) {
+  const cliArgs = cliArgsForTool(name, args);
+  const cliScript = options.cliScript || null;
+  return {
+    command: process.execPath,
+    args: cliScript ? [cliScript, ...cliArgs] : cliArgs,
+    cwd: options.cwd || options.pluginRoot || process.cwd(),
+    mutates: MUTATING_TOOLS.has(name),
+    unsafeFields: COMMAND_FIELDS.filter((field) => args?.[field] != null && args[field] !== ""),
+    timeoutSeconds: options.timeoutSeconds || DEFAULT_TOOL_TIMEOUT_SECONDS,
   };
 }
 
@@ -119,7 +139,7 @@ function cliArgsForTool(name, args) {
   if (name === "log_experiment") return compactArgs(["log", cwdFlag(args), option("--commit", args.commit), option("--metric", args.metric), option("--status", args.status), option("--description", args.description), option("--metrics", jsonOption(args.metrics)), option("--asi", jsonOption(args.asi)), listOption("--commit-paths", args.commit_paths ?? args.commitPaths), listOption("--revert-paths", args.revert_paths ?? args.revertPaths), flag("--allow-add-all", args.allow_add_all ?? args.allowAddAll), flag("--allow-dirty-revert", args.allow_dirty_revert ?? args.allowDirtyRevert), flag("--from-last", args.from_last ?? args.fromLast)]);
   if (name === "read_state") return compactArgs(["state", cwdFlag(args)]);
   if (name === "measure_quality_gap") return compactArgs(["quality-gap", cwdFlag(args), option("--research-slug", args.research_slug ?? args.researchSlug), "--list"]);
-  if (name === "gap_candidates") return compactArgs(["gap-candidates", cwdFlag(args), option("--research-slug", args.research_slug ?? args.researchSlug), flag("--apply", args.apply), option("--model-command", args.model_command ?? args.modelCommand)]);
+  if (name === "gap_candidates") return compactArgs(["gap-candidates", cwdFlag(args), option("--research-slug", args.research_slug ?? args.researchSlug), flag("--apply", args.apply), option("--model-command", args.model_command ?? args.modelCommand), option("--model-timeout-seconds", args.model_timeout_seconds ?? args.modelTimeoutSeconds)]);
   if (name === "finalize_preview") return compactArgs(["finalize-preview", cwdFlag(args), option("--trunk", args.trunk)]);
   if (name === "integrations") return compactArgs(["integrations", args.subcommand || "list", option("--catalog", args.catalog)]);
   if (name === "export_dashboard") return compactArgs(["export", cwdFlag(args), option("--output", args.output), flag("--json-full", args.json_full ?? args.jsonFull ?? args.full)]);

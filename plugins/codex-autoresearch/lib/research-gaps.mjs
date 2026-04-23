@@ -1,15 +1,19 @@
-import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { runShell as runBoundedShell } from "./runner.mjs";
 import { parseQualityGaps, researchDirPath, researchSlugFromArgs } from "./session-core.mjs";
+
+const MAX_MODEL_CANDIDATES = 100;
+const MAX_CANDIDATE_TEXT_LENGTH = 1000;
 
 export async function gapCandidates(args) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const slug = researchSlugFromArgs(args);
   const researchDir = researchDirPath(workDir, slug);
+  const modelTimeoutSeconds = numberOption(args.model_timeout_seconds ?? args.modelTimeoutSeconds, 60);
   const candidates = [
     ...await candidatesFromSynthesis(researchDir),
-    ...await candidatesFromModelCommand(args.model_command || args.modelCommand, researchDir),
+    ...await candidatesFromModelCommand(args.model_command || args.modelCommand, researchDir, modelTimeoutSeconds),
   ];
   const gapsPath = path.join(researchDir, "quality-gaps.md");
   const existingText = await readIfExists(gapsPath);
@@ -104,43 +108,45 @@ function parseFencedCandidates(text) {
   return parsed;
 }
 
-async function candidatesFromModelCommand(command, cwd) {
+async function candidatesFromModelCommand(command, cwd, timeoutSeconds) {
   if (!command) return [];
-  const result = await runShell(command, cwd);
-  if (result.code !== 0) throw new Error(`model-command failed: ${result.stderr || result.stdout}`);
+  const result = await runBoundedShell(command, cwd, timeoutSeconds);
+  if (result.exitCode !== 0 || result.timedOut) {
+    throw new Error(`model-command failed${result.timedOut ? " (timed out)" : ""}: ${result.output}`);
+  }
   let parsed;
   try {
-    parsed = JSON.parse(result.stdout);
+    parsed = JSON.parse(result.output);
   } catch (error) {
     throw new Error(`model-command must print a JSON array of candidates: ${error.message}`);
   }
   if (!Array.isArray(parsed)) throw new Error("model-command must print a JSON array of candidates.");
+  if (parsed.length > MAX_MODEL_CANDIDATES) throw new Error(`model-command returned ${parsed.length} candidates; limit is ${MAX_MODEL_CANDIDATES}.`);
   return parsed.map((candidate) => ({ ...candidate, origin: candidate.origin || "model-command" }));
 }
 
-async function runShell(command, cwd) {
-  return await new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
-    child.on("error", (error) => resolve({ code: -1, stdout, stderr: String(error.message || error) }));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
+function numberOption(value, fallback) {
+  if (value == null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
 function validateCandidate(candidate) {
   const text = String(candidate.text || candidate.title || "").trim();
   if (!text) throw new Error("Gap candidate is missing text.");
+  if (text.length > MAX_CANDIDATE_TEXT_LENGTH) throw new Error(`Gap candidate text exceeds ${MAX_CANDIDATE_TEXT_LENGTH} characters.`);
   return {
-    text,
-    source: String(candidate.source || ""),
+    text: printableText(text),
+    source: printableText(String(candidate.source || "")).slice(0, 300),
     confidence: String(candidate.confidence || "medium"),
     impact: String(candidate.impact || "medium"),
-    validationHint: String(candidate.validationHint || candidate.validation_hint || "Add evidence before closing this gap."),
+    validationHint: printableText(String(candidate.validationHint || candidate.validation_hint || "Add evidence before closing this gap.")).slice(0, 700),
     origin: String(candidate.origin || "manual"),
   };
+}
+
+function printableText(value) {
+  return String(value || "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
 async function appendCandidates(gapsPath, candidates) {

@@ -1092,6 +1092,16 @@ test("mcp-smoke reports direct stdio server readiness", async () => {
   assert.match(payload.toolNames.join("\n"), /next_experiment/);
 });
 
+test("CLI parser accepts equals-form options", async () => {
+  await withTempDir("equals-options", async (dir) => {
+    const init = await runCli(["init", `--cwd=${dir}`, "--name=equals options", "--metric-name=seconds"]);
+    assert.equal(init.code, 0, init.stderr);
+    const state = await runCli(["state", `--cwd=${dir}`]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(JSON.parse(state.stdout).config.metricName, "seconds");
+  });
+});
+
 test("mcp tools/list uses conservative 2024-compatible tool metadata", async () => {
   const child = spawn(process.execPath, [mcpServer], {
     cwd: pluginRoot,
@@ -1214,7 +1224,9 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
   assert.equal(init.result.serverInfo.name, "codex-autoresearch");
   const payload = JSON.parse(tool.result.content[0].text);
   assert.equal(payload.ok, true);
+  assert.equal(payload.tool, "setup_plan");
   assert.equal(payload.workDir, pluginRoot);
+  assert.equal(payload.result.workDir, pluginRoot);
   assert.equal(stderr, "");
 });
 
@@ -1230,8 +1242,27 @@ test("mcp server dispatches guided setup through the CLI wrapper", async () => {
   });
 });
 
+test("mcp server rejects unknown arguments and gated command materialization", async () => {
+  await withTempDir("mcp-contract-rejections", async (dir) => {
+    const unknown = await callMcpTool("setup_plan", { working_dir: dir, typo_argument: true });
+    assert.equal(unknown.result.isError, true);
+    assert.match(unknown.result.content[0].text, /Unknown argument/);
+    assert.doesNotMatch(unknown.result.content[0].text, /\n\s+at\s/);
+
+    const gated = await callMcpTool("setup_session", {
+      working_dir: dir,
+      name: "unsafe setup",
+      metric_name: "seconds",
+      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
+    });
+    assert.equal(gated.result.isError, true);
+    assert.match(gated.result.content[0].text, /allow_unsafe_command=true/);
+    assert.doesNotMatch(gated.result.content[0].text, /\n\s+at\s/);
+  });
+});
+
 test("mcp CLI adapter forwards schema-supported options that need CLI flags", async () => {
-  const { createCliToolCaller } = await import("../lib/mcp-cli-adapter.mjs");
+  const { buildCliInvocationForTool, createCliToolCaller } = await import("../lib/mcp-cli-adapter.mjs");
   await withTempDir("mcp-cli-adapter", async (dir) => {
     const fakeCli = path.join(dir, "fake-cli.mjs");
     await writeFile(fakeCli, "console.log(JSON.stringify({ args: process.argv.slice(2) }));\n", "utf8");
@@ -1265,6 +1296,18 @@ test("mcp CLI adapter forwards schema-supported options that need CLI flags", as
     });
     assert.ok(doctor.args.includes("--check-benchmark"));
     assert.ok(doctor.args.includes("--check-installed"));
+
+    const invocation = buildCliInvocationForTool("gap_candidates", {
+      working_dir: dir,
+      model_command: "node model.js",
+      model_timeout_seconds: 3,
+    }, { cliScript: fakeCli, cwd: dir, timeoutSeconds: 5 });
+    assert.equal(invocation.command, process.execPath);
+    assert.deepEqual(invocation.args.slice(0, 3), [fakeCli, "gap-candidates", "--cwd"]);
+    assert.ok(invocation.args.includes("--model-timeout-seconds"));
+    assert.deepEqual(invocation.unsafeFields, ["model_command"]);
+    assert.equal(invocation.mutates, true);
+    assert.equal(invocation.timeoutSeconds, 5);
   });
 });
 

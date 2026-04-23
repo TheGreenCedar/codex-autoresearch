@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEMO_ENTRIES, DEMO_META } from "../demoData.js";
 import { defaultConfig, normalizeEntries } from "../model.js";
 
@@ -11,6 +11,18 @@ export function useDashboardSession({ initialEntries, initialMeta }) {
   const [viewModel, setViewModel] = useState(() => initialMeta?.viewModel || {});
   const normalized = useMemo(() => normalizeEntries(entries), [entries]);
   const [activeSegment, setActiveSegment] = useState(() => normalized.latestSegment);
+  const [manualSegment, setManualSegment] = useState(false);
+  const selectActiveSegment = useCallback((segment) => {
+    setManualSegment(true);
+    setActiveSegment(segment);
+  }, []);
+  useEffect(() => {
+    const exists = normalized.segments.some((segment) => segment.segment === activeSegment);
+    if (!manualSegment || !exists) {
+      setActiveSegment(normalized.latestSegment);
+      if (!exists) setManualSegment(false);
+    }
+  }, [activeSegment, manualSegment, normalized.latestSegment, normalized.segments]);
   const session = useMemo(() => {
     const active = normalized.segments.find((segment) => segment.segment === activeSegment)
       || normalized.segments.find((segment) => segment.segment === normalized.latestSegment)
@@ -24,7 +36,7 @@ export function useDashboardSession({ initialEntries, initialMeta }) {
     meta,
     normalized,
     session,
-    setActiveSegment,
+    setActiveSegment: selectActiveSegment,
     setEntries,
     setMeta,
     setViewModel,

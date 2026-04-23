@@ -7,6 +7,8 @@ description: Run Codex Autoresearch end to end from one plugin skill. Use when C
 
 Run one measured loop until the useful stopping point: set up the benchmark, keep the live dashboard available, run packets, log decisions, preserve ASI, and finalize kept work into reviewable branches.
 
+Default runway: `Setup -> Gap -> Packet -> Log -> Finalize`.
+
 ## Golden Paths
 
 AX, the AI experience:
@@ -57,6 +59,7 @@ After `next_experiment`, log the packet. After `log_experiment`, read the return
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer.
 - Stop only when the user interrupts, the iteration limit is reached, benchmark/checks are blocked, cleanup would be unsafe, or the goal is genuinely exhausted.
 - Use `log --from-last` or MCP packet data instead of retyping parsed metrics.
+- Served-dashboard log decisions require the current last-run fingerprint, typed confirmation, a specific description, and ASI fields. If the packet is stale, rerun or refresh before logging.
 - `keep` and ordinary `discard` require a finite primary metric.
 - `crash` and `checks_failed` can be logged without a metric. Never invent sentinel metrics.
 - Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, and `next_action_hint`.
@@ -101,16 +104,17 @@ Prefer the served dashboard:
 - Share the served `http://127.0.0.1:<port>/` URL by default.
 - Use `export_dashboard` or `export` only for offline snapshots or when live serving is unavailable.
 - Treat static HTML as read-only. It should not expose inert live controls or command-copy panels.
+- Treat served-dashboard actions as guarded local adapters: nonce-bound, same-origin, JSON-only, bounded-output, and backed by fresh session fingerprints.
 
 Read dashboard evidence in this order:
 
 1. Top metric trajectory and latest/best/baseline markers.
 2. Run log for status, metric, delta, commit, description, and ASI.
 3. Current readout for best kept change, recent failures, next action, confidence, and finalization readiness.
-4. Loop stage rail for setup, gaps, log decision, and finalization.
+4. Loop runway for setup, gap review, packet readiness, log decision, and finalization.
 5. Strategy memory for plateau and lane guidance.
 
-Safe live actions stay bounded to doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions. Branch creation stays outside the dashboard.
+Safe live actions stay bounded to doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions. Branch creation, broad staging, arbitrary commands, custom finalizer args, and finalizer mutation stay outside the dashboard.
 
 ## Finalize
 
@@ -118,10 +122,10 @@ Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize_preview` or `scripts/autoresearch.mjs finalize-preview --cwd <project>`.
 2. Read `autoresearch.jsonl` and keep only `status: "keep"`.
-3. Use `scripts/finalize-autoresearch.mjs plan --output <groups.json> --goal <short-goal>` to draft non-overlapping groups.
+3. Use `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` to draft non-overlapping groups. By default the plan is stored under Git metadata, not the feature branch.
 4. Review groups for dependency and file overlap. Merge overlapping or dependent groups.
 5. Ask for approval before creating branches unless the user already approved finalization.
-6. Run the finalizer from the autoresearch source branch.
+6. Run the finalizer from the autoresearch source branch. If branch, `HEAD`, merge-base, final tree, plan fingerprint, or worktree cleanliness differs from the plan, refresh the preview instead of forcing it.
 7. Report created review branches, files, metric improvement, generated review summary path, verification status, and cleanup order.
 
 Runway order: preview, approve, create review branches, verify, merge into trunk, then cleanup.

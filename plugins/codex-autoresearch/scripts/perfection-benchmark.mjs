@@ -429,20 +429,23 @@ const checks = [
   {
     id: "dashboard-semantic-labels",
     file: "assets/template.html, dashboard/src/main.jsx",
-    description: "The dashboard uses real labels only for form controls, not decorative microcopy.",
+    description: "The dashboard uses real labels for form controls and avoids decorative label tags.",
     run: async () => {
       const template = await readDashboardSurface();
       const labelCount = (template.match(/<label\b/g) || []).length;
       if (
-        labelCount === 1
+        labelCount >= 4
         && (template.includes('<label for="segment-select">') || template.includes('htmlFor="segment-select"') || template.includes("htmlFor:`segment-select`"))
+        && template.includes('htmlFor="log-decision-status"')
+        && template.includes('htmlFor="log-decision-description"')
+        && template.includes('htmlFor="log-decision-asi"')
         && template.includes("score-label")
         && template.includes("readout-label")
         && !template.includes("<label>Best kept change</label>")
       ) {
         return pass();
       }
-      return fail(`Expected one real form label; found ${labelCount}.`);
+      return fail(`Expected segment and log form labels without decorative label tags; found ${labelCount}.`);
     },
   },
   {

@@ -10,6 +10,7 @@ import { TrendPanel } from "./components/TrendPanel.jsx";
 import { MissionPanel } from "./components/MissionPanel.jsx";
 import { CodexBrief, LiveActions, QualityGapPanel, StrategyMemory } from "./components/ContextPanels.jsx";
 import { Ledger } from "./components/Ledger.jsx";
+import { ActionReceiptPanel } from "./components/ActionReceiptPanel.jsx";
 
 export function Dashboard({ initialEntries, initialMeta }) {
   const {
@@ -28,6 +29,8 @@ export function Dashboard({ initialEntries, initialMeta }) {
   const {
     liveEnabled,
     liveStatus,
+    actionsById,
+    lastReceipt,
     refreshLiveData,
     runLiveAction,
     setLiveEnabled,
@@ -42,6 +45,12 @@ export function Dashboard({ initialEntries, initialMeta }) {
 
   return (
     <div className="runboard-shell">
+      <nav className="skip-links" aria-label="Skip links">
+        <a href="#decision-rail">Current decision</a>
+        <a href="#mission-panel">Mission control</a>
+        <a href="#trend-panel">Run chart</a>
+        <a href="#ledger">Ledger</a>
+      </nav>
       <SideRail liveActions={mode.liveActions} />
 
       <main className="wrap">
@@ -68,7 +77,8 @@ export function Dashboard({ initialEntries, initialMeta }) {
         </section>
 
         <section className="workspace-grid">
-          <MissionPanel viewModel={viewModel} mode={mode} runLiveAction={runLiveAction} />
+          <MissionPanel viewModel={viewModel} mode={mode} runLiveAction={runLiveAction} actionsById={actionsById} lastReceipt={lastReceipt} />
+          <ActionReceiptPanel receipt={lastReceipt} />
           <CodexBrief session={session} viewModel={viewModel} />
           <StrategyMemory viewModel={viewModel} />
           <QualityGapPanel viewModel={viewModel} />

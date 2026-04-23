@@ -116,6 +116,7 @@ export function createCliCommandHandlers(deps) {
         slug: args.slug,
         apply: args.apply,
         modelCommand: args.modelCommand,
+        modelTimeoutSeconds: args.modelTimeoutSeconds,
       }),
     }),
     "finalize-preview": async (args) => ({
@@ -210,7 +211,7 @@ async function serveCommand(args, deps) {
     cwd: args.cwd,
     port: args.port,
     scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
-    dashboardHtml: async () => {
+    dashboardHtml: async ({ actionNonce, actionNonceHeader } = {}) => {
       const { workDir, config } = deps.resolveWorkDir(args.cwd);
       const entries = deps.readJsonl(workDir);
       const commands = deps.dashboardCommands(workDir);
@@ -220,9 +221,11 @@ async function serveCommand(args, deps) {
         jsonlName: "autoresearch.jsonl",
         deliveryMode: "live-server",
         liveActionsAvailable: true,
+        actionNonce,
+        actionNonceHeader,
         modeGuidance: {
           title: "Live dashboard",
-          detail: "Live actions available.",
+          detail: "Live refresh and guarded actions are available.",
         },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
         commands,

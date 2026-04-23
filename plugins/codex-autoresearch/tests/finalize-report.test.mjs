@@ -177,6 +177,9 @@ test("finalizer plan can create nested output paths and collapse overlapping gro
   assert.equal(plan.groups.length, 1);
   assert.match(plan.groups[0].title, /Consolidated overlap-loop changes/);
   assert.match(plan.groups[0].body, /src\/value\.txt/);
+
+  const finalized = await run(process.execPath, [finalizer, output], repo);
+  assert.match(finalized.stdout, /Created review branches:/);
 });
 
 test("finalizer removes empty skipped branches and sanitizes branch names", async () => {

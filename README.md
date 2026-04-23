@@ -9,6 +9,8 @@
 
 Codex Autoresearch turns an open-ended improvement request into a measured loop: one primary metric, one benchmark, explicit keep/discard decisions, durable ASI, a live dashboard, and clean review branches when the noisy work is done.
 
+The CLI is the canonical engine. MCP tools and the served dashboard are bounded adapters over the same session state, while static exports are read-only evidence snapshots.
+
 It is adapted from [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) and the broader [karpathy/autoresearch](https://github.com/karpathy/autoresearch) idea.
 
 ## Start With Codex
@@ -64,7 +66,8 @@ The agent gets one skill surface and deterministic helpers underneath it. The sk
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness gate |
 | `autoresearch.ideas.md` | Deferred hypotheses, avoided dead ends, and next lanes |
 | `autoresearch.research/<slug>/` | Source-backed deep-research scratchpad and `quality_gap` checklist |
-| live dashboard URL | Served operator surface with refresh, readout, chart, stage rail, and guarded actions |
+| live dashboard URL | Served operator surface with refresh, readout, chart, runway, guarded actions, and receipts |
+| `autoresearch-dashboard.html` | Read-only static export with embedded evidence and no live action token |
 | review branches | Finalized kept work under `autoresearch-review/<goal>/...` |
 
 ## Dashboard
@@ -75,16 +78,21 @@ The live dashboard is the normal operator surface. Codex should hand you a serve
 http://127.0.0.1:49152/
 ```
 
+The operator runway is `Setup -> Gap -> Packet -> Log -> Finalize`. The served dashboard keeps that path visible while preserving the CLI as the source of truth.
+
 The dashboard prioritizes:
 
 - metric trajectory with baseline, best, latest, status, and run markers
 - newest-first run log with metric deltas, commits, descriptions, and ASI
 - current readout for best kept change, recent failures, next action, confidence, and finalization readiness
-- loop stage rail for setup, gap review, log decision, and finalization
+- loop runway for setup, gap review, packet readiness, log decision, and finalization
 - strategy memory for plateau detection and lane guidance
 - guarded local actions for doctor, setup-plan, recipes, gap preview, finalize preview, export, and confirmed log decisions
+- action receipts with command summary, duration, ledger linkage, and next-state hints
 
-Static `autoresearch-dashboard.html` exports are fallback snapshots for offline review.
+Served-dashboard actions are local-only and nonce-bound. Mutating log decisions require a fresh last-run fingerprint, typed confirmation, specific ASI, same-origin request checks, JSON payloads, and bounded command execution. The browser cannot submit arbitrary commands, broad staging, finalizer mutation, or custom output paths.
+
+Static `autoresearch-dashboard.html` exports are fallback snapshots for offline review. They contain no action nonce and expose no live mutation controls.
 
 ## Docs
 
@@ -171,7 +179,7 @@ flowchart TB
 | `doctor_session` | Check setup, Git state, and benchmark metric output |
 | `clear_session` | Delete session artifacts after explicit confirmation |
 
-Custom shell commands through MCP require `allow_unsafe_command: true`; configured benchmark scripts are preferred.
+MCP tools reject unknown arguments before dispatch so misspelled options fail loudly. Custom command-bearing fields such as `command`, `benchmark_command`, `checks_command`, and `model_command` require `allow_unsafe_command: true`; configured benchmark scripts are preferred.
 
 ## Changelog
 

@@ -98,6 +98,13 @@ export function TrendPanel({ session, readout }) {
         </div>
       </figure>
       <p id="trend-chart-summary" className="sr-summary">{chart.summary}</p>
+      <ul className="chart-data-list" aria-label="Chart data points">
+        {chartData.map((item) => (
+          <li key={`data-${item.runNumber}`}>
+            {item.runLabel}: {item.statusLabel}, {formatChartRunValue(item.metric, session.config.metricUnit)}, {item.description}{item.best ? ", best kept" : ""}{item.latest ? ", latest" : ""}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
