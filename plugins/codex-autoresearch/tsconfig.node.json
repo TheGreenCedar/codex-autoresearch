@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "lib": ["ES2024"],
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["lib/**/*.ts", "scripts/**/*.ts", "vite.dashboard.config.ts", "tsdown.config.ts"],
+  "exclude": ["dashboard/src", "dist", "node_modules", "tests"]
+}

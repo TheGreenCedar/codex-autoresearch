@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": false,
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist",
+    "allowJs": false,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node", "vite/client"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "dashboard/src/**/*",
+    "lib/**/*.ts",
+    "scripts/**/*.ts",
+    "vite.dashboard.config.ts",
+    "tsdown.config.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

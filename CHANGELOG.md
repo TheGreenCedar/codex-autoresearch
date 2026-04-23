@@ -8,26 +8,36 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Added
 
-- Documented the evidence-integrity contract for metric parsing, missing metrics, no-change keeps, last-run freshness, and corrupt JSONL surfacing.
-- Documented live/static dashboard trust state, including serve-or-restart guidance, read-only static exports, suspicious perfect-score handling, and the `quality_gap=0` research-round boundary.
+- Reworked the public README into a short product front door with a dashboard screenshot, demo links, install guidance, and one clear starting prompt.
+- Split detailed usage, evidence, MCP, and maintainer guidance into focused docs under `plugins/codex-autoresearch/docs/`.
+- Added a visible demo path with a 100-point runtime-improvement session, a scrubbed static dashboard snapshot, and screenshot notes.
+- Added a weighted demo metric with an inline formula and a metric-details breakdown for time and memory: `0.7 * (seconds / baseline_seconds) + 0.3 * (memory_mb / baseline_memory_mb)`.
+- Documented the evidence rules for metric parsing, missing metrics, no-change keeps, stale packets, and corrupt JSONL.
+- Documented live versus static dashboard behavior, including when to serve a fresh dashboard instead of trusting an old export.
 - Documented the finalization checklist from preview through merge and cleanup, including read-only plan expectations and collapse-overlap guidance for coupled kept commits.
 
 ### Fixed
 
+- Migrated the authored plugin, dashboard, and owned tests from JS/MJS/JSX to TypeScript while keeping the public `scripts/*.mjs` command surface stable through tiny shims.
+- Standardized the package toolchain on `tsdown`, `@typescript/native-preview` (`tsgo`), `oxlint`, `oxfmt`, and `npm-run-all2`, and made the package gate exercise the dashboard verification test alongside the core product suite.
 - Preserved the full union file set when executing collapsed finalizer plans for overlapping kept commits.
-- Hardened follow-up evidence fixes so finalizer plans reject unsafe paths, collapsed plans replay kept sources without excluded-file leakage, last-run freshness sees untracked directory edits, raw ASI JSON stays authoritative when edited, and integer limits reject fractional values.
-- Hardened generated finalizer plan fingerprints against excluded-commit tampering and rejected inconsistent excluded-commit metadata before branch creation.
-- Made dashboard trust reasons fully visible, bounded retained CLI metric maps while preserving the primary metric in large streams, surfaced corrupt JSONL file paths in state readers, and made `npm run check` fail when rebuilt dashboard assets are stale.
+- Made finalizer plans reject unsafe paths, excluded-commit tampering, inconsistent metadata, and excluded-file leakage before branch creation.
+- Made last-run freshness notice untracked directory edits, preserved edited raw ASI JSON, and rejected fractional values for integer limits.
+- Made dashboard trust reasons fully visible, bounded retained CLI metric maps while preserving the primary metric in large streams, surfaced corrupt JSONL file paths in state readers, and made `npm run check` catch stale dashboard rebuilds.
+- Removed passive dashboard and doctor warning noise around empty `commitPaths`, and turned missing keep-commit metadata into a calm finalization-backlog state instead of a trust-warning flood.
 - Rejected finalizer plan paths that target `.git` metadata and required `allow_unsafe_command: true` for MCP setup guidance backed by external recipe catalogs.
 - Normalized invalid metric values before CLI state and experiment-memory ranking so unknown metrics cannot become best evidence.
 - Restored MCP parity for `setup_plan` and `guided_setup` setup inputs such as checks commands, commit paths, and iteration limits while keeping custom command materialization behind `allow_unsafe_command: true`.
+- Made publishable package artifacts explicitly include the built `dist/` runtime, and taught the package gate to fail if `npm pack --dry-run` drops runtime shims or accidentally ships authored source and tests.
 
 ### Migration Notes
 
+- Authored source now lives in `.ts` and `.tsx`; keep using the stable `scripts/*.mjs` entrypoints from the package root and let them delegate into the built TypeScript runtime.
 - Treat old dashboard exports as snapshots only; regenerate or serve a fresh dashboard before trusting packet freshness, live actions, or finalization readiness.
 - Do not interpret missing metrics or missing deltas as zero. Rerun the packet or repair the benchmark so it prints the required primary `METRIC name=value`.
 - Rerun stale last-run packets after Git, file, command, config, or ledger changes instead of logging from old evidence.
 - Use the single `codex-autoresearch` skill surface for all setup, dashboard, deep-research, logging, and finalization guidance. Existing CLI and MCP helpers remain implementation surfaces behind that skill.
+- The root `README.md` is a public overview. Use `plugins/codex-autoresearch/docs/` for operator workflow, evidence, MCP, and maintainer detail.
 
 ## 2026-04-22
 
@@ -60,7 +70,7 @@ This project uses a root-only changelog because the root README is the public do
 - Rejected unknown MCP arguments before dispatch and centralized unsafe-command gating across stdio and in-process MCP paths.
 - Extended CLI parsing with `--flag=value` and `--` sentinel support while keeping command-aware validation.
 - Made finalization safer and more portable with stale-plan refusals, structured command suggestions, and separate PowerShell/POSIX cleanup guidance.
-- Released `0.5.1` with review fixes for collapsed finalizer plan fingerprints and direct CLI model-command timeout forwarding.
+- Released `0.6.0` with the TypeScript rebuild, weighted metric dashboard demo, quieter default demo diagnostics, timestamp-axis polish, and package artifact verification for publishable runtime bundles.
 
 ### Removed
 

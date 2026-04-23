@@ -13,6 +13,7 @@ Default runway: `Setup -> Gap -> Packet -> Log -> Finalize`.
 
 AX, the AI experience:
 
+- Treat Codex Autoresearch as one skill surface for the whole loop.
 - Keep this as the only Codex-facing skill for the plugin. Do not route users to `autoresearch-create`, `autoresearch-dashboard`, `autoresearch-deep-research`, `autoresearch-finalize`, `/autoresearch`, or `/autoresearch-finalize` as separate invocation surfaces.
 - Prefer MCP tools when available. Use CLI helpers only as the deterministic fallback.
 - Keep the next action machine-readable through `next_experiment`, `log_experiment`, `continuation.shouldContinue`, `continuation.forbidFinalAnswer`, ASI, and `autoresearch.ideas.md`.
@@ -114,6 +115,7 @@ Prefer the served dashboard:
 - If the server process ended, live refresh fails, or the user is looking at a `file://` export but needs actions, restart `serve_dashboard` and share the new URL.
 - Use `export_dashboard` or `export` only for offline snapshots or when live serving is unavailable.
 - Treat static HTML as read-only. It should not expose inert live controls or command-copy panels.
+- Treat dashboard commands as guarded local actions: safe previews and confirmed log decisions only, with mutation boundaries kept outside the UI.
 - Treat served-dashboard actions as guarded local adapters: nonce-bound, same-origin, JSON-only, bounded-output, and backed by fresh session fingerprints.
 
 Read dashboard evidence in this order:
@@ -124,6 +126,14 @@ Read dashboard evidence in this order:
 4. Current readout for best kept change, recent failures, next action, confidence, and finalization readiness.
 5. Loop runway for setup, gap review, packet readiness, log decision, and finalization.
 6. Strategy memory for plateau and lane guidance.
+
+When a session config declares `metricDefinition.mode: "weighted_cost"`, read the chart as a composite score instead of a raw metric. The demo uses:
+
+- `time_score = seconds / baseline_seconds`
+- `memory_score = memory_mb / baseline_memory_mb`
+- `weighted_cost = 0.7 * time_score + 0.3 * memory_score`
+
+Lower is better. Use the inline formula for fast orientation and the `Metric details` panel for the selected run's time and memory breakdown.
 
 Safe live actions stay bounded to doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions. Branch creation, broad staging, arbitrary commands, custom finalizer args, and finalizer mutation stay outside the dashboard.
 
@@ -161,10 +171,8 @@ npm run check
 For targeted plugin work, useful checks include:
 
 ```bash
-node --check scripts/autoresearch.mjs
-node --check scripts/autoresearch-mcp.mjs
-node --test tests/autoresearch-cli.test.mjs
-node --test tests/dashboard-verification.test.mjs
+npm test
+node --test dist/tests/dashboard-verification.test.mjs
 node scripts/autoresearch.mjs mcp-smoke
 git diff --check
 ```

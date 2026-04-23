@@ -1,9 +1,9 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.5.1",
-  "type": "module",
+  "version": "0.6.0",
   "private": true,
   "description": "Codex plugin for autonomous benchmark and optimization loops.",
+  "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
   "license": "Apache-2.0",
   "author": {
     "name": "Albert Najjar",
@@ -14,12 +14,35 @@
     "type": "git",
     "url": "git+https://github.com/TheGreenCedar/codex-autoresearch.git"
   },
-  "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
+  "files": [
+    ".codex-plugin/",
+    ".mcp.json",
+    "LICENSE",
+    "assets/",
+    "dist/lib/",
+    "dist/scripts/",
+    "docs/",
+    "examples/",
+    "scripts/*.mjs",
+    "skills/"
+  ],
+  "type": "module",
   "scripts": {
-    "build:dashboard": "vite build --config vite.dashboard.config.mjs",
-    "dev:dashboard": "vite --config vite.dashboard.config.mjs --host 127.0.0.1",
-    "test": "node --test tests/*.test.mjs",
-    "check": "node scripts/check.mjs"
+    "build:node": "tsdown --config tsdown.config.ts",
+    "build:dashboard": "vite build --config vite.dashboard.config.ts",
+    "build": "run-s build:node build:dashboard",
+    "dev:dashboard": "vite --config vite.dashboard.config.ts --host 127.0.0.1",
+    "typecheck:node": "tsgo --project tsconfig.node.json --noEmit",
+    "typecheck:dashboard": "tsgo --project tsconfig.dashboard.json --noEmit",
+    "typecheck": "run-s typecheck:node typecheck:dashboard",
+    "lint": "oxlint --deny-warnings --node-plugin --promise-plugin --react-plugin --jsx-a11y-plugin --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts",
+    "format": "oxfmt --write --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.json tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts package.json",
+    "format:check": "oxfmt --check --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.json tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts package.json",
+    "prepare": "npm run build:node",
+    "test": "run-s build:node test:compiled",
+    "test:compiled": "node --test dist/tests/autoresearch-cli.test.mjs dist/tests/dashboard-verification.test.mjs dist/tests/evidence-core.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/finalize-report.test.mjs dist/tests/full-product.test.mjs dist/tests/perfection-benchmark.test.mjs",
+    "check:product": "npm run build:node && node scripts/check.mjs",
+    "check": "run-p typecheck lint format:check && npm run check:product"
   },
   "dependencies": {
     "lucide-react": "^1.8.0",
@@ -28,8 +51,17 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260423.1",
     "@vitejs/plugin-react": "^6.0.1",
     "jsdom": "^29.0.2",
+    "npm-run-all2": "^8.0.4",
+    "oxfmt": "^0.46.0",
+    "oxlint": "^1.61.0",
+    "tsdown": "^0.21.10",
+    "typescript": "^6.0.3",
     "vite": "^8.0.9"
   }
 }

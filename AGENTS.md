@@ -71,6 +71,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 - Keep live dashboard actions local-only and bounded to safe operations such as doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions.
 - Mutating finalization stays outside the dashboard surface.
 - After dashboard or view-model changes, export or serve a dashboard and inspect the result, not just the tests.
+- Whenever dashboard UI, layout, or visual copy changes, refresh the checked-in demo in the same pass. Update `examples/demo-session/autoresearch-dashboard.html`, `assets/showcase/dashboard-demo.png`, and any compact manifest preview asset that visually represents the dashboard so the public demo stays aligned with the current UI.
 
 ## Version And Release Work
 

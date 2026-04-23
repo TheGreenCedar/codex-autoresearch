@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -10,14 +10,7 @@
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
   "repository": "https://github.com/TheGreenCedar/codex-autoresearch",
   "license": "Apache-2.0",
-  "keywords": [
-    "codex",
-    "autoresearch",
-    "experiments",
-    "benchmark",
-    "optimization",
-    "mcp"
-  ],
+  "keywords": ["codex", "autoresearch", "experiments", "benchmark", "optimization", "mcp"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
@@ -26,11 +19,7 @@
     "longDescription": "Codex Autoresearch gives Codex one skill surface for the full loop: start or resume a measured session, convert deep research into quality_gap checkpoints, run next_experiment packets, log keep/discard/crash/checks_failed decisions with ASI, keep the live dashboard open, and split kept work into clean review branches.",
     "developerName": "Albert Najjar",
     "category": "Coding",
-    "capabilities": [
-      "Interactive",
-      "Read",
-      "Write"
-    ],
+    "capabilities": ["Interactive", "Read", "Write"],
     "websiteURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch",
@@ -42,8 +31,6 @@
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/logo.svg",
-    "screenshots": [
-      "./assets/demo-dashboard.svg"
-    ]
+    "screenshots": ["./assets/demo-dashboard.svg"]
   }
 }

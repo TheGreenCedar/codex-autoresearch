@@ -1,0 +1,9 @@
+{
+  "autonomyMode": "guarded",
+  "checksPolicy": "always",
+  "keepPolicy": "primary-only",
+  "dashboardRefreshSeconds": 5,
+  "commitPaths": [
+    "src/indexer"
+  ]
+}

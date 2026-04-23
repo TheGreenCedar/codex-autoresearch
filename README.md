@@ -2,256 +2,89 @@
 <img height="120" alt="Codex Autoresearch" src="plugins/codex-autoresearch/assets/logo.svg" />
 
 # Codex Autoresearch
-### Measured optimization loops for Codex
+### Measured improvement loops for Codex
 
-**[Start With Codex](#start-with-codex)** - **[Golden Paths](#golden-paths)** - **[Dashboard](#dashboard)** - **[Docs](#docs)** - **[Changelog](#changelog)** - **[Maintainers](#maintainers)**
+**[Install](#install)** - **[Start With Codex](#start-with-codex)** - **[Demo](#demo)** - **[Docs](#docs)** - **[Changelog](#changelog)**
 </div>
 
-Codex Autoresearch turns an open-ended improvement request into a measured loop: one primary metric, one benchmark, explicit keep/discard decisions, durable ASI, a live dashboard, and clean review branches when the noisy work is done.
+Codex Autoresearch helps Codex improve a repo without losing the plot. You give it a goal and a benchmark, it runs measured experiments, keeps or discards changes with evidence, and turns the useful work into reviewable branches.
 
-The CLI is the canonical engine. MCP tools and the served dashboard are bounded adapters over the same session state, while static exports are read-only evidence snapshots.
+![Codex Autoresearch dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
 It is adapted from [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) and the broader [karpathy/autoresearch](https://github.com/karpathy/autoresearch) idea.
 
-## Start With Codex
+## What It Does
 
-Install the plugin, then talk to Codex in the repo you want to improve:
+1. You ask Codex to improve something measurable.
+2. Codex creates or resumes an Autoresearch session with one primary `METRIC name=value`.
+3. Each packet is logged as keep, discard, crash, or checks failed, with the reason preserved in the ledger.
+4. When the loop has useful kept work, Codex previews and creates clean review branches.
+
+The live dashboard stays beside the loop so you can see the metric trend, latest decision, best kept change, blockers, and next action.
+
+## Install
 
 ```bash
 codex marketplace add TheGreenCedar/codex-autoresearch
 ```
 
-Use natural requests:
+Then work in the repo you want to improve and ask Codex to use Codex Autoresearch.
+
+## Start With Codex
+
+Copy this into Codex and adjust the benchmark/check commands for your project:
 
 ```text
-Use Codex Autoresearch to reduce unit test runtime.
+Use Codex Autoresearch for indexing pipeline speed and memory footprint optimization.
 Benchmark: npm test -- --runInBand
 Metric: seconds, lower is better
 Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-```text
-Use Codex Autoresearch to study this project and make the dashboard feel effortless.
-Turn the accepted findings into a quality_gap loop.
-```
+For product or documentation work, use a quality-gap loop:
 
 ```text
-Use Codex Autoresearch to open the live dashboard, summarize the current loop, and continue from the latest ASI.
+Use Codex Autoresearch to study this project and improve the dashboard.
+Turn accepted findings into a quality_gap loop, implement them, and keep the live dashboard open.
 ```
 
-```text
-Use Codex Autoresearch to finalize the kept experiments into review branches.
-```
+Codex should give you a local dashboard URL, run a packet, log the decision, and keep iterating until the stop condition is real.
 
-Codex should give you the live dashboard URL, run the next measured packet, log the decision, and keep iterating until a real stop condition is reached.
+## Demo
 
-## Golden Paths
+The demo session shows a 100-packet loop for `Indexing Pipeline Speed and Memory Footprint Optimization`.
+Its primary dashboard score is a weighted cost:
 
-**UX: user experience**
+`0.7 * (seconds / baseline_seconds) + 0.3 * (memory_mb / baseline_memory_mb)`
 
-The user interacts with one thing: Codex Autoresearch. The request can be vague or precise. Codex asks only for missing essentials, opens the live dashboard, reports evidence in plain language, and keeps the loop moving.
+Lower is better. The chart can switch between score, percent of baseline, raw value, iteration, and timestamp, while the metric details panel shows the full time and memory breakdown for the selected run.
 
-**AX: AI experience**
+- [Demo tour](plugins/codex-autoresearch/examples/demo-session/demo.md)
+- [Demo ledger](plugins/codex-autoresearch/examples/demo-session/autoresearch.jsonl)
+- [Dashboard runboard](plugins/codex-autoresearch/examples/demo-session/autoresearch-dashboard.html)
+- [Screenshot notes](plugins/codex-autoresearch/assets/showcase/showcase.md)
 
-The agent gets one skill surface and deterministic helpers underneath it. The skill chooses the workflow, MCP tools execute bounded actions, the JSONL log preserves truth, and `continuation` tells Codex whether to keep going.
+The checked-in HTML is a portable copy of the demo evidence. The screenshot is captured from an HTTP-served runboard so the showcase reflects the live operator surface.
 
-## What Codex Creates
+## Tooling
 
-| Artifact | Role |
-| --- | --- |
-| `autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions |
-| `autoresearch.jsonl` | Append-only history of setup, packets, metrics, status, commits, and ASI |
-| `autoresearch.sh` or `autoresearch.ps1` | Benchmark entrypoint that prints `METRIC name=value` |
-| `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness gate |
-| `autoresearch.ideas.md` | Deferred hypotheses, avoided dead ends, and next lanes |
-| `autoresearch.research/<slug>/` | Source-backed deep-research scratchpad and `quality_gap` checklist |
-| live dashboard URL | Served operator surface with refresh, readout, chart, runway, guarded actions, and receipts |
-| `autoresearch-dashboard.html` | Read-only static export with embedded evidence and no live action token |
-| review branches | Finalized kept work under `autoresearch-review/<goal>/...` |
-
-## Dashboard
-
-The live dashboard is the normal operator surface. Codex should hand you a served local URL like:
-
-```text
-http://127.0.0.1:49152/
-```
-
-The operator runway is `Setup -> Gap -> Packet -> Log -> Finalize`. The served dashboard keeps that path visible while preserving the CLI as the source of truth.
-
-The dashboard prioritizes:
-
-- metric trajectory with baseline, best, latest, status, and run markers
-- newest-first run log with metric deltas, commits, descriptions, and ASI
-- current readout for best kept change, recent failures, next action, confidence, and finalization readiness
-- loop runway for setup, gap review, packet readiness, log decision, and finalization
-- strategy memory for plateau detection and lane guidance
-- guarded local actions for doctor, setup-plan, recipes, gap preview, finalize preview, export, and confirmed log decisions
-- action receipts with command summary, duration, ledger linkage, and next-state hints
-
-Served-dashboard actions are local-only and nonce-bound. Mutating log decisions require a fresh last-run fingerprint, typed confirmation, specific ASI, same-origin request checks, JSON payloads, and bounded command execution. The browser cannot submit arbitrary commands, broad staging, finalizer mutation, or custom output paths.
-
-Static `autoresearch-dashboard.html` exports are fallback snapshots for offline review. They contain no action nonce and expose no live mutation controls.
-
-### Evidence Integrity
-
-Codex Autoresearch treats evidence as stricter than display:
-
-- `METRIC name=value` lines are the decision input; output tails and dashboard snippets are only display summaries.
-- Missing, null, crashed, or ineligible metrics stay unknown. They must not be coerced into `0`, `0%`, a baseline, a best run, or chart evidence.
-- Last-run packets are loggable only while fresh against the session ledger, config, active working directory, Git/file fingerprint, and packet command. If the packet is stale, rerun `next` before logging.
-- A `keep` with no source changes must be recorded as no-change evidence. It must not borrow an old `HEAD` as if a new result was created.
-- Corrupt `autoresearch.jsonl` should surface the file and line that failed so the operator can repair the ledger instead of trusting a partial dashboard.
-
-### Trust State
-
-The dashboard should make its trust level visible:
-
-- Live dashboards show refresh state, guarded action availability, dirty Git or drift warnings, stale-packet warnings, and action receipts.
-- Static exports say they are read-only snapshots. If the operator needs fresh evidence or actions, Codex should serve or restart the live dashboard.
-- `quality_gap=0` means the accepted checklist for this round is closed, not that product discovery is permanently complete.
-- Perfect-looking results are suspicious when they lack fresh packets, clean checks, ASI, or enough comparison history. Codex should verify freshness and explain the evidence before celebrating.
-
-### Serve Or Restart
-
-Use `serve_dashboard` or `node plugins/codex-autoresearch/scripts/autoresearch.mjs serve --cwd <project>` for the operator URL. If the browser is on a `file://` export, if refresh fails, or if the dashboard process ended, restart serving and hand back the new `http://127.0.0.1:<port>/` URL. Regenerate static exports only for offline review or archival evidence.
-
-### Finalization Safety
-
-Finalization has a fixed checklist:
-
-1. Run `finalize_preview`; it is read-only.
-2. Resolve dirty worktree, stale plan, missing kept evidence, and overlap warnings.
-3. If kept commits overlap across shared files, rerun the plan with collapse-overlap guidance and prefer one consolidated review branch.
-4. Approve the plan.
-5. Create review branches from the clean autoresearch source branch.
-6. Verify the branch union, session-artifact exclusion, and generated review summary.
-7. Merge to trunk, then clean up source branches and session artifacts.
-
-Preview output must say exactly what would happen and leave branches, refs, and the worktree unchanged. For branch finalization, use `finalize_preview` and `scripts/finalize-autoresearch.mjs plan --goal <short-goal>` as the read-only planning surfaces before creating review branches.
+The authored plugin and dashboard source now live in TypeScript. The package uses `tsdown` for the Node build, `tsgo` for typechecking, `oxlint` for linting, `oxfmt` for formatting, and `npm-run-all2` to keep the verification loop fast.
 
 ## Docs
 
-### Loop
+- [Docs index](plugins/codex-autoresearch/docs/index.md)
+- [Getting started](plugins/codex-autoresearch/docs/getting-started.md)
+- [Operator workflows](plugins/codex-autoresearch/docs/operator-workflows.md)
+- [Evidence and safety](plugins/codex-autoresearch/docs/evidence-and-safety.md)
+- [MCP tools](plugins/codex-autoresearch/docs/mcp-tools.md)
+- [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
 
-```mermaid
-flowchart LR
-  U["User asks Codex"] --> S["Codex Autoresearch skill"]
-  S --> P["Setup or resume session"]
-  P --> D["Open live dashboard"]
-  P --> B["Run benchmark packet"]
-  B --> M["Parse METRIC lines"]
-  M --> K{"Keep?"}
-  K -->|yes| C["Commit scoped win"]
-  K -->|no| R["Discard or log failure"]
-  C --> L["Append JSONL + ASI"]
-  R --> L
-  L --> N{"continuation.shouldContinue"}
-  N -->|yes| H["Choose next hypothesis"]
-  H --> B
-  N -->|no| F["Finalize or hand off"]
-```
-
-### State
-
-```mermaid
-stateDiagram-v2
-  [*] --> NeedsSetup
-  NeedsSetup --> Ready: setup_session
-  Ready --> PacketReady: next_experiment
-  PacketReady --> Logged: log_experiment
-  Logged --> Ready: continuation.shouldContinue
-  Logged --> FinalizeReady: kept evidence complete
-  FinalizeReady --> ReviewBranches: finalize
-  PacketReady --> Blocked: stale packet or failed checks
-  Blocked --> Ready: repair or rerun packet
-```
-
-### Deep Research
-
-```mermaid
-flowchart TD
-  A["Broad project question"] --> B["autoresearch.research/<slug>/brief.md"]
-  B --> C["sources.md + notes"]
-  C --> D["synthesis.md"]
-  D --> E["gap-candidates preview"]
-  E --> F{"Evidence-backed?"}
-  F -->|yes| G["quality-gaps.md"]
-  F -->|no| X["Reject and record why"]
-  G --> H["quality_gap benchmark"]
-  H --> I["Implement or reject accepted gap"]
-  I --> J["Log round with ASI"]
-  J --> K["Fresh research round"]
-```
-
-### Runtime Surface
-
-```mermaid
-flowchart TB
-  Skill["Single Codex skill"] --> MCP["MCP tools"]
-  Skill --> CLI["CLI fallback"]
-  MCP --> Core["session-core, runner, research-gaps, finalize-preview"]
-  CLI --> Core
-  Core --> Log["autoresearch.jsonl"]
-  Core --> Dash["live dashboard view model"]
-  Core --> Git["scoped commits and review branches"]
-```
-
-## MCP Tools
-
-| Tool | Use |
-| --- | --- |
-| `setup_plan` | Read-only first-run or resume plan |
-| `setup_session` | Create session files and JSONL config |
-| `setup_research_session` | Create `autoresearch.research/<slug>/` and a `quality_gap` session |
-| `next_experiment` | Run preflight and benchmark as one decision packet |
-| `log_experiment` | Record keep, discard, crash, or checks_failed with ASI |
-| `read_state` | Summarize baseline, best, run counts, confidence, and limits |
-| `measure_quality_gap` | Count open and closed accepted checklist gaps |
-| `gap_candidates` | Preview or apply evidence-backed gap candidates |
-| `finalize_preview` | Inspect review-branch readiness without creating branches |
-| `serve_dashboard` | Start the live dashboard and return the operator URL |
-| `export_dashboard` | Write a read-only fallback dashboard snapshot |
-| `doctor_session` | Check setup, Git state, and benchmark metric output |
-| `clear_session` | Preview deletion targets with `dry_run`; delete session artifacts only after explicit confirmation |
-
-MCP tools reject unknown arguments before dispatch so misspelled options fail loudly. Custom command-bearing fields such as `command`, `benchmark_command`, `checks_command`, and `model_command` require `allow_unsafe_command: true`; setup guidance that reads an external recipe `catalog` requires the same gate because catalog recipes can materialize benchmark/check commands. Configured benchmark scripts are preferred.
+The active package lives under `plugins/codex-autoresearch`. The plugin skill lives at [plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md](plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md).
 
 ## Changelog
 
 User-facing changes are tracked in [CHANGELOG.md](CHANGELOG.md). Surface removals, prompt changes, dashboard behavior changes, and release migration notes belong there before publishing.
-
-## Maintainers
-
-The active package lives under `plugins/codex-autoresearch`. The root README is the only README. The plugin skill lives at [plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md](plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md).
-
-Run the plugin gate from the package root:
-
-```bash
-cd plugins/codex-autoresearch
-npm run check
-```
-
-Useful targeted checks:
-
-```bash
-node --check scripts/autoresearch.mjs
-node --check scripts/autoresearch-mcp.mjs
-node --test tests/autoresearch-cli.test.mjs
-node --test tests/dashboard-verification.test.mjs
-node scripts/autoresearch.mjs mcp-smoke
-git diff --check
-```
-
-Local plugin routing from the wrapper root:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
-node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
-node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
-node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
-```
 
 ## License
 
