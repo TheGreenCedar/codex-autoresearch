@@ -15,8 +15,8 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
-import os from "node:os";
 import { spawn } from "node:child_process";
+import os from "node:os";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 //#region scripts/autoresearch.ts
@@ -31,6 +31,12 @@ const SESSION_FILES = [
 	"autoresearch.config.json",
 	"autoresearch.last-run.json"
 ];
+const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
+	"# Codex Autoresearch ledger files",
+	"autoresearch.jsonl text eol=lf",
+	"autoresearch.md text eol=lf",
+	"autoresearch.ideas.md text eol=lf"
+].join("\n");
 const RESEARCH_DIR = "autoresearch.research";
 const AUTONOMY_MODES = new Set([
 	"guarded",
@@ -62,7 +68,7 @@ const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
-const PLUGIN_VERSION = "1.0.1";
+const PLUGIN_VERSION = "1.1.0";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -85,7 +91,7 @@ Usage:
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
@@ -97,8 +103,11 @@ Usage:
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
+  node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs benchmark-lint --cwd <project> [--metric-name <name>] [--sample <text>|--command <cmd>]
+  node scripts/autoresearch.mjs checks-inspect --cwd <project> --command <cmd> [--timeout-seconds <n>]
   node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--dry-run|--yes]
+  node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose]
   node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
   node scripts/autoresearch.mjs mcp-smoke
@@ -404,13 +413,15 @@ async function setupPlan(args) {
 				"autoresearch.md",
 				"autoresearch.ideas.md",
 				shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
-				"autoresearch.config.json"
+				"autoresearch.config.json",
+				".gitattributes"
 			],
 			commands: [`git add -- ${[
 				"autoresearch.md",
 				"autoresearch.ideas.md",
 				shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
-				"autoresearch.config.json"
+				"autoresearch.config.json",
+				".gitattributes"
 			].map(shellQuote).join(" ")}`, `git commit -m ${shellQuote(`Start autoresearch session: ${planArgs.name || "Autoresearch session"}`)}`],
 			note: "Run after setup creates files and before the first experiment-scoped keep commit."
 		} : null,
@@ -496,6 +507,7 @@ async function promptPlan(args) {
 }
 async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 	const explicit = parsePromptFields(prompt);
+	const discoveredBenchmark = await discoverAutoresearchBenchmark(workDir, prompt);
 	const lower = prompt.toLowerCase();
 	const speed = /\b(speed|fast|faster|latency|runtime|p99|p90|performance|slow)\b/.test(lower);
 	const memory = /\b(memory|rss|heap|footprint|ram)\b/.test(lower);
@@ -509,9 +521,10 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 	const explicitScope = explicit.scope.length ? explicit.scope : [];
 	const repoRecipe = await recommendRecipe(workDir);
 	const loopKind = bugs || productResearch && !speed && !memory ? "quality-gap" : "measured-optimization";
-	const metricName = explicit.metricName || (bugs || productResearch && !speed && !memory ? "quality_gap" : latencyRatio ? "p99_p90_ratio" : speed && memory ? "score" : speed ? "seconds" : memory ? "rss_mb" : repoRecipe?.metricName || "seconds");
-	const direction = explicit.direction || (metricName === "quality_gap" || metricName === "p99_p90_ratio" || metricName === "score" || metricName === "seconds" || metricName === "rss_mb" ? "lower" : repoRecipe?.direction || "lower");
-	const metricUnit = explicit.metricUnit || (metricName === "quality_gap" ? "gaps" : metricName === "seconds" ? "s" : metricName === "rss_mb" ? "MB" : "");
+	const useDiscoveredBenchmark = loopKind === "measured-optimization" ? discoveredBenchmark : null;
+	const metricName = explicit.metricName || useDiscoveredBenchmark?.metricName || (bugs || productResearch && !speed && !memory ? "quality_gap" : latencyRatio ? "p99_p90_ratio" : speed && memory ? "score" : speed ? "seconds" : memory ? "rss_mb" : repoRecipe?.metricName || "seconds");
+	const direction = explicit.direction || useDiscoveredBenchmark?.direction || (metricName === "quality_gap" || metricName === "p99_p90_ratio" || metricName === "score" || metricName === "seconds" || metricName === "rss_mb" ? "lower" : repoRecipe?.direction || "lower");
+	const metricUnit = explicit.metricUnit || useDiscoveredBenchmark?.metricUnit || (metricName === "quality_gap" ? "gaps" : metricName === "seconds" ? "s" : metricName === "rss_mb" ? "MB" : "");
 	const secondaryMetrics = uniqueStrings([
 		...explicit.secondaryMetrics,
 		...speed && memory ? ["seconds", "rss_mb"] : [],
@@ -520,6 +533,7 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 	]);
 	const constraints = uniqueStrings([
 		...explicit.constraints,
+		...useDiscoveredBenchmark?.constraints || [],
 		...testSpeed ? ["Do not delete or skip correctness tests to improve runtime."] : [],
 		...memory ? ["Treat memory regressions as tradeoffs, not invisible wins."] : [],
 		...suspects.length ? [`Evaluate suspect families separately: ${suspects.join(", ")}.`] : [],
@@ -527,11 +541,12 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 	]);
 	const filesInScope = uniqueStrings([
 		...explicitScope,
+		...useDiscoveredBenchmark ? [useDiscoveredBenchmark.path] : [],
 		...testSpeed ? ["test runner config", "test helpers"] : [],
 		...repoRecipe?.scope || []
 	]);
 	const offLimits = uniqueStrings(explicit.offLimits);
-	const benchmarkCommand = explicit.benchmarkCommand || "";
+	const benchmarkCommand = explicit.benchmarkCommand || useDiscoveredBenchmark?.command || "";
 	const checksCommand = explicit.checksCommand || "";
 	const recipe = benchmarkCommand ? "" : loopKind === "quality-gap" ? "quality-gap" : repoRecipe?.id || "custom";
 	const missing = [];
@@ -546,7 +561,8 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 		latencyRatio,
 		testSpeed,
 		suspects,
-		referencedFiles
+		referencedFiles,
+		discoveredBenchmark: useDiscoveredBenchmark
 	});
 	const nextAction = missing.length > 0 ? `Confirm ${missing.join(", ")} or accept the suggested recipe before setup.` : "Run setup, doctor, live dashboard, then one packet.";
 	return {
@@ -568,7 +584,12 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 			testSpeed,
 			maxIterations,
 			suspects,
-			referencedFiles
+			referencedFiles,
+			discoveredBenchmark: useDiscoveredBenchmark ? {
+				path: useDiscoveredBenchmark.path,
+				metricName: useDiscoveredBenchmark.metricName,
+				command: useDiscoveredBenchmark.command
+			} : null
 		},
 		metric: {
 			name: metricName,
@@ -602,6 +623,67 @@ async function analyzeAutoresearchPrompt(workDir, prompt, args) {
 		}),
 		nextAction
 	};
+}
+async function discoverAutoresearchBenchmark(workDir, prompt) {
+	const scriptsDir = path.join(workDir, "scripts");
+	if (!await pathExists(scriptsDir)) return null;
+	const candidates = [];
+	for (const entry of await fsp.readdir(scriptsDir, { withFileTypes: true }).catch(() => [])) {
+		if (!entry.isFile()) continue;
+		if (!/^autoresearch[-_].+\.(?:mjs|js|cjs|ts)$/.test(entry.name)) continue;
+		const absolute = path.join(scriptsDir, entry.name);
+		const text = await fsp.readFile(absolute, "utf8").catch(() => "");
+		const metrics = metricNamesFromScript(text);
+		if (!metrics.length) continue;
+		const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
+		candidates.push({
+			path: relative,
+			command: `node ${relative}`,
+			metricName: choosePrimaryMetricName(metrics),
+			metrics,
+			score: benchmarkPromptScore(prompt, relative, text, metrics),
+			constraints: benchmarkConstraintsFromScript(relative, metrics)
+		});
+	}
+	candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+	const best = candidates[0];
+	if (!best || best.score <= 0) return null;
+	return {
+		...best,
+		direction: metricLooksHigherIsBetter(best.metricName) ? "higher" : "lower",
+		metricUnit: metricLooksHigherIsBetter(best.metricName) ? "points" : inferMetricUnit(best.metricName)
+	};
+}
+function metricNamesFromScript(text) {
+	const names = /* @__PURE__ */ new Set();
+	for (const match of text.matchAll(/METRIC\s+([A-Za-z_][A-Za-z0-9_.:-]*)\s*=/g)) names.add(match[1]);
+	for (const match of text.matchAll(/METRIC\s+\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\s*=/g)) names.add(match[1]);
+	return [...names].filter((name) => /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name));
+}
+function choosePrimaryMetricName(metrics) {
+	return metrics.find((metric) => /(^|[_:-])score$/i.test(metric)) || metrics.find((metric) => /^quality_gap$/i.test(metric)) || metrics[0];
+}
+function benchmarkPromptScore(prompt, relativePath, text, metrics) {
+	const haystack = `${relativePath}\n${text.slice(0, 4e3)}`.toLowerCase();
+	const words = uniqueStrings(prompt.toLowerCase().split(/[^a-z0-9_]+/).filter((word) => word.length >= 4));
+	let score = relativePath.includes("autoresearch") ? 2 : 0;
+	for (const word of words) if (haystack.includes(word)) score += 1;
+	if (metrics.some((metric) => /score/i.test(metric))) score += 2;
+	if (/parse|index|embed|pipeline|benchmark/.test(prompt.toLowerCase()) && /parse|index|embed|pipeline/.test(haystack)) score += 4;
+	return score;
+}
+function benchmarkConstraintsFromScript(relativePath, metrics) {
+	const constraints = [`Use existing benchmark surface ${relativePath} before inventing a new timer.`];
+	if (metrics.some((metric) => /quality|score/i.test(metric))) constraints.push("Treat the primary score as the decision contract; inspect quality, speed, and footprint components before promoting a speedup.");
+	return constraints;
+}
+function metricLooksHigherIsBetter(metricName) {
+	return /score|quality|throughput|docs_per_second|hit|mrr/i.test(metricName);
+}
+function inferMetricUnit(metricName) {
+	if (/seconds|duration|latency|time/i.test(metricName)) return "s";
+	if (/rss|memory|heap|mb/i.test(metricName)) return "MB";
+	return "";
 }
 function parsePromptFields(prompt) {
 	const field = (name) => {
@@ -645,8 +727,9 @@ function uniqueStrings(items) {
 function titleFromPrompt(prompt, loopKind) {
 	return prompt.replace(/^Use\s+\$?Codex Autoresearch\s+to\s+/i, "").replace(/^Use\s+Codex Autoresearch\s+to\s+/i, "").replace(/\s+/g, " ").trim().split(/[.!?]/)[0].slice(0, 72).trim() || (loopKind === "quality-gap" ? "Quality gap loop" : "Measured improvement loop");
 }
-function buildPromptExperimentPlan({ speed, memory, bugs, latencyRatio, testSpeed, suspects, referencedFiles }) {
+function buildPromptExperimentPlan({ speed, memory, bugs, latencyRatio, testSpeed, suspects, referencedFiles, discoveredBenchmark }) {
 	const lanes = [];
+	if (discoveredBenchmark) lanes.push(`Start from existing benchmark surface ${discoveredBenchmark.path}.`);
 	if (latencyRatio) lanes.push("Measure p90 and p99 separately before optimizing the ratio.");
 	if (speed) lanes.push("Start with profiling or timing the current slow path.");
 	if (memory) lanes.push("Track memory as a secondary or composite metric for every packet.");
@@ -775,11 +858,13 @@ async function onboardingPacket(args) {
 		doctorSession({
 			cwd: workDir,
 			checkBenchmark: false,
+			checkInstalled: true,
 			explain: true
 		}).catch((error) => ({
 			ok: false,
 			issues: [error.message],
 			warnings: [],
+			drift: null,
 			nextAction: "Fix doctor before running packets."
 		})),
 		recommendNext({
@@ -818,7 +903,14 @@ async function onboardingPacket(args) {
 			ok: doctor.ok,
 			issues: doctor.issues || [],
 			warnings: doctor.warnings || [],
+			drift: doctor.drift || null,
 			nextAction: doctor.nextAction
+		},
+		runtimeTruth: {
+			checkedInstalledRuntime: true,
+			drift: doctor.drift || null,
+			warnings: doctor.drift?.warnings || [],
+			nextAction: doctor.drift?.ok === false ? "Refresh or inspect the installed Codex plugin runtime before trusting source-only changes." : "Installed-runtime drift was checked during onboarding."
 		},
 		nextAction: nextPacket.action || nextPacket.nextBestAction || nextPacket.nextAction || guide.nextAction,
 		hazards: compactHazards({
@@ -874,10 +966,10 @@ function compactHazards({ doctor, guide, state }) {
 }
 function agentReportTemplates(config = {}) {
 	return {
-		firstResponse: "I found the Autoresearch session, checked state/doctor, and the next safe action is: <action>. Dashboard: <url or command>.",
-		progress: `Packet result: ${config.metricName || "metric"}=<value>, status=<pending|keep|discard|crash|checks_failed>, evidence=<brief>, next=<ASI next_action_hint>.`,
+		firstResponse: "I found the Autoresearch session, checked state/doctor, verified or restarted the live dashboard, and the next safe action is: <action>. Dashboard: <verified url or command>.",
+		progress: `Tried: <plain-English hypothesis>. Result: ${config.metricName || "metric"}=<value>, status=<pending|keep|discard|crash|checks_failed>. Meaning: <what changed versus baseline/incumbent>. Decision: <log/keep/discard>. Next: <ASI next_action_hint or continuation>.`,
 		final: "Changed: <files/behavior>. Verified: <commands>. Autoresearch: <runs/kept/best/next>. Risks: <remaining blockers>.",
-		blocked: "Blocked by <specific layer>. Evidence: <command/output>. Safe next action: <fix or command>."
+		blocked: "Blocked by <specific layer>. Evidence: <command/output>. Dashboard: <verified replacement URL or unavailable reason>. Safe next action: <fix or command>."
 	};
 }
 function replacementNextCommandFromLastRun(workDir, packet, defaultBenchmarkCommandReady) {
@@ -990,6 +1082,7 @@ function renderSessionDocument(args) {
 	const metricUnit = args.metric_unit ?? args.metricUnit ?? "";
 	const direction = args.direction === "higher" ? "higher" : "lower";
 	const primaryMetric = validateMetricName(args.metric_name || args.metricName);
+	const metricContractNote = metricLooksHigherIsBetter(primaryMetric) ? `- Decision contract: ${primaryMetric} is treated as a quality-bearing score; faster runs should not be promoted when component evidence shows quality or correctness erosion.` : `- Decision contract: ${primaryMetric} is the primary metric; secondary evidence explains tradeoffs but should not silently override it.`;
 	return replaceAllText(readAssetTemplate("autoresearch.md.template"), {
 		"<goal>": args.name,
 		"<Specific description of what is being optimized and the workload.>": args.goal || args.name,
@@ -998,9 +1091,28 @@ function renderSessionDocument(args) {
 		"`<benchmark command>` prints `METRIC name=value` lines.": `\`${benchmarkCommand}\` prints \`METRIC name=value\` lines.`,
 		"- `<path>`: <why it matters>": markdownList(scope, "TBD: add files after initial inspection"),
 		"- `<path or behavior>`: <reason>": markdownList(offLimits, "TBD: add off-limits files or behaviors if needed"),
-		[constraintsPlaceholder]: markdownList(constraints, "TBD: add correctness and compatibility constraints"),
+		[constraintsPlaceholder]: markdownList(uniqueStrings([metricContractNote, ...constraints]), "TBD: add correctness and compatibility constraints"),
 		"- Baseline: <initial metric and notes>": "- Baseline: pending"
 	});
+}
+function renderIdeasDocument(args) {
+	const title = args.name || "Autoresearch";
+	const goal = String(args.goal || args.name || "").trim();
+	const constraints = listOption(args.constraints);
+	const secondary = listOption(args.secondary_metrics ?? args.secondaryMetrics);
+	const ideas = uniqueStrings([
+		...goal ? [`Baseline the current behavior for: ${goal}`] : [],
+		...secondary.length ? [`Track secondary metrics explicitly: ${secondary.join(", ")}.`] : [],
+		...constraints.filter((constraint) => !/^Decision contract:/i.test(constraint)).slice(0, 3).map((constraint) => `Validate constraint before promotion: ${constraint}`),
+		"Reserve one packet for a distant-scout lane before repeating the same near-neighbor tweak.",
+		"If a promotion-grade packet has no decision row, log it as benchmark coverage work rather than a candidate regression."
+	]);
+	return [
+		`# Autoresearch Ideas: ${title}`,
+		"",
+		...ideas.map((idea) => `- ${idea}`),
+		""
+	].join("\n");
 }
 function renderResumeBlock(workDir) {
 	const cwd = shellQuote(workDir);
@@ -1209,7 +1321,7 @@ async function writeSessionFile(filePath, content, options = {}) {
 	};
 }
 function appendJsonl(workDir, entry) {
-	fs.appendFileSync(jsonlPath(workDir), JSON.stringify(entry) + os.EOL);
+	fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
 }
 function readJsonl(workDir) {
 	const filePath = jsonlPath(workDir);
@@ -1346,6 +1458,13 @@ function metricParseSource(result) {
 		retained
 	].filter(Boolean).join("\n");
 	return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
+}
+function headText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
+	let trimmed = text;
+	if (Buffer.byteLength(trimmed, "utf8") > maxBytes) trimmed = Buffer.from(trimmed, "utf8").subarray(0, maxBytes).toString("utf8");
+	const lines = trimmed.split(/\r?\n/);
+	if (lines.length > maxLines) trimmed = lines.slice(0, maxLines).join("\n");
+	return trimmed;
 }
 function metricLineName(line) {
 	const match = String(line || "").trim().match(/^METRIC\s+([^=\s]+)=/i);
@@ -1882,6 +2001,24 @@ function setupCheckpointGuidance(workDir, files, name) {
 		note: "Checkpoint these generated session files before the first experiment commit if this project is in Git."
 	};
 }
+async function ensureAutoresearchGitattributes(workDir) {
+	const filePath = path.join(workDir, ".gitattributes");
+	const exists = await pathExists(filePath);
+	const current = exists ? await fsp.readFile(filePath, "utf8") : "";
+	const hasJsonlRule = /^autoresearch\.jsonl\s+.*\beol=lf\b/im.test(current);
+	const hasMdRule = /^autoresearch\.md\s+.*\beol=lf\b/im.test(current);
+	const hasIdeasRule = /^autoresearch\.ideas\.md\s+.*\beol=lf\b/im.test(current);
+	if (hasJsonlRule && hasMdRule && hasIdeasRule) return {
+		path: filePath,
+		action: "kept"
+	};
+	const separator = current.trimEnd() ? "\n\n" : "";
+	await fsp.writeFile(filePath, `${current.trimEnd()}${separator}${AUTORESEARCH_GITATTRIBUTES_BLOCK}\n`, "utf8");
+	return {
+		path: filePath,
+		action: exists ? "updated" : "created"
+	};
+}
 async function writeRuntimeConfig(sessionCwd, updates) {
 	if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
 	const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
@@ -1923,6 +2060,7 @@ async function writeSetupBootstrapFiles(args, options) {
 		executable: shellKind === "bash"
 	}));
 	files.push(await writeSessionFile(path.join(workDir, "autoresearch.ideas.md"), options.ideasContent(context), { overwrite }));
+	if (!boolOption(args.skip_gitattributes ?? args.skipGitattributes, false)) files.push(await ensureAutoresearchGitattributes(workDir));
 	if (args.checks_command || args.checksCommand || boolOption(args.create_checks ?? args.createChecks, false)) files.push(await writeSessionFile(path.join(workDir, checksFile), renderChecksScript(args, shellKind), {
 		overwrite,
 		executable: shellKind === "bash"
@@ -1937,7 +2075,7 @@ async function setupSession(args) {
 	const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
 		sessionDocumentArgs: () => args,
 		benchmarkContent: ({ shellKind: setupShellKind }) => renderBenchmarkScript(args, setupShellKind),
-		ideasContent: () => `# Autoresearch Ideas: ${args.name}\n\n- Add promising ideas here when they are not tried immediately.\n`
+		ideasContent: () => renderIdeasDocument(args)
 	});
 	const maxIterations = positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
 	const setupConfig = {};
@@ -2620,6 +2758,7 @@ async function serveDashboard(args) {
 		})
 	});
 	liveUrl = serveResult.url;
+	const health = await verifyLiveDashboardUrl(liveUrl);
 	liveDashboardServers.add(serveResult.server);
 	serveResult.server.on("close", () => {
 		liveDashboardServers.delete(serveResult.server);
@@ -2629,9 +2768,12 @@ async function serveDashboard(args) {
 		workDir: serveResult.workDir,
 		port: serveResult.port,
 		url: serveResult.url,
+		verified: health.ok,
+		healthUrl: health.url,
+		checkedAt: health.checkedAt,
 		modeGuidance: {
 			deliveryMode: "live-server",
-			difference: "This is the dashboard link to hand to the operator; exported HTML is only a read-only fallback snapshot."
+			difference: health.ok ? "This dashboard link was liveness-checked and can be handed to the operator; exported HTML is only a read-only fallback snapshot." : `Dashboard server started but liveness check failed: ${health.error}. Restart serve before handing this URL to the operator.`
 		},
 		progress: operationProgress({
 			stage: "serve",
@@ -2641,6 +2783,33 @@ async function serveDashboard(args) {
 			outputTail: serveResult.url
 		})
 	};
+}
+async function verifyLiveDashboardUrl(url) {
+	const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+	const healthUrl = new URL("health", url).toString();
+	try {
+		const response = await fetch(healthUrl);
+		if (!response.ok) return {
+			ok: false,
+			url: healthUrl,
+			checkedAt,
+			error: `GET /health returned ${response.status}`
+		};
+		const payload = await response.json().catch(() => null);
+		return {
+			ok: payload?.ok === true,
+			url: healthUrl,
+			checkedAt,
+			error: payload?.ok === true ? "" : "GET /health did not return ok=true"
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			url: healthUrl,
+			checkedAt,
+			error: error instanceof Error ? error.message : String(error)
+		};
+	}
 }
 async function clearSession(args) {
 	const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
@@ -2937,7 +3106,16 @@ function compactPublicState(state) {
 		nextAction: continuation.nextAction || "Run doctor, then next.",
 		shouldContinue: continuation.shouldContinue === true,
 		forbidFinalAnswer: continuation.forbidFinalAnswer === true,
+		activeBudget: continuation.activeBudget === true,
+		requiresLogDecision: continuation.requiresLogDecision === true,
+		afterLogAction: continuation.afterLogAction || "",
+		finalAnswerPolicy: continuation.finalAnswerPolicy || "",
 		blockers: [...new Set(blockers)].slice(0, 6),
+		report: {
+			happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
+			decision: continuation.requiresLogDecision === true ? "A packet is waiting for a keep/discard/crash/checks_failed log decision." : state.best == null ? "No best metric yet." : `Best ${state.config?.metricName || "metric"} is ${state.best}.`,
+			next: continuation.nextAction || "Run doctor, then next."
+		},
 		memory: {
 			plateau: state.memory?.plateau?.detected === true,
 			suggestedLane: state.memory?.summary?.suggestedLane || "",
@@ -2976,8 +3154,12 @@ function dashboardCommands(workDir, qualityGap = null) {
 			command: `node ${script} benchmark-lint --cwd ${cwd}`
 		},
 		{
+			label: "Benchmark inspect",
+			command: `node ${script} benchmark-inspect --cwd ${cwd}`
+		},
+		{
 			label: "Next run",
-			command: `node ${script} next --cwd ${cwd}`
+			command: `node ${script} next --cwd ${cwd} --compact`
 		},
 		{
 			label: "Keep last",
@@ -3006,12 +3188,17 @@ function dashboardCommands(workDir, qualityGap = null) {
 		{
 			label: "New segment",
 			command: `node ${script} new-segment --cwd ${cwd} --dry-run`
+		},
+		{
+			label: "Promote gate",
+			command: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`
 		}
 	];
 }
 function loopContinuation(workDir, state, config = {}, stage = "state", options = {}) {
 	const mode = config.autonomyMode || "guarded";
 	const limit = iterationLimitInfo(state, config);
+	const activeBudget = limit.maxIterations != null && Number(limit.remainingIterations) > 0 && mode !== "manual";
 	const commands = continuationCommands(workDir);
 	const memory = buildExperimentMemory({
 		runs: state.current,
@@ -3035,17 +3222,24 @@ function loopContinuation(workDir, state, config = {}, stage = "state", options 
 		commands,
 		stopConditions
 	};
-	if (stage === "needs-log-decision") return {
-		mode,
-		stage,
-		shouldContinue: false,
-		shouldAskUser: false,
-		requiresLogDecision: true,
-		forbidFinalAnswer: mode === "owner-autonomous",
-		nextAction: options.requiredStatus ? `Log this packet as ${options.requiredStatus} with rollback ASI, then continue to the next hypothesis.` : "Log this packet as keep or discard with ASI, then continue to the next hypothesis.",
-		commands,
-		stopConditions
-	};
+	if (stage === "needs-log-decision") {
+		const logThenContinue = options.requiredStatus ? `Log this packet as ${options.requiredStatus} with rollback ASI, then continue to the next hypothesis.` : "Log this packet as keep or discard with ASI, then continue to the next hypothesis.";
+		return {
+			mode,
+			stage,
+			activeBudget,
+			shouldContinue: activeBudget,
+			shouldAskUser: false,
+			requiresLogDecision: true,
+			forbidFinalAnswer: mode === "owner-autonomous" || activeBudget,
+			finalAnswerPolicy: mode === "owner-autonomous" || activeBudget ? "Do not send a final answer after this packet; log it, read continuation, and keep the budget moving until a stop condition appears." : "Report the pending log decision if the user only asked for state.",
+			logThenContinue: true,
+			afterLogAction: "After the log command succeeds, immediately read the returned continuation and run the next packet when the user asked for an ongoing budget.",
+			nextAction: logThenContinue,
+			commands,
+			stopConditions
+		};
+	}
 	if (limit.limitReached) return {
 		mode,
 		stage,
@@ -3070,12 +3264,14 @@ function loopContinuation(workDir, state, config = {}, stage = "state", options 
 	return {
 		mode,
 		stage,
+		activeBudget,
 		plateau: memory.plateau,
 		lanePortfolio: memory.lanePortfolio,
 		shouldContinue: true,
 		shouldAskUser: false,
-		forbidFinalAnswer: ownerAutonomous,
-		nextAction: ownerAutonomous ? memory.plateau?.detected ? `Keep the floor: run the ${topLane?.label || "distant scout"} lane next because the current search is plateauing.` : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to invoke another subskill." : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
+		forbidFinalAnswer: ownerAutonomous || activeBudget,
+		finalAnswerPolicy: ownerAutonomous || activeBudget ? "Do not stop at a status report while iterations remain; continue running packets until the limit, blocker, exhaustion, or user interruption." : "A status report is acceptable when the user asked only to inspect state.",
+		nextAction: ownerAutonomous ? memory.plateau?.detected ? `Keep the floor: run the ${topLane?.label || "distant scout"} lane next because the current search is plateauing.` : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to invoke another subskill." : activeBudget ? memory.plateau?.detected ? `Keep going: run the ${topLane?.label || "distant scout"} lane next, log it, and continue because the active budget still has ${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"} left.` : `Keep going: choose the next hypothesis, run next --compact, log the packet, and continue because the active budget still has ${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"} left.` : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
 		commands,
 		stopConditions
 	};
@@ -3085,7 +3281,8 @@ function continuationCommands(workDir) {
 	const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
 	return {
 		state: `node ${script} state --cwd ${cwd}`,
-		next: `node ${script} next --cwd ${cwd}`,
+		next: `node ${script} next --cwd ${cwd} --compact`,
+		nextFull: `node ${script} next --cwd ${cwd}`,
 		keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
 		discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
 		liveDashboard: `node ${script} serve --cwd ${cwd}`,
@@ -3093,8 +3290,11 @@ function continuationCommands(workDir) {
 		extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
 		onboardingPacket: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
 		recommendNext: `node ${script} recommend-next --cwd ${cwd} --compact`,
+		benchmarkInspect: `node ${script} benchmark-inspect --cwd ${cwd}`,
 		benchmarkLint: `node ${script} benchmark-lint --cwd ${cwd}`,
-		newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`
+		checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
+		newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
+		promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`
 	};
 }
 function currentQualityGapSlug(workDir) {
@@ -3111,7 +3311,10 @@ function currentQualityGapSlug(workDir) {
 }
 async function doctorSession(args) {
 	const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-	const state = await publicState(args);
+	const state = await publicState({
+		...args,
+		compact: false
+	});
 	const issues = [];
 	const warnings = [];
 	const warningDetails = [];
@@ -3240,10 +3443,11 @@ async function benchmarkLint(args) {
 	const metricName = validateMetricName(args.metric_name || args.metricName || state.config.metricName || "metric");
 	let sample = args.sample || "";
 	let commandResult = null;
+	let timeoutSeconds = numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
 	if (!sample) {
 		const command = args.command || await defaultBenchmarkCommand(workDir);
 		if (command) {
-			commandResult = await runShell(command, workDir, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60), { retainMetricNames: [metricName] });
+			commandResult = await runShell(command, workDir, timeoutSeconds, { retainMetricNames: [metricName] });
 			sample = metricParseSource(commandResult);
 		}
 	}
@@ -3254,7 +3458,10 @@ async function benchmarkLint(args) {
 	if (!sample) issues.push("No sample output, command, or default autoresearch script was available.");
 	else if (!Object.keys(parsedMetrics).length) issues.push("No METRIC name=value lines were parsed.");
 	else if (!emitsPrimary) issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
-	if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) issues.push(`Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`);
+	if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) {
+		issues.push(`Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`);
+		if (commandResult.timedOut && !Object.keys(parsedMetrics).length) warnings.push("Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.");
+	}
 	if (Object.keys(parsedMetrics).length > 20) warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
 	return {
 		ok: issues.length === 0,
@@ -3265,9 +3472,153 @@ async function benchmarkLint(args) {
 		emitsPrimary,
 		issues,
 		warnings,
+		timeoutSeconds: commandResult ? timeoutSeconds : null,
+		contractCheckHint: "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
 		example: `METRIC ${metricName}=1.23`,
-		nextAction: issues.length ? `Update the benchmark so it prints METRIC ${metricName}=<number>.` : "Benchmark output satisfies the metric contract."
+		nextAction: issues.length ? commandResult?.timedOut ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.` : `Update the benchmark so it prints METRIC ${metricName}=<number>.` : "Benchmark output satisfies the metric contract."
 	};
+}
+async function benchmarkInspect(args) {
+	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+	const state = currentState(workDir);
+	const command = String(args.command || "").trim();
+	const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 5));
+	const warnings = benchmarkInspectWarnings(command);
+	if (!command) return {
+		ok: true,
+		workDir,
+		ranCommand: false,
+		command: "",
+		timeoutSeconds: null,
+		parsedMetrics: {},
+		outputPreview: "",
+		warnings,
+		hints: benchmarkInspectHints(state.config.metricName || ""),
+		nextAction: "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet."
+	};
+	const result = await runShell(command, workDir, timeoutSeconds, { retainMetricNames: [state.config.metricName].filter(Boolean) });
+	const output = metricParseSource(result) || result.fullOutput || result.output || "";
+	const parsedMetrics = parseMetricLines(output);
+	if (result.timedOut && Object.keys(parsedMetrics).length === 0) warnings.push("The inspect command timed out before any METRIC output. Use a benchmark-specific list/dry-run/artifact mode before running the full packet.");
+	if (result.exitCode !== 0 && !result.timedOut) warnings.push(`The inspect command exited ${result.exitCode}; verify the command is a bounded probe.`);
+	return {
+		ok: !result.timedOut && result.exitCode === 0,
+		workDir,
+		ranCommand: true,
+		command: result.command,
+		timeoutSeconds,
+		exitCode: result.exitCode,
+		timedOut: result.timedOut,
+		parsedMetrics,
+		outputPreview: headText(output || result.fullOutput || result.output || "", 30, 12e3),
+		outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+		warnings,
+		hints: benchmarkInspectHints(state.config.metricName || ""),
+		nextAction: result.timedOut || result.exitCode !== 0 ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract." : "If this is bounded and representative, run benchmark-lint or the first compact next packet."
+	};
+}
+function benchmarkInspectWarnings(command) {
+	const warnings = [];
+	if (!command) return warnings;
+	if (/CODESTORY_PIPELINE_LIST_CASES\s*=\s*1/i.test(command)) warnings.push("This looks like the wrong CodeStory list flag seen in onboarding; use CODESTORY_EMBED_RESEARCH_LIST=1 for the current pipeline list mode.");
+	if (!/(LIST|DRY|INSPECT|SAMPLE|ARTIFACT|LIMIT|COUNT|HELP)/i.test(command)) warnings.push("Command does not advertise an obvious list/dry-run/sample bound. Confirm it will not start the full benchmark.");
+	return warnings;
+}
+function benchmarkInspectHints(metricName = "") {
+	return [
+		"Prefer a benchmark-native list, dry-run, sample, artifact, or small-count mode before a full packet.",
+		"Use benchmark-lint --sample for pure METRIC parser checks when the raw command is expensive.",
+		metricName ? `The primary contract remains METRIC ${metricName}=<number>.` : "After setup, the primary contract is METRIC <name>=<number>.",
+		"For the CodeStory parse/index/embed pipeline, the known case-list switch is CODESTORY_EMBED_RESEARCH_LIST=1."
+	];
+}
+async function checksInspect(args) {
+	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+	const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
+	const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
+	if (!command) return {
+		ok: true,
+		workDir,
+		ranCommand: false,
+		command: "",
+		timeoutSeconds: null,
+		exitCode: null,
+		timedOut: false,
+		failedTests: [],
+		warnings: ["No checks command was provided."],
+		hints: checksInspectHints(),
+		outputPreview: "",
+		nextAction: "Run checks-inspect with the exact correctness command before treating a failed suite as evidence."
+	};
+	const result = await runShell(command, workDir, timeoutSeconds);
+	const output = result.fullOutput || result.output || "";
+	const failedTests = extractFailedTests(output);
+	const warnings = checksInspectWarnings(command, output, result, failedTests);
+	return {
+		ok: !result.timedOut && result.exitCode === 0,
+		workDir,
+		ranCommand: true,
+		command: result.command,
+		timeoutSeconds,
+		exitCode: result.exitCode,
+		timedOut: result.timedOut,
+		failedTests,
+		warnings,
+		hints: checksInspectHints(),
+		outputPreview: headText(output, 50, 16e3),
+		outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+		nextAction: result.timedOut || result.exitCode !== 0 ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed." : "Checks command completed cleanly; include it as verification evidence before logging or finalizing."
+	};
+}
+function checksInspectWarnings(command, output, result, failedTests) {
+	const warnings = [];
+	if (result.timedOut) warnings.push("The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.");
+	if (cargoUnexpectedArgument(output)) warnings.push("Cargo rejected the check command shape. cargo test accepts one name filter per invocation; run separate exact filters or a package target such as --lib.");
+	if (/cargo(?:\.exe)?\s+test/i.test(command) && looksLikeMultipleCargoFilters(command)) warnings.push("This cargo test command appears to include multiple name filters before --; prefer separate exact test invocations or a broader target filter.");
+	if (failedTests.length > 1) warnings.push(`${failedTests.length} tests failed. Classify touched-path failures separately from pre-existing or broad-suite failures before deciding keep/discard/checks_failed.`);
+	else if (failedTests.length === 1) warnings.push(`One test failed: ${failedTests[0]}. Confirm whether it is caused by the current packet before logging checks_failed.`);
+	if (result.exitCode !== 0 && !result.timedOut && failedTests.length === 0) warnings.push(`The checks command exited ${result.exitCode} without a parsed failed-test list; inspect the output for setup, command, or environment failure.`);
+	return warnings;
+}
+function cargoUnexpectedArgument(output = "") {
+	return /unexpected argument ['"`][^'"`]+['"`] found/i.test(output) && /Usage:\s+cargo(?:\.exe)? test/i.test(output);
+}
+function looksLikeMultipleCargoFilters(command = "") {
+	const tokens = String(command).split(/\s+--\s+/)[0].match(/"[^"]*"|'[^']*'|\S+/g) || [];
+	const testIndex = tokens.findIndex((token, index) => token.replace(/['"]/g, "") === "test" && index > 0);
+	if (testIndex < 0) return false;
+	const filters = [];
+	for (let index = testIndex + 1; index < tokens.length; index += 1) {
+		const token = tokens[index].replace(/^['"]|['"]$/g, "");
+		if (!token || token.startsWith("-")) {
+			if (token === "-p" || token === "--package" || token === "--manifest-path") index += 1;
+			continue;
+		}
+		filters.push(token);
+	}
+	return filters.length > 1;
+}
+function extractFailedTests(output = "") {
+	const tests = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const pattern of [/test\s+([^\s]+)\s+\.\.\.\s+FAILED/g, /^\s*([A-Za-z0-9_:.-]+)\s+---\s+FAILED/gm]) {
+		let match;
+		while (match = pattern.exec(output)) {
+			const name = match[1];
+			if (!seen.has(name)) {
+				seen.add(name);
+				tests.push(name);
+			}
+		}
+	}
+	return tests.slice(0, 20);
+}
+function checksInspectHints() {
+	return [
+		"For Cargo, do not pass multiple test name filters in one cargo test invocation.",
+		"Use separate exact filters for touched tests, or a broader package target when the goal is suite health.",
+		"If a broad suite fails, record which failures are touched-path, pre-existing, or environment-related before logging checks_failed."
+	];
 }
 async function newSegment(args) {
 	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
@@ -3294,6 +3645,47 @@ async function newSegment(args) {
 		nextSegment: state.segment + 1,
 		entry,
 		nextAction: dryRun ? "Review the segment entry, then rerun with --yes to append it." : "Run and log a fresh baseline or next packet for the new segment."
+	};
+}
+async function promoteGate(args) {
+	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+	const state = currentState(workDir);
+	const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
+	const confirmed = boolOption(args.confirm ?? args.yes, false);
+	const reason = String(args.reason || "").trim();
+	if (!reason) throw new Error("promote-gate requires --reason <text>.");
+	if (!dryRun && !confirmed) throw new Error("promote-gate requires --dry-run or --yes because it appends a new measurement segment.");
+	const queryCount = positiveIntegerOption(args.query_count ?? args.queryCount, null, "queryCount");
+	const entry = {
+		type: "config",
+		name: state.config.name || "Autoresearch",
+		metricName: state.config.metricName || "metric",
+		metricUnit: state.config.metricUnit ?? "",
+		bestDirection: state.config.bestDirection === "higher" ? "higher" : "lower",
+		segmentReason: `Promote measurement gate: ${reason}`,
+		measurementGate: {
+			name: String(args.gate_name || args.gateName || "promotion gate").trim(),
+			reason,
+			queryCount,
+			benchmarkCommand: args.benchmark_command || args.benchmarkCommand || "",
+			checksCommand: args.checks_command || args.checksCommand || "",
+			notes: listOption(args.notes)
+		},
+		timestamp: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	if (!dryRun) appendJsonl(workDir, entry);
+	return {
+		ok: true,
+		workDir,
+		dryRun,
+		previousSegment: state.segment,
+		nextSegment: state.segment + 1,
+		entry,
+		commands: {
+			inspect: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-inspect --cwd ${shellQuote(workDir)}`,
+			next: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`
+		},
+		nextAction: dryRun ? "Review the promoted measurement gate, then rerun with --yes to append the new segment." : "Run a fresh compact packet under the promoted measurement gate and log the decision with ASI."
 	};
 }
 async function nextExperiment(args) {
@@ -3371,11 +3763,72 @@ async function nextExperiment(args) {
 		continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", { requiredStatus: run.logHint.status })
 	};
 	await writeLastRunPacket(run.workDir, packet, lastRunFile);
-	return packet;
+	return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+function compactNextExperimentPacket(packet) {
+	const run = packet.run || {};
+	const decision = packet.decision || {};
+	const continuation = packet.continuation || {};
+	const metricName = run.metricName || packet.history?.config?.metricName || "metric";
+	const metricUnit = run.metricUnit || packet.history?.config?.metricUnit || "";
+	const metricText = decision.metric == null ? "no primary metric" : `${metricName}=${decision.metric}${metricUnit}`;
+	const suggested = decision.safeSuggestedStatus || decision.suggestedStatus || "review";
+	return {
+		ok: packet.ok,
+		workDir: packet.workDir,
+		lastRunPath: packet.lastRunPath,
+		history: {
+			segment: packet.history?.segment,
+			currentRuns: packet.history?.currentRuns,
+			totalRuns: packet.history?.totalRuns,
+			nextRun: packet.history?.nextRun
+		},
+		run: {
+			ok: run.ok,
+			command: run.command,
+			metricName,
+			parsedPrimary: run.parsedPrimary,
+			parsedMetrics: run.parsedMetrics,
+			checks: run.checks ? {
+				ok: run.checks.ok,
+				policy: run.checks.policy,
+				exitCode: run.checks.exitCode,
+				timedOut: run.checks.timedOut
+			} : null,
+			progress: run.progress ? {
+				mode: run.progress.mode,
+				status: run.progress.status,
+				durationMs: run.progress.durationMs
+			} : null,
+			outputTruncated: run.outputTruncated === true,
+			metricsTruncated: run.metricsTruncated === true
+		},
+		decision: {
+			metric: decision.metric,
+			metrics: decision.metrics,
+			allowedStatuses: decision.allowedStatuses || [],
+			suggestedStatus: suggested,
+			statusGuidance: decision.statusGuidance || "",
+			asiTemplate: decision.asiTemplate || {},
+			diversityGuidance: decision.diversityGuidance || null,
+			plateau: decision.plateau || null
+		},
+		report: {
+			tried: `Ran packet #${packet.history?.nextRun || "?"} with ${metricText}.`,
+			means: decision.statusGuidance || (run.ok ? "Benchmark produced a decision packet." : "Benchmark did not complete cleanly."),
+			decision: `Log as ${suggested} unless review evidence changes the call.`,
+			next: continuation.nextAction || packet.nextAction || "Log the packet, then read continuation."
+		},
+		nextAction: packet.nextAction,
+		continuation,
+		fullPacket: "The complete doctor/run output is preserved in lastRunPath for audit and log --from-last."
+	};
 }
 const { callTool, toolSchemas, validateToolArguments } = createMcpInterface({
 	boolOption,
+	benchmarkInspect,
 	benchmarkLint,
+	checksInspect,
 	clearSession,
 	configureSession,
 	doctorHooks,
@@ -3393,6 +3846,7 @@ const { callTool, toolSchemas, validateToolArguments } = createMcpInterface({
 	onboardingPacket,
 	parseJsonOption,
 	parseJsonFileOption,
+	promoteGate,
 	promptPlan,
 	publicState,
 	recommendNext,
@@ -3481,7 +3935,7 @@ async function handleMcpMessage(message) {
 				capabilities: { tools: {} },
 				serverInfo: {
 					name: "codex-autoresearch",
-					version: "1.0.1"
+					version: "1.1.0"
 				}
 			}
 		});
@@ -3661,8 +4115,11 @@ async function mcpSmoke() {
 		"onboarding_packet",
 		"recommend_next",
 		"read_state",
+		"benchmark_inspect",
 		"benchmark_lint",
+		"checks_inspect",
 		"new_segment",
+		"promote_gate",
 		"doctor_session",
 		"serve_dashboard",
 		"clear_session"
@@ -3695,7 +4152,9 @@ async function main() {
 		return;
 	}
 	const outcome = await runCliCommand(command, args, createCliCommandHandlers({
+		benchmarkInspect,
 		benchmarkLint,
+		checksInspect,
 		buildDriftReport,
 		buildDashboardViewModel,
 		clearSession,
@@ -3721,6 +4180,7 @@ async function main() {
 		parseJsonOption,
 		pluginRoot: PLUGIN_ROOT,
 		pluginVersion: PLUGIN_VERSION,
+		promoteGate,
 		promptPlan,
 		publicState,
 		recommendNext,

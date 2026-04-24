@@ -21,7 +21,7 @@ export function dashboardMode(meta: DashboardMeta = {}): DashboardMode {
     return {
       liveActions: true,
       title: guidance.title || "Live dashboard",
-      detail: guidance.detail || "Live refresh and guarded local actions are available.",
+      detail: guidance.detail || "Live refresh is available; actions stay in CLI or MCP.",
       refreshDone: "Live data refreshed",
       actionNote: "Guarded actions execute through the local autoresearch server.",
     };

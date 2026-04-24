@@ -38,8 +38,11 @@ const TOOL_REGISTRY = [
   { name: "gap_candidates", cliCommand: "gap-candidates", actionPolicy: "preview" },
   { name: "finalize_preview", cliCommand: "finalize-preview", actionPolicy: "read" },
   { name: "integrations", cliCommand: "integrations", actionPolicy: "read" },
+  { name: "benchmark_inspect", cliCommand: "benchmark-inspect", actionPolicy: "read" },
+  { name: "checks_inspect", cliCommand: "checks-inspect", actionPolicy: "read" },
   { name: "benchmark_lint", cliCommand: "benchmark-lint", actionPolicy: "read" },
   { name: "new_segment", cliCommand: "new-segment", actionPolicy: "state_mutation" },
+  { name: "promote_gate", cliCommand: "promote-gate", actionPolicy: "state_mutation" },
   { name: "export_dashboard", cliCommand: "export", actionPolicy: "artifact_write" },
   { name: "serve_dashboard", cliCommand: "serve", actionPolicy: "process_start" },
   { name: "doctor_session", cliCommand: "doctor", actionPolicy: "read" },
@@ -66,6 +69,9 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
     return "state_mutation";
   }
   if (name === "doctor_session" && args.check_benchmark) return "process_start";
+  if (name === "benchmark_inspect" && args.command) return "process_start";
+  if (name === "checks_inspect" && (args.command || args.checks_command || args.checksCommand))
+    return "process_start";
   if (name === "benchmark_lint" && args.command) return "process_start";
   return base;
 }

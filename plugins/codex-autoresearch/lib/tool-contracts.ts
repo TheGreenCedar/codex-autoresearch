@@ -139,6 +139,15 @@ const CONTRACTS = {
     safety: "May write synced catalog state for sync-recipes.",
     outputSchema: basicOutputSchema(["ok"]),
   },
+  benchmark_inspect: {
+    purpose: "Inspect a bounded benchmark probe before a full packet.",
+    whenToUse:
+      "Use before benchmark_lint or next_experiment when a list/dry-run/artifact command might prevent an accidental full run.",
+    contrast: "Use benchmark_lint to validate METRIC parsing after the probe is known bounded.",
+    safety:
+      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "warnings", "hints", "outputPreview"]),
+  },
   benchmark_lint: {
     purpose: "Validate benchmark METRIC output without starting a loop.",
     whenToUse: "Use before setup, doctor, or next when the benchmark contract is uncertain.",
@@ -147,10 +156,26 @@ const CONTRACTS = {
       "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
     outputSchema: basicOutputSchema(["ok", "workDir", "issues", "parsedMetrics"]),
   },
+  checks_inspect: {
+    purpose: "Classify correctness-check command failures before logging a decision.",
+    whenToUse:
+      "Use when a checks command fails, looks broad, or may be malformed before treating it as experiment evidence.",
+    contrast: "Use benchmark_inspect for metric-producing commands.",
+    safety:
+      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "failedTests", "warnings", "hints"]),
+  },
   new_segment: {
     purpose: "Start a fresh session segment while preserving old ledger history.",
     whenToUse: "Use when a session is maxed, stale, or intentionally changing phase.",
     contrast: "Use clear_session only when deleting artifacts is intended.",
+    safety: "Dry-run is read-only; confirmed run appends a config entry.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "entry"]),
+  },
+  promote_gate: {
+    purpose: "Preview or append a promoted measurement gate as a fresh segment.",
+    whenToUse: "Use when moving from exploration to a stronger measurement contract.",
+    contrast: "Use new_segment for a generic phase reset without measurement-gate metadata.",
     safety: "Dry-run is read-only; confirmed run appends a config entry.",
     outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "entry"]),
   },

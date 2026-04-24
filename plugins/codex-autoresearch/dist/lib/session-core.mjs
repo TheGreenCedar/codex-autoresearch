@@ -2,7 +2,6 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
-import os from "node:os";
 //#region lib/session-core.ts
 const STATUS_VALUES = new Set([
 	"keep",
@@ -69,7 +68,7 @@ function jsonlPath(workDir) {
 	return path.join(workDir, "autoresearch.jsonl");
 }
 function appendJsonl(workDir, entry) {
-	fs.appendFileSync(jsonlPath(workDir), JSON.stringify(entry) + os.EOL);
+	fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
 }
 function readJsonl(workDir) {
 	const filePath = jsonlPath(workDir);

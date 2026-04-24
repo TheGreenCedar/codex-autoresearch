@@ -267,7 +267,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.0.1");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.0");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
@@ -310,6 +310,18 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(lintPayload.ok, true);
     assert.equal(lintPayload.parsedMetrics.score, 4.2);
 
+    const inspect = await runCli(["benchmark-inspect", "--cwd", dir]);
+    assert.equal(inspect.code, 0, inspect.stderr);
+    const inspectPayload = JSON.parse(inspect.stdout);
+    assert.equal(inspectPayload.ranCommand, false);
+    assert.match(inspectPayload.hints.join("\n"), /METRIC score=<number>/);
+
+    const checksInspect = await runCli(["checks-inspect", "--cwd", dir]);
+    assert.equal(checksInspect.code, 0, checksInspect.stderr);
+    const checksInspectPayload = JSON.parse(checksInspect.stdout);
+    assert.equal(checksInspectPayload.ranCommand, false);
+    assert.match(checksInspectPayload.hints.join("\n"), /Cargo/);
+
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
@@ -342,6 +354,28 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
     assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
 
+    await mkdir(path.join(dir, "scripts"), { recursive: true });
+    await writeFile(
+      path.join(dir, "scripts", "autoresearch-indexer-embedder-pipeline.mjs"),
+      "console.log('METRIC pipeline_score=123')\nconsole.log('METRIC quality_component=1')\n",
+    );
+    const pipelinePromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Start a new Codex Autoresearch session to improve the performance of the parse + index + embed pipeline.",
+    ]);
+    assert.equal(pipelinePromptPlan.code, 0, pipelinePromptPlan.stderr);
+    const pipelinePayload = JSON.parse(pipelinePromptPlan.stdout);
+    assert.equal(pipelinePayload.intent.metric.name, "pipeline_score");
+    assert.equal(pipelinePayload.intent.metric.direction, "higher");
+    assert.match(
+      pipelinePayload.intent.setupDefaults.benchmarkCommand,
+      /scripts\/autoresearch-indexer-embedder-pipeline\.mjs/,
+    );
+    assert.match(pipelinePayload.intent.setupDefaults.constraints.join("\n"), /primary score/);
+
     const broadPromptPlan = await runCli([
       "prompt-plan",
       "--cwd",
@@ -369,6 +403,20 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     const segmentPayload = JSON.parse(segment.stdout);
     assert.equal(segmentPayload.nextSegment, 1);
 
+    const promote = await runCli([
+      "promote-gate",
+      "--cwd",
+      dir,
+      "--reason",
+      "larger sample",
+      "--query-count",
+      "25",
+      "--dry-run",
+    ]);
+    assert.equal(promote.code, 0, promote.stderr);
+    const promotePayload = JSON.parse(promote.stdout);
+    assert.equal(promotePayload.entry.measurementGate.queryCount, 25);
+
     const after = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(after.code, 0, after.stderr);
     const afterPayload = JSON.parse(after.stdout);
@@ -389,7 +437,7 @@ test("MCP setup_session can use recipe defaults without explicit name and metric
   });
 });
 
-test("MCP exposes onboarding, prompt planning, benchmark lint, recommend-next, and new-segment tools", async () => {
+test("MCP exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
   await withTempDir("mcp-delight-tools", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "mcp delight", "--metric-name", "score"]);
     await runCli([
@@ -431,6 +479,22 @@ test("MCP exposes onboarding, prompt planning, benchmark lint, recommend-next, a
     assert.equal(lint.result?.isError, undefined, lint.result?.content?.[0]?.text);
     assert.match(lint.result.content[0].text, /"emitsPrimary": true/);
 
+    const inspect = await callMcpTool("benchmark_inspect", {
+      working_dir: dir,
+    });
+    assert.equal(inspect.result?.isError, undefined, inspect.result?.content?.[0]?.text);
+    assert.match(inspect.result.content[0].text, /benchmark-native list/);
+
+    const checksInspect = await callMcpTool("checks_inspect", {
+      working_dir: dir,
+    });
+    assert.equal(
+      checksInspect.result?.isError,
+      undefined,
+      checksInspect.result?.content?.[0]?.text,
+    );
+    assert.match(checksInspect.result.content[0].text, /correctness command/);
+
     const next = await callMcpTool("recommend_next", { working_dir: dir, compact: true });
     assert.equal(next.result?.isError, undefined, next.result?.content?.[0]?.text);
     assert.match(next.result.content[0].text, /"whySafe"/);
@@ -438,6 +502,15 @@ test("MCP exposes onboarding, prompt planning, benchmark lint, recommend-next, a
     const dryRun = await callMcpTool("new_segment", { working_dir: dir, dry_run: true });
     assert.equal(dryRun.result?.isError, undefined, dryRun.result?.content?.[0]?.text);
     assert.match(dryRun.result.content[0].text, /"dryRun": true/);
+
+    const promote = await callMcpTool("promote_gate", {
+      working_dir: dir,
+      reason: "larger gate",
+      query_count: 20,
+      dry_run: true,
+    });
+    assert.equal(promote.result?.isError, undefined, promote.result?.content?.[0]?.text);
+    assert.match(promote.result.content[0].text, /"queryCount": 20/);
   });
 });
 
@@ -488,6 +561,8 @@ test("MCP serve_dashboard returns a live dashboard URL", async () => {
     assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
     const payload = JSON.parse(response.result.content[0].text);
     assert.equal(payload.modeGuidance.deliveryMode, "live-server");
+    assert.equal(payload.verified, true);
+    assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
     assert.match(payload.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
   });
 });
@@ -958,12 +1033,15 @@ test("live server exposes health and view-model endpoints", async () => {
         () => stderr,
       );
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
+      assert.equal(payload.verified, true);
+      assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
       assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());
       assert.equal(health.ok, true);
       const html = await fetch(payload.url).then((res) => res.text());
       assert.match(html, /"deliveryMode":"live-server"/);
-      assert.match(html, /Live actions available/);
+      assert.doesNotMatch(html, /Live actions available/);
+      assert.doesNotMatch(html, /live-actions-panel/);
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
     } finally {

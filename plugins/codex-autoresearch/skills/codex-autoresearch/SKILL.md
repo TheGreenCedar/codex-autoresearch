@@ -21,6 +21,7 @@ AX, the AI experience:
 
 - Start by getting machine-readable context: MCP `onboarding_packet`, then `recommend_next`, `read_state`, `guided_setup`, or `doctor_session`.
 - When the user gives a broad natural-language goal without a benchmark contract, call MCP `prompt_plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
+- If the target repo already has `scripts/autoresearch-*` benchmark scripts, prefer those as the starting benchmark surface. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
 - Prefer MCP tools when available. Use CLI helpers only as the deterministic fallback.
 - Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, ASI, continuation data, and the ledger.
@@ -30,8 +31,8 @@ UX, the user experience:
 
 - Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
-- At session start and resume, start or reuse the live dashboard and directly provide the live dashboard URL, normally `http://127.0.0.1:<port>/`.
-- Report evidence instead of helper mechanics: current state, best metric, latest packet, decision, next action, blockers, dashboard URL, and verification.
+- At session start and resume, start or reuse the live dashboard, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
+- Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/crash/checks decision, the next move, blockers, dashboard URL, and verification.
 
 ## Start Or Resume
 
@@ -41,10 +42,11 @@ UX, the user experience:
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Prefer MCP `onboarding_packet` for a compact handoff, then `recommend_next` for one safe action.
 6. Use MCP `prompt_plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer MCP `setup_plan` for read-only setup guidance. Use `setup_session` only when essentials are known and files should be created.
-7. Use `benchmark_lint`, `doctor_session`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
-8. If benchmark output is uncertain, use `benchmark_lint` or `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
+7. Use `benchmark_inspect`, `benchmark_lint`, `checks_inspect`, `doctor_session`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
+8. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark_lint` or `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
 9. Start the live dashboard with MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
 10. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
+11. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
 
 Explicit benchmark commands are assumed to print `METRIC name=value` lines. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 
@@ -55,6 +57,8 @@ node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<user request>"
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs setup-plan --cwd <project>
+node scripts/autoresearch.mjs benchmark-inspect --cwd <project>
+node scripts/autoresearch.mjs checks-inspect --cwd <project> --command "<checks command>"
 node scripts/autoresearch.mjs guide --cwd <project>
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 node scripts/autoresearch.mjs serve --cwd <project>
@@ -71,13 +75,15 @@ After `next_experiment`, log the packet. After `log_experiment`, read the return
 - `keep` and ordinary `discard` require a finite primary metric.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
-- If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer.
+- If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer. A finite active budget counts: do not stop at a report while iterations remain and there is no blocker.
+- Prefer `next --compact` or MCP `next_experiment` with `compact=true` for live-loop reporting; the full decision packet stays in `lastRunPath` for `log --from-last` and audit.
+- If correctness checks fail, run `checks_inspect` or `checks-inspect` before deciding. Fix malformed command shapes first, then separate touched-path failures from broad-suite, pre-existing, or environment failures.
 - Stop only when the user interrupts, the limit is reached, benchmark/checks are blocked, cleanup would be unsafe, a fresh segment is needed, or the goal is genuinely exhausted.
 
 CLI fallback:
 
 ```bash
-node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs next --cwd <project> --compact
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
@@ -88,6 +94,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next_experiment` before logging.
 - If doctor reports benchmark drift, treat the old best as historical evidence, not current runtime proof.
 - If the session is maxed, stale, or intentionally changing phase, use `new_segment` or `new-segment --cwd <project> --dry-run` first; confirmed segment creation appends to `autoresearch.jsonl`.
+- If the benchmark contract is being promoted, use `promote_gate` or `promote-gate --cwd <project> --reason "<why>" --dry-run` so the new segment records the gate, sample size, and measurement reason.
 - If `commitPaths` are missing or stale, repair them before relying on keep commits.
 
 Git safety:
@@ -103,19 +110,20 @@ Prefer the served dashboard:
 
 - Use MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`.
 - Share the served `http://127.0.0.1:<port>/` URL by default.
-- Restart `serve_dashboard` if live refresh failed, the old process ended, or the user is looking at a `file://` export but needs actions.
+- Restart `serve_dashboard` if live refresh failed, the old process ended, or the user is looking at a `file://` export but needs fresh data.
 - Use `export_dashboard` or `export` only for offline snapshots.
-- Treat static HTML as read-only. It should not expose inert live controls.
+- Static exports are read-only; use the served dashboard when packet freshness matters.
+- Treat the dashboard as a visual aid, not a command center. It should not expose inert live controls, mutation buttons, or action receipts.
 
 Read dashboard evidence in this order:
 
-1. Trust blockers: stale packets, dirty Git, missing paths, runtime drift, corrupt ledger, static export mode.
-2. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
-3. Metric trend: baseline, best, latest, confidence, weighted formula when present.
-4. Mission control: setup, gap review, packet readiness, log decision, finalization.
-5. Strategy memory: plateau, lanes, novelty, repeated families.
+1. Metric trend: baseline, best, latest, confidence, weighted formula when present.
+2. Codex brief and session memory: what happened, what matters, plateau, lanes, novelty, repeated families.
+3. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
+4. Ledger and ASI: what was kept, rejected, crashed, or blocked by checks.
+5. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
 
-Safe live actions stay bounded to doctor, setup-plan, onboarding packet, recommend-next, benchmark-lint, recipes, gap-candidates preview, finalize-preview, export, new-segment dry-run, and confirmed log decisions. These guarded local actions avoid branch creation, broad staging, arbitrary commands, custom finalizer args, and finalizer mutation inside the dashboard.
+Use CLI or MCP for actions and logging. The dashboard should support judgment; it should not become the workflow driver.
 
 ## Deep Research Loops
 
@@ -149,7 +157,7 @@ Runway order: preview, approve, create review branches, verify, merge into trunk
 
 ## Integrations
 
-Use `integrations list`, `integrations doctor`, or `integrations sync-recipes` only when recipe catalogs or external helper surfaces are actually part of the loop. Treat integrations as setup support, not a replacement for benchmark evidence, ASI, dashboard trust blockers, or confirmed log decisions.
+Use `integrations list`, `integrations doctor`, or `integrations sync-recipes` only when recipe catalogs or external helper surfaces are actually part of the loop. Treat integrations as setup support, not a replacement for benchmark evidence, ASI, runtime/blocker checks, or confirmed log decisions.
 
 ## Hooks
 
@@ -175,5 +183,6 @@ npm test
 node scripts/autoresearch.mjs mcp-smoke
 node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
 node scripts/autoresearch.mjs benchmark-lint --cwd .
+node scripts/autoresearch.mjs checks-inspect --cwd . --command "npm test"
 git diff --check
 ```

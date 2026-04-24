@@ -1,88 +1,10 @@
-import { actionLabel, fallbackAiSummary, formatDisplayTime } from "../model";
+import { fallbackAiSummary } from "../model";
 import type {
   ChecklistItemModel,
-  DashboardMeta,
-  DashboardMode,
   DashboardViewModel,
   FinalizePreviewModel,
   SessionSegment,
 } from "../types";
-
-export function TrustStrip({
-  mode,
-  meta,
-  viewModel,
-}: {
-  mode: DashboardMode;
-  meta: DashboardMeta;
-  viewModel: DashboardViewModel;
-}) {
-  const showcase = Boolean(mode.showcase || meta.showcaseMode || meta.settings?.showcaseMode);
-  const trust = viewModel.trustState || viewModel.trust || meta.trustState || {};
-  const generated = trust.generatedAt || meta.generatedAt || "";
-  const modeLabel = showcase
-    ? "Live runboard"
-    : trust.modeLabel || trustModeLabel(trust.mode, mode);
-  const detail = showcase
-    ? "100 embedded packets."
-    : trust.detail ||
-      trust.summary ||
-      (mode.liveActions
-        ? mode.detail
-        : `${mode.detail} Snapshot mode is read-only; live controls are intentionally absent.`);
-  const actionState = showcase
-    ? "Guarded local actions enabled."
-    : trust.actionState ||
-      trust.actions ||
-      (mode.liveActions
-        ? "Guarded local actions are enabled."
-        : "No usable live mutation controls are exposed.");
-  const evidenceState =
-    trust.evidenceState ||
-    trust.evidence ||
-    (viewModel.summary?.runs
-      ? `${viewModel.summary.runs} run${viewModel.summary.runs === 1 ? "" : "s"} embedded.`
-      : "No run evidence embedded yet.");
-  return (
-    <section
-      className={`trust-strip ${showcase ? "trust-showcase" : mode.liveActions ? "trust-live" : "trust-static"}`}
-      id="trust-strip"
-      aria-label="Dashboard trust state"
-      tabIndex={-1}
-    >
-      <div>
-        <p className="eyebrow">Trust state</p>
-        <h2 id="trust-title">{modeLabel}</h2>
-        <p id="trust-detail">{detail}</p>
-      </div>
-      <div className="trust-cells" id="trust-cells">
-        <TrustCell label="Actions" value={actionState} />
-        <TrustCell label="Evidence" value={evidenceState} />
-        <TrustCell
-          label="Generated"
-          value={generated ? formatDisplayTime(generated) : "embedded snapshot"}
-        />
-      </div>
-    </section>
-  );
-}
-
-function trustModeLabel(value: string | undefined, mode: DashboardMode) {
-  const key = String(value || "").toLowerCase();
-  if (key === "static-export" || key === "static" || key === "snapshot")
-    return "Static read-only export";
-  if (key === "live-server" || key === "live") return "Live local runboard";
-  return mode.liveActions ? "Live local runboard" : "Static read-only export";
-}
-
-function TrustCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
 
 export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewModel }) {
   const gap = viewModel.qualityGap || {};
@@ -155,7 +77,7 @@ export function CodexBrief({
   const source =
     summary.source || (latestRun ? `latest #${latestRun} / dashboard state` : "dashboard state");
   return (
-    <section className="panel brief-panel" aria-label="Codex brief">
+    <section className="panel brief-panel" id="codex-brief" aria-label="Codex brief" tabIndex={-1}>
       <div className="panel-head">
         <div>
           <p className="eyebrow">Codex brief</p>
@@ -183,10 +105,15 @@ export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel })
   const memory = viewModel.experimentMemory || {};
   const lanes = Array.isArray(memory.lanePortfolio) ? memory.lanePortfolio.slice(0, 4) : [];
   return (
-    <section className="panel memory-panel" aria-label="Strategy memory">
+    <section
+      className="panel memory-panel"
+      id="strategy-memory"
+      aria-label="Session memory"
+      tabIndex={-1}
+    >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Strategy memory</p>
+          <p className="eyebrow">Session memory</p>
           <h2>Experiment portfolio</h2>
         </div>
         <span className="panel-note">
@@ -261,62 +188,6 @@ export function FinalizationChecklist({ viewModel }: { viewModel: DashboardViewM
               <p>{item.detail}</p>
             </div>
           </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-export function LiveActions({
-  mode,
-  runLiveAction,
-}: {
-  mode: DashboardMode;
-  runLiveAction: (action: string) => void;
-}) {
-  const actions = [
-    { id: "doctor", detail: "Check setup and benchmark health." },
-    { id: "doctor-explain", detail: "Explain blockers and fixes." },
-    { id: "onboarding-packet", detail: "Build an agent handoff packet." },
-    { id: "recommend-next", detail: "Return one safe next action." },
-    { id: "benchmark-lint", detail: "Validate METRIC parsing." },
-    { id: "setup-plan", detail: "Inspect setup guidance." },
-    { id: "guide", detail: "Open the guided next step." },
-    { id: "recipes", detail: "Preview recipe ideas." },
-    { id: "gap-candidates", detail: "Preview research gap candidates." },
-    { id: "finalize-preview", detail: "Read-only finalization preview." },
-    { id: "export", detail: "Write a static dashboard snapshot." },
-    { id: "new-segment-dry-run", detail: "Preview a fresh segment." },
-  ];
-  return (
-    <section
-      className="panel live-actions-panel"
-      id="live-actions-panel"
-      aria-label="Live actions"
-      hidden={!mode.liveActions}
-    >
-      <div className="panel-head">
-        <div>
-          <p className="eyebrow">Live actions</p>
-          <h2>Guarded tools</h2>
-        </div>
-        <span id="action-note" className="panel-note">
-          {mode.actionNote}
-        </span>
-      </div>
-      <div className="action-grid" id="action-grid">
-        {actions.map((action) => (
-          <button
-            className="tool-button live-action"
-            type="button"
-            key={action.id}
-            data-action={action.id}
-            title={action.detail}
-            onClick={() => runLiveAction(action.id)}
-          >
-            <span>{actionLabel(action.id)}</span>
-            <small>{action.detail}</small>
-          </button>
         ))}
       </div>
     </section>

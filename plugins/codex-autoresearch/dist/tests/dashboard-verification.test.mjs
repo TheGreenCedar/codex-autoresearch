@@ -52,9 +52,11 @@ const runDashboard = async (entries, meta = {}, options = {}) => {
 		assert.ok(element, `Missing dashboard element: ${id}`);
 		return element;
 	};
+	const queryById = (id) => dom.window.document.getElementById(id);
 	return {
 		dom,
-		getById
+		getById,
+		queryById
 	};
 };
 async function waitForDashboardReady(window) {
@@ -66,12 +68,6 @@ async function waitFor(predicate, message) {
 		if (Date.now() - started > 2e3) throw new Error(message);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
-}
-function setInputValue(window, element, value) {
-	const prototype = element.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-	Object.getOwnPropertyDescriptor(prototype, "value").set.call(element, value);
-	element.dispatchEvent(new window.Event("input", { bubbles: true }));
-	element.dispatchEvent(new window.Event("change", { bubbles: true }));
 }
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
 	const { getById } = await runDashboard([
@@ -376,6 +372,25 @@ test("dashboard holds crash runs at the nearest successful metric level", async 
 	assert.match(chart, /#2/);
 	assert.doesNotMatch(chart, /Infinity|NaN/);
 });
+test("dashboard does not label raw score metrics as baseline time", async () => {
+	const { queryById, getById } = await runDashboard([{
+		type: "config",
+		name: "raw score path",
+		metricName: "pipeline_score",
+		bestDirection: "higher",
+		metricUnit: "points"
+	}, {
+		type: "run",
+		run: 1,
+		metric: 873608.88442,
+		status: "keep",
+		description: "Baseline",
+		confidence: 1
+	}], { commands: [] });
+	assert.equal(queryById("metric-detail-baseline-time"), null);
+	assert.equal(getById("metric-detail-baseline-value").textContent, "873608.88points");
+	assert.match(getById("metric-detail-primary").textContent || "", /873608.88points/);
+});
 test("dashboard renders formatted x-axis labels when timestamp mode is enabled", async () => {
 	const { dom, getById } = await runDashboard([{
 		type: "config",
@@ -618,16 +633,14 @@ test("dashboard copy buttons expose the current URL and next CLI command", async
 			} }
 		});
 	} });
-	assert.match(getById("next-cli-command").textContent, /autoresearch\.mjs next/);
 	getById("copy-dashboard-url").click();
-	getById("copy-next-cli-command").click();
-	await waitFor(() => writes.length === 2, "Copy buttons did not write both values.");
-	assert.deepEqual(writes, ["http://127.0.0.1:61234/", "node scripts/autoresearch.mjs next --cwd ."]);
+	await waitFor(() => writes.length === 1, "Copy URL button did not write the dashboard URL.");
+	assert.deepEqual(writes, ["http://127.0.0.1:61234/"]);
 	await waitFor(() => getById("copy-dashboard-url-status").hidden === false, "Copy URL status did not become visible.");
 	dom.window.close();
 });
-test("dashboard mission control renders explicit log-decision controls", async () => {
-	const { getById } = await runDashboard([{
+test("dashboard promotes Codex brief and session memory instead of command controls", async () => {
+	const { getById, queryById } = await runDashboard([{
 		type: "config",
 		name: "mission path",
 		metricName: "seconds",
@@ -643,70 +656,31 @@ test("dashboard mission control renders explicit log-decision controls", async (
 	}], {
 		deliveryMode: "live-server",
 		liveActionsAvailable: true,
-		viewModel: { missionControl: {
-			activeStep: "log",
-			staticFallback: "Serve locally for live actions.",
-			steps: [
-				{
-					id: "setup",
-					title: "Setup",
-					state: "done",
-					detail: "Session setup is readable.",
-					command: "node scripts/autoresearch.mjs setup-plan --cwd .",
-					safeAction: "setup-plan"
-				},
-				{
-					id: "gaps",
-					title: "Gap review",
-					state: "ready",
-					detail: "1 open / 4 total.",
-					command: "node scripts/autoresearch.mjs gap-candidates --cwd .",
-					safeAction: "gap-candidates"
-				},
-				{
-					id: "log",
-					title: "Log decision",
-					state: "ready",
-					detail: "Last packet is ready.",
-					command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"",
-					mutates: true
-				},
-				{
-					id: "finalize",
-					title: "Finalize",
-					state: "idle",
-					detail: "Preview later.",
-					command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
-					safeAction: "finalize-preview"
-				}
-			],
-			logDecision: {
-				available: true,
-				allowedStatuses: ["keep", "discard"],
-				suggestedStatus: "keep",
-				metric: 4.2,
-				statusGuidance: "Keep if the evidence matches the diff.",
-				defaultDescription: "Describe the kept change",
-				asiTemplate: {
-					evidence: "seconds=4.2",
-					next_action_hint: ""
-				},
-				command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"",
-				commandsByStatus: {
-					keep: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Describe the kept change\"",
-					discard: "node scripts/autoresearch.mjs log --cwd . --from-last --status discard --description \"Describe the discarded change\""
-				}
+		viewModel: {
+			aiSummary: {
+				title: "Codex handoff",
+				happened: ["Run #1 created the baseline."],
+				plan: ["Compare the next hypothesis against the baseline."],
+				source: "test model"
+			},
+			experimentMemory: {
+				plateau: { detected: false },
+				lanePortfolio: [{
+					id: "cache",
+					title: "Cache path",
+					status: "ready",
+					nextActionHint: "Test manifest cache reuse."
+				}]
 			}
-		} },
+		},
 		commands: []
 	});
-	assert.match(getById("mission-note").textContent, /Active: Log decision/);
-	assert.match(getById("mission-control-grid").innerHTML, /Gap review/);
-	assert.match(getById("mission-control-grid").innerHTML, /Log decision/);
-	assert.match(getById("log-decision-status").innerHTML, /keep/);
-	assert.equal(getById("log-decision-description").value, "Describe the kept change");
-	assert.match(getById("log-decision-asi").value, /seconds=4\.2/);
-	assert.equal(getById("run-log-decision").disabled, false);
+	assert.match(getById("codex-brief").textContent, /Run #1 created the baseline/);
+	assert.match(getById("strategy-memory").textContent, /Test manifest cache reuse/);
+	assert.equal(queryById("mission-control-grid"), null);
+	assert.equal(queryById("log-decision-panel"), null);
+	assert.equal(queryById("action-receipt"), null);
+	assert.equal(queryById("live-actions-panel"), null);
 });
 test("dashboard explains that zero quality gaps still need a fresh research round", async () => {
 	const { getById } = await runDashboard([{
@@ -875,13 +849,13 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
 			"Last-run packet is stale."
 		]
 	});
-	const { dom, getById } = await runDashboard(entries, {
+	const { dom, queryById } = await runDashboard(entries, {
 		deliveryMode: "static-export",
 		liveActionsAvailable: false,
 		viewModel,
 		commands: []
 	});
-	assert.equal(getById("trust-title").textContent, "Static read-only export");
+	assert.equal(queryById("trust-strip"), null);
 	assert.equal(dom.window.document.getElementById("trust-warnings"), null);
 	assert.match(viewModel.trustState.reasons.join("\n"), /Working tree is dirty/);
 	assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt autoresearch\.jsonl/);
@@ -1039,7 +1013,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
 		},
 		drift: {
 			ok: false,
-			local: { version: "1.0.1" },
+			local: { version: "1.1.0" },
 			installed: {
 				available: true,
 				version: "0.5.1",
@@ -1053,13 +1027,13 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
 	assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
 	assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
 	assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-	assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.0.1");
+	assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.0");
 	assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
 	assert.equal(viewModel.nextBestAction.kind, "stale-packet");
 	assert.match(viewModel.nextBestAction.detail, /stale/);
 });
 test("dashboard distinguishes static snapshot controls from live actions", async () => {
-	const { getById } = await runDashboard([{
+	const { getById, queryById } = await runDashboard([{
 		type: "config",
 		name: "static dashboard",
 		metricName: "quality_gap",
@@ -1110,20 +1084,15 @@ test("dashboard distinguishes static snapshot controls from live actions", async
 	});
 	assert.equal(getById("live-title").textContent, "Static snapshot");
 	assert.match(getById("live-detail").textContent, /Read-only export/);
-	assert.equal(getById("trust-title").textContent, "Static read-only export");
-	assert.match(getById("trust-detail").textContent, /Read-only export/);
-	assert.match(getById("trust-cells").textContent, /No usable live mutation controls/);
+	assert.equal(queryById("trust-strip"), null);
 	assert.equal(getById("refresh-now").hidden, true);
 	assert.equal(getById("live-toggle").hidden, true);
-	assert.doesNotMatch(getById("mission-control-grid").innerHTML, /mission-run|Serve to run/);
-	assert.equal(getById("live-actions-panel").hidden, true);
-	assert.equal(getById("log-status-field").hidden, true);
-	assert.equal(getById("log-description-field").hidden, true);
-	assert.equal(getById("log-asi-field").hidden, true);
-	assert.equal(getById("run-log-decision").hidden, true);
+	assert.equal(queryById("mission-control-grid"), null);
+	assert.equal(queryById("live-actions-panel"), null);
+	assert.equal(queryById("log-decision-panel"), null);
 });
 test("dashboard keeps static exports read-only when served over HTTP", async () => {
-	const { getById, dom } = await runDashboard([{
+	const { getById, queryById, dom } = await runDashboard([{
 		type: "config",
 		name: "hosted static dashboard",
 		metricName: "quality_gap",
@@ -1153,12 +1122,12 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
 	assert.equal(getById("live-title").textContent, "Static snapshot");
 	assert.equal(getById("refresh-now").hidden, true);
 	assert.equal(getById("live-toggle").hidden, true);
-	assert.equal(getById("live-actions-panel").hidden, true);
-	assert.equal(getById("next-command-copy").hidden, true);
+	assert.equal(queryById("live-actions-panel"), null);
+	assert.equal(queryById("next-command-copy"), null);
 	dom.window.close();
 });
 test("showcase dashboard presents the demo as live while keeping diagnostics in the model", async () => {
-	const { getById } = await runDashboard([
+	const { getById, queryById } = await runDashboard([
 		{
 			type: "config",
 			name: "optimize my indexing pipeline's speed and memory footprint",
@@ -1200,17 +1169,14 @@ test("showcase dashboard presents the demo as live while keeping diagnostics in 
 	});
 	assert.equal(getById("live-title").textContent, "Live runboard");
 	assert.match(getById("live-detail").textContent, /100 embedded packets/);
-	assert.equal(getById("trust-title").textContent, "Live runboard");
-	assert.match(getById("trust-cells").textContent, /Guarded local actions enabled/);
+	assert.equal(queryById("trust-strip"), null);
 	assert.equal(getById("next-action-detail").textContent, "Check memory footprint before keeping the path.");
 	assert.equal(getById("decision-evidence-chips").textContent.includes("Needs attention"), false);
-	assert.equal(getById("trust-strip").querySelectorAll("span").length > 0, true);
-	assert.equal(getById("trust-strip").querySelector(".trust-warning-list"), null);
 	assert.equal(getById("refresh-now").hidden, false);
-	assert.equal(getById("live-actions-panel").hidden, false);
+	assert.equal(queryById("live-actions-panel"), null);
 });
-test("served dashboard keeps live action controls executable", async () => {
-	const { getById } = await runDashboard([{
+test("served dashboard exposes live refresh but no command-center controls", async () => {
+	const { getById, queryById } = await runDashboard([{
 		type: "config",
 		name: "served dashboard",
 		metricName: "quality_gap",
@@ -1241,19 +1207,18 @@ test("served dashboard keeps live action controls executable", async () => {
 		commands: []
 	});
 	assert.equal(getById("live-title").textContent, "Live dashboard");
-	assert.equal(getById("trust-title").textContent, "Live local runboard");
-	assert.match(getById("trust-cells").textContent, /Guarded local actions are enabled/);
+	assert.equal(queryById("trust-strip"), null);
 	assert.equal(getById("refresh-now").textContent, "Refresh live data");
 	assert.equal(getById("live-toggle").textContent, "Auto-refresh off");
 	assert.equal(getById("refresh-now").hidden, false);
 	assert.equal(getById("live-toggle").hidden, false);
-	assert.match(getById("action-note").textContent, /Guarded actions/);
-	assert.equal(getById("live-actions-panel").hidden, false);
-	assert.match(getById("mission-control-grid").innerHTML, /mission-run/);
-	assert.match(getById("action-grid").textContent, /Preview finalization/);
+	assert.equal(queryById("action-note"), null);
+	assert.equal(queryById("live-actions-panel"), null);
+	assert.equal(queryById("mission-control-grid"), null);
+	assert.equal(queryById("action-grid"), null);
 });
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
-	const { dom, getById } = await runDashboard([
+	const { dom, getById, queryById } = await runDashboard([
 		{
 			type: "config",
 			name: "trust fields",
@@ -1329,7 +1294,7 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
 			}
 		}
 	});
-	assert.equal(getById("trust-title").textContent, "Live evidence runboard");
+	assert.equal(queryById("trust-strip"), null);
 	assert.equal(dom.window.document.getElementById("trust-warnings"), null);
 	assert.equal(getById("research-truth-title").textContent, "Truth pass complete");
 	assert.equal(getById("research-truth-bar").getAttribute("aria-valuenow"), "100");
@@ -1368,176 +1333,6 @@ test("dashboard surfaces generated suspicious research reasons", async () => {
 	assert.equal(dom.window.document.getElementById("decision-suspicious-perfect"), null);
 	assert.match(String(viewModel.researchTruth.suspiciousReasons[0]), /no breadth evidence/);
 });
-test("structured ASI editor serializes to the existing asi payload", async () => {
-	const viewModel = { missionControl: {
-		activeStep: "log",
-		steps: [{
-			id: "log",
-			title: "Log decision",
-			state: "ready",
-			detail: "Last packet is ready."
-		}],
-		logDecision: {
-			available: true,
-			allowedStatuses: ["keep"],
-			suggestedStatus: "keep",
-			defaultDescription: "Keep measured change",
-			lastRunFingerprint: "fingerprint-1",
-			asiTemplate: { evidence: "seconds=4.2" },
-			commandsByStatus: { keep: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description \"Keep measured change\"" }
-		}
-	} };
-	const entries = [{
-		type: "config",
-		name: "asi path",
-		metricName: "seconds",
-		bestDirection: "lower",
-		metricUnit: "s"
-	}, {
-		type: "run",
-		run: 1,
-		metric: 5,
-		status: "keep",
-		description: "Baseline",
-		confidence: 1
-	}];
-	const { getById, dom } = await runDashboard(entries, {
-		deliveryMode: "live-server",
-		liveActionsAvailable: true,
-		actionNonce: "nonce-1",
-		viewModel
-	}, { beforeParse(window) {
-		window.__actionBodies = [];
-		window.fetch = async (url, options = {}) => {
-			if (String(url).includes("actions/log-keep")) {
-				window.__actionBodies.push(JSON.parse(options.body || "{}"));
-				return {
-					ok: true,
-					json: async () => ({
-						ok: true,
-						receipt: {
-							ok: true,
-							action: "log-keep",
-							status: "completed",
-							ledgerRun: 2,
-							receiptId: "receipt-1",
-							nextStep: "Logged run #2."
-						}
-					})
-				};
-			}
-			if (String(url).includes("view-model")) return {
-				ok: true,
-				json: async () => viewModel
-			};
-			return {
-				ok: true,
-				text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n")
-			};
-		};
-	} });
-	setInputValue(dom.window, getById("asi-hypothesis"), "Cache the manifest");
-	setInputValue(dom.window, getById("asi-evidence"), "METRIC seconds=4.2");
-	setInputValue(dom.window, getById("asi-next-action-hint"), "Stress the cached path.");
-	getById("run-log-decision").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-	await waitFor(() => dom.window.__actionBodies.length === 1, "Log decision action was not called.");
-	await waitFor(() => /Logged run #2/.test(getById("receipt-toast").textContent), "Receipt toast was not updated.");
-	const [body] = dom.window.__actionBodies;
-	assert.equal(body.confirm, "log-keep");
-	assert.equal(body.lastRunFingerprint, "fingerprint-1");
-	assert.deepEqual(body.asi, {
-		hypothesis: "Cache the manifest",
-		evidence: "METRIC seconds=4.2",
-		next_action_hint: "Stress the cached path."
-	});
-	dom.window.close();
-});
-test("raw ASI JSON edits are authoritative on submit", async () => {
-	const viewModel = { missionControl: {
-		activeStep: "log",
-		steps: [{
-			id: "log",
-			title: "Log decision",
-			state: "ready",
-			detail: "Last packet is ready."
-		}],
-		logDecision: {
-			available: true,
-			allowedStatuses: ["keep"],
-			suggestedStatus: "keep",
-			defaultDescription: "Keep measured change",
-			lastRunFingerprint: "fingerprint-raw",
-			asiTemplate: {
-				hypothesis: "old hypothesis",
-				evidence: "old evidence"
-			},
-			commandsByStatus: { keep: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep" }
-		}
-	} };
-	const entries = [{
-		type: "config",
-		name: "raw asi path",
-		metricName: "seconds",
-		bestDirection: "lower",
-		metricUnit: "s"
-	}, {
-		type: "run",
-		run: 1,
-		metric: 5,
-		status: "keep",
-		description: "Baseline",
-		confidence: 1
-	}];
-	const { getById, dom } = await runDashboard(entries, {
-		deliveryMode: "live-server",
-		liveActionsAvailable: true,
-		actionNonce: "nonce-raw",
-		viewModel
-	}, { beforeParse(window) {
-		window.__actionBodies = [];
-		window.fetch = async (url, options = {}) => {
-			if (String(url).includes("actions/log-keep")) {
-				window.__actionBodies.push(JSON.parse(options.body || "{}"));
-				return {
-					ok: true,
-					json: async () => ({
-						ok: true,
-						receipt: {
-							ok: true,
-							action: "log-keep",
-							status: "completed",
-							ledgerRun: 2,
-							receiptId: "receipt-raw",
-							nextStep: "Logged raw ASI."
-						}
-					})
-				};
-			}
-			if (String(url).includes("view-model")) return {
-				ok: true,
-				json: async () => viewModel
-			};
-			return {
-				ok: true,
-				text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n")
-			};
-		};
-	} });
-	setInputValue(dom.window, getById("log-decision-asi"), JSON.stringify({
-		hypothesis: "raw hypothesis",
-		evidence: "raw evidence",
-		extra: "preserved"
-	}, null, 2));
-	getById("run-log-decision").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-	await waitFor(() => dom.window.__actionBodies.length === 1, "Raw ASI log action was not called.");
-	const [body] = dom.window.__actionBodies;
-	assert.deepEqual(body.asi, {
-		hypothesis: "raw hypothesis",
-		evidence: "raw evidence",
-		extra: "preserved"
-	});
-	dom.window.close();
-});
 test("dashboard exposes keyboard skip path through primary surfaces", async () => {
 	const { dom } = await runDashboard([{
 		type: "config",
@@ -1573,10 +1368,9 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
 	const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) => item.getAttribute("href"));
 	assert.deepEqual(hrefs, [
 		"#trend-panel",
+		"#codex-brief",
+		"#strategy-memory",
 		"#decision-rail",
-		"#mission-panel",
-		"#log-decision-panel",
-		"#action-receipt",
 		"#ledger"
 	]);
 	for (const href of hrefs) {

@@ -100,6 +100,16 @@ const TOOL_REGISTRY = [
 		actionPolicy: "read"
 	},
 	{
+		name: "benchmark_inspect",
+		cliCommand: "benchmark-inspect",
+		actionPolicy: "read"
+	},
+	{
+		name: "checks_inspect",
+		cliCommand: "checks-inspect",
+		actionPolicy: "read"
+	},
+	{
 		name: "benchmark_lint",
 		cliCommand: "benchmark-lint",
 		actionPolicy: "read"
@@ -107,6 +117,11 @@ const TOOL_REGISTRY = [
 	{
 		name: "new_segment",
 		cliCommand: "new-segment",
+		actionPolicy: "state_mutation"
+	},
+	{
+		name: "promote_gate",
+		cliCommand: "promote-gate",
 		actionPolicy: "state_mutation"
 	},
 	{
@@ -142,6 +157,8 @@ function actionPolicyForTool(name, args = {}) {
 	const base = toolMetadata(name)?.actionPolicy || "read";
 	if (name === "gap_candidates" && (args.apply || args.apply === "true")) return "state_mutation";
 	if (name === "doctor_session" && args.check_benchmark) return "process_start";
+	if (name === "benchmark_inspect" && args.command) return "process_start";
+	if (name === "checks_inspect" && (args.command || args.checks_command || args.checksCommand)) return "process_start";
 	if (name === "benchmark_lint" && args.command) return "process_start";
 	return base;
 }

@@ -261,6 +261,7 @@ export const toolSchemas = applyToolContracts([
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
         checks_policy: { type: "string", enum: ["always", "on-improvement", "manual"] },
+        compact: { type: "boolean" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -357,6 +358,21 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "benchmark_inspect",
+    description:
+      "Safely inspect a benchmark list, dry-run, sample, or artifact command before running an expensive packet.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        command: { type: "string" },
+        timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "benchmark_lint",
     description:
       "Validate sample benchmark output or a command for METRIC parsing without starting an experiment.",
@@ -367,6 +383,22 @@ export const toolSchemas = applyToolContracts([
         metric_name: { type: "string" },
         sample: { type: "string" },
         command: { type: "string" },
+        timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "checks_inspect",
+    description:
+      "Run and classify a correctness-check command before treating failures as experiment evidence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        command: { type: "string" },
+        checks_command: { type: "string" },
         timeout_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
@@ -386,6 +418,27 @@ export const toolSchemas = applyToolContracts([
         confirm: { type: "boolean" },
       },
       required: ["working_dir"],
+    },
+  },
+  {
+    name: "promote_gate",
+    description:
+      "Append or preview a promoted measurement gate as a fresh segment with gate metadata.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        reason: { type: "string" },
+        gate_name: { type: "string" },
+        query_count: { type: "integer" },
+        benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
+        notes: { type: "array", items: { type: "string" } },
+        dry_run: { type: "boolean" },
+        confirm: { type: "boolean" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir", "reason"],
     },
   },
   {

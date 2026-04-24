@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 
 export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
@@ -87,7 +86,7 @@ export function jsonlPath(workDir) {
 }
 
 export function appendJsonl(workDir, entry) {
-  fs.appendFileSync(jsonlPath(workDir), JSON.stringify(entry) + os.EOL);
+  fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
 }
 
 export function readJsonl(workDir) {

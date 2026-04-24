@@ -4,6 +4,28 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.1.0
+
+Friction-reduction pass from live CodeStory onboarding forensics.
+
+### Changed
+
+- `prompt-plan` now discovers existing `scripts/autoresearch-*.mjs` metric benchmarks and can infer score-style primary metrics from them before falling back to generic speed recipes.
+- Setup-generated session notes now include an explicit metric decision contract and less-empty idea scaffolding.
+- Benchmark linting now gives a clearer timeout recovery hint for expensive workloads: use sample/artifact mode or lint the generated wrapper before full packets.
+- Active-loop continuation now marks log decisions as a log-then-continue step so long-budget loops do not read like they require a user handoff after every packet.
+- Guarded sessions with a finite active iteration budget now set a stronger continuation/final-answer policy so Codex keeps running packets instead of stopping at a status report.
+- `next --compact` now returns an operator-sized packet with tried/meaning/decision/next reporting while preserving the full last-run packet for `log --from-last`; generated next commands use compact mode by default.
+- Served live dashboards now perform a `/health` liveness check before returning the URL, making stale localhost dashboard links easier to catch and restart.
+- Onboarding/report templates now require a plain-English operator story instead of raw experiment parameters.
+- Dashboard metric details no longer label raw score metrics as baseline time/memory.
+- Onboarding packets now check installed Codex plugin runtime drift by default so stale marketplace/cache installs are visible during handoff.
+- Added `benchmark-inspect` / MCP `benchmark_inspect` for bounded list/dry-run/sample probes before expensive benchmark packets.
+- Added `checks-inspect` / MCP `checks_inspect` to catch malformed correctness commands, identify failed tests, and separate touched-path failures from broad-suite friction before logging `checks_failed`.
+- Added `promote-gate` / MCP `promote_gate` to record stronger measurement gates as fresh segments with sample/gate metadata.
+- Session setup now writes Autoresearch `.gitattributes` rules and ledger appends use LF line endings, reducing noisy CRLF warnings on Windows.
+- The dashboard is now a visual aid instead of a command center: trust state, mission-control controls, live action panels, and action receipts are removed from the visible UI; Codex brief and session memory now sit below the chart, with the ledger immediately below the next action.
+
 ## 1.0.1
 
 Patch release for TypeScript-built plugin installs.
@@ -30,7 +52,7 @@ Initial release of the Codex Autoresearch plugin as a single Codex-facing measur
 - Added natural-language prompt planning through CLI `prompt-plan` and MCP `prompt_plan`, so broad README-style requests can become inferred metrics, experiment lanes, missing essentials, and read-only setup commands before any files are changed.
 - Added first-class workflow and architecture diagram docs for the first-five-minutes path, prompt-to-loop planning, active packets, quality-gap research, runtime surfaces, trust boundaries, MCP flow, and finalization.
 - Added compact onboarding, recommend-next, benchmark linting, new-segment, doctor explain/hooks, live dashboard, and finalization preview surfaces across CLI/MCP/docs/skill.
-- Added dashboard trust blockers, run chart, next safe action, copyable report/handoff outputs, stale-session guidance, and safe local live actions.
+- Added dashboard trust blockers, run chart, next safe action, copyable report/handoff outputs, stale-session guidance, and local live-action experiments that were later removed from the visible UI.
 
 ### Changed
 
@@ -43,6 +65,6 @@ Initial release of the Codex Autoresearch plugin as a single Codex-facing measur
 
 ### Safety Notes
 
-- Static dashboard exports remain read-only snapshots. Serve the live dashboard for guarded local actions and current packet freshness.
+- Static dashboard exports remain read-only snapshots. Serve the live dashboard for current packet freshness; use CLI or MCP for actions.
 - Custom command materialization over MCP still requires explicit unsafe-command gating.
 - Hooks remain opt-in examples only, not required core behavior.

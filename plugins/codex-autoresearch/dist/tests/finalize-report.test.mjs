@@ -1,8 +1,8 @@
 import { resolvePackageRoot } from "../lib/runtime-paths.mjs";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import { spawn } from "node:child_process";
+import os from "node:os";
 import assert from "node:assert/strict";
 import test from "node:test";
 //#region tests/finalize-report.test.ts

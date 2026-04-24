@@ -556,7 +556,7 @@ function ExperimentModal({
               <dd>{point.evidence}</dd>
             </div>
           )}
-          {breakdown && (
+          {breakdown && readout.metricDefinition.mode === "weighted_cost" && (
             <>
               <div>
                 <dt>Time</dt>
@@ -631,18 +631,29 @@ function MetricDetails({
           </p>
         )}
         <div className="metric-details-grid">
-          <div className="metric-detail-card">
-            <span>Baseline time</span>
-            <strong id="metric-detail-baseline-time">
-              {formatMetric(readout.metricDefinition.baselineTime, "s")}
-            </strong>
-          </div>
-          <div className="metric-detail-card">
-            <span>Baseline memory</span>
-            <strong id="metric-detail-baseline-memory">
-              {formatMemoryValue(readout.metricDefinition.baselineMemory)}
-            </strong>
-          </div>
+          {readout.metricDefinition.mode === "weighted_cost" ? (
+            <>
+              <div className="metric-detail-card">
+                <span>Baseline time</span>
+                <strong id="metric-detail-baseline-time">
+                  {formatMetric(readout.metricDefinition.baselineTime, "s")}
+                </strong>
+              </div>
+              <div className="metric-detail-card">
+                <span>Baseline memory</span>
+                <strong id="metric-detail-baseline-memory">
+                  {formatMemoryValue(readout.metricDefinition.baselineMemory)}
+                </strong>
+              </div>
+            </>
+          ) : (
+            <div className="metric-detail-card">
+              <span>Baseline {readout.metricDefinition.valueLabel.toLowerCase()}</span>
+              <strong id="metric-detail-baseline-value">
+                {formatMetricValue(readout.baseline, readout.metricDefinition)}
+              </strong>
+            </div>
+          )}
           <div className="metric-detail-card">
             <span>{readout.metricDefinition.valueLabel}</span>
             <strong id="metric-detail-score">

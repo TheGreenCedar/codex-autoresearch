@@ -24,7 +24,7 @@ Inspired by [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch), gen
 1. Codex identifies the real target repo or child package and checks whether a session already exists.
 2. A benchmark prints one primary metric as `METRIC name=value`.
 3. Codex runs one packet, then logs it as `keep`, `discard`, `crash`, or `checks_failed` with ASI.
-4. The dashboard shows the trust state, next safe action, blockers, best kept evidence, and metric trend.
+4. The dashboard shows the metric trend, Codex brief, session memory, next safe action, ledger, and supporting diagnostics.
 5. When there is useful kept work, Codex previews finalization into reviewable branches.
 
 This is not automation theater. The contract is evidence: no invented zeroes, no stale packets, no broad cleanup without consent, and no triumphant little parade before verification.
@@ -77,7 +77,7 @@ Codex should:
 
 1. Check Git state and identify the owning package.
 2. Run an onboarding packet or setup plan.
-3. Run `benchmark-lint` or `doctor --check-benchmark` before the first live packet.
+3. Run `benchmark-inspect`, `benchmark-lint`, or `doctor --check-benchmark` before the first live packet.
 4. Checkpoint generated session files before experiment-scoped keep commits.
 5. Start the live dashboard and give you a local URL.
 6. Run one packet.
@@ -131,17 +131,19 @@ node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "Use Codex Autoresearch to improve test speed without deleting tests"
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs setup-plan --cwd <project>
+node scripts/autoresearch.mjs benchmark-inspect --cwd <project>
 node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC seconds=1.23"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs serve --cwd <project>
-node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs next --cwd <project> --compact
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --asi-file asi.json
 node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
+node scripts/autoresearch.mjs promote-gate --cwd <project> --reason "move to the larger sample" --query-count 150 --dry-run
 ```
 
-MCP exposes the same workflow behind the skill, including `onboarding_packet`, `prompt_plan`, `recommend_next`, `benchmark_lint`, `new_segment`, `serve_dashboard`, `next_experiment`, and `log_experiment`.
+MCP exposes the same workflow behind the skill, including `onboarding_packet`, `prompt_plan`, `recommend_next`, `benchmark_inspect`, `benchmark_lint`, `checks_inspect`, `new_segment`, `promote_gate`, `serve_dashboard`, `next_experiment`, and `log_experiment`.
 
 ## Dashboard
 
@@ -151,13 +153,16 @@ The live dashboard is the normal operator surface:
 node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
-It shows:
+The dashboard is a visual aid, not a command center. It shows:
 
-- the next safe action and why it is safe
-- trust blockers such as stale packets, dirty Git, runtime drift, missing paths, and static-export mode
 - baseline, latest, best, confidence, and weighted metric formulas
-- best kept change, recent failures, strategy lanes, and finalization readiness
+- the Codex brief and session memory directly below the metric chart
+- the next safe action and why it is safe
+- the ledger, ASI, and handoff context directly below the next action
+- best kept change, recent failures, strategy lanes, runtime drift, and finalization readiness
 - copyable status reports and agent handoff packets
+
+Live mutation controls, mission-control buttons, and action receipts are intentionally omitted from the dashboard UI. Use the CLI or MCP tools for actions and logging.
 
 Static exports are portable review snapshots:
 
@@ -165,7 +170,7 @@ Static exports are portable review snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-Static exports are read-only. Serve a fresh dashboard when you need live actions or current packet freshness. Use `--showcase` only for checked-in public demo snapshots that must not embed local absolute paths.
+Static exports are read-only. Serve a fresh dashboard when you need current packet freshness. Use `--showcase` only for checked-in public demo snapshots that must not embed local absolute paths.
 
 ## Tooling
 

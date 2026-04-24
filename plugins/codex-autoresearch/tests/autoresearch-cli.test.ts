@@ -436,7 +436,7 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
   });
 });
 
-test("dashboard includes segment and finalize-readiness cockpit controls", async () => {
+test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
     await runCli([
@@ -473,20 +473,23 @@ test("dashboard includes segment and finalize-readiness cockpit controls", async
     assert.ok(doc.getElementById("segment-select"));
     assert.ok(doc.getElementById("live-toggle"));
     assert.doesNotMatch(dashboard, /id="command-grid"/);
-    assert.match(doc.body.textContent, /Mission control/);
-    assert.ok(doc.getElementById("mission-control-grid"));
     assert.match(doc.body.textContent, /Run log/);
     assert.ok(doc.getElementById("ledger-scroll"));
     assert.match(doc.body.textContent, /Codex brief/);
     assert.ok(doc.getElementById("ai-summary-title"));
-    assert.ok(doc.getElementById("run-log-decision"));
+    assert.equal(doc.getElementById("mission-control-grid"), null);
+    assert.equal(doc.getElementById("run-log-decision"), null);
+    assert.equal(doc.getElementById("trust-strip"), null);
     assert.match(dashboard, /__AUTORESEARCH_META__/);
     assert.doesNotMatch(dashboard, /clipboard\?\.writeText/);
     assert.doesNotMatch(dashboard, /autoresearch\.mjs/);
     assert.match(doc.body.textContent, /Finalize/);
-    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="mission-panel"'));
+    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="codex-brief"'));
+    assert.ok(rendered.indexOf('id="codex-brief"') < rendered.indexOf('id="strategy-memory"'));
+    assert.ok(rendered.indexOf('id="strategy-memory"') < rendered.indexOf('id="decision-rail"'));
+    assert.ok(rendered.indexOf('id="decision-rail"') < rendered.indexOf('id="ledger"'));
     assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="ledger"'));
-    assert.ok(rendered.indexOf('id="mission-panel"') < rendered.indexOf('id="ledger"'));
+    assert.ok(rendered.indexOf('id="ledger"') < rendered.indexOf('id="research-truth-meter"'));
     dom.window.close();
   });
 });
@@ -970,6 +973,51 @@ test("owner-autonomous runs return continuation instead of handing control back"
     assert.equal(payload.continuation.forbidFinalAnswer, true);
     assert.match(payload.continuation.nextAction, /without asking the user/);
     assert.match(payload.continuation.commands.next, / next /);
+  });
+});
+
+test("guarded sessions with active budgets keep continuation non-final", async () => {
+  await withTempDir("guarded-active-budget", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "budget", "--metric-name", "seconds"]);
+    await runCli(["config", "--cwd", dir, "--checks-policy", "manual", "--max-iterations", "3"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.continuation.stage, "needs-log-decision");
+    assert.equal(packet.continuation.activeBudget, true);
+    assert.equal(packet.continuation.shouldContinue, true);
+    assert.equal(packet.continuation.forbidFinalAnswer, true);
+    assert.match(packet.report.tried, /seconds=3/);
+    assert.equal(packet.doctor, undefined);
+    assert.match(packet.fullPacket, /lastRunPath/);
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep baseline",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.continuation.stage, "logged");
+    assert.equal(payload.continuation.activeBudget, true);
+    assert.equal(payload.continuation.shouldContinue, true);
+    assert.equal(payload.continuation.forbidFinalAnswer, true);
+    assert.match(payload.continuation.finalAnswerPolicy, /Do not stop/);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.activeBudget, true);
+    assert.equal(statePayload.forbidFinalAnswer, true);
+    assert.match(statePayload.commands.next, /--compact/);
+    assert.match(statePayload.report.next, /Keep going/);
   });
 });
 
@@ -1945,6 +1993,7 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     const payload = JSON.parse(result.stdout);
     assert.ok(payload.checkpoint.paths.includes("autoresearch.md"));
     assert.ok(payload.checkpoint.paths.includes("autoresearch.config.json"));
+    assert.ok(payload.checkpoint.paths.includes(".gitattributes"));
     assert.match(payload.checkpoint.commands.join("\n"), /git add --/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
@@ -1963,6 +2012,125 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     assert.match(sessionDoc, /`src`: in configured commit scope/);
     assert.match(sessionDoc, /`tests`: in configured commit scope/);
     assert.doesNotMatch(sessionDoc, /TBD: add files after initial inspection/);
+
+    const attributes = await readFile(path.join(dir, ".gitattributes"), "utf8");
+    assert.match(attributes, /autoresearch\.jsonl text eol=lf/);
+    assert.match(attributes, /autoresearch\.md text eol=lf/);
+    assert.match(attributes, /autoresearch\.ideas\.md text eol=lf/);
+  });
+});
+
+test("ledger appends use LF on Windows-facing sessions", async () => {
+  await withTempDir("ledger-lf", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lf", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.doesNotMatch(ledger, /\r\n/);
+    assert.match(ledger, /\n/);
+  });
+});
+
+test("benchmark-inspect warns before suspicious full benchmark probes", async () => {
+  await withTempDir("benchmark-inspect", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "inspect", "--metric-name", "score"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('case-a')"`;
+    const result = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ranCommand, true);
+    assert.match(payload.outputPreview, /case-a/);
+    assert.match(payload.hints.join("\n"), /METRIC score=<number>/);
+
+    const suspicious = await runCli([
+      "benchmark-inspect",
+      "--cwd",
+      dir,
+      "--command",
+      "CODESTORY_PIPELINE_LIST_CASES=1 node scripts/autoresearch-indexer-embedder-pipeline.mjs",
+    ]);
+    assert.equal(suspicious.code, 0, suspicious.stderr);
+    const suspiciousPayload = JSON.parse(suspicious.stdout);
+    assert.match(suspiciousPayload.warnings.join("\n"), /CODESTORY_EMBED_RESEARCH_LIST=1/);
+  });
+});
+
+test("checks-inspect catches malformed cargo checks and broad failures", async () => {
+  await withTempDir("checks-inspect", async (dir) => {
+    const cargoShape = `${quoteForShell(process.execPath)} -e "console.error(\\"error: unexpected argument 'build_search_state' found\\\\n\\\\nUsage: cargo.exe test [OPTIONS] [TESTNAME] [-- [ARGS]...]\\"); process.exit(1)"`;
+    const shapeResult = await runCli(["checks-inspect", "--cwd", dir, "--command", cargoShape]);
+    assert.equal(shapeResult.code, 0, shapeResult.stderr);
+    const shapePayload = JSON.parse(shapeResult.stdout);
+    assert.equal(shapePayload.ok, false);
+    assert.match(shapePayload.warnings.join("\n"), /Cargo rejected/);
+    assert.match(shapePayload.nextAction, /Fix command-shape/);
+
+    const broadFailure = `${quoteForShell(process.execPath)} -e "console.error(\\"test runtime::one ... FAILED\\\\ntest semantic::two ... FAILED\\"); process.exit(1)"`;
+    const broadResult = await runCli(["checks-inspect", "--cwd", dir, "--command", broadFailure]);
+    assert.equal(broadResult.code, 0, broadResult.stderr);
+    const broadPayload = JSON.parse(broadResult.stdout);
+    assert.deepEqual(broadPayload.failedTests, ["runtime::one", "semantic::two"]);
+    assert.match(broadPayload.warnings.join("\n"), /2 tests failed/);
+  });
+});
+
+test("promote-gate dry-runs and appends measurement gate metadata", async () => {
+  await withTempDir("promote-gate", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "gate", "--metric-name", "score"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    const dryRun = await runCli([
+      "promote-gate",
+      "--cwd",
+      dir,
+      "--reason",
+      "move to 150 queries",
+      "--query-count",
+      "150",
+      "--dry-run",
+    ]);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    const dryPayload = JSON.parse(dryRun.stdout);
+    assert.equal(dryPayload.dryRun, true);
+    assert.equal(dryPayload.entry.measurementGate.queryCount, 150);
+
+    const confirmed = await runCli([
+      "promote-gate",
+      "--cwd",
+      dir,
+      "--reason",
+      "move to 150 queries",
+      "--gate-name",
+      "150-query gate",
+      "--query-count",
+      "150",
+      "--yes",
+    ]);
+    assert.equal(confirmed.code, 0, confirmed.stderr);
+    const payload = JSON.parse(confirmed.stdout);
+    assert.equal(payload.nextSegment, 1);
+    assert.equal(payload.entry.measurementGate.name, "150-query gate");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(JSON.parse(state.stdout).segment, 1);
   });
 });
 
@@ -2124,6 +2292,7 @@ test("mcp-smoke reports direct stdio server readiness", async () => {
   assert.equal(payload.missingRequiredTools.length, 0);
   assert.match(payload.toolNames.join("\n"), /setup_session/);
   assert.match(payload.toolNames.join("\n"), /next_experiment/);
+  assert.match(payload.toolNames.join("\n"), /checks_inspect/);
 });
 
 test("CLI parser accepts equals-form options", async () => {
@@ -2201,9 +2370,11 @@ test("mcp tools expose guidance and output contracts", async () => {
   const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
+  const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
 
   assert.ok(guided);
+  assert.ok(checksInspect);
   assert.ok(serve);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
@@ -2222,6 +2393,7 @@ test("mcp tools expose guidance and output contracts", async () => {
     "Read-only unless benchmark check runs configured commands.",
   );
   assert.equal(cliCommandForTool("next_experiment"), "next");
+  assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
   assert.equal(toolMutates("next_experiment"), true);
   assert.equal(toolMutates("read_state"), false);
 });
@@ -3035,7 +3207,7 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
   });
 
   assert.equal(report.ok, false);
-  assert.equal(report.local.version, "1.0.1");
+  assert.equal(report.local.version, "1.1.0");
   assert.equal(report.installed.version, "0.5.1");
   assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
   assert.match(report.warnings.join("\n"), /restart Codex/);

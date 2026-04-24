@@ -1,6 +1,6 @@
 export function SideRail({ liveActions, showcase }) {
   const status = showcase ? "Live" : liveActions ? "Live" : "Static";
-  const detail = showcase ? "Runboard" : liveActions ? "Local actions" : "Snapshot";
+  const detail = showcase ? "Runboard" : liveActions ? "Visual aid" : "Snapshot";
   return (
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>
@@ -13,9 +13,9 @@ export function SideRail({ liveActions, showcase }) {
           <span className="nav-icon">2</span>
           <span>Metric</span>
         </a>
-        <a href="#mission-panel">
+        <a href="#codex-brief">
           <span className="nav-icon">3</span>
-          <span>Flow</span>
+          <span>Brief</span>
         </a>
         <a href="#ledger">
           <span className="nav-icon">4</span>

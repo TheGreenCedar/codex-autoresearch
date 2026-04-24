@@ -212,6 +212,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.nextExperiment({
         cwd: args.cwd,
         command: args.command,
+        compact: args.compact,
         timeoutSeconds: args.timeoutSeconds,
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
@@ -261,10 +262,38 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         timeoutSeconds: args.timeoutSeconds,
       }),
     }),
+    "benchmark-inspect": async (args) => ({
+      result: await deps.benchmarkInspect({
+        cwd: args.cwd,
+        command: args.command,
+        timeoutSeconds: args.timeoutSeconds,
+      }),
+    }),
+    "checks-inspect": async (args) => ({
+      result: await deps.checksInspect({
+        cwd: args.cwd,
+        command: args.command || args.checksCommand,
+        timeoutSeconds: args.timeoutSeconds,
+      }),
+    }),
     "new-segment": async (args) => ({
       result: await deps.newSegment({
         cwd: args.cwd,
         reason: args.reason,
+        dryRun: args.dryRun,
+        yes: args.yes,
+        confirm: args.confirm,
+      }),
+    }),
+    "promote-gate": async (args) => ({
+      result: await deps.promoteGate({
+        cwd: args.cwd,
+        reason: args.reason,
+        gateName: args.gateName,
+        queryCount: args.queryCount,
+        benchmarkCommand: args.benchmarkCommand,
+        checksCommand: args.checksCommand,
+        notes: args.notes,
         dryRun: args.dryRun,
         yes: args.yes,
         confirm: args.confirm,
@@ -363,6 +392,7 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
     },
   });
   liveUrl = serveResult.url;
+  const health = await verifyLiveDashboardUrl(liveUrl);
   return {
     keepAlive: true,
     result: {
@@ -370,11 +400,45 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
       workDir: serveResult.workDir,
       port: serveResult.port,
       url: serveResult.url,
+      verified: health.ok,
+      healthUrl: health.url,
+      checkedAt: health.checkedAt,
       modeGuidance: {
         deliveryMode: "live-server",
-        difference:
-          "This served URL can run guarded dashboard actions; exported file:// dashboards are read-only snapshots.",
+        difference: health.ok
+          ? "This served URL was liveness-checked for live refresh; use CLI or MCP for actions, while exported file:// dashboards remain read-only snapshots."
+          : `Dashboard server started but liveness check failed: ${health.error}. Restart serve before handing this URL to a user.`,
       },
     },
   };
+}
+
+async function verifyLiveDashboardUrl(url: string) {
+  const checkedAt = new Date().toISOString();
+  const healthUrl = new URL("health", url).toString();
+  try {
+    const response = await fetch(healthUrl);
+    if (!response.ok) {
+      return {
+        ok: false,
+        url: healthUrl,
+        checkedAt,
+        error: `GET /health returned ${response.status}`,
+      };
+    }
+    const payload = (await response.json().catch(() => null)) as LooseObject | null;
+    return {
+      ok: payload?.ok === true,
+      url: healthUrl,
+      checkedAt,
+      error: payload?.ok === true ? "" : "GET /health did not return ok=true",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url: healthUrl,
+      checkedAt,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

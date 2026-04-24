@@ -13,11 +13,8 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const chips = evidenceChipsFor(viewModel, action, readout);
-  const [copiedCommand, setCopiedCommand] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
   const [copiedHandoff, setCopiedHandoff] = useState(false);
-  const nextCommand = nextCommandFor(viewModel, action);
-  const canCopyNextCommand = Boolean(mode.liveActions && nextCommand);
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
@@ -49,28 +46,6 @@ export function DecisionRail({
             action.detail ||
             "Add ASI next_action_hint to make the next session obvious."}
         </p>
-        <div id="next-command-copy" className="next-command-copy" hidden={!canCopyNextCommand}>
-          <div>
-            <span>Next CLI command</span>
-            <code id="next-cli-command">{nextCommand}</code>
-          </div>
-          <button
-            id="copy-next-cli-command"
-            type="button"
-            className="tool-button subtle"
-            onClick={async () => {
-              if (!nextCommand) return;
-              const copied = await copyText(nextCommand);
-              setCopiedCommand(copied);
-              if (copied) window.setTimeout(() => setCopiedCommand(false), 1600);
-            }}
-          >
-            {copiedCommand ? "Copied command" : "Copy command"}
-          </button>
-          <span className="copy-status" aria-live="polite" hidden={!copiedCommand}>
-            Next CLI command copied.
-          </span>
-        </div>
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
@@ -118,7 +93,7 @@ export function DecisionRail({
         </div>
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
-          <span>{mode.liveActions ? "Live actions available" : "Read-only snapshot"}</span>
+          <span>{mode.liveActions ? "Live data available" : "Read-only snapshot"}</span>
         </div>
       </div>
       <div className="decision-list" aria-label="Recent decision history">
@@ -150,20 +125,6 @@ function userReportFor(
       ? `Codex handoff includes ${diagnostics} diagnostic note${diagnostics === 1 ? "" : "s"}.`
       : "No Codex diagnostics are pending.",
   ].join("\n");
-}
-
-function nextCommandFor(viewModel: DashboardViewModel, action: NextBestAction) {
-  const primary = recordFrom(action.primaryCommand);
-  const guidedSetup = recordFrom(viewModel.guidedSetup);
-  const commands = recordFrom(guidedSetup.commands);
-  return firstString(
-    action.command,
-    primary.command,
-    commands.replaceLast,
-    commands.next,
-    commands.baseline,
-    commands.logLast,
-  );
 }
 
 function evidenceChipsFor(
@@ -207,13 +168,6 @@ function toList(value: unknown) {
       return String(item || "");
     })
     .filter(Boolean);
-}
-
-function firstString(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
 }
 
 function recordFrom(value: unknown): Record<string, unknown> {

@@ -271,7 +271,7 @@ const checks = [
 				"filter hallucinations",
 				"## Dashboard",
 				"serve_dashboard",
-				"static HTML as read-only",
+				"Static exports are read-only",
 				"## Finalize",
 				"finalize_preview",
 				"Runway order"
@@ -474,7 +474,7 @@ const checks = [
 				"aiSummary",
 				"Next action",
 				"nextBestAction",
-				"Strategy memory",
+				"Session memory",
 				"lanePortfolio",
 				"plateau"
 			]) ? pass() : fail("Dashboard is missing chart, next-action, or portfolio/plateau surfaces.");
@@ -508,6 +508,7 @@ const checks = [
 				"recommend-next --cwd <project>",
 				"recipes list|show|recommend",
 				"benchmark-lint --cwd <project>",
+				"checks-inspect --cwd <project>",
 				"new-segment --cwd <project>",
 				"gap-candidates --cwd <project>",
 				"finalize-preview --cwd <project>",
@@ -519,6 +520,7 @@ const checks = [
 				"recommend_next",
 				"serve_dashboard",
 				"benchmark_lint",
+				"checks_inspect",
 				"new_segment",
 				"gap_candidates",
 				"finalize_preview"
@@ -550,17 +552,18 @@ const checks = [
 	{
 		id: "full-product-docs",
 		file: "../../README.md, skills/codex-autoresearch/SKILL.md",
-		description: "Public docs describe recipes, setup-plan, gap candidates, finalization preview, live actions, and integrations through the single skill.",
+		description: "Public docs describe recipes, setup-plan, gap candidates, finalization preview, visual dashboard use, and integrations through the single skill.",
 		run: async () => {
 			return includesAll(await readRootText("README.md") + await readText("skills/codex-autoresearch/SKILL.md"), [
 				"setup-plan",
 				"onboarding-packet",
 				"recommend-next",
 				"benchmark-lint",
+				"checks-inspect",
 				"new-segment",
 				"gap-candidates",
 				"finalize-preview",
-				"guarded local actions",
+				"visual aid",
 				"confirmed log decisions",
 				"serve_dashboard",
 				"recipes"

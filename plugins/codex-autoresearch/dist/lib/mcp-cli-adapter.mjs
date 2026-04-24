@@ -266,7 +266,8 @@ function cliArgsForTool(name, args) {
 		option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds),
 		option("--checks-command", args.checks_command ?? args.checksCommand),
 		option("--checks-timeout-seconds", args.checks_timeout_seconds ?? args.checksTimeoutSeconds),
-		option("--checks-policy", args.checks_policy ?? args.checksPolicy)
+		option("--checks-policy", args.checks_policy ?? args.checksPolicy),
+		flag("--compact", args.compact)
 	]);
 	if (name === "log_experiment") return compactArgs([
 		"log",
@@ -320,10 +321,34 @@ function cliArgsForTool(name, args) {
 		option("--command", args.command),
 		option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds)
 	]);
+	if (name === "benchmark_inspect") return compactArgs([
+		"benchmark-inspect",
+		cwdFlag(args),
+		option("--command", args.command),
+		option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds)
+	]);
+	if (name === "checks_inspect") return compactArgs([
+		"checks-inspect",
+		cwdFlag(args),
+		option("--command", args.command ?? args.checks_command ?? args.checksCommand),
+		option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds)
+	]);
 	if (name === "new_segment") return compactArgs([
 		"new-segment",
 		cwdFlag(args),
 		option("--reason", args.reason),
+		flag("--dry-run", args.dry_run ?? args.dryRun),
+		flag("--yes", args.confirm ?? args.yes)
+	]);
+	if (name === "promote_gate") return compactArgs([
+		"promote-gate",
+		cwdFlag(args),
+		option("--reason", args.reason),
+		option("--gate-name", args.gate_name ?? args.gateName),
+		option("--query-count", args.query_count ?? args.queryCount),
+		option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+		option("--checks-command", args.checks_command ?? args.checksCommand),
+		listOption("--notes", args.notes),
 		flag("--dry-run", args.dry_run ?? args.dryRun),
 		flag("--yes", args.confirm ?? args.yes)
 	]);
