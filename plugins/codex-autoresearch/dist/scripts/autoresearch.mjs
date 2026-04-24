@@ -75,7 +75,7 @@ function usage() {
 	return `Codex Autoresearch
 
 Usage:
-  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
   node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
@@ -93,7 +93,7 @@ Usage:
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
@@ -144,6 +144,16 @@ function parseJsonOption(value, fallback) {
 		throw new Error(`Invalid JSON option: ${error.message}`);
 	}
 }
+async function parseJsonFileOption(filePath, workDir, optionName) {
+	if (filePath == null || filePath === "") return null;
+	const input = String(filePath);
+	const resolved = path.isAbsolute(input) ? input : path.join(workDir, input);
+	try {
+		return parseJsonOption(await fsp.readFile(resolved, "utf8"), {});
+	} catch (error) {
+		throw new Error(`${optionName} must point to a valid JSON file: ${error.message}`);
+	}
+}
 function numberOption(value, fallback) {
 	if (value == null || value === "") return fallback;
 	const parsed = Number(value);
@@ -188,6 +198,9 @@ function safeSlug(value, fallback = "research") {
 }
 function shellQuote(value) {
 	return `"${String(value).replace(/"/g, "\\\"")}"`;
+}
+function slashPath(value) {
+	return String(value || "").replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 function validateMetricName(name) {
 	if (!METRIC_NAME_PATTERN.test(String(name || "")) || DENIED_METRIC_NAMES.has(String(name))) throw new Error(`Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${name}`);
@@ -266,6 +279,54 @@ async function withRecipeDefaults(args) {
 	const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
 	return recipeId ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog) : args;
 }
+function explicitBenchmarkPrintsMetric(args) {
+	const hasExplicitBenchmarkCommand = Boolean(args.benchmark_command || args.benchmarkCommand);
+	return boolOption(args.benchmark_prints_metric ?? args.benchmarkPrintsMetric, hasExplicitBenchmarkCommand);
+}
+function scopeWarningsFromArgs(args) {
+	const scope = normalizeRelativePaths(args.files_in_scope ?? args.filesInScope ?? args.scope, "filesInScope").map(slashPath);
+	const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths").map(slashPath);
+	if (!scope.length || !commitPaths.length) return [];
+	const covers = (container, item) => container === item || item.startsWith(`${container}/`) || container.startsWith(`${item}/`);
+	const commitOutsideScope = commitPaths.filter((commitPath) => scope.every((scopePath) => !covers(scopePath, commitPath)));
+	const scopeOutsideCommit = scope.filter((scopePath) => commitPaths.every((commitPath) => !covers(commitPath, scopePath)));
+	const warnings = [];
+	if (commitOutsideScope.length) warnings.push(`commitPaths not represented in filesInScope: ${commitOutsideScope.join(", ")}`);
+	if (scopeOutsideCommit.length) warnings.push(`filesInScope not represented in commitPaths: ${scopeOutsideCommit.join(", ")}`);
+	return warnings;
+}
+function firstRunChecklist({ setupCommand, benchmarkLintCommand, doctorCommand, checkpoint, baselineCommand, logCommand }) {
+	const steps = [{
+		step: "setup",
+		command: setupCommand,
+		purpose: "Create or refresh the session files."
+	}];
+	if (benchmarkLintCommand) steps.push({
+		step: "benchmark-lint",
+		command: benchmarkLintCommand,
+		purpose: "Validate that the benchmark emits the primary METRIC line before running it live."
+	});
+	steps.push({
+		step: "doctor",
+		command: doctorCommand,
+		purpose: "Run setup/readiness checks and confirm the benchmark contract."
+	});
+	if (checkpoint?.commands?.length) steps.push({
+		step: "checkpoint",
+		command: checkpoint.commands.join(" && "),
+		purpose: "Commit generated session files before experiment-scoped keep commits."
+	});
+	steps.push({
+		step: "baseline",
+		command: baselineCommand,
+		purpose: "Run the first measured packet."
+	}, {
+		step: "log",
+		command: logCommand,
+		purpose: "Record the packet with status and ASI before starting another run."
+	});
+	return steps;
+}
 async function setupPlan(args) {
 	const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
 	const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
@@ -293,6 +354,13 @@ async function setupPlan(args) {
 	const commitPaths = normalizeRelativePaths(planArgs.commit_paths ?? planArgs.commitPaths, "commitPaths");
 	const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
 	const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
+	const metricName = validateMetricName(planArgs.metric_name || planArgs.metricName || "seconds");
+	const benchmarkPrintsMetric = explicitBenchmarkPrintsMetric(planArgs);
+	const benchmarkMode = {
+		explicitCommand: Boolean(benchmarkCommand),
+		printsMetric: benchmarkPrintsMetric,
+		note: benchmarkCommand ? benchmarkPrintsMetric ? "Explicit benchmark commands are treated as metric-emitting by default. Pass --benchmark-prints-metric false to time a raw workload instead." : "This explicit benchmark command will be wrapped and timed by the generated script." : "No explicit benchmark command was provided; generated placeholder wrappers must be replaced before use."
+	};
 	const command = [
 		"node",
 		shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
@@ -303,13 +371,14 @@ async function setupPlan(args) {
 		shellQuote(planArgs.name || "Autoresearch session"),
 		planArgs.goal ? `--goal ${shellQuote(planArgs.goal)}` : "",
 		"--metric-name",
-		shellQuote(planArgs.metric_name || planArgs.metricName || "seconds"),
+		shellQuote(metricName),
 		planArgs.metric_unit || planArgs.metricUnit ? `--metric-unit ${shellQuote(planArgs.metric_unit ?? planArgs.metricUnit)}` : "",
 		"--direction",
 		shellQuote(planArgs.direction || "lower"),
 		"--shell",
 		shellQuote(shellKind),
 		benchmarkCommand ? `--benchmark-command ${shellQuote(benchmarkCommand)}` : "",
+		planArgs.benchmark_prints_metric != null || planArgs.benchmarkPrintsMetric != null ? `--benchmark-prints-metric ${shellQuote(planArgs.benchmark_prints_metric ?? planArgs.benchmarkPrintsMetric)}` : "",
 		checksCommand ? `--checks-command ${shellQuote(checksCommand)}` : "",
 		listOption(planArgs.files_in_scope ?? planArgs.filesInScope).length ? `--files-in-scope ${shellQuote(listOption(planArgs.files_in_scope ?? planArgs.filesInScope).join(","))}` : "",
 		listOption(planArgs.off_limits ?? planArgs.offLimits).length ? `--off-limits ${shellQuote(listOption(planArgs.off_limits ?? planArgs.offLimits).join(","))}` : "",
@@ -321,9 +390,33 @@ async function setupPlan(args) {
 		args.catalog ? `--catalog ${shellQuote(args.catalog)}` : ""
 	].filter(Boolean).join(" ");
 	const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+	const benchmarkLintCommand = benchmarkCommand ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}` : hasDefaultBenchmarkCommand ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(await defaultBenchmarkCommand(workDir))}` : "";
 	const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
 	const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
 	const guideCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`;
+	const scopeWarnings = scopeWarningsFromArgs(planArgs);
+	const checklist = firstRunChecklist({
+		setupCommand: command,
+		benchmarkLintCommand,
+		doctorCommand,
+		checkpoint: commitPaths.length > 0 ? {
+			paths: [
+				"autoresearch.md",
+				"autoresearch.ideas.md",
+				shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
+				"autoresearch.config.json"
+			],
+			commands: [`git add -- ${[
+				"autoresearch.md",
+				"autoresearch.ideas.md",
+				shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
+				"autoresearch.config.json"
+			].map(shellQuote).join(" ")}`, `git commit -m ${shellQuote(`Start autoresearch session: ${planArgs.name || "Autoresearch session"}`)}`],
+			note: "Run after setup creates files and before the first experiment-scoped keep commit."
+		} : null,
+		baselineCommand,
+		logCommand
+	});
 	return {
 		ok: true,
 		workDir,
@@ -333,32 +426,21 @@ async function setupPlan(args) {
 		recommendedRecipe: recommended,
 		missing,
 		defaultBenchmarkCommandReady: hasDefaultBenchmarkCommand,
+		benchmarkMode,
+		benchmarkLintCommand,
+		scopeWarnings,
 		nextCommand: command,
 		guideCommand,
 		baselineCommand,
-		guidedFlow: [
-			{
-				step: "setup",
-				command,
-				purpose: "Create the session files and metric config."
-			},
-			{
-				step: "doctor",
-				command: doctorCommand,
-				purpose: "Verify the benchmark emits the configured metric."
-			},
-			{
-				step: "baseline",
-				command: baselineCommand,
-				purpose: "Run the first measured packet."
-			},
-			{
-				step: "log",
-				command: logCommand,
-				purpose: "Record the last packet with a deliberate keep/discard decision."
-			}
-		],
-		notes: ["setup-plan is read-only.", "Generated recipe scripts remain inspectable and should be checked with doctor before logging a keep."]
+		firstRunChecklist: checklist,
+		guidedFlow: checklist,
+		notes: [
+			"setup-plan is read-only.",
+			"Before the first live packet, run benchmark-lint or doctor --check-benchmark so a broken or expensive benchmark is caught early.",
+			"Generated recipe scripts remain inspectable and should be checkpointed before experiment-scoped keep commits.",
+			benchmarkMode.note,
+			...scopeWarnings.map((warning) => `Scope warning: ${warning}`)
+		]
 	};
 }
 async function promptPlan(args) {
@@ -661,12 +743,16 @@ async function guidedSetup(args) {
 		} : null,
 		commands: {
 			setup: setup.nextCommand,
+			benchmarkLint: setup.benchmarkLintCommand,
 			doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command,
+			checkpoint: setup.firstRunChecklist.find((step) => step.step === "checkpoint")?.command || "",
 			baseline: baselineCommand,
 			logLast: logCommand,
 			replaceLast: replaceLastRunCommand,
 			dashboard: dashboardCommand
 		},
+		firstRunChecklist: setup.firstRunChecklist,
+		scopeWarnings: setup.scopeWarnings,
 		settings: dashboardSettings(config),
 		diversityGuidance: state.memory?.diversityGuidance || null,
 		lanePortfolio: state.memory?.lanePortfolio || [],
@@ -714,6 +800,8 @@ async function onboardingPacket(args) {
 		generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
 		protocol: [
 			"Inspect state and doctor before editing.",
+			"Before the first live packet, benchmark-lint or doctor --check-benchmark must prove the primary METRIC contract.",
+			"Checkpoint generated session files before experiment-scoped keep commits.",
 			"Run exactly one packet with next_experiment or next.",
 			"Log the packet with keep, discard, crash, or checks_failed plus ASI.",
 			"Read continuation before deciding whether to continue or finalize."
@@ -891,7 +979,9 @@ function markdownList(items, emptyText) {
 	return items.map((item) => `- ${item}`).join("\n");
 }
 function renderSessionDocument(args) {
-	const scope = listOption(args.files_in_scope ?? args.filesInScope ?? args.scope);
+	const explicitScope = listOption(args.files_in_scope ?? args.filesInScope ?? args.scope);
+	const commitScope = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths").map((item) => `\`${item}\`: in configured commit scope`);
+	const scope = explicitScope.length ? explicitScope : commitScope;
 	const offLimits = listOption(args.off_limits ?? args.offLimits);
 	const constraints = listOption(args.constraints);
 	const constraintsPlaceholder = "- <Correctness, compatibility, dependency, or budget constraints>";
@@ -933,7 +1023,8 @@ function renderResumeBlock(workDir) {
 function renderBenchmarkScript(args, shellKind) {
 	const command = args.benchmark_command || args.benchmarkCommand || "# TODO: replace with the real workload";
 	const metricName = validateMetricName(args.metric_name || args.metricName || "elapsed_seconds");
-	if (boolOption(args.benchmark_prints_metric ?? args.benchmarkPrintsMetric, false)) {
+	const hasExplicitBenchmarkCommand = Boolean(args.benchmark_command || args.benchmarkCommand);
+	if (boolOption(args.benchmark_prints_metric ?? args.benchmarkPrintsMetric, hasExplicitBenchmarkCommand)) {
 		if (shellKind === "bash") return [
 			"#!/usr/bin/env bash",
 			"set -euo pipefail",
@@ -1783,6 +1874,14 @@ async function appendRuntimeConfigFile(files, sessionCwd, updates) {
 	const { configPath, content } = mergeRuntimeConfig(sessionCwd, updates);
 	files.push(await writeSessionFile(configPath, content, { overwrite: true }));
 }
+function setupCheckpointGuidance(workDir, files, name) {
+	const paths = [...new Set(files.map((file) => path.relative(workDir, file.path).replace(/\\/g, "/")).filter((filePath) => filePath && !filePath.startsWith("..") && !path.isAbsolute(filePath)))];
+	return {
+		paths,
+		commands: paths.length ? [`git add -- ${paths.map(shellQuote).join(" ")}`, `git commit -m ${shellQuote(`Start autoresearch session: ${name}`)}`] : [],
+		note: "Checkpoint these generated session files before the first experiment commit if this project is in Git."
+	};
+}
 async function writeRuntimeConfig(sessionCwd, updates) {
 	if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
 	const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
@@ -1851,12 +1950,36 @@ async function setupSession(args) {
 	if (Object.keys(runtimeUpdates).length > 0) await appendRuntimeConfigFile(files, sessionCwd, runtimeUpdates);
 	let init = null;
 	if (!boolOption(args.skip_init ?? args.skipInit, false)) init = await initExperiment(args);
+	const checkpoint = setupCheckpointGuidance(workDir, files, args.name);
+	const metricName = validateMetricName(args.metric_name || args.metricName);
+	const benchmarkCommand = shellKind === "bash" ? "bash ./autoresearch.sh" : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+	const benchmarkMode = {
+		explicitCommand: Boolean(args.benchmark_command || args.benchmarkCommand),
+		printsMetric: explicitBenchmarkPrintsMetric(args),
+		note: explicitBenchmarkPrintsMetric(args) ? "The benchmark command/script is expected to print METRIC lines." : "The generated benchmark script wraps the command and emits the primary metric from elapsed time."
+	};
+	const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
+	const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+	const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+	const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
 	return {
 		ok: true,
 		workDir,
 		sessionCwd,
 		shell: shellKind,
 		files,
+		checkpoint,
+		benchmarkMode,
+		benchmarkLintCommand,
+		scopeWarnings: scopeWarningsFromArgs(args),
+		firstRunChecklist: firstRunChecklist({
+			setupCommand: "already completed",
+			benchmarkLintCommand,
+			doctorCommand,
+			checkpoint,
+			baselineCommand,
+			logCommand
+		}),
 		init
 	};
 }
@@ -1921,6 +2044,12 @@ async function setupResearchSession(args) {
 		cwd: workDir,
 		researchSlug: slug
 	});
+	const checkpoint = setupCheckpointGuidance(workDir, files, args.name || `Deep research: ${goal}`);
+	const benchmarkCommand = shellKind === "bash" ? "bash ./autoresearch.sh" : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+	const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote("quality_gap")} --command ${shellQuote(benchmarkCommand)}`;
+	const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+	const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+	const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
 	return {
 		ok: true,
 		workDir,
@@ -1929,6 +2058,22 @@ async function setupResearchSession(args) {
 		researchDir,
 		shell: shellKind,
 		files,
+		checkpoint,
+		benchmarkMode: {
+			explicitCommand: true,
+			printsMetric: true,
+			note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad."
+		},
+		benchmarkLintCommand,
+		scopeWarnings: scopeWarningsFromArgs(args),
+		firstRunChecklist: firstRunChecklist({
+			setupCommand: "already completed",
+			benchmarkLintCommand,
+			doctorCommand,
+			checkpoint,
+			baselineCommand,
+			logCommand
+		}),
 		init,
 		qualityGap: {
 			open: gap.open,
@@ -2268,7 +2413,9 @@ async function logExperiment(args) {
 	const description = args.description || lastPacket?.run?.description || "";
 	if (!description) throw new Error("description is required");
 	const metrics = args.metrics ?? lastPacket?.decision?.metrics ?? {};
-	const asi = args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
+	const asiFilePath = args.asi_file ?? args.asiFile;
+	if (asiFilePath && args.asi != null) throw new Error("Use either --asi or --asi-file, not both.");
+	const asi = await parseJsonFileOption(asiFilePath, workDir, "--asi-file") ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
 	const stateBefore = currentState(workDir);
 	const inGit = await insideGitRepo(workDir);
 	const explicitCommit = args.commit != null && String(args.commit).trim() !== "";
@@ -2530,7 +2677,8 @@ async function clearSession(args) {
 	};
 }
 function dashboardHtml(entries, meta = {}) {
-	const data = JSON.stringify(entries).replace(/</g, "\\u003c");
+	const dataForClient = meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export" ? stripDashboardCommandFields(entries) : entries;
+	const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
 	const metaForClient = stripDashboardCommandFields(meta);
 	const publicExport = Boolean(meta.publicExport || meta.showcaseMode || meta.settings?.publicExport || meta.settings?.showcaseMode);
 	const metaData = JSON.stringify(publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient).replace(/</g, "\\u003c");
@@ -2554,6 +2702,7 @@ function stripDashboardCommandFields(value) {
 	const commandKeys = new Set([
 		"argv",
 		"baselineCommand",
+		"benchmarkLintCommand",
 		"cwd",
 		"command",
 		"commandLabel",
@@ -3243,6 +3392,7 @@ const { callTool, toolSchemas, validateToolArguments } = createMcpInterface({
 	nextExperiment,
 	onboardingPacket,
 	parseJsonOption,
+	parseJsonFileOption,
 	promptPlan,
 	publicState,
 	recommendNext,

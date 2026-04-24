@@ -2280,6 +2280,80 @@ test("setup-plan preserves explicit command and state inputs", async () => {
 		assert.match(payload.nextCommand, /process\.exit\(0\)/);
 		assert.match(payload.nextCommand, /--commit-paths "src,tests"/);
 		assert.match(payload.nextCommand, /--max-iterations "7"/);
+		assert.equal(payload.benchmarkMode.printsMetric, true);
+		assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
+		assert.deepEqual(payload.firstRunChecklist.map((step) => step.step), [
+			"setup",
+			"benchmark-lint",
+			"doctor",
+			"checkpoint",
+			"baseline",
+			"log"
+		]);
+	});
+});
+test("setup-plan warns when files in scope and commit paths diverge", async () => {
+	await withTempDir("setup-plan-scope-warning", async (dir) => {
+		const result = await runCli([
+			"setup-plan",
+			"--cwd",
+			dir,
+			"--name",
+			"scope warning",
+			"--metric-name",
+			"seconds",
+			"--benchmark-command",
+			`${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+			"--files-in-scope",
+			"src",
+			"--commit-paths",
+			"src,tests"
+		]);
+		assert.equal(result.code, 0, result.stderr);
+		const payload = JSON.parse(result.stdout);
+		assert.match(payload.scopeWarnings.join("\n"), /tests/);
+		assert.match(payload.notes.join("\n"), /Scope warning/);
+	});
+});
+test("setup does not append elapsed metrics to explicit metric-emitting benchmarks", async () => {
+	await withTempDir("setup-explicit-metric", async (dir) => {
+		const result = await runCli([
+			"setup",
+			"--cwd",
+			dir,
+			"--name",
+			"explicit metric setup",
+			"--metric-name",
+			"seconds",
+			"--benchmark-command",
+			`${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=42')"`,
+			"--commit-paths",
+			"src,tests"
+		]);
+		assert.equal(result.code, 0, result.stderr);
+		const payload = JSON.parse(result.stdout);
+		assert.ok(payload.checkpoint.paths.includes("autoresearch.md"));
+		assert.ok(payload.checkpoint.paths.includes("autoresearch.config.json"));
+		assert.match(payload.checkpoint.commands.join("\n"), /git add --/);
+		assert.equal(payload.benchmarkMode.printsMetric, true);
+		assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
+		assert.deepEqual(payload.firstRunChecklist.map((step) => step.step), [
+			"setup",
+			"benchmark-lint",
+			"doctor",
+			"checkpoint",
+			"baseline",
+			"log"
+		]);
+		const scriptName = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
+		const script = await readFile(path.join(dir, scriptName), "utf8");
+		assert.match(script, /METRIC seconds=42/);
+		assert.doesNotMatch(script, /Elapsed\.TotalSeconds|elapsed_seconds/);
+		assert.doesNotMatch(script, /METRIC seconds=\{0\}|printf 'METRIC seconds/);
+		const sessionDoc = await readFile(path.join(dir, "autoresearch.md"), "utf8");
+		assert.match(sessionDoc, /`src`: in configured commit scope/);
+		assert.match(sessionDoc, /`tests`: in configured commit scope/);
+		assert.doesNotMatch(sessionDoc, /TBD: add files after initial inspection/);
 	});
 });
 test("invalid iteration limits and negative extensions fail loudly", async () => {
@@ -2337,6 +2411,41 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
 		]);
 		assert.notEqual(fractionalExtend.code, 0);
 		assert.match(fractionalExtend.stderr, /extend must be a non-negative integer/);
+	});
+});
+test("log accepts ASI from a JSON file", async () => {
+	await withTempDir("asi-file", async (dir) => {
+		await runCli([
+			"init",
+			"--cwd",
+			dir,
+			"--name",
+			"asi file",
+			"--metric-name",
+			"seconds"
+		]);
+		await writeFile(path.join(dir, "asi.json"), JSON.stringify({
+			hypothesis: "avoid shell quoting",
+			evidence: "file parsed",
+			next_action_hint: "continue"
+		}), "utf8");
+		const result = await runCli([
+			"log",
+			"--cwd",
+			dir,
+			"--metric",
+			"3",
+			"--status",
+			"keep",
+			"--description",
+			"Baseline",
+			"--asi-file",
+			"asi.json"
+		]);
+		assert.equal(result.code, 0, result.stderr);
+		const run = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line)).find((entry) => entry.run === 1);
+		assert.equal(run.asi.hypothesis, "avoid shell quoting");
+		assert.equal(run.asi.evidence, "file parsed");
 	});
 });
 test("broad discard cleanup preserves deep research scratchpads", async () => {

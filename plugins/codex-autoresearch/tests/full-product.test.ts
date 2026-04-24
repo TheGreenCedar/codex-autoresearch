@@ -219,7 +219,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.match(planPayload.guideCommand, / guide /);
     assert.deepEqual(
       planPayload.guidedFlow.map((step) => step.step),
-      ["setup", "doctor", "baseline", "log"],
+      ["setup", "benchmark-lint", "doctor", "baseline", "log"],
     );
 
     const recipes = await runCli(["recipes", "list"]);

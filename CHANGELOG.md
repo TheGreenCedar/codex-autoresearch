@@ -12,6 +12,14 @@ Patch release for TypeScript-built plugin installs.
 
 - Fixed Git/marketplace-style source downloads after the TypeScript migration: source downloads now include the compiled TypeScript runtime that the public `.mjs` launcher scripts load.
 - Added a release gate that verifies the tracked `dist/` runtime exists for source-checkout downloads, not only for `npm pack` artifacts.
+- Fixed setup-generated benchmark wrappers so explicit metric-emitting benchmark commands no longer get an extra elapsed-time primary metric appended.
+- Fixed setup session docs to carry configured commit paths into the initial "Files in Scope" section instead of leaving them as generic TBDs.
+- Added setup checkpoint guidance so generated session files are surfaced before experiment-scoped keep commits.
+- Added `log --asi-file <path>` for shells where inline JSON ASI is hard to quote reliably.
+- Added first-run checklist guidance across setup, guide, and onboarding packets so benchmark linting, doctor checks, checkpointing, baseline, and logging happen in order.
+- Added scope/commit-path drift warnings when setup receives both surfaces and they disagree.
+- Documented `--benchmark-prints-metric false` for explicit benchmark commands that should be timed as raw workloads.
+- Tightened dashboard chart y-axis labels for large raw metrics so ticks stay readable in narrow panels.
 
 ## 1.0.0
 

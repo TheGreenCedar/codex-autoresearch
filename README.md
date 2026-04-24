@@ -77,11 +77,14 @@ Codex should:
 
 1. Check Git state and identify the owning package.
 2. Run an onboarding packet or setup plan.
-3. Verify the benchmark prints `METRIC seconds=<number>`.
-4. Start the live dashboard and give you a local URL.
-5. Run one packet.
-6. Log the decision with ASI.
-7. Continue only when the continuation state says it is safe.
+3. Run `benchmark-lint` or `doctor --check-benchmark` before the first live packet.
+4. Checkpoint generated session files before experiment-scoped keep commits.
+5. Start the live dashboard and give you a local URL.
+6. Run one packet.
+7. Log the decision with ASI, using `--asi-file <path>` when inline JSON quoting is brittle.
+8. Continue only when the continuation state says it is safe.
+
+Explicit `--benchmark-command` values are treated as commands that print their own `METRIC name=value` lines. To time a raw workload instead, pass `--benchmark-prints-metric false`.
 
 For product, docs, UX, or broad research, ask for a quality-gap loop:
 
@@ -133,6 +136,7 @@ node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs serve --cwd <project>
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --asi-file asi.json
 node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
 ```

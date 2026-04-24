@@ -21,6 +21,7 @@ const toolSchemas = applyToolContracts([
 					enum: ["lower", "higher"]
 				},
 				benchmark_command: { type: "string" },
+				benchmark_prints_metric: { type: "boolean" },
 				checks_command: { type: "string" },
 				files_in_scope: {
 					type: "array",
@@ -66,6 +67,7 @@ const toolSchemas = applyToolContracts([
 					enum: ["lower", "higher"]
 				},
 				benchmark_command: { type: "string" },
+				benchmark_prints_metric: { type: "boolean" },
 				checks_command: { type: "string" },
 				files_in_scope: {
 					type: "array",
@@ -110,6 +112,7 @@ const toolSchemas = applyToolContracts([
 					enum: ["lower", "higher"]
 				},
 				benchmark_command: { type: "string" },
+				benchmark_prints_metric: { type: "boolean" },
 				checks_command: { type: "string" },
 				files_in_scope: {
 					type: "array",
@@ -192,6 +195,7 @@ const toolSchemas = applyToolContracts([
 					enum: ["lower", "higher"]
 				},
 				benchmark_command: { type: "string" },
+				benchmark_prints_metric: { type: "boolean" },
 				checks_command: { type: "string" },
 				shell: {
 					type: "string",

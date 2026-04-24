@@ -4,12 +4,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 //#region lib/mcp-cli-adapter.ts
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 900;
+const MCP_CLI_OUTPUT_CAPTURE_BYTES = 900 * 1024;
 function createCliToolCaller({ cliScript, pluginRoot, toolTimeoutSeconds = DEFAULT_TOOL_TIMEOUT_SECONDS }) {
 	const liveDashboardProcesses = /* @__PURE__ */ new Map();
 	const runCliInvocation = async (invocation) => {
 		const result = await runProcess(invocation.command, invocation.args, {
 			cwd: invocation.cwd,
-			timeoutSeconds: invocation.timeoutSeconds
+			timeoutSeconds: invocation.timeoutSeconds,
+			maxOutputBytes: MCP_CLI_OUTPUT_CAPTURE_BYTES
 		});
 		return {
 			code: result.exitCode,
@@ -117,6 +119,7 @@ function cliArgsForTool(name, args) {
 		option("--metric-unit", args.metric_unit ?? args.metricUnit),
 		option("--direction", args.direction),
 		option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+		option("--benchmark-prints-metric", args.benchmark_prints_metric ?? args.benchmarkPrintsMetric),
 		option("--checks-command", args.checks_command ?? args.checksCommand),
 		listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
 		listOption("--off-limits", args.off_limits ?? args.offLimits),
@@ -136,6 +139,7 @@ function cliArgsForTool(name, args) {
 		option("--metric-unit", args.metric_unit ?? args.metricUnit),
 		option("--direction", args.direction),
 		option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+		option("--benchmark-prints-metric", args.benchmark_prints_metric ?? args.benchmarkPrintsMetric),
 		option("--checks-command", args.checks_command ?? args.checksCommand),
 		listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
 		listOption("--off-limits", args.off_limits ?? args.offLimits),
@@ -154,6 +158,7 @@ function cliArgsForTool(name, args) {
 		option("--metric-unit", args.metric_unit ?? args.metricUnit),
 		option("--direction", args.direction),
 		option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+		option("--benchmark-prints-metric", args.benchmark_prints_metric ?? args.benchmarkPrintsMetric),
 		option("--checks-command", args.checks_command ?? args.checksCommand),
 		listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
 		listOption("--off-limits", args.off_limits ?? args.offLimits),
@@ -189,6 +194,7 @@ function cliArgsForTool(name, args) {
 		option("--metric-unit", args.metric_unit ?? args.metricUnit),
 		option("--direction", args.direction),
 		option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+		option("--benchmark-prints-metric", args.benchmark_prints_metric ?? args.benchmarkPrintsMetric),
 		option("--checks-command", args.checks_command ?? args.checksCommand),
 		option("--shell", args.shell),
 		listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),

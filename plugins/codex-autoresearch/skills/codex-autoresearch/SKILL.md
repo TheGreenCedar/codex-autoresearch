@@ -41,10 +41,12 @@ UX, the user experience:
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Prefer MCP `onboarding_packet` for a compact handoff, then `recommend_next` for one safe action.
 6. Use MCP `prompt_plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer MCP `setup_plan` for read-only setup guidance. Use `setup_session` only when essentials are known and files should be created.
-7. Use `doctor_session` or `doctor --cwd <project> --explain`; add `--check-benchmark` before trusting first-run or drift-sensitive metrics.
+7. Use `benchmark_lint`, `doctor_session`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
 8. If benchmark output is uncertain, use `benchmark_lint` or `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
 9. Start the live dashboard with MCP `serve_dashboard` or `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
-10. Run and log the baseline immediately.
+10. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
+
+Explicit benchmark commands are assumed to print `METRIC name=value` lines. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 
 CLI fallback from `plugins/codex-autoresearch`:
 
@@ -65,7 +67,7 @@ Over MCP, pass `allow_unsafe_command: true` before materializing custom benchmar
 After `next_experiment`, log the packet. After `log_experiment`, read the returned continuation object.
 
 - Use `log --from-last` or MCP packet data instead of retyping parsed metrics.
-- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`.
+- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
 - `keep` and ordinary `discard` require a finite primary metric.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
