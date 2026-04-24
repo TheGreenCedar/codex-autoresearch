@@ -267,8 +267,113 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "0.6.0");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.0.0");
     assert.equal(doctorPayload.drift.ok, true);
+  });
+});
+
+test("delight commands provide compact state, onboarding, linting, hooks, and new segments", async () => {
+  await withTempDir("delight-commands", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "Delight loop", "--metric-name", "score"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "5",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi",
+      JSON.stringify({ hypothesis: "baseline", evidence: "score=5" }),
+    ]);
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.metric, "score");
+    assert.equal(compactPayload.runs, 1);
+    assert.equal(compactPayload.commands.newSegmentDryRun.includes("new-segment"), true);
+
+    const lint = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "score",
+      "--sample",
+      "METRIC score=4.2",
+    ]);
+    assert.equal(lint.code, 0, lint.stderr);
+    const lintPayload = JSON.parse(lint.stdout);
+    assert.equal(lintPayload.ok, true);
+    assert.equal(lintPayload.parsedMetrics.score, 4.2);
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.ok, true);
+    assert.ok(recommendPayload.nextAction);
+
+    const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
+    assert.equal(onboarding.code, 0, onboarding.stderr);
+    const onboardingPayload = JSON.parse(onboarding.stdout);
+    assert.equal(onboardingPayload.kind, "codex-autoresearch-onboarding-packet");
+    assert.ok(onboardingPayload.templates.firstResponse);
+
+    const promptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      [
+        "Use $Codex Autoresearch to optimize my unit tests' speed.",
+        "Benchmark: node -e \"console.log('METRIC seconds=1')\"",
+        "Metric: seconds, lower is better",
+        'Checks: node -e "process.exit(0)"',
+        "Scope: test runner config and test helpers only",
+      ].join("\n"),
+    ]);
+    assert.equal(promptPlan.code, 0, promptPlan.stderr);
+    const promptPayload = JSON.parse(promptPlan.stdout);
+    assert.equal(promptPayload.kind, "codex-autoresearch-prompt-plan");
+    assert.equal(promptPayload.intent.metric.name, "seconds");
+    assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
+    assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
+
+    const broadPromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with the most obvious low hanging fruits. Keep doing this 100 times.",
+    ]);
+    assert.equal(broadPromptPlan.code, 0, broadPromptPlan.stderr);
+    const broadPayload = JSON.parse(broadPromptPlan.stdout);
+    assert.equal(broadPayload.intent.loopKind, "quality-gap");
+    assert.equal(broadPayload.intent.setupDefaults.maxIterations, 100);
+
+    const hooks = await runCli(["doctor", "hooks", "--cwd", dir]);
+    assert.equal(hooks.code, 0, hooks.stderr);
+    const hooksPayload = JSON.parse(hooks.stdout);
+    assert.equal(hooksPayload.defaultEnabled, false);
+    assert.ok(Array.isArray(hooksPayload.limitations));
+
+    const dryRun = await runCli(["new-segment", "--cwd", dir, "--dry-run"]);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    assert.equal(JSON.parse(dryRun.stdout).dryRun, true);
+
+    const segment = await runCli(["new-segment", "--cwd", dir, "--reason", "fresh phase", "--yes"]);
+    assert.equal(segment.code, 0, segment.stderr);
+    const segmentPayload = JSON.parse(segment.stdout);
+    assert.equal(segmentPayload.nextSegment, 1);
+
+    const after = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(after.code, 0, after.stderr);
+    const afterPayload = JSON.parse(after.stdout);
+    assert.equal(afterPayload.segment, 1);
+    assert.equal(afterPayload.runs, 0);
   });
 });
 
@@ -281,6 +386,58 @@ test("MCP setup_session can use recipe defaults without explicit name and metric
     assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
     const payload = JSON.parse(response.result.content[0].text);
     assert.equal(payload.init.config.metricName, "rss_mb");
+  });
+});
+
+test("MCP exposes onboarding, prompt planning, benchmark lint, recommend-next, and new-segment tools", async () => {
+  await withTempDir("mcp-delight-tools", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "mcp delight", "--metric-name", "score"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi",
+      JSON.stringify({ hypothesis: "baseline", evidence: "score=3" }),
+    ]);
+
+    const onboarding = await callMcpTool("onboarding_packet", {
+      working_dir: dir,
+      compact: true,
+    });
+    assert.equal(onboarding.result?.isError, undefined, onboarding.result?.content?.[0]?.text);
+    assert.match(onboarding.result.content[0].text, /codex-autoresearch-onboarding-packet/);
+
+    const promptPlan = await callMcpTool("prompt_plan", {
+      working_dir: dir,
+      prompt:
+        "Use $Codex Autoresearch to figure out why p99 latency is so much higher than p90. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. Use @experiments.md.",
+    });
+    assert.equal(promptPlan.result?.isError, undefined, promptPlan.result?.content?.[0]?.text);
+    assert.match(promptPlan.result.content[0].text, /p99_p90_ratio/);
+    assert.match(promptPlan.result.content[0].text, /DNS lookup/);
+    assert.match(promptPlan.result.content[0].text, /experiments\.md/);
+
+    const lint = await callMcpTool("benchmark_lint", {
+      working_dir: dir,
+      metric_name: "score",
+      sample: "METRIC score=2",
+    });
+    assert.equal(lint.result?.isError, undefined, lint.result?.content?.[0]?.text);
+    assert.match(lint.result.content[0].text, /"emitsPrimary": true/);
+
+    const next = await callMcpTool("recommend_next", { working_dir: dir, compact: true });
+    assert.equal(next.result?.isError, undefined, next.result?.content?.[0]?.text);
+    assert.match(next.result.content[0].text, /"whySafe"/);
+
+    const dryRun = await callMcpTool("new_segment", { working_dir: dir, dry_run: true });
+    assert.equal(dryRun.result?.isError, undefined, dryRun.result?.content?.[0]?.text);
+    assert.match(dryRun.result.content[0].text, /"dryRun": true/);
   });
 });
 

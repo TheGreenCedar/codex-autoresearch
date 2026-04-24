@@ -8,7 +8,8 @@ This repository is a wrapper for the Codex Autoresearch plugin. The active packa
 - Root `CHANGELOG.md` is the release-note surface for user-facing changes.
 - The main skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
 - Topic docs live in `plugins/codex-autoresearch/docs/`.
-- Internal planning archives, such as `docs/specification-delight-roadmap/`, are not first-run onboarding.
+- Current task docs are `start.md`, `operate.md`, `trust.md`, `finish.md`, `recipes.md`, `troubleshooting.md`, and `hooks.md`.
+- Internal planning archives are not first-run onboarding.
 
 Do not assume root-level npm scripts exist. Package scripts live in `plugins/codex-autoresearch/package.json`.
 
@@ -66,6 +67,12 @@ git diff --check
 ```
 
 For dashboard or view-model changes, export or serve a dashboard and inspect it. Static code and tests alone do not prove the operator surface is understandable.
+
+When refreshing the checked-in demo, use the public showcase export so workstation paths and transient branch warnings are scrubbed:
+
+```bash
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
+```
 
 Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, so a publishable artifact must include the built runtime and exclude authored source and tests.
 

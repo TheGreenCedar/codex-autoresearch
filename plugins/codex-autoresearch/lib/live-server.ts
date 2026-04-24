@@ -18,6 +18,11 @@ const LOG_ACTION_STATUS = new Map([
 ]);
 const DASHBOARD_ACTIONS = new Map([
   ["doctor", { className: "read", allowedBodyKeys: [] }],
+  ["doctor-explain", { className: "read", allowedBodyKeys: [] }],
+  ["onboarding-packet", { className: "read", allowedBodyKeys: [] }],
+  ["recommend-next", { className: "read", allowedBodyKeys: [] }],
+  ["benchmark-lint", { className: "read", allowedBodyKeys: [] }],
+  ["new-segment-dry-run", { className: "preview", allowedBodyKeys: [] }],
   ["setup-plan", { className: "read", allowedBodyKeys: [] }],
   ["guide", { className: "read", allowedBodyKeys: [] }],
   ["recipes", { className: "read", allowedBodyKeys: [] }],
@@ -167,6 +172,11 @@ export async function serveAutoresearch(args: LooseObject) {
 
 async function actionArgs(action, workDir, body) {
   if (action === "doctor") return ["doctor", "--cwd", workDir];
+  if (action === "doctor-explain") return ["doctor", "--cwd", workDir, "--explain"];
+  if (action === "onboarding-packet") return ["onboarding-packet", "--cwd", workDir, "--compact"];
+  if (action === "recommend-next") return ["recommend-next", "--cwd", workDir, "--compact"];
+  if (action === "benchmark-lint") return ["benchmark-lint", "--cwd", workDir];
+  if (action === "new-segment-dry-run") return ["new-segment", "--cwd", workDir, "--dry-run"];
   if (action === "setup-plan") return ["setup-plan", "--cwd", workDir];
   if (action === "guide") return ["guide", "--cwd", workDir];
   if (action === "recipes") return ["recipes", "list"];

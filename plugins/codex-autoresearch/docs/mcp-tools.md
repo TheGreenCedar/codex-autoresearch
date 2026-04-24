@@ -8,7 +8,10 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are dete
 | --- | --- |
 | `setup_plan` | Return a read-only setup readiness plan with missing fields, recipe suggestion, and next commands. |
 | `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard actions. |
-| `list_recipes` | List built-in and optional catalog recipes. |
+| `prompt_plan` | Convert a natural-language request into inferred metric defaults, experiment lanes, missing essentials, and setup commands. |
+| `onboarding_packet` | Return a compact human-and-agent onboarding packet with state, hazards, templates, and commands. |
+| `recommend_next` | Return the single safest next action with evidence and commands. |
+| `list_recipes` | List or recommend built-in and optional catalog recipes. |
 | `setup_session` | Create session files and append the initial config header. |
 | `setup_research_session` | Create a deep-research scratchpad and initialize a `quality_gap` session. |
 | `configure_session` | Update autonomy mode, checks policy, keep policy, dashboard refresh, commit paths, or iteration limit. |
@@ -21,6 +24,8 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are dete
 | `gap_candidates` | Extract or apply validated gap candidates from synthesis and optional model output. |
 | `finalize_preview` | Return finalization readiness without creating branches. |
 | `integrations` | List, doctor, or sync external recipe/catalog integration surfaces. |
+| `benchmark_lint` | Validate sample benchmark output or a command for `METRIC` parsing without starting a loop. |
+| `new_segment` | Start a fresh run segment while preserving old ledger history; confirmed use appends a config entry. |
 | `export_dashboard` | Write a self-contained fallback HTML snapshot. |
 | `serve_dashboard` | Start a local live dashboard and return the operator URL. |
 | `doctor_session` | Run setup/Git/benchmark preflight checks and optional installed-runtime checks. |
@@ -28,13 +33,19 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are dete
 
 ## Adjacent Tool Choices
 
-Use `setup_plan` before mutation. Use `setup_session` only when essentials are known and the user is ready to create files.
+Use `prompt_plan` when the user starts with a broad request such as "improve indexer speed while keeping memory efficient" or "keep reducing bugs 100 times." Use `setup_plan` before mutation. Use `setup_session` only when essentials are known and the user is ready to create files.
 
-Use `guided_setup` when Codex needs the next action in one packet. It is better than separate ad hoc calls during first-run or resume workflows.
+Use `onboarding_packet` when a new human or AI needs a compact resume packet. Use `recommend_next` when the question is simply "what is the one safe next action?"
+
+Use `guided_setup` when Codex needs setup/resume state in one packet. It is better than separate ad hoc calls during first-run or resume workflows.
 
 Use `next_experiment` for the normal loop. It packages preflight, benchmark, allowed log decisions, ASI fields, and continuation guidance. Use `run_experiment` only when you need a lower-level benchmark run.
 
 Use `measure_quality_gap` to count the current checklist. Use `gap_candidates` to propose or apply candidate checklist items from research evidence.
+
+Use `benchmark_lint` before setup or doctor when the benchmark output format is uncertain.
+
+Use `new_segment` when the current segment is maxed, stale, or intentionally entering a new phase. Use dry-run before confirmation.
 
 Use `finalize_preview` for readiness. Branch creation stays in the finalizer CLI, not the dashboard or MCP preview surface.
 
@@ -63,12 +74,17 @@ From `plugins/codex-autoresearch`, the common CLI equivalents are:
 ```bash
 node scripts/autoresearch.mjs setup-plan --cwd <project>
 node scripts/autoresearch.mjs guide --cwd <project>
+node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "Use Codex Autoresearch to improve test speed without deleting tests"
+node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
+node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
+node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC seconds=1.23" --metric-name seconds
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs state --cwd <project>
 node scripts/autoresearch.mjs serve --cwd <project>
 node scripts/autoresearch.mjs export --cwd <project>
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark
+node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 

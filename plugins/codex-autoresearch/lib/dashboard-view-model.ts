@@ -59,6 +59,28 @@ export function buildDashboardViewModel({
     trustWarnings: trustContext.decisionWarnings,
     commands,
   });
+  const trustBlockers = buildTrustBlockers({
+    trustWarnings: trustContext.decisionWarnings,
+    guidedSetup,
+    warnings,
+    commands,
+  });
+  const decisionReceipt = buildDecisionReceipt({
+    state,
+    current,
+    bestKept,
+    latestFailure,
+    action: actionRail[0],
+    trustBlockers,
+  });
+  const bestVsLatest = buildBestVsLatest({ state, current, bestKept });
+  const handoffPacket = buildHandoffPacket({
+    state,
+    current,
+    action: actionRail[0],
+    trustBlockers,
+    experimentMemory,
+  });
   const portfolio = buildPortfolio(experimentMemory, state.config.bestDirection);
   const missionControl = buildMissionControl({
     current,
@@ -112,6 +134,12 @@ export function buildDashboardViewModel({
     finalizationChecklist,
     missionControl,
     aiSummary,
+    trustBlockers,
+    decisionReceipt,
+    bestVsLatest,
+    handoffPacket,
+    codexDiagnostics: trustBlockers,
+    staleSession: staleSessionSummary({ guidedSetup, state, warnings: trustBlockers }),
     nextBestAction: actionRail[0],
     actionRail,
     drift,
@@ -365,22 +393,17 @@ function buildEvidenceChips({
   const delta = percentChange(best, baseline, state.config.bestDirection);
   return [
     evidenceChip({
-      label: "Trust",
+      label: "Mode",
       value:
-        trustState.status === "trusted"
-          ? "Trusted"
+        trustState.mode === "live-server" || trustState.mode === "live"
+          ? "Live"
           : trustState.status === "read-only"
-            ? "Read-only"
-            : trustState.status === UNKNOWN
+            ? "Snapshot"
+            : trustState.mode === UNKNOWN
               ? UNKNOWN
-              : "Needs attention",
-      tone:
-        trustState.status === "trusted"
-          ? "good"
-          : trustState.status === "read-only"
-            ? "neutral"
-            : "warn",
-      detail: trustState.reasons[0] || "No trust warnings reported by the model.",
+              : "Runboard",
+      tone: trustState.mode === "live-server" || trustState.mode === "live" ? "good" : "neutral",
+      detail: "Runtime diagnostics are preserved for Codex handoff when relevant.",
     }),
     evidenceChip({
       label: "Baseline",
@@ -488,6 +511,151 @@ function buildFinalizationChecklist({
         : "Branch creation should wait for a ready preview packet.",
     }),
   ];
+}
+
+function buildTrustBlockers({
+  trustWarnings = [],
+  guidedSetup = null,
+  warnings = [],
+  commands = [],
+}: LooseObject) {
+  const commandMap = commandLookup(commands);
+  const raw = [
+    ...stringList(trustWarnings),
+    ...stringList(warnings),
+    ...(guidedSetup?.stage === "stale-last-run"
+      ? [guidedSetup?.lastRun?.freshness?.reason || guidedSetup.nextAction]
+      : []),
+    ...(guidedSetup?.stage === "limit-reached"
+      ? [guidedSetup.nextAction || "Iteration limit reached."]
+      : []),
+  ];
+  return unique(raw)
+    .slice(0, 6)
+    .map((message) => ({
+      message,
+      severity: /dirty|stale|drift|missing|limit|benchmark|commitPaths/i.test(message)
+        ? "warning"
+        : "info",
+      action: blockerActionFor(message),
+      command: blockerCommandFor(message, commandMap),
+    }));
+}
+
+function blockerActionFor(message) {
+  if (/stale/i.test(message)) return "Replace the stale packet.";
+  if (/limit/i.test(message)) return "Extend the limit or start a new segment.";
+  if (/benchmark|metric/i.test(message)) return "Lint or repair the benchmark.";
+  if (/dirty|commitPaths/i.test(message)) return "Inspect Git and commit paths.";
+  if (/drift/i.test(message)) return "Verify installed/runtime routing.";
+  return "Review before continuing.";
+}
+
+function blockerCommandFor(message, commandMap) {
+  if (/stale/i.test(message)) return commandMap.get("next run") || "";
+  if (/limit/i.test(message))
+    return commandMap.get("new segment") || commandMap.get("extend limit") || "";
+  if (/benchmark|metric/i.test(message))
+    return commandMap.get("benchmark lint") || commandMap.get("doctor") || "";
+  if (/dirty|commitPaths|drift/i.test(message)) return commandMap.get("doctor") || "";
+  return "";
+}
+
+function buildDecisionReceipt({
+  state,
+  current = [],
+  bestKept = null,
+  latestFailure = null,
+  action = null,
+  trustBlockers = [],
+}: LooseObject) {
+  const latest = current.at(-1) || null;
+  return {
+    title: action?.title || "Next action",
+    summary: action?.detail || "No next action available.",
+    generatedAt: new Date().toISOString(),
+    ledger: {
+      segment: state.segment,
+      runs: current.length,
+      latestRun: latest ? compactRun(latest) : null,
+      bestKept: bestKept ? compactRun(bestKept) : null,
+      latestFailure: latestFailure ? compactRun(latestFailure) : null,
+    },
+    whySafe: action?.explanation?.evidence || action?.utilityCopy || "",
+    avoids: action?.explanation?.avoids || "",
+    proof: action?.explanation?.proof || "",
+    blockers: trustBlockers,
+  };
+}
+
+function buildBestVsLatest({ state, current = [], bestKept = null }: LooseObject) {
+  const latest = current.at(-1) || null;
+  const latestMetric = finiteMetric(latest?.metric);
+  const bestMetric = finiteMetric(bestKept?.metric ?? state.best);
+  const baseline = finiteMetric(state.baseline);
+  return {
+    metricName: state.config.metricName,
+    direction: state.config.bestDirection,
+    baseline,
+    best: bestMetric,
+    bestRun: bestKept ? compactRun(bestKept) : null,
+    latest: latestMetric,
+    latestRun: latest ? compactRun(latest) : null,
+    latestBeatsBest:
+      latestMetric != null && bestMetric != null
+        ? state.config.bestDirection === "higher"
+          ? latestMetric > bestMetric
+          : latestMetric < bestMetric
+        : false,
+    latestVsBestPercent:
+      latestMetric != null && bestMetric != null
+        ? percentChange(latestMetric, bestMetric, state.config.bestDirection)
+        : null,
+  };
+}
+
+function buildHandoffPacket({
+  state,
+  current = [],
+  action = null,
+  trustBlockers = [],
+  experimentMemory = null,
+}: LooseObject) {
+  return {
+    kind: "dashboard-handoff",
+    metric: state.config.metricName,
+    direction: state.config.bestDirection,
+    segment: state.segment,
+    runs: current.length,
+    latestRun: current.at(-1)?.run || null,
+    nextAction: action?.detail || "",
+    shouldFixFirst: trustBlockers.length > 0,
+    blockers: trustBlockers.map((item) => item.message),
+    lane: experimentMemory?.diversityGuidance?.id || experimentMemory?.summary?.suggestedLane || "",
+    plateau: experimentMemory?.plateau?.detected === true,
+  };
+}
+
+function staleSessionSummary({ guidedSetup = null, state, warnings = [] }: LooseObject) {
+  const stage = guidedSetup?.stage || "";
+  const limitReached = Boolean(guidedSetup?.state?.limit?.limitReached);
+  const staleWarning = warnings.find((warning) => /stale|drift/i.test(warning.message || ""));
+  return {
+    stale:
+      stage === "stale-last-run" ||
+      limitReached ||
+      Boolean(staleWarning) ||
+      (Number(state?.current?.length) > 0 && state?.baseline == null),
+    stage,
+    reason:
+      staleWarning?.message ||
+      guidedSetup?.lastRun?.freshness?.reason ||
+      (limitReached ? "Iteration limit reached." : ""),
+    nextAction:
+      stage === "limit-reached"
+        ? "Extend the limit or start a new segment."
+        : guidedSetup?.nextAction || "",
+  };
 }
 
 function currentHasRuns(state) {
@@ -631,19 +799,9 @@ function buildActionRail({
   qualityGap,
   finalizePreview,
   experimentMemory,
-  drift,
-  warnings: operatorWarnings = [],
-  trustWarnings = [],
   commands,
 }: LooseObject) {
   const commandMap = commandLookup(commands);
-  const warnings = [
-    ...(current.length ? [] : Array.isArray(setupPlan?.missing) ? setupPlan.missing : []),
-    ...(Array.isArray(setupPlan?.warnings) ? setupPlan.warnings : []),
-    ...(Array.isArray(drift?.warnings) ? drift.warnings : []),
-    ...operatorWarnings,
-    ...trustWarnings,
-  ];
   const lastMemoryAction = experimentMemory?.latestNextAction || "";
   const qualityGapOpen = Number(qualityGap?.open);
   const hasQualityGaps = Number.isFinite(qualityGapOpen) && qualityGapOpen > 0;
@@ -719,19 +877,6 @@ function buildActionRail({
       commandLabel: "Setup",
       tone: "warn",
       source: "setup",
-    });
-  } else if (warnings.length) {
-    primary = actionItem({
-      kind: "fix-blocker",
-      priority: "Critical",
-      title: "Clear setup drift",
-      detail: warningMessage(warnings[0]),
-      utilityCopy: "Trust the loop after doctor is clean.",
-      safeAction: "doctor",
-      command: commandMap.get("doctor"),
-      commandLabel: "Doctor",
-      tone: "warn",
-      source: "doctor",
     });
   } else if (!current.length) {
     primary = actionItem({

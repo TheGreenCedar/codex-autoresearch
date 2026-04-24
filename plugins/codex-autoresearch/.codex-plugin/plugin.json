@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "Codex Autoresearch",
     "shortDescription": "Run measured Codex loops from one plugin skill",
-    "longDescription": "Codex Autoresearch gives Codex one skill surface for the full loop: start or resume a measured session, convert deep research into quality_gap checkpoints, run next_experiment packets, log keep/discard/crash/checks_failed decisions with ASI, keep the live dashboard open, and split kept work into clean review branches.",
+    "longDescription": "Codex Autoresearch gives Codex one skill surface for the full loop: onboard a human or AI agent, start or resume a measured session, lint benchmark METRIC output, convert deep research into quality_gap checkpoints, run next_experiment packets, log keep/discard/crash/checks_failed decisions with ASI, keep the live dashboard open, and split kept work into clean review branches.",
     "developerName": "Albert Najjar",
     "category": "Coding",
     "capabilities": ["Interactive", "Read", "Write"],
@@ -24,8 +24,8 @@
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "defaultPrompt": [
-      "Use Codex Autoresearch on this project.",
-      "Run a deep-research quality_gap loop.",
+      "Use Codex Autoresearch to improve this repo.",
+      "Plan an Autoresearch loop from this prompt.",
       "Open the live dashboard and continue."
     ],
     "brandColor": "#2563EB",

@@ -2471,8 +2471,20 @@ test("mcp CLI adapter forwards schema-supported options that need CLI flags", as
     assert.deepEqual(invocation.args.slice(0, 3), [fakeCli, "gap-candidates", "--cwd"]);
     assert.ok(invocation.args.includes("--model-timeout-seconds"));
     assert.deepEqual(invocation.unsafeFields, ["model_command"]);
-    assert.equal(invocation.mutates, true);
+    assert.equal(invocation.actionPolicy, "preview");
+    assert.equal(invocation.mutates, false);
     assert.equal(invocation.timeoutSeconds, 5);
+
+    const appliedInvocation = buildCliInvocationForTool(
+      "gap_candidates",
+      {
+        working_dir: dir,
+        apply: true,
+      },
+      { cliScript: fakeCli, cwd: dir, timeoutSeconds: 5 },
+    );
+    assert.equal(appliedInvocation.actionPolicy, "state_mutation");
+    assert.equal(appliedInvocation.mutates, true);
   });
 });
 
@@ -2914,7 +2926,7 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
   });
 
   assert.equal(report.ok, false);
-  assert.equal(report.local.version, "0.6.0");
+  assert.equal(report.local.version, "1.0.0");
   assert.equal(report.installed.version, "0.5.1");
   assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
   assert.match(report.warnings.join("\n"), /restart Codex/);

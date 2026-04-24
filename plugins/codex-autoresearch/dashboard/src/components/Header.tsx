@@ -51,8 +51,8 @@ export function Header({
     <header className="masthead">
       <div className="masthead-top">
         <div className="session-contract">
-          <p className="eyebrow">Autoresearch runboard</p>
-          <h1>{session.config.name || "Autoresearch"}</h1>
+          <h1>Autoresearch Runboard</h1>
+          <p className="eyebrow">{session.config.name || "Autoresearch session"}</p>
           <div className="metric-line">
             <span>{metricLabel}</span>
             <span>{directionLabel(readout.metricDefinition.bestDirection)}</span>

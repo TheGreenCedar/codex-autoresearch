@@ -1,5 +1,7 @@
 # Getting Started
 
+For a visual first pass, start with [Workflow diagrams](workflows.md). For the shortest setup path, see [Start](start.md).
+
 Codex Autoresearch turns an open improvement goal into a measured loop: define one primary metric, run a repeatable benchmark, keep or discard each packet with evidence, and preserve the trail in project files.
 
 ## Install

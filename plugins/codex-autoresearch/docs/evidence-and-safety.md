@@ -1,5 +1,7 @@
 # Evidence And Safety
 
+For the visual trust boundary, see [Architecture diagrams](architecture.md). For task-oriented evidence rules, see [Trust](trust.md).
+
 Autoresearch is useful only when the loop preserves the truth of what was measured. Treat display surfaces as summaries and session files as the durable evidence.
 
 ## Metric Contract
@@ -80,4 +82,3 @@ Prefer configured `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
 If `autoresearch.jsonl` is corrupt, surface the failing file and line. Do not silently continue from a partial ledger.
 
 If dashboard trust warnings mention stale packets, dirty Git, drift, missing metrics, corrupt state, or static mode, resolve those warnings before claiming a result is final.
-

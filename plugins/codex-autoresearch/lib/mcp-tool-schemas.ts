@@ -17,9 +17,16 @@ export const toolSchemas = applyToolContracts([
         recipe_id: { type: "string" },
         catalog: { type: "string" },
         name: { type: "string" },
+        goal: { type: "string" },
         metric_name: { type: "string" },
+        metric_unit: { type: "string" },
+        direction: { type: "string", enum: ["lower", "higher"] },
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
+        files_in_scope: { type: "array", items: { type: "string" } },
+        off_limits: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        secondary_metrics: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "integer" },
         allow_unsafe_command: { type: "boolean" },
@@ -38,9 +45,16 @@ export const toolSchemas = applyToolContracts([
         recipe_id: { type: "string" },
         catalog: { type: "string" },
         name: { type: "string" },
+        goal: { type: "string" },
         metric_name: { type: "string" },
+        metric_unit: { type: "string" },
+        direction: { type: "string", enum: ["lower", "higher"] },
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
+        files_in_scope: { type: "array", items: { type: "string" } },
+        off_limits: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        secondary_metrics: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "integer" },
         allow_unsafe_command: { type: "boolean" },
@@ -49,12 +63,67 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
-    name: "list_recipes",
-    description: "List built-in and optional catalog recipes.",
+    name: "prompt_plan",
+    description:
+      "Convert a natural-language Autoresearch request into inferred loop intent, missing essentials, setup defaults, and first safe commands.",
     inputSchema: {
       type: "object",
       properties: {
+        working_dir: { type: "string" },
+        prompt: { type: "string" },
+        name: { type: "string" },
+        goal: { type: "string" },
+        metric_name: { type: "string" },
+        metric_unit: { type: "string" },
+        direction: { type: "string", enum: ["lower", "higher"] },
+        benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
+        files_in_scope: { type: "array", items: { type: "string" } },
+        off_limits: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        secondary_metrics: { type: "array", items: { type: "string" } },
+        commit_paths: { type: "array", items: { type: "string" } },
+        max_iterations: { type: "integer" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir", "prompt"],
+    },
+  },
+  {
+    name: "onboarding_packet",
+    description:
+      "Return a compact human-and-agent onboarding packet with state, hazards, report templates, and next commands.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        compact: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "recommend_next",
+    description:
+      "Return the single safest next action with why-it-is-safe evidence and copyable commands.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        compact: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "list_recipes",
+    description: "List or recommend built-in and optional catalog benchmark recipes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
         catalog: { type: "string" },
+        recommend: { type: "boolean" },
       },
       required: [],
     },
@@ -221,7 +290,10 @@ export const toolSchemas = applyToolContracts([
     description: "Summarize the current autoresearch.jsonl state.",
     inputSchema: {
       type: "object",
-      properties: { working_dir: { type: "string" } },
+      properties: {
+        working_dir: { type: "string" },
+        compact: { type: "boolean" },
+      },
       required: ["working_dir"],
     },
   },
@@ -281,6 +353,38 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "benchmark_lint",
+    description:
+      "Validate sample benchmark output or a command for METRIC parsing without starting an experiment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        metric_name: { type: "string" },
+        sample: { type: "string" },
+        command: { type: "string" },
+        timeout_seconds: { type: "number" },
+        allow_unsafe_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "new_segment",
+    description:
+      "Start a fresh run segment while preserving old ledger history; requires confirmation unless dry-run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        reason: { type: "string" },
+        dry_run: { type: "boolean" },
+        confirm: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "export_dashboard",
     description: "Write a self-contained fallback HTML snapshot for autoresearch.jsonl.",
     inputSchema: {
@@ -317,6 +421,8 @@ export const toolSchemas = applyToolContracts([
         command: { type: "string" },
         check_benchmark: { type: "boolean" },
         check_installed: { type: "boolean" },
+        explain: { type: "boolean" },
+        hooks: { type: "boolean" },
         timeout_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },

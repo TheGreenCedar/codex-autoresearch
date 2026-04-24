@@ -36,7 +36,10 @@ function createToolHandlers(deps) {
   return ensureToolHandlerCoverage({
     setup_plan: (args) => deps.setupPlan(args),
     guided_setup: (args) => deps.guidedSetup(args),
-    list_recipes: (args) => deps.recipeCommand("list", args),
+    prompt_plan: (args) => deps.promptPlan(args),
+    onboarding_packet: (args) => deps.onboardingPacket(args),
+    recommend_next: (args) => deps.recommendNext(args),
+    list_recipes: (args) => deps.recipeCommand(args.recommend ? "recommend" : "list", args),
     setup_session: (args) => deps.setupSession(args),
     setup_research_session: (args) => deps.setupResearchSession(args),
     configure_session: (args) => deps.configureSession(args),
@@ -54,9 +57,11 @@ function createToolHandlers(deps) {
     gap_candidates: (args) => deps.gapCandidates(args),
     finalize_preview: (args) => deps.finalizePreview(args),
     integrations: (args) => deps.integrationsCommand(args.subcommand || "list", args),
+    benchmark_lint: (args) => deps.benchmarkLint(args),
+    new_segment: (args) => deps.newSegment(args),
     export_dashboard: (args) => deps.exportDashboard(args),
     serve_dashboard: (args) => deps.serveDashboard(args),
-    doctor_session: (args) => deps.doctorSession(args),
+    doctor_session: (args) => (args.hooks ? deps.doctorHooks(args) : deps.doctorSession(args)),
     clear_session: (args) => deps.clearSession(args),
   });
 }

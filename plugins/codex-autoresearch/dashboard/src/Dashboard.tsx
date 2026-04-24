@@ -62,11 +62,11 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       className={`runboard-shell ${mode.liveActions || mode.showcase ? "mode-live" : "mode-static"}`}
     >
       <nav className="skip-links" aria-label="Skip links">
+        <a href="#trend-panel">Run chart</a>
         <a href="#decision-rail">Current decision</a>
         <a href="#mission-panel">Mission control</a>
         <a href="#log-decision-panel">Log form</a>
         <a href="#action-receipt">Receipt</a>
-        <a href="#trend-panel">Run chart</a>
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail liveActions={mode.liveActions} showcase={mode.showcase} />
@@ -88,13 +88,13 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
         <TrustStrip mode={mode} meta={meta} viewModel={viewModel} />
 
-        <section className="decision-layout" aria-label="Current operator decision">
-          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
-        </section>
-
         <section className="metric-layout" aria-label="Metric evidence">
           <TrendPanel session={session} readout={readout} />
           <ScoreStrip session={session} readout={readout} />
+        </section>
+
+        <section className="decision-layout" aria-label="Current operator decision">
+          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
         </section>
 
         <section className="workspace-grid">

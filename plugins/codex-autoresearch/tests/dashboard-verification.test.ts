@@ -130,12 +130,15 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   const rail = getById("decision-rail").innerHTML;
   const nextActionDetail = getById("next-action-detail").textContent.trim();
   const nextActionTitle = getById("next-action-title").textContent.trim();
+  const metricDetails = getById("metric-details") as HTMLDetailsElement;
 
   assert.match(rail, /#1/);
   assert.match(rail, /Keep|Discard|crash|checks_failed/i);
   assert.notEqual(rail.includes("No decisions yet"), true);
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
+  assert.equal(metricDetails.open, true);
+  assert.match(getById("metric-detail-primary").textContent, /4\.8/);
 });
 
 test("dashboard ledger and truth meter do not coerce unknown evidence to zero", async () => {
@@ -952,7 +955,7 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
     ],
   });
 
-  const { getById } = await runDashboard(entries, {
+  const { dom, getById } = await runDashboard(entries, {
     deliveryMode: "static-export",
     liveActionsAvailable: false,
     viewModel,
@@ -960,11 +963,10 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
   });
 
   assert.equal(getById("trust-title").textContent, "Static read-only export");
-  const warnings = getById("trust-warnings").textContent;
-  assert.match(warnings, /Static export is read-only/);
-  assert.match(warnings, /Working tree is dirty/);
-  assert.match(warnings, /Corrupt autoresearch\.jsonl/);
-  assert.match(warnings, /Last-run packet is stale/);
+  assert.equal(dom.window.document.getElementById("trust-warnings"), null);
+  assert.match(viewModel.trustState.reasons.join("\n"), /Working tree is dirty/);
+  assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt autoresearch\.jsonl/);
+  assert.match(viewModel.trustState.reasons.join("\n"), /Last-run packet is stale/);
 });
 
 test("dashboard view model marks perfect quality metrics suspicious without freshness, breadth, or promotion evidence", () => {
@@ -1138,7 +1140,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "0.6.0" },
+      local: { version: "1.0.0" },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1156,7 +1158,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "0.6.0");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.0.0");
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
@@ -1272,7 +1274,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   dom.window.close();
 });
 
-test("showcase dashboard presents the demo as live while keeping real warnings visible", async () => {
+test("showcase dashboard presents the demo as live while keeping diagnostics in the model", async () => {
   const entries = [
     {
       type: "config",
@@ -1323,8 +1325,13 @@ test("showcase dashboard presents the demo as live while keeping real warnings v
   assert.match(getById("live-detail").textContent, /100 embedded packets/);
   assert.equal(getById("trust-title").textContent, "Live runboard");
   assert.match(getById("trust-cells").textContent, /Guarded local actions enabled/);
-  assert.match(getById("trust-warnings").textContent, /Git worktree is dirty/);
-  assert.doesNotMatch(getById("trust-warnings").textContent, /Static read-only export/);
+  assert.equal(
+    getById("next-action-detail").textContent,
+    "Check memory footprint before keeping the path.",
+  );
+  assert.equal(getById("decision-evidence-chips").textContent.includes("Needs attention"), false);
+  assert.equal(getById("trust-strip").querySelectorAll("span").length > 0, true);
+  assert.equal(getById("trust-strip").querySelector(".trust-warning-list"), null);
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-actions-panel").hidden, false);
 });
@@ -1401,7 +1408,12 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
       title: "Review packet gated",
       items: [
         { id: "evidence", label: "Evidence packet", detail: "Kept run has ASI.", state: "done" },
-        { id: "warnings", label: "Warnings", detail: "Resolve dirty tree.", state: "blocked" },
+        {
+          id: "codex-notes",
+          label: "Codex notes",
+          detail: "Diagnostic details stay in the handoff.",
+          state: "blocked",
+        },
       ],
     },
     nextBestAction: {
@@ -1424,20 +1436,20 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
 
-  const { getById } = await runDashboard(entries, {
+  const { dom, getById } = await runDashboard(entries, {
     deliveryMode: "live-server",
     liveActionsAvailable: true,
     viewModel,
   });
 
   assert.equal(getById("trust-title").textContent, "Live evidence runboard");
-  assert.match(getById("trust-warnings").textContent, /Doctor warning/);
+  assert.equal(dom.window.document.getElementById("trust-warnings"), null);
   assert.equal(getById("research-truth-title").textContent, "Truth pass complete");
   assert.equal(getById("research-truth-bar").getAttribute("aria-valuenow"), "100");
-  assert.match(getById("suspicious-perfect-warning").textContent, /accepted checklist only/);
+  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
   assert.match(getById("finalization-checklist-title").textContent, /Review packet gated/);
-  assert.match(getById("finalization-checklist-items").textContent, /Resolve dirty tree/);
+  assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
 });
 
 test("dashboard surfaces generated suspicious research reasons", async () => {
@@ -1461,14 +1473,15 @@ test("dashboard surfaces generated suspicious research reasons", async () => {
     { type: "run", run: 1, metric: 0, status: "keep", description: "Closed gaps", confidence: 1 },
   ];
 
-  const { getById } = await runDashboard(entries, {
+  const { dom } = await runDashboard(entries, {
     deliveryMode: "live-server",
     liveActionsAvailable: true,
     viewModel,
   });
 
-  assert.match(getById("suspicious-perfect-warning").textContent, /no breadth evidence/);
-  assert.match(getById("decision-suspicious-perfect").textContent, /no breadth evidence/);
+  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
+  assert.equal(dom.window.document.getElementById("decision-suspicious-perfect"), null);
+  assert.match(String(viewModel.researchTruth.suspiciousReasons[0]), /no breadth evidence/);
 });
 
 test("structured ASI editor serializes to the existing asi payload", async () => {
@@ -1687,11 +1700,11 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   );
 
   assert.deepEqual(hrefs, [
+    "#trend-panel",
     "#decision-rail",
     "#mission-panel",
     "#log-decision-panel",
     "#action-receipt",
-    "#trend-panel",
     "#ledger",
   ]);
   for (const href of hrefs) {

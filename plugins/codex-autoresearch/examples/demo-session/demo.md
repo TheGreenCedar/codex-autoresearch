@@ -24,7 +24,11 @@ Verify the default path with doctor:
 node scripts/autoresearch.mjs doctor --cwd examples/demo-session --check-benchmark
 ```
 
-`autoresearch-dashboard.html` is the curated docs showcase that ships with the current dashboard build and bundled demo data.
+`autoresearch-dashboard.html` is the curated docs showcase that ships with the current dashboard build and bundled demo data. Refresh it with the portable showcase mode so local workstation paths and feature-branch Git warnings are not embedded in the public demo:
+
+```bash
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
+```
 
 If you want a raw portable export of the example session evidence, write it to a separate file instead of overwriting the curated demo:
 
