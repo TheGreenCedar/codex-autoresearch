@@ -223,6 +223,9 @@ const checks = [
       const agents = await readRootText("AGENTS.md");
       return !changelog.includes("## Unreleased") &&
         includesAll(changelog, [
+          "## 1.0.1",
+          "source downloads now include the compiled TypeScript runtime",
+          "tracked `dist/` runtime",
           "## 1.0.0",
           "prompt-plan",
           "prompt_plan",
@@ -431,6 +434,39 @@ const checks = [
         manifest.interface?.longDescription?.includes("one skill surface")
         ? pass()
         : fail("Default prompts should be concise plugin-level starters.");
+    },
+  },
+  {
+    id: "source-download-runtime",
+    file: ".gitignore, dist/scripts/*.mjs, dist/lib/*.mjs, scripts/*.mjs",
+    description:
+      "Git/marketplace source downloads include the compiled TypeScript runtime used by the public launcher scripts.",
+    run: async () => {
+      const gitignore = await readText(".gitignore");
+      const ignoredDist = gitignore
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .some((line) => line === "dist/" || line === "/dist/" || line === "dist");
+      const required = [
+        "scripts/autoresearch.mjs",
+        "scripts/autoresearch-mcp.mjs",
+        "dist/scripts/autoresearch.mjs",
+        "dist/scripts/autoresearch-mcp.mjs",
+        "dist/lib/mcp-cli-adapter.mjs",
+        "dist/lib/mcp-tool-schemas.mjs",
+        "dist/lib/session-core.mjs",
+      ];
+      const missing = [];
+      for (const file of required) {
+        if (!(await fileExists(file))) missing.push(file);
+      }
+      return !ignoredDist && missing.length === 0
+        ? pass()
+        : fail(
+            ignoredDist
+              ? "dist is ignored, so source downloads can miss the compiled runtime."
+              : `Missing runtime files: ${missing.join(", ")}`,
+          );
     },
   },
   {

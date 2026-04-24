@@ -3,9 +3,10 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 
 const ROOT = resolvePackageRoot(import.meta.url);
+const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const node = process.execPath;
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
@@ -58,6 +59,18 @@ const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.css",
 ];
 
+const sourceCheckoutRuntimePaths = [
+  "plugins/codex-autoresearch/dist/lib/cli-handlers.mjs",
+  "plugins/codex-autoresearch/dist/lib/mcp-cli-adapter.mjs",
+  "plugins/codex-autoresearch/dist/lib/mcp-interface.mjs",
+  "plugins/codex-autoresearch/dist/lib/mcp-tool-schemas.mjs",
+  "plugins/codex-autoresearch/dist/lib/session-core.mjs",
+  "plugins/codex-autoresearch/dist/scripts/autoresearch.mjs",
+  "plugins/codex-autoresearch/dist/scripts/autoresearch-mcp.mjs",
+  "plugins/codex-autoresearch/scripts/autoresearch.mjs",
+  "plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs",
+];
+
 interface CommandResult {
   label: string;
   code: number | null;
@@ -76,6 +89,7 @@ interface PackageManifest {
 const ok =
   (await runPhase("syntax", syntaxChecks)) &&
   (await runDashboardBuildWithParity()) &&
+  (await runSourceCheckoutArtifactCheck()) &&
   (await runPackageArtifactCheck()) &&
   (await runPhase("product", productChecks));
 
@@ -201,6 +215,75 @@ async function runPackageArtifactCheck() {
   }
 
   console.log("ok package-artifact");
+  return true;
+}
+
+async function runSourceCheckoutArtifactCheck() {
+  console.log("\n== source checkout ==");
+  const missing = [];
+  for (const file of sourceCheckoutRuntimePaths) {
+    try {
+      await fsp.access(path.join(REPO_ROOT, file));
+    } catch {
+      missing.push(file);
+    }
+  }
+
+  if (missing.length) {
+    console.log("fail source-runtime-files");
+    console.log(indent(`Missing source checkout runtime files:\n${missing.join("\n")}`));
+    return false;
+  }
+
+  const gitProbe = await runCommand([
+    "git-probe",
+    "git",
+    ["-C", REPO_ROOT, "rev-parse", "--is-inside-work-tree"],
+  ]);
+  if (gitProbe.code !== 0) {
+    console.log("ok source-runtime-files");
+    console.log("skip source-runtime-committable (not a Git checkout)");
+    return true;
+  }
+
+  const committable = await runCommand([
+    "source-runtime-committable",
+    "git",
+    [
+      "-C",
+      REPO_ROOT,
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...sourceCheckoutRuntimePaths,
+    ],
+  ]);
+  if (committable.code !== 0) {
+    console.log("ok source-runtime-files");
+    console.log("fail source-runtime-committable");
+    const output = `${committable.stdout}${committable.stderr}`.trim();
+    if (output) console.log(indent(output));
+    return false;
+  }
+  const committablePaths = new Set(committable.stdout.split(/\r?\n/).filter(Boolean));
+  const ignoredOrInvisible = sourceCheckoutRuntimePaths.filter(
+    (file) => !committablePaths.has(file),
+  );
+  if (ignoredOrInvisible.length) {
+    console.log("ok source-runtime-files");
+    console.log("fail source-runtime-committable");
+    console.log(
+      indent(
+        `Runtime files are present but ignored or invisible to Git:\n${ignoredOrInvisible.join("\n")}`,
+      ),
+    );
+    return false;
+  }
+
+  console.log("ok source-runtime-files");
+  console.log("ok source-runtime-committable");
   return true;
 }
 

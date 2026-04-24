@@ -4,6 +4,15 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.0.1
+
+Patch release for TypeScript-built plugin installs.
+
+### Fixed
+
+- Fixed Git/marketplace-style source downloads after the TypeScript migration: source downloads now include the compiled TypeScript runtime that the public `.mjs` launcher scripts load.
+- Added a release gate that verifies the tracked `dist/` runtime exists for source-checkout downloads, not only for `npm pack` artifacts.
+
 ## 1.0.0
 
 Initial release of the Codex Autoresearch plugin as a single Codex-facing measured-loop surface.

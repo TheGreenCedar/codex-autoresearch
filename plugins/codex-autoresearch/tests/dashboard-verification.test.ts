@@ -1140,7 +1140,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "1.0.0" },
+      local: { version: "1.0.1" },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1158,7 +1158,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.0.0");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.0.1");
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
