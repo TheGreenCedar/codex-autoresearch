@@ -63,7 +63,13 @@ function normalizeRun(entry: DashboardEntry, target: SessionSegment): SessionRun
       entry.asi && typeof entry.asi === "object" && !Array.isArray(entry.asi)
         ? { ...(entry.asi as SessionRun["asi"]) }
         : {},
-    timestamp: typeof entry.timestamp === "string" ? entry.timestamp : undefined,
+    timestamp: normalizeTimestamp(entry.timestamp),
     segment: target.segment,
   };
+}
+
+function normalizeTimestamp(value: unknown): string | number | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return undefined;
 }

@@ -4,6 +4,10 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.1.1
+
+- Fixed the dashboard timestamp x-axis toggle for exports that embed run timestamps as numeric epoch values.
+
 ## 1.1.0
 
 Friction-reduction pass from live CodeStory onboarding forensics.

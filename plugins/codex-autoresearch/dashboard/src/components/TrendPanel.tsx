@@ -59,7 +59,7 @@ interface ChartDatum {
   evidence: string;
   rollbackReason: string;
   nextActionHint: string;
-  timestamp?: string;
+  timestamp?: string | number;
   best: boolean;
   latest: boolean;
   heldMetric: boolean;
@@ -332,7 +332,7 @@ function buildTimestampTicks(chartData: ChartDatum[]): number[] {
   return Array.from(new Set(ticks));
 }
 
-function toTimestampValue(value: string | undefined): number | null {
+function toTimestampValue(value: string | number | undefined): number | null {
   if (!value) return null;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? timestamp : null;

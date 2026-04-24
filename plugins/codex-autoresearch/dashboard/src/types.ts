@@ -49,7 +49,7 @@ export interface SessionRun {
   confidence?: number | null;
   metrics: Record<string, unknown>;
   asi: RunAsi;
-  timestamp?: string;
+  timestamp?: string | number;
   segment: number;
   [key: string]: unknown;
 }
