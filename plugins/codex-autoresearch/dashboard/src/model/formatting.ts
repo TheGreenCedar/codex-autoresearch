@@ -73,12 +73,17 @@ export function formatDisplayTime(value: Date | string | number | null | undefin
 export function actionLabel(action: string | null | undefined): string {
   const labels: Record<string, string> = {
     doctor: "Run doctor",
+    "doctor-explain": "Explain doctor",
+    "onboarding-packet": "Build handoff",
+    "recommend-next": "Recommend next",
+    "benchmark-lint": "Lint benchmark",
     "setup-plan": "Review setup",
     guide: "Show guide",
     recipes: "Show recipes",
     "gap-candidates": "Preview gaps",
     "finalize-preview": "Preview finalization",
     export: "Export snapshot",
+    "new-segment-dry-run": "Preview segment",
     "log-keep": "Log keep",
     "log-discard": "Log discard",
     "log-crash": "Log crash",

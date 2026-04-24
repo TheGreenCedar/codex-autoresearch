@@ -5,7 +5,6 @@ import type {
   DashboardMode,
   DashboardViewModel,
   FinalizePreviewModel,
-  ResearchTruthModel,
   SessionSegment,
 } from "../types";
 
@@ -20,17 +19,17 @@ export function TrustStrip({
 }) {
   const showcase = Boolean(mode.showcase || meta.showcaseMode || meta.settings?.showcaseMode);
   const trust = viewModel.trustState || viewModel.trust || meta.trustState || {};
-  const warnings = uniqueList([
-    ...toList(trust.reasons),
-    ...toList(trust.warnings),
-    ...toList(viewModel.trustWarnings),
-    ...toList(viewModel.warnings),
-  ]).filter((warning) => !showcase || !isStaticExportNotice(warning));
   const generated = trust.generatedAt || meta.generatedAt || "";
   const modeLabel = showcase
     ? "Live runboard"
     : trust.modeLabel || trustModeLabel(trust.mode, mode);
-  const detail = showcase ? "100 embedded packets." : trust.detail || trust.summary || mode.detail;
+  const detail = showcase
+    ? "100 embedded packets."
+    : trust.detail ||
+      trust.summary ||
+      (mode.liveActions
+        ? mode.detail
+        : `${mode.detail} Snapshot mode is read-only; live controls are intentionally absent.`);
   const actionState = showcase
     ? "Guarded local actions enabled."
     : trust.actionState ||
@@ -64,21 +63,7 @@ export function TrustStrip({
           value={generated ? formatDisplayTime(generated) : "embedded snapshot"}
         />
       </div>
-      <div className="trust-warning-list" id="trust-warnings" hidden={!warnings.length}>
-        {warnings.map((warning) => (
-          <span key={warning}>{warning}</span>
-        ))}
-      </div>
     </section>
-  );
-}
-
-function isStaticExportNotice(value: string) {
-  const normalized = String(value || "").toLowerCase();
-  return (
-    normalized.includes("static") ||
-    normalized.includes("read-only export") ||
-    normalized.includes("no usable live mutation controls")
   );
 }
 
@@ -88,10 +73,6 @@ function trustModeLabel(value: string | undefined, mode: DashboardMode) {
     return "Static read-only export";
   if (key === "live-server" || key === "live") return "Live local runboard";
   return mode.liveActions ? "Live local runboard" : "Static read-only export";
-}
-
-function uniqueList(items: unknown[]) {
-  return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
 function TrustCell({ label, value }: { label: string; value: string }) {
@@ -128,14 +109,6 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
     (Number.isFinite(total) && total > 0
       ? `${Number.isFinite(open) ? open : 0} open / ${total} total accepted gap${total === 1 ? "" : "s"}.`
       : "No accepted research checklist is embedded in this snapshot.");
-  const suspiciousReason = toList(truth.suspiciousReasons || truth.suspicious_reasons)[0] || "";
-  const suspiciousWarning = suspiciousPerfectMessage(
-    truth,
-    suspiciousReason ||
-      (Number.isFinite(open) && open === 0 && Number.isFinite(total) && total > 0
-        ? "Suspicious-perfect check: quality_gap=0 closes the accepted checklist for this round; rerun discovery before calling the product complete."
-        : ""),
-  );
   return (
     <section
       className="panel truth-panel"
@@ -163,14 +136,6 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
       </div>
       <p className="truth-detail" id="research-truth-detail">
         {detail}
-      </p>
-      <p
-        className="form-error truth-warning"
-        id="suspicious-perfect-warning"
-        role="alert"
-        hidden={!suspiciousWarning}
-      >
-        {suspiciousWarning}
       </p>
     </section>
   );
@@ -311,12 +276,17 @@ export function LiveActions({
 }) {
   const actions = [
     { id: "doctor", detail: "Check setup and benchmark health." },
+    { id: "doctor-explain", detail: "Explain blockers and fixes." },
+    { id: "onboarding-packet", detail: "Build an agent handoff packet." },
+    { id: "recommend-next", detail: "Return one safe next action." },
+    { id: "benchmark-lint", detail: "Validate METRIC parsing." },
     { id: "setup-plan", detail: "Inspect setup guidance." },
     { id: "guide", detail: "Open the guided next step." },
     { id: "recipes", detail: "Preview recipe ideas." },
     { id: "gap-candidates", detail: "Preview research gap candidates." },
     { id: "finalize-preview", detail: "Read-only finalization preview." },
     { id: "export", detail: "Write a static dashboard snapshot." },
+    { id: "new-segment-dry-run", detail: "Preview a fresh segment." },
   ];
   return (
     <section
@@ -438,21 +408,4 @@ function normalizePercent(value: unknown) {
   if (!Number.isFinite(number)) return null;
   const percent = number <= 1 ? number * 100 : number;
   return Math.max(0, Math.min(100, Math.round(percent)));
-}
-
-function suspiciousPerfectMessage(truth: ResearchTruthModel, fallback = "") {
-  const defaultMessage =
-    fallback ||
-    "Suspicious-perfect check: verify freshness, evidence breadth, and promotion proof before treating this round as complete.";
-  if (typeof truth.suspiciousPerfectWarning === "string" && truth.suspiciousPerfectWarning.trim()) {
-    return truth.suspiciousPerfectWarning;
-  }
-  if (typeof truth.suspiciousPerfect === "string" && truth.suspiciousPerfect.trim()) {
-    return truth.suspiciousPerfect;
-  }
-  if (truth.suspiciousPerfect && typeof truth.suspiciousPerfect === "object") {
-    const suspicious = truth.suspiciousPerfect as Record<string, unknown>;
-    return String(suspicious.message || suspicious.detail || defaultMessage);
-  }
-  return truth.suspiciousPerfect ? defaultMessage : fallback;
 }

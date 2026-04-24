@@ -1,5 +1,7 @@
 # Operator Workflows
 
+For a visual map, start with [Workflow diagrams](workflows.md). The task-oriented pages are [Operate](operate.md), [Trust](trust.md), and [Finish](finish.md).
+
 Use this page when running or resuming an autoresearch loop. For first setup, start with [Getting started](getting-started.md).
 
 ## Resume A Loop

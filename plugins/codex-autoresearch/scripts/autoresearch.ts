@@ -34,7 +34,7 @@ import {
   finiteMetric,
   isBaselineEligibleMetricRun,
 } from "../lib/session-core.js";
-import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 
 type LooseObject = Record<string, any>;
 
@@ -87,8 +87,9 @@ const METRIC_OUTPUT_CAPTURE_BYTES = 64 * 1024;
 const MAX_PARSED_METRICS = 512;
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
-const PLUGIN_VERSION = "0.6.0";
+const PLUGIN_VERSION = "1.0.0";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -106,7 +107,10 @@ Usage:
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
   node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs recipes list|show [recipe-id] [--catalog <path-or-url>]
+  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
+  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
+  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
+  node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
@@ -118,9 +122,12 @@ Usage:
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
   node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
-  node scripts/autoresearch.mjs state --cwd <project>
-  node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark]
-  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--json-full|--verbose]
+  node scripts/autoresearch.mjs state --cwd <project> [--compact]
+  node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
+  node scripts/autoresearch.mjs doctor hooks
+  node scripts/autoresearch.mjs benchmark-lint --cwd <project> [--metric-name <name>] [--sample <text>|--command <cmd>]
+  node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--dry-run|--yes]
+  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose]
   node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
   node scripts/autoresearch.mjs mcp-smoke
   node scripts/autoresearch.mjs --mcp
@@ -384,14 +391,30 @@ async function setupPlan(args) {
     shellQuote(workDir),
     "--name",
     shellQuote(planArgs.name || "Autoresearch session"),
+    planArgs.goal ? `--goal ${shellQuote(planArgs.goal)}` : "",
     "--metric-name",
     shellQuote(planArgs.metric_name || planArgs.metricName || "seconds"),
+    planArgs.metric_unit || planArgs.metricUnit
+      ? `--metric-unit ${shellQuote(planArgs.metric_unit ?? planArgs.metricUnit)}`
+      : "",
     "--direction",
     shellQuote(planArgs.direction || "lower"),
     "--shell",
     shellQuote(shellKind),
     benchmarkCommand ? `--benchmark-command ${shellQuote(benchmarkCommand)}` : "",
     checksCommand ? `--checks-command ${shellQuote(checksCommand)}` : "",
+    listOption(planArgs.files_in_scope ?? planArgs.filesInScope).length
+      ? `--files-in-scope ${shellQuote(listOption(planArgs.files_in_scope ?? planArgs.filesInScope).join(","))}`
+      : "",
+    listOption(planArgs.off_limits ?? planArgs.offLimits).length
+      ? `--off-limits ${shellQuote(listOption(planArgs.off_limits ?? planArgs.offLimits).join(","))}`
+      : "",
+    listOption(planArgs.constraints).length
+      ? `--constraints ${shellQuote(listOption(planArgs.constraints).join(","))}`
+      : "",
+    listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
+      ? `--secondary-metrics ${shellQuote(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).join(","))}`
+      : "",
     setupMaxIterations != null ? `--max-iterations ${shellQuote(setupMaxIterations)}` : "",
     commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
@@ -436,10 +459,346 @@ async function setupPlan(args) {
   };
 }
 
-async function guidedSetup(args) {
+async function promptPlan(args: LooseObject): Promise<LooseObject> {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const prompt = String(args.prompt || args.goal || args.request || "").trim();
+  if (!prompt) throw new Error("prompt-plan requires --prompt <text>.");
+  const intent = await analyzeAutoresearchPrompt(workDir, prompt, args);
+  const setupArgs = {
+    cwd: workDir,
+    ...intent.setupDefaults,
+    name: args.name || intent.setupDefaults.name,
+    goal: args.goal || intent.setupDefaults.goal,
+    metricName: args.metricName ?? args.metric_name ?? intent.setupDefaults.metricName,
+    metric_name: args.metric_name ?? args.metricName ?? intent.setupDefaults.metricName,
+    metricUnit: args.metricUnit ?? args.metric_unit ?? intent.setupDefaults.metricUnit,
+    metric_unit: args.metric_unit ?? args.metricUnit ?? intent.setupDefaults.metricUnit,
+    direction: args.direction || intent.setupDefaults.direction,
+    benchmarkCommand:
+      args.benchmarkCommand ?? args.benchmark_command ?? intent.setupDefaults.benchmarkCommand,
+    benchmark_command:
+      args.benchmark_command ?? args.benchmarkCommand ?? intent.setupDefaults.benchmarkCommand,
+    checksCommand: args.checksCommand ?? args.checks_command ?? intent.setupDefaults.checksCommand,
+    checks_command: args.checks_command ?? args.checksCommand ?? intent.setupDefaults.checksCommand,
+    filesInScope: args.filesInScope ?? args.files_in_scope ?? intent.setupDefaults.filesInScope,
+    files_in_scope: args.files_in_scope ?? args.filesInScope ?? intent.setupDefaults.filesInScope,
+    offLimits: args.offLimits ?? args.off_limits ?? intent.setupDefaults.offLimits,
+    off_limits: args.off_limits ?? args.offLimits ?? intent.setupDefaults.offLimits,
+    constraints: args.constraints ?? intent.setupDefaults.constraints,
+    secondaryMetrics:
+      args.secondaryMetrics ?? args.secondary_metrics ?? intent.setupDefaults.secondaryMetrics,
+    secondary_metrics:
+      args.secondary_metrics ?? args.secondaryMetrics ?? intent.setupDefaults.secondaryMetrics,
+    commitPaths: args.commitPaths ?? args.commit_paths ?? intent.setupDefaults.commitPaths,
+    commit_paths: args.commit_paths ?? args.commitPaths ?? intent.setupDefaults.commitPaths,
+    maxIterations: args.maxIterations ?? args.max_iterations ?? intent.setupDefaults.maxIterations,
+    max_iterations: args.max_iterations ?? args.maxIterations ?? intent.setupDefaults.maxIterations,
+    recipe: args.recipe ?? args.recipe_id ?? args.recipeId ?? intent.setupDefaults.recipe,
+    recipe_id: args.recipe_id ?? args.recipeId ?? args.recipe ?? intent.setupDefaults.recipe,
+  };
+  const setup = await setupPlan(setupArgs);
+  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
+  return {
+    ok: true,
+    workDir,
+    kind: "codex-autoresearch-prompt-plan",
+    prompt,
+    intent,
+    setup,
+    commands: {
+      promptPlan: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} prompt-plan --cwd ${shellQuote(workDir)} --prompt ${shellQuote(prompt)}`,
+      setup: setup.nextCommand,
+      doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command || "",
+      dashboard: dashboardCommand,
+      firstPacket: setup.baselineCommand,
+    },
+    nextAction: intent.nextAction,
+  };
+}
+
+async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: LooseObject) {
+  const explicit = parsePromptFields(prompt);
+  const lower = prompt.toLowerCase();
+  const speed = /\b(speed|fast|faster|latency|runtime|p99|p90|performance|slow)\b/.test(lower);
+  const memory = /\b(memory|rss|heap|footprint|ram)\b/.test(lower);
+  const bugs = /\b(bug|bugs|defect|defects|failure|failures|low hanging fruits?)\b/.test(lower);
+  const productResearch =
+    /\b(product|docs?|documentation|ux|dashboard|architecture|study|research|delight)\b/.test(
+      lower,
+    );
+  const testSpeed = /\b(unit tests?|tests?)\b/.test(lower) && speed;
+  const latencyRatio = /\bp99\b/.test(lower) && /\bp90\b/.test(lower);
+  const maxIterations =
+    positiveIntegerFromPrompt(prompt) ??
+    positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
+  const suspects = parseSuspects(prompt);
+  const referencedFiles = parseReferencedFiles(prompt);
+  const explicitScope = explicit.scope.length ? explicit.scope : [];
+  const repoRecipe = await recommendRecipe(workDir);
+  const loopKind =
+    bugs || (productResearch && !speed && !memory) ? "quality-gap" : "measured-optimization";
+  const metricName =
+    explicit.metricName ||
+    (bugs || (productResearch && !speed && !memory)
+      ? "quality_gap"
+      : latencyRatio
+        ? "p99_p90_ratio"
+        : speed && memory
+          ? "score"
+          : speed
+            ? "seconds"
+            : memory
+              ? "rss_mb"
+              : repoRecipe?.metricName || "seconds");
+  const direction =
+    explicit.direction ||
+    (metricName === "quality_gap" ||
+    metricName === "p99_p90_ratio" ||
+    metricName === "score" ||
+    metricName === "seconds" ||
+    metricName === "rss_mb"
+      ? "lower"
+      : repoRecipe?.direction || "lower");
+  const metricUnit =
+    explicit.metricUnit ||
+    (metricName === "quality_gap"
+      ? "gaps"
+      : metricName === "seconds"
+        ? "s"
+        : metricName === "rss_mb"
+          ? "MB"
+          : "");
+  const secondaryMetrics = uniqueStrings([
+    ...explicit.secondaryMetrics,
+    ...(speed && memory ? ["seconds", "rss_mb"] : []),
+    ...(latencyRatio ? ["p90_ms", "p99_ms"] : []),
+    ...suspects.map((suspect) => `suspect:${suspect}`),
+  ]);
+  const constraints = uniqueStrings([
+    ...explicit.constraints,
+    ...(testSpeed ? ["Do not delete or skip correctness tests to improve runtime."] : []),
+    ...(memory ? ["Treat memory regressions as tradeoffs, not invisible wins."] : []),
+    ...(suspects.length ? [`Evaluate suspect families separately: ${suspects.join(", ")}.`] : []),
+    ...(referencedFiles.length
+      ? [
+          `Use referenced experiment notes before inventing new families: ${referencedFiles.join(", ")}.`,
+        ]
+      : []),
+  ]);
+  const filesInScope = uniqueStrings([
+    ...explicitScope,
+    ...(testSpeed ? ["test runner config", "test helpers"] : []),
+    ...(repoRecipe?.scope || []),
+  ]);
+  const offLimits = uniqueStrings(explicit.offLimits);
+  const benchmarkCommand = explicit.benchmarkCommand || "";
+  const checksCommand = explicit.checksCommand || "";
+  const recipe = benchmarkCommand
+    ? ""
+    : loopKind === "quality-gap"
+      ? "quality-gap"
+      : repoRecipe?.id || "custom";
+  const missing = [];
+  if (!benchmarkCommand && loopKind === "measured-optimization") {
+    missing.push("benchmark_command");
+  }
+  if (!checksCommand && (testSpeed || bugs)) missing.push("checks_command");
+  if (!filesInScope.length) missing.push("scope");
+  const experimentPlan = buildPromptExperimentPlan({
+    prompt,
+    speed,
+    memory,
+    bugs,
+    latencyRatio,
+    testSpeed,
+    suspects,
+    referencedFiles,
+  });
+  const nextAction =
+    missing.length > 0
+      ? `Confirm ${missing.join(", ")} or accept the suggested recipe before setup.`
+      : "Run setup, doctor, live dashboard, then one packet.";
+  return {
+    loopKind,
+    confidence: promptPlanConfidence({
+      benchmarkCommand,
+      explicit,
+      speed,
+      memory,
+      bugs,
+      productResearch,
+    }),
+    inferredFrom: {
+      speed,
+      memory,
+      bugs,
+      productResearch,
+      latencyRatio,
+      testSpeed,
+      maxIterations,
+      suspects,
+      referencedFiles,
+    },
+    metric: { name: metricName, unit: metricUnit, direction },
+    missing,
+    experimentPlan,
+    setupDefaults: {
+      recipe,
+      name: titleFromPrompt(prompt, loopKind),
+      goal: prompt,
+      metricName,
+      metricUnit,
+      direction,
+      benchmarkCommand,
+      checksCommand,
+      filesInScope,
+      offLimits,
+      constraints,
+      secondaryMetrics,
+      maxIterations,
+      commitPaths: filesInScope,
+    },
+    safeInterpretation: safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }),
+    nextAction,
+  };
+}
+
+function parsePromptFields(prompt: string) {
+  const field = (name) => {
+    const match = prompt.match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
+    return match?.[1]?.trim() || "";
+  };
+  const metricText = field("Metric");
+  const metricMatch = metricText.match(
+    /^([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s*\(([^)]+)\))?(?:\s*,\s*(lower|higher)\s+is\s+better)?/i,
+  );
+  const secondaryText = field("Secondary metrics") || field("Secondary");
+  return {
+    benchmarkCommand: field("Benchmark"),
+    checksCommand: field("Checks"),
+    metricName: metricMatch ? validateMetricName(metricMatch[1]) : "",
+    metricUnit: metricMatch?.[2] || "",
+    direction: metricMatch?.[3]?.toLowerCase() || "",
+    scope: splitHumanList(field("Scope")),
+    offLimits: splitHumanList(field("Off limits") || field("Off-limits")),
+    constraints: splitHumanList(field("Constraints")),
+    secondaryMetrics: splitHumanList(secondaryText),
+  };
+}
+
+function splitHumanList(value: string) {
+  if (!value) return [];
+  return value
+    .split(/\r?\n|,|;|\band\b/i)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function positiveIntegerFromPrompt(prompt: string) {
+  const match = prompt.match(/\b(\d{1,4})\s*(?:times|iterations|packets|runs)\b/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function parseSuspects(prompt: string) {
+  const match = prompt.match(/\bI suspect:\s*([^.\n]+)/i);
+  if (!match) return [];
+  return uniqueStrings(splitHumanList(match[1]).map((item) => item.replace(/^or\s+/i, "")));
+}
+
+function parseReferencedFiles(prompt: string) {
+  return uniqueStrings(
+    [...prompt.matchAll(/@([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)/g)].map((m) => m[1]),
+  );
+}
+
+function uniqueStrings(items) {
+  return [
+    ...new Set(
+      listOption(items)
+        .map((item) => String(item).trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function titleFromPrompt(prompt: string, loopKind: string) {
+  const stripped = prompt
+    .replace(/^Use\s+\$?Codex Autoresearch\s+to\s+/i, "")
+    .replace(/^Use\s+Codex Autoresearch\s+to\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const title = stripped.split(/[.!?]/)[0].slice(0, 72).trim();
+  return title || (loopKind === "quality-gap" ? "Quality gap loop" : "Measured improvement loop");
+}
+
+function buildPromptExperimentPlan({
+  speed,
+  memory,
+  bugs,
+  latencyRatio,
+  testSpeed,
+  suspects,
+  referencedFiles,
+}: LooseObject) {
+  const lanes = [];
+  if (latencyRatio) lanes.push("Measure p90 and p99 separately before optimizing the ratio.");
+  if (speed) lanes.push("Start with profiling or timing the current slow path.");
+  if (memory) lanes.push("Track memory as a secondary or composite metric for every packet.");
+  if (testSpeed)
+    lanes.push(
+      "Try runner configuration, fixture reuse, and expensive setup isolation before changing assertions.",
+    );
+  if (bugs)
+    lanes.push(
+      "Convert accepted bug findings into quality_gap checklist items, then close them with checks.",
+    );
+  for (const suspect of suspects) lanes.push(`Run a bounded suspect family: ${suspect}.`);
+  for (const file of referencedFiles)
+    lanes.push(`Read ${file} before generating experiment families.`);
+  return {
+    lanes: lanes.length
+      ? lanes
+      : ["Run one baseline packet, then choose the smallest measurable next experiment."],
+    stopRules: [
+      "Stop a family when it regresses the primary metric without reducing risk.",
+      "Repeat measurement before keeping noisy or surprising wins.",
+      "Do not finalize until checks and packet freshness are current.",
+    ],
+  };
+}
+
+function promptPlanConfidence({
+  benchmarkCommand,
+  explicit,
+  speed,
+  memory,
+  bugs,
+  productResearch,
+}) {
+  let score = 0.35;
+  if (benchmarkCommand) score += 0.25;
+  if (explicit.metricName) score += 0.15;
+  if (explicit.checksCommand) score += 0.1;
+  if (speed || memory || bugs || productResearch) score += 0.15;
+  return Math.min(0.95, Number(score.toFixed(2)));
+}
+
+function safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }: LooseObject) {
+  if (testSpeed)
+    return "Optimize test runtime by changing runner/config/helpers while preserving test coverage and correctness checks.";
+  if (bugs)
+    return "Find likely defects, measure accepted fixes through quality_gap or checks, and avoid broad rewrites without evidence.";
+  if (speed && memory)
+    return "Optimize speed with memory as an explicit tradeoff, preferably through a composite metric or secondary metric gate.";
+  return `Turn the prompt into a measured Autoresearch session: ${prompt}`;
+}
+
+async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const setup = await setupPlan(args);
-  const state = await publicState({ cwd: workDir });
+  const state: LooseObject = await publicState({ cwd: workDir });
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
   const lastRun = await readLastRunPacket(workDir).catch(() => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
@@ -526,6 +885,130 @@ async function guidedSetup(args) {
   };
 }
 
+async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const [state, guide, doctor, next] = await Promise.all([
+    publicState({ cwd: workDir, compact: true }),
+    guidedSetup({ cwd: workDir }).catch((error) => ({
+      ok: false,
+      stage: "blocked",
+      warnings: [error.message],
+      nextAction: "Fix the guided setup error before running packets.",
+    })),
+    doctorSession({ cwd: workDir, checkBenchmark: false, explain: true }).catch((error) => ({
+      ok: false,
+      issues: [error.message],
+      warnings: [],
+      nextAction: "Fix doctor before running packets.",
+    })),
+    recommendNext({ cwd: workDir, compact: true }).catch((error) => ({
+      ok: false,
+      action: null,
+      nextAction: error.message,
+    })),
+  ]);
+  const commands = continuationCommands(workDir);
+  const nextPacket = next as LooseObject;
+  return {
+    ok: true,
+    workDir,
+    kind: "codex-autoresearch-onboarding-packet",
+    generatedAt: new Date().toISOString(),
+    protocol: [
+      "Inspect state and doctor before editing.",
+      "Run exactly one packet with next_experiment or next.",
+      "Log the packet with keep, discard, crash, or checks_failed plus ASI.",
+      "Read continuation before deciding whether to continue or finalize.",
+    ],
+    readFirst: [
+      "autoresearch.md",
+      "autoresearch.jsonl",
+      "autoresearch.ideas.md",
+      "autoresearch.last-run.json when present",
+    ],
+    state,
+    guidedSetup: guide,
+    doctor: {
+      ok: doctor.ok,
+      issues: doctor.issues || [],
+      warnings: doctor.warnings || [],
+      nextAction: doctor.nextAction,
+    },
+    nextAction:
+      nextPacket.action || nextPacket.nextBestAction || nextPacket.nextAction || guide.nextAction,
+    hazards: compactHazards({
+      doctor,
+      guide,
+      state,
+    }),
+    commands: {
+      ...commands,
+      guide: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`,
+      doctorExplain: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --explain`,
+      onboardingPacket: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} onboarding-packet --cwd ${shellQuote(workDir)} --compact`,
+      newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
+    },
+    templates: agentReportTemplates(config),
+  };
+}
+
+async function recommendNext(args: LooseObject): Promise<LooseObject> {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const viewModel = await dashboardViewModel(workDir, config, {
+    deliveryMode: "cli",
+    sourceCwd: workDir,
+    pluginVersion: PLUGIN_VERSION,
+  });
+  const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
+  const action = viewModel.nextBestAction || {};
+  return {
+    ok: true,
+    workDir,
+    action,
+    nextAction: action.detail || viewModel.readout?.nextAction || compact.nextAction,
+    whySafe:
+      action.explanation?.evidence ||
+      action.utilityCopy ||
+      "Derived from state, doctor warnings, ASI memory, and dashboard trust state.",
+    avoids:
+      action.explanation?.avoids ||
+      "Avoids running a packet before setup, stale-last-run, or trust blockers are resolved.",
+    proof:
+      action.explanation?.proof || "The next command should update state or clear the blocker.",
+    blockers: viewModel.trustBlockers || compact.blockers || [],
+    commands: {
+      primary: action.command || action.primaryCommand?.command || "",
+      ...compact.commands,
+    },
+    compactState: boolOption(args.compact, false) ? compact : undefined,
+  };
+}
+
+function compactHazards({ doctor, guide, state }: LooseObject) {
+  return [
+    ...(Array.isArray(doctor?.issues) ? doctor.issues : []),
+    ...(Array.isArray(doctor?.warnings) ? doctor.warnings : []),
+    ...(Array.isArray(guide?.warnings) ? guide.warnings : []),
+    ...(Array.isArray(state?.blockers) ? state.blockers : []),
+  ]
+    .map((item) => (typeof item === "object" ? item.message || item.code : item))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function agentReportTemplates(config: LooseObject = {}) {
+  const metric = config.metricName || "metric";
+  return {
+    firstResponse:
+      "I found the Autoresearch session, checked state/doctor, and the next safe action is: <action>. Dashboard: <url or command>.",
+    progress: `Packet result: ${metric}=<value>, status=<pending|keep|discard|crash|checks_failed>, evidence=<brief>, next=<ASI next_action_hint>.`,
+    final:
+      "Changed: <files/behavior>. Verified: <commands>. Autoresearch: <runs/kept/best/next>. Risks: <remaining blockers>.",
+    blocked:
+      "Blocked by <specific layer>. Evidence: <command/output>. Safe next action: <fix or command>.",
+  };
+}
+
 function replacementNextCommandFromLastRun(workDir, packet, defaultBenchmarkCommandReady) {
   const parts = [
     "node",
@@ -555,6 +1038,25 @@ async function recipeCommand(subcommand, args) {
   if (!subcommand || subcommand === "list") {
     const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
     return { ok: true, recipes: [...listBuiltInRecipes(), ...catalogRecipes] };
+  }
+  if (subcommand === "recommend") {
+    const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+    const recipe = await recommendRecipe(workDir);
+    const setup = await setupPlan({
+      cwd: workDir,
+      recipe: args.recipe || recipe?.id,
+      catalog: args.catalog,
+    });
+    return {
+      ok: true,
+      workDir,
+      recommendedRecipe: recipe,
+      reason: recipe
+        ? `Detected project shape matches ${recipe.title}.`
+        : "No built-in recipe matched strongly; use custom setup.",
+      nextCommand: setup.nextCommand,
+      doctorCommand: setup.guidedFlow.find((step) => step.step === "doctor")?.command || "",
+    };
   }
   if (subcommand === "show") {
     const id = args._[2] || args.id || args.recipe || args.recipeId;
@@ -1906,8 +2408,25 @@ function dashboardSettings(config, extra: LooseObject = {}) {
 async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
-  const warnings = await operatorWarningsForWorkDir(workDir);
+  const warnings = context.suppressEnvironmentWarnings
+    ? []
+    : await operatorWarningsForWorkDir(workDir);
   const settings = dashboardSettings(config, context);
+  const drift =
+    context.runtimeDrift ||
+    (await buildDriftReport({
+      pluginRoot: PLUGIN_ROOT,
+      includeInstalled: Boolean(context.includeInstalledRuntime),
+    }).catch((error) => ({
+      ok: false,
+      warnings: [error.message],
+    })));
+  const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
+    ok: false,
+    ready: false,
+    warnings: [error.message],
+    nextAction: "Fix finalization preview errors before relying on review readiness.",
+  }));
   return buildDashboardViewModel({
     state,
     settings,
@@ -1921,12 +2440,9 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
       warnings: [error.message],
     })),
     qualityGap,
-    finalizePreview: await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
-      ok: false,
-      ready: false,
-      warnings: [error.message],
-      nextAction: "Fix finalization preview errors before relying on review readiness.",
-    })),
+    finalizePreview: context.suppressEnvironmentWarnings
+      ? suppressEnvironmentWarningsFromPreview(finalizePreview)
+      : finalizePreview,
     recipes: listBuiltInRecipes().map((recipe) => ({
       id: recipe.id,
       title: recipe.title,
@@ -1937,16 +2453,14 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
       direction: state.config.bestDirection,
       settings,
     }),
-    drift: await buildDriftReport({ pluginRoot: PLUGIN_ROOT }).catch((error) => ({
-      ok: false,
-      warnings: [error.message],
-    })),
+    drift,
     warnings,
   });
 }
 
 async function operatorWarningsForWorkDir(workDir) {
   const inGit = await insideGitRepo(workDir);
+  const config = readConfig(workDir);
   const warnings = [];
   if (inGit && (await isGitClean(workDir)) === false) {
     warnings.push({
@@ -1957,7 +2471,33 @@ async function operatorWarningsForWorkDir(workDir) {
         "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
     });
   }
+  const missingCommitPaths = [];
+  for (const item of listOption(config.commitPaths || config.commit_paths)) {
+    if (!(await pathExists(path.resolve(workDir, item)))) missingCommitPaths.push(item);
+  }
+  if (missingCommitPaths.length) {
+    warnings.push({
+      code: "missing_commit_paths",
+      severity: "warning",
+      message: `Configured commitPaths do not exist: ${missingCommitPaths.slice(0, 5).join(", ")}.`,
+      action:
+        "Update commitPaths before relying on keep commits or use explicit --commit-paths for the next log.",
+    });
+  }
   return warnings;
+}
+
+function suppressEnvironmentWarningsFromPreview(preview) {
+  if (!preview || typeof preview !== "object" || Array.isArray(preview)) return preview;
+  const copy = { ...preview };
+  const warnings = listOption(copy.warnings).filter(
+    (warning) => !/dirty|working tree/i.test(String(warning)),
+  );
+  if (warnings.length > 0) copy.warnings = warnings;
+  else delete copy.warnings;
+  delete copy.suggestedCommand;
+  delete copy.suggestedCommands;
+  return copy;
 }
 
 async function configureSession(args: LooseObject) {
@@ -2359,11 +2899,25 @@ async function exportDashboard(args) {
   const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
   const commands = dashboardCommands(workDir);
   const generatedAt = new Date().toISOString();
+  const showcaseExport = boolOption(args.showcase ?? args.showcaseMode, false);
+  const sourceCwd = showcaseExport
+    ? path.relative(PLUGIN_ROOT, workDir).replaceAll("\\", "/") || "."
+    : workDir;
+  const runtimeDrift = await buildDriftReport({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: false,
+  }).catch((error) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
   const dashboardContext = {
     deliveryMode: "static-export",
     generatedAt,
-    sourceCwd: workDir,
+    sourceCwd,
     pluginVersion: PLUGIN_VERSION,
+    runtimeDrift,
+    publicExport: showcaseExport,
+    suppressEnvironmentWarnings: showcaseExport,
   };
   const viewModel = await dashboardViewModel(workDir, config, dashboardContext);
   const html = dashboardHtml(entries, {
@@ -2380,6 +2934,7 @@ async function exportDashboard(args) {
     commands,
     settings: dashboardSettings(config, dashboardContext),
     viewModel,
+    publicExport: showcaseExport,
   });
   await fsp.writeFile(output, html, "utf8");
   const modeGuidance = {
@@ -2417,6 +2972,13 @@ async function serveDashboard(args) {
   const startedAt = Date.now();
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   let liveUrl = "";
+  const runtimeDrift = await buildDriftReport({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: true,
+  }).catch((error) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
   const serveResult = await serveAutoresearch({
     cwd: workDir,
     port: args.port,
@@ -2430,6 +2992,7 @@ async function serveDashboard(args) {
         generatedAt,
         sourceCwd: workDir,
         pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
       };
       return dashboardHtml(entries, {
         workDir,
@@ -2456,6 +3019,7 @@ async function serveDashboard(args) {
         generatedAt: new Date().toISOString(),
         sourceCwd: workDir,
         pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
       }),
   });
   liveUrl = serveResult.url;
@@ -2525,7 +3089,16 @@ async function clearSession(args) {
 
 function dashboardHtml(entries, meta: LooseObject = {}) {
   const data = JSON.stringify(entries).replace(/</g, "\\u003c");
-  const metaData = JSON.stringify(stripDashboardCommandFields(meta)).replace(/</g, "\\u003c");
+  const metaForClient = stripDashboardCommandFields(meta);
+  const publicExport = Boolean(
+    meta.publicExport ||
+    meta.showcaseMode ||
+    meta.settings?.publicExport ||
+    meta.settings?.showcaseMode,
+  );
+  const metaData = JSON.stringify(
+    publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
+  ).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
     throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
@@ -2567,15 +3140,27 @@ function readDashboardBuildAsset(fileName) {
 
 function stripDashboardCommandFields(value) {
   const commandKeys = new Set([
+    "argv",
     "baselineCommand",
+    "cwd",
     "command",
     "commandLabel",
     "commands",
     "commandsByStatus",
+    "display",
     "guideCommand",
     "guidedFlow",
+    "liveDashboardCommand",
     "nextCommand",
+    "output",
+    "outputTail",
     "primaryCommand",
+    "sessionCwd",
+    "sourceCwd",
+    "staticExport",
+    "suggestedCommand",
+    "suggestedCommands",
+    "workDir",
   ]);
   if (Array.isArray(value)) return value.map((item) => stripDashboardCommandFields(item));
   if (!value || typeof value !== "object") return value;
@@ -2584,6 +3169,32 @@ function stripDashboardCommandFields(value) {
       .filter(([key]) => !commandKeys.has(key))
       .map(([key, item]) => [key, stripDashboardCommandFields(item)]),
   );
+}
+
+function scrubDashboardPublicExport(value) {
+  if (Array.isArray(value)) return value.map((item) => scrubDashboardPublicExport(item));
+  if (typeof value === "string") return scrubDashboardPublicExportString(value);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, scrubDashboardPublicExport(item)]),
+  );
+}
+
+function scrubDashboardPublicExportString(value) {
+  const placeholders = [
+    [PLUGIN_ROOT, "<plugin-root>"],
+    [REPO_ROOT, "<repo-root>"],
+    [process.execPath, "node"],
+  ];
+  let scrubbed = value;
+  for (const [needle, replacement] of placeholders) {
+    if (!needle) continue;
+    scrubbed = scrubbed.replaceAll(String(needle), replacement);
+    scrubbed = scrubbed.replaceAll(String(needle).replaceAll("\\", "/"), replacement);
+  }
+  return scrubbed
+    .replace(/[A-Za-z]:\\[^\r\n"]+/g, "<local-path>")
+    .replace(/[A-Za-z]:\/[^\r\n" ]+/g, "<local-path>");
 }
 
 async function resolveLastRunPath(workDir) {
@@ -2766,7 +3377,7 @@ async function deleteLastRunPacket(workDir) {
   }
 }
 
-async function publicState(args) {
+async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const warningDetails = await operatorWarningsForWorkDir(workDir);
@@ -2781,7 +3392,7 @@ async function publicState(args) {
       state.current.filter((run) => run.status === status).length,
     ]),
   );
-  return {
+  const fullState = {
     ok: true,
     workDir,
     config: state.config,
@@ -2809,6 +3420,43 @@ async function publicState(args) {
     memory,
     continuation: loopContinuation(workDir, state, config, "state"),
   };
+  return boolOption(args.compact, false) ? compactPublicState(fullState) : fullState;
+}
+
+function compactPublicState(state: LooseObject) {
+  const limit = state.limit || {};
+  const continuation = state.continuation || {};
+  const blockers = [
+    ...(Array.isArray(state.warningDetails)
+      ? state.warningDetails.map((warning) => warning.message || warning.code)
+      : []),
+    ...(Array.isArray(state.warnings) ? state.warnings : []),
+  ].filter(Boolean);
+  return {
+    ok: state.ok,
+    workDir: state.workDir,
+    name: state.config?.name || "Autoresearch",
+    metric: state.config?.metricName || "metric",
+    direction: state.config?.bestDirection || "lower",
+    segment: state.segment,
+    runs: state.runs,
+    kept: state.kept,
+    discarded: state.discarded,
+    baseline: state.baseline,
+    best: state.best,
+    limitReached: Boolean(limit.limitReached),
+    remainingIterations: limit.remainingIterations ?? null,
+    nextAction: continuation.nextAction || "Run doctor, then next.",
+    shouldContinue: continuation.shouldContinue === true,
+    forbidFinalAnswer: continuation.forbidFinalAnswer === true,
+    blockers: [...new Set(blockers)].slice(0, 6),
+    memory: {
+      plateau: state.memory?.plateau?.detected === true,
+      suggestedLane: state.memory?.summary?.suggestedLane || "",
+      latestNextAction: state.memory?.latestNextAction || "",
+    },
+    commands: continuation.commands || state.commands || {},
+  };
 }
 
 function dashboardCommands(workDir, qualityGap = null) {
@@ -2817,8 +3465,17 @@ function dashboardCommands(workDir, qualityGap = null) {
   const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
   return [
     { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
+    {
+      label: "Onboarding packet",
+      command: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
+    },
+    { label: "Recommend next", command: `node ${script} recommend-next --cwd ${cwd} --compact` },
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
-    { label: "Doctor", command: `node ${script} doctor --cwd ${cwd} --check-benchmark` },
+    {
+      label: "Doctor",
+      command: `node ${script} doctor --cwd ${cwd} --check-benchmark --check-installed`,
+    },
+    { label: "Benchmark lint", command: `node ${script} benchmark-lint --cwd ${cwd}` },
     { label: "Next run", command: `node ${script} next --cwd ${cwd}` },
     {
       label: "Keep last",
@@ -2835,6 +3492,7 @@ function dashboardCommands(workDir, qualityGap = null) {
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
+    { label: "New segment", command: `node ${script} new-segment --cwd ${cwd} --dry-run` },
   ];
 }
 
@@ -2942,6 +3600,10 @@ function continuationCommands(workDir) {
     liveDashboard: `node ${script} serve --cwd ${cwd}`,
     exportDashboard: `node ${script} export --cwd ${cwd}`,
     extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
+    onboardingPacket: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
+    recommendNext: `node ${script} recommend-next --cwd ${cwd} --compact`,
+    benchmarkLint: `node ${script} benchmark-lint --cwd ${cwd}`,
+    newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
   };
 }
 
@@ -2960,9 +3622,9 @@ function currentQualityGapSlug(workDir) {
   return null;
 }
 
-async function doctorSession(args) {
+async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = await publicState(args);
+  const state: LooseObject = await publicState(args);
   const issues = [];
   const warnings = [];
   const warningDetails = [];
@@ -3031,6 +3693,13 @@ async function doctorSession(args) {
         benchmark.metricError = `Benchmark did not emit primary metric METRIC ${state.config.metricName}=<number>.`;
         issues.push(benchmark.metricError);
       }
+      const driftWarning = benchmarkDriftWarning({
+        currentMetric: benchmark.parsedMetrics[state.config.metricName],
+        bestMetric: state.best,
+        direction: state.config.bestDirection,
+        metricName: state.config.metricName,
+      });
+      if (driftWarning) warnings.push(driftWarning);
     }
   }
 
@@ -3046,7 +3715,7 @@ async function doctorSession(args) {
     nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
-  return {
+  const result: LooseObject = {
     ok: issues.length === 0,
     workDir,
     config: state.config,
@@ -3062,6 +3731,159 @@ async function doctorSession(args) {
     warningDetails,
     nextAction,
     continuation: loopContinuation(workDir, currentState(workDir), config, "doctor"),
+  };
+  if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
+  return result;
+}
+
+function benchmarkDriftWarning({ currentMetric, bestMetric, direction, metricName }: LooseObject) {
+  const current = finiteMetric(currentMetric);
+  const best = finiteMetric(bestMetric);
+  if (current == null || best == null || best === 0) return "";
+  const worse =
+    direction === "higher"
+      ? current < best && Math.abs((best - current) / best) >= 0.25
+      : current > best && Math.abs((current - best) / best) >= 0.25;
+  if (!worse) return "";
+  return `Benchmark drift: current ${metricName}=${current} is far worse than historical best ${best}. Treat the old best as historical evidence, not current runtime proof.`;
+}
+
+function doctorExplanation(result: LooseObject): LooseObject {
+  return {
+    verdict: result.ok
+      ? "Doctor found no blocking issues."
+      : "Doctor found issues that must be fixed before trusting the loop.",
+    priorityFixes: [
+      ...(result.issues || []),
+      ...(result.warnings || []).filter((warning) =>
+        /dirty|drift|benchmark|missing|stale|commitPaths/i.test(String(warning)),
+      ),
+    ].slice(0, 5),
+    nextSafeAction: result.nextAction,
+    readAs:
+      "Issues block the loop. Warnings reduce trust and should be resolved before keeping results when they affect evidence, Git, or runtime drift.",
+  };
+}
+
+async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const platformSupported = process.platform !== "win32";
+  return {
+    ok: true,
+    workDir,
+    feature: "codex_hooks",
+    defaultEnabled: false,
+    supportedNow: platformSupported,
+    platform: process.platform,
+    verdict: platformSupported
+      ? "Hooks can be explored as opt-in reminders, but should not be required for core Autoresearch behavior."
+      : "Hooks are not a dependable default on this Windows environment; keep them as docs/templates only.",
+    limitations: [
+      "Codex hooks are experimental.",
+      "Use them as reminders or context injection, not irreversible enforcement.",
+      "Current hook behavior is best suited to shell/Bash-style tool observations, not complete MCP/write/web-search coverage.",
+      "Autoresearch core behavior must remain correct without hooks.",
+    ],
+    templates: {
+      sessionStart:
+        "SessionStart: run `node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact` and surface the next safe action.",
+      postToolUse:
+        "PostToolUse: when shell output contains `METRIC name=value`, remind the agent to log the packet with ASI.",
+      stop: "Stop: if `autoresearch.last-run.json` exists or continuation.forbidFinalAnswer is true, warn before a final answer.",
+    },
+    docs: [
+      "https://developers.openai.com/codex/hooks",
+      "https://developers.openai.com/codex/concepts/customization#skills",
+    ],
+  };
+}
+
+async function benchmarkLint(args) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const metricName = validateMetricName(
+    args.metric_name || args.metricName || state.config.metricName || "metric",
+  );
+  let sample = args.sample || "";
+  let commandResult = null;
+  if (!sample) {
+    const command = args.command || (await defaultBenchmarkCommand(workDir));
+    if (command) {
+      commandResult = await runShell(
+        command,
+        workDir,
+        numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
+        { retainMetricNames: [metricName] },
+      );
+      sample = metricParseSource(commandResult);
+    }
+  }
+  const parsedMetrics = parseMetricLines(sample);
+  const emitsPrimary = finiteMetric(parsedMetrics[metricName]) != null;
+  const issues = [];
+  const warnings = [];
+  if (!sample) {
+    issues.push("No sample output, command, or default autoresearch script was available.");
+  } else if (!Object.keys(parsedMetrics).length) {
+    issues.push("No METRIC name=value lines were parsed.");
+  } else if (!emitsPrimary) {
+    issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
+  }
+  if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) {
+    issues.push(
+      `Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`,
+    );
+  }
+  if (Object.keys(parsedMetrics).length > 20) {
+    warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
+  }
+  return {
+    ok: issues.length === 0,
+    workDir,
+    metricName,
+    checkedCommand: commandResult?.command || args.command || "",
+    parsedMetrics,
+    emitsPrimary,
+    issues,
+    warnings,
+    example: `METRIC ${metricName}=1.23`,
+    nextAction: issues.length
+      ? `Update the benchmark so it prints METRIC ${metricName}=<number>.`
+      : "Benchmark output satisfies the metric contract.",
+  };
+}
+
+async function newSegment(args) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
+  const confirmed = boolOption(args.confirm ?? args.yes, false);
+  const reason = String(args.reason || "Start a fresh segment while preserving history.").trim();
+  const entry = {
+    type: "config",
+    name: state.config.name || "Autoresearch",
+    metricName: state.config.metricName || "metric",
+    metricUnit: state.config.metricUnit ?? "",
+    bestDirection: state.config.bestDirection === "higher" ? "higher" : "lower",
+    segmentReason: reason,
+    timestamp: new Date().toISOString(),
+  };
+  if (!dryRun && !confirmed) {
+    throw new Error(
+      "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
+    );
+  }
+  if (!dryRun) appendJsonl(workDir, entry);
+  return {
+    ok: true,
+    workDir,
+    dryRun,
+    previousSegment: state.segment,
+    nextSegment: state.segment + 1,
+    entry,
+    nextAction: dryRun
+      ? "Review the segment entry, then rerun with --yes to append it."
+      : "Run and log a fresh baseline or next packet for the new segment.",
   };
 }
 
@@ -3163,8 +3985,10 @@ async function nextExperiment(args) {
 
 const mcpInterface = createMcpInterface({
   boolOption,
+  benchmarkLint,
   clearSession,
   configureSession,
+  doctorHooks,
   doctorSession,
   exportDashboard,
   finalizePreview: buildFinalizePreview,
@@ -3174,9 +3998,13 @@ const mcpInterface = createMcpInterface({
   integrationsCommand,
   logExperiment,
   measureQualityGap,
+  newSegment,
   nextExperiment,
+  onboardingPacket,
   parseJsonOption,
+  promptPlan,
   publicState,
+  recommendNext,
   recipeCommand,
   runExperiment,
   serveDashboard,
@@ -3250,7 +4078,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "0.6.0" },
+        serverInfo: { name: "codex-autoresearch", version: "1.0.0" },
       },
     });
     return;
@@ -3408,7 +4236,12 @@ async function mcpSmoke() {
     "setup_plan",
     "setup_session",
     "next_experiment",
+    "prompt_plan",
+    "onboarding_packet",
+    "recommend_next",
     "read_state",
+    "benchmark_lint",
+    "new_segment",
     "doctor_session",
     "serve_dashboard",
     "clear_session",
@@ -3447,6 +4280,8 @@ async function main() {
     return;
   }
   const handlers = createCliCommandHandlers({
+    benchmarkLint,
+    buildDriftReport,
     buildDashboardViewModel,
     clearSession,
     configureSession,
@@ -3454,6 +4289,7 @@ async function main() {
     dashboardHtml,
     dashboardSettings,
     dashboardViewModel,
+    doctorHooks,
     doctorSession,
     exportDashboard,
     finalizePreview: buildFinalizePreview,
@@ -3464,11 +4300,15 @@ async function main() {
     interactiveSetup,
     logExperiment,
     measureQualityGap,
+    newSegment,
     nextExperiment,
+    onboardingPacket,
     parseJsonOption,
     pluginRoot: PLUGIN_ROOT,
     pluginVersion: PLUGIN_VERSION,
+    promptPlan,
     publicState,
+    recommendNext,
     readJsonl,
     recipeCommand,
     resolveWorkDir,

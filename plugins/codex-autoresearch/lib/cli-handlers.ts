@@ -52,9 +52,16 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         recipeId: args.recipeId,
         catalog: args.catalog,
         name: args.name,
+        goal: args.goal,
         metricName: args.metricName,
+        metricUnit: args.metricUnit,
+        direction: args.direction,
         benchmarkCommand: args.benchmarkCommand,
         checksCommand: args.checksCommand,
+        filesInScope: args.filesInScope,
+        offLimits: args.offLimits,
+        constraints: args.constraints,
+        secondaryMetrics: args.secondaryMetrics,
         commitPaths: args.commitPaths,
         maxIterations: args.maxIterations,
       }),
@@ -66,11 +73,51 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         recipeId: args.recipeId,
         catalog: args.catalog,
         name: args.name,
+        goal: args.goal,
         metricName: args.metricName,
+        metricUnit: args.metricUnit,
         benchmarkCommand: args.benchmarkCommand,
         checksCommand: args.checksCommand,
+        filesInScope: args.filesInScope,
+        offLimits: args.offLimits,
+        constraints: args.constraints,
+        secondaryMetrics: args.secondaryMetrics,
         commitPaths: args.commitPaths,
         maxIterations: args.maxIterations,
+      }),
+    }),
+    "prompt-plan": async (args) => ({
+      result: await deps.promptPlan({
+        cwd: args.cwd,
+        prompt: args.prompt,
+        goal: args.goal,
+        recipe: args.recipe,
+        recipeId: args.recipeId,
+        catalog: args.catalog,
+        name: args.name,
+        metricName: args.metricName,
+        metricUnit: args.metricUnit,
+        direction: args.direction,
+        benchmarkCommand: args.benchmarkCommand,
+        checksCommand: args.checksCommand,
+        filesInScope: args.filesInScope,
+        offLimits: args.offLimits,
+        constraints: args.constraints,
+        secondaryMetrics: args.secondaryMetrics,
+        commitPaths: args.commitPaths,
+        maxIterations: args.maxIterations,
+      }),
+    }),
+    "onboarding-packet": async (args) => ({
+      result: await deps.onboardingPacket({
+        cwd: args.cwd,
+        compact: args.compact,
+      }),
+    }),
+    "recommend-next": async (args) => ({
+      result: await deps.recommendNext({
+        cwd: args.cwd,
+        compact: args.compact,
       }),
     }),
     recipes: async (args) => ({
@@ -184,21 +231,46 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       }),
     }),
     state: async (args) => ({
-      result: await deps.publicState({ cwd: args.cwd }),
+      result: await deps.publicState({ cwd: args.cwd, compact: args.compact }),
     }),
     doctor: async (args) => ({
-      result: await deps.doctorSession({
+      result: await (args._[1] === "hooks" || args.hooks
+        ? deps.doctorHooks({
+            cwd: args.cwd,
+          })
+        : deps.doctorSession({
+            cwd: args.cwd,
+            command: args.command,
+            checkBenchmark: args.checkBenchmark,
+            checkInstalled: args.checkInstalled,
+            explain: args.explain,
+            timeoutSeconds: args.timeoutSeconds,
+          })),
+    }),
+    "benchmark-lint": async (args) => ({
+      result: await deps.benchmarkLint({
         cwd: args.cwd,
+        metricName: args.metricName,
+        sample: args.sample,
         command: args.command,
-        checkBenchmark: args.checkBenchmark,
-        checkInstalled: args.checkInstalled,
         timeoutSeconds: args.timeoutSeconds,
+      }),
+    }),
+    "new-segment": async (args) => ({
+      result: await deps.newSegment({
+        cwd: args.cwd,
+        reason: args.reason,
+        dryRun: args.dryRun,
+        yes: args.yes,
+        confirm: args.confirm,
       }),
     }),
     export: async (args) => ({
       result: await deps.exportDashboard({
         cwd: args.cwd,
         output: args.output,
+        showcase: args.showcase,
+        showcaseMode: args.showcaseMode,
         jsonFull: args.jsonFull,
         verbose: args.verbose,
       }),
@@ -227,6 +299,17 @@ export async function runCliCommand(
 async function serveCommand(args: LooseObject, deps: LooseObject) {
   const resolved = deps.resolveWorkDir(args.cwd);
   let liveUrl = "";
+  const runtimeDrift = deps.buildDriftReport
+    ? await deps
+        .buildDriftReport({
+          pluginRoot: deps.pluginRoot,
+          includeInstalled: true,
+        })
+        .catch((error) => ({
+          ok: false,
+          warnings: [error.message],
+        }))
+    : null;
   const serveResult = await deps.serveAutoresearch({
     cwd: resolved.workDir,
     port: args.port,
@@ -242,6 +325,7 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
         generatedAt,
         sourceCwd: workDir,
         pluginVersion: deps.pluginVersion || "unknown",
+        runtimeDrift,
       };
       return deps.dashboardHtml(entries, {
         workDir,
@@ -269,6 +353,7 @@ async function serveCommand(args: LooseObject, deps: LooseObject) {
         generatedAt: new Date().toISOString(),
         sourceCwd: workDir,
         pluginVersion: deps.pluginVersion || "unknown",
+        runtimeDrift,
       });
     },
   });

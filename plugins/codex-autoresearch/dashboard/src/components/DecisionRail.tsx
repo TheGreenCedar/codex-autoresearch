@@ -1,11 +1,6 @@
+import { useState } from "react";
 import { STATUS_LABELS, TONES } from "../constants";
-import type {
-  DashboardMode,
-  DashboardReadout,
-  DashboardViewModel,
-  NextBestAction,
-  ResearchTruthModel,
-} from "../types";
+import type { DashboardMode, DashboardReadout, DashboardViewModel, NextBestAction } from "../types";
 
 export function DecisionRail({
   readout,
@@ -18,7 +13,11 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const chips = evidenceChipsFor(viewModel, action, readout);
-  const suspiciousWarning = suspiciousPerfectMessage(viewModel.researchTruth || {});
+  const [copiedCommand, setCopiedCommand] = useState(false);
+  const [copiedReport, setCopiedReport] = useState(false);
+  const [copiedHandoff, setCopiedHandoff] = useState(false);
+  const nextCommand = nextCommandFor(viewModel, action);
+  const canCopyNextCommand = Boolean(mode.liveActions && nextCommand);
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
@@ -50,6 +49,28 @@ export function DecisionRail({
             action.detail ||
             "Add ASI next_action_hint to make the next session obvious."}
         </p>
+        <div id="next-command-copy" className="next-command-copy" hidden={!canCopyNextCommand}>
+          <div>
+            <span>Next CLI command</span>
+            <code id="next-cli-command">{nextCommand}</code>
+          </div>
+          <button
+            id="copy-next-cli-command"
+            type="button"
+            className="tool-button subtle"
+            onClick={async () => {
+              if (!nextCommand) return;
+              const copied = await copyText(nextCommand);
+              setCopiedCommand(copied);
+              if (copied) window.setTimeout(() => setCopiedCommand(false), 1600);
+            }}
+          >
+            {copiedCommand ? "Copied command" : "Copy command"}
+          </button>
+          <span className="copy-status" aria-live="polite" hidden={!copiedCommand}>
+            Next CLI command copied.
+          </span>
+        </div>
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
@@ -61,14 +82,6 @@ export function DecisionRail({
             </span>
           ))}
         </div>
-        <p
-          className="form-error decision-warning"
-          id="decision-suspicious-perfect"
-          role="alert"
-          hidden={!suspiciousWarning}
-        >
-          {suspiciousWarning}
-        </p>
         <div className="readout-facts">
           <span className="readout-label">Best kept change</span>
           <strong id="best-kept-detail">
@@ -78,6 +91,30 @@ export function DecisionRail({
           <strong id="recent-failure-detail">
             {readout.latestFailure?.description || "No recent failure."}
           </strong>
+        </div>
+        <div className="decision-copy-actions" aria-label="Copyable decision outputs">
+          <button
+            type="button"
+            className="tool-button subtle"
+            onClick={async () => {
+              const copied = await copyText(userReportFor(viewModel, readout, action));
+              setCopiedReport(copied);
+              if (copied) window.setTimeout(() => setCopiedReport(false), 1600);
+            }}
+          >
+            {copiedReport ? "Copied report" : "Copy report"}
+          </button>
+          <button
+            type="button"
+            className="tool-button subtle"
+            onClick={async () => {
+              const copied = await copyText(JSON.stringify(viewModel.handoffPacket || {}, null, 2));
+              setCopiedHandoff(copied);
+              if (copied) window.setTimeout(() => setCopiedHandoff(false), 1600);
+            }}
+          >
+            {copiedHandoff ? "Copied handoff" : "Copy handoff"}
+          </button>
         </div>
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
@@ -97,22 +134,36 @@ export function DecisionRail({
   );
 }
 
-function suspiciousPerfectMessage(truth: ResearchTruthModel) {
-  const defaultMessage =
-    "Suspicious-perfect check: verify freshness, evidence breadth, and promotion proof before treating this round as complete.";
-  const suspiciousReason = toList(truth.suspiciousReasons || truth.suspicious_reasons)[0];
-  if (suspiciousReason) return suspiciousReason;
-  if (typeof truth.suspiciousPerfectWarning === "string" && truth.suspiciousPerfectWarning.trim()) {
-    return truth.suspiciousPerfectWarning;
-  }
-  if (typeof truth.suspiciousPerfect === "string" && truth.suspiciousPerfect.trim()) {
-    return truth.suspiciousPerfect;
-  }
-  if (truth.suspiciousPerfect && typeof truth.suspiciousPerfect === "object") {
-    const suspicious = truth.suspiciousPerfect as Record<string, unknown>;
-    return String(suspicious.message || suspicious.detail || defaultMessage);
-  }
-  return truth.suspiciousPerfect ? defaultMessage : "";
+function userReportFor(
+  viewModel: DashboardViewModel,
+  readout: DashboardReadout,
+  action: NextBestAction,
+) {
+  const receipt = recordFrom(viewModel.decisionReceipt);
+  const summary = recordFrom(viewModel.summary);
+  const diagnostics = toList(viewModel.trustBlockers).length;
+  return [
+    `Autoresearch: ${summary.runs ?? 0} run(s), best=${readout.best ?? "none"}, baseline=${readout.baseline ?? "none"}.`,
+    `Next: ${action.title || receipt.title || "Next action"} - ${action.detail || receipt.summary || readout.nextAction || "No next action"}.`,
+    `Why safe: ${action.explanation?.evidence || action.utilityCopy || receipt.whySafe || "dashboard state"}.`,
+    diagnostics
+      ? `Codex handoff includes ${diagnostics} diagnostic note${diagnostics === 1 ? "" : "s"}.`
+      : "No Codex diagnostics are pending.",
+  ].join("\n");
+}
+
+function nextCommandFor(viewModel: DashboardViewModel, action: NextBestAction) {
+  const primary = recordFrom(action.primaryCommand);
+  const guidedSetup = recordFrom(viewModel.guidedSetup);
+  const commands = recordFrom(guidedSetup.commands);
+  return firstString(
+    action.command,
+    primary.command,
+    commands.replaceLast,
+    commands.next,
+    commands.baseline,
+    commands.logLast,
+  );
 }
 
 function evidenceChipsFor(
@@ -156,4 +207,26 @@ function toList(value: unknown) {
       return String(item || "");
     })
     .filter(Boolean);
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function recordFrom(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 }

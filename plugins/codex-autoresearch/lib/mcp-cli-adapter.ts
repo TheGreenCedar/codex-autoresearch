@@ -1,32 +1,15 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { runProcess } from "./runner.js";
+import {
+  actionPolicyForTool,
+  actionPolicyMutates,
+  unsafeCommandFieldsForArgs,
+} from "./tool-registry.js";
 
 type LooseObject = Record<string, any>;
 
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 15 * 60;
-const MUTATING_TOOLS = new Set([
-  "setup_session",
-  "setup_research_session",
-  "configure_session",
-  "init_experiment",
-  "run_experiment",
-  "next_experiment",
-  "log_experiment",
-  "gap_candidates",
-  "export_dashboard",
-  "serve_dashboard",
-  "clear_session",
-]);
-const COMMAND_FIELDS = [
-  "command",
-  "benchmark_command",
-  "benchmarkCommand",
-  "checks_command",
-  "checksCommand",
-  "model_command",
-  "modelCommand",
-];
 
 export function createCliToolCaller({
   cliScript,
@@ -134,12 +117,14 @@ export function createCliToolCaller({
 export function buildCliInvocationForTool(name, args, options: LooseObject = {}) {
   const cliArgs = cliArgsForTool(name, args);
   const cliScript = options.cliScript || null;
+  const actionPolicy = actionPolicyForTool(name, args);
   return {
     command: process.execPath,
     args: cliScript ? [cliScript, ...cliArgs] : cliArgs,
     cwd: options.cwd || options.pluginRoot || process.cwd(),
-    mutates: MUTATING_TOOLS.has(name),
-    unsafeFields: COMMAND_FIELDS.filter((field) => args?.[field] != null && args[field] !== ""),
+    mutates: actionPolicyMutates(actionPolicy),
+    actionPolicy,
+    unsafeFields: unsafeCommandFieldsForArgs(args),
     timeoutSeconds: options.timeoutSeconds || DEFAULT_TOOL_TIMEOUT_SECONDS,
   };
 }
@@ -152,9 +137,16 @@ function cliArgsForTool(name, args) {
       option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe),
       option("--catalog", args.catalog),
       option("--name", args.name),
+      option("--goal", args.goal),
       option("--metric-name", args.metric_name ?? args.metricName),
+      option("--metric-unit", args.metric_unit ?? args.metricUnit),
+      option("--direction", args.direction),
       option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
       option("--checks-command", args.checks_command ?? args.checksCommand),
+      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
+      listOption("--off-limits", args.off_limits ?? args.offLimits),
+      listOption("--constraints", args.constraints),
+      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
       listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
       option("--max-iterations", args.max_iterations ?? args.maxIterations),
     ]);
@@ -165,14 +157,49 @@ function cliArgsForTool(name, args) {
       option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe),
       option("--catalog", args.catalog),
       option("--name", args.name),
+      option("--goal", args.goal),
       option("--metric-name", args.metric_name ?? args.metricName),
+      option("--metric-unit", args.metric_unit ?? args.metricUnit),
+      option("--direction", args.direction),
       option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
       option("--checks-command", args.checks_command ?? args.checksCommand),
+      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
+      listOption("--off-limits", args.off_limits ?? args.offLimits),
+      listOption("--constraints", args.constraints),
+      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
       listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
       option("--max-iterations", args.max_iterations ?? args.maxIterations),
     ]);
+  if (name === "prompt_plan")
+    return compactArgs([
+      "prompt-plan",
+      cwdFlag(args),
+      option("--prompt", args.prompt),
+      option("--name", args.name),
+      option("--goal", args.goal),
+      option("--metric-name", args.metric_name ?? args.metricName),
+      option("--metric-unit", args.metric_unit ?? args.metricUnit),
+      option("--direction", args.direction),
+      option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+      option("--checks-command", args.checks_command ?? args.checksCommand),
+      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
+      listOption("--off-limits", args.off_limits ?? args.offLimits),
+      listOption("--constraints", args.constraints),
+      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
+      listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
+      option("--max-iterations", args.max_iterations ?? args.maxIterations),
+    ]);
+  if (name === "onboarding_packet")
+    return compactArgs(["onboarding-packet", cwdFlag(args), flag("--compact", args.compact)]);
+  if (name === "recommend_next")
+    return compactArgs(["recommend-next", cwdFlag(args), flag("--compact", args.compact)]);
   if (name === "list_recipes")
-    return compactArgs(["recipes", "list", option("--catalog", args.catalog)]);
+    return compactArgs([
+      "recipes",
+      args.recommend ? "recommend" : "list",
+      cwdFlag(args),
+      option("--catalog", args.catalog),
+    ]);
   if (name === "setup_session")
     return compactArgs([
       "setup",
@@ -288,7 +315,8 @@ function cliArgsForTool(name, args) {
       flag("--allow-dirty-revert", args.allow_dirty_revert ?? args.allowDirtyRevert),
       flag("--from-last", args.from_last ?? args.fromLast),
     ]);
-  if (name === "read_state") return compactArgs(["state", cwdFlag(args)]);
+  if (name === "read_state")
+    return compactArgs(["state", cwdFlag(args), flag("--compact", args.compact)]);
   if (name === "measure_quality_gap")
     return compactArgs([
       "quality-gap",
@@ -313,6 +341,23 @@ function cliArgsForTool(name, args) {
       args.subcommand || "list",
       option("--catalog", args.catalog),
     ]);
+  if (name === "benchmark_lint")
+    return compactArgs([
+      "benchmark-lint",
+      cwdFlag(args),
+      option("--metric-name", args.metric_name ?? args.metricName),
+      option("--sample", args.sample),
+      option("--command", args.command),
+      option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds),
+    ]);
+  if (name === "new_segment")
+    return compactArgs([
+      "new-segment",
+      cwdFlag(args),
+      option("--reason", args.reason),
+      flag("--dry-run", args.dry_run ?? args.dryRun),
+      flag("--yes", args.confirm ?? args.yes),
+    ]);
   if (name === "export_dashboard")
     return compactArgs([
       "export",
@@ -330,6 +375,8 @@ function cliArgsForTool(name, args) {
       flag("--check-benchmark", args.check_benchmark ?? args.checkBenchmark),
       flag("--check-installed", args.check_installed ?? args.checkInstalled),
       option("--timeout-seconds", args.timeout_seconds ?? args.timeoutSeconds),
+      flag("--explain", args.explain),
+      flag("--hooks", args.hooks),
     ]);
   if (name === "clear_session")
     return compactArgs([

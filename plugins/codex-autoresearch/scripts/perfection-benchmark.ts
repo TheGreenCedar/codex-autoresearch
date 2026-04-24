@@ -188,22 +188,27 @@ const checks = [
       return !pluginReadmeExists &&
         !demoReadmeExists &&
         includesAll(root, [
-          "![Codex Autoresearch dashboard",
           "## Install",
           "## Start With Codex",
           "Use Codex Autoresearch",
-          "## Demo",
+          "## Live Demo",
           "## Docs",
+          "![Codex Autoresearch live dashboard",
           "plugins/codex-autoresearch/assets/showcase/dashboard-demo.png",
+          "node scripts/autoresearch.mjs serve --cwd examples/demo-session",
           "plugins/codex-autoresearch/examples/demo-session/demo.md",
           "plugins/codex-autoresearch/docs/index.md",
+          "plugins/codex-autoresearch/docs/workflows.md",
+          "plugins/codex-autoresearch/docs/architecture.md",
           "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
-        ])
+        ]) &&
+        !root.includes("static report screenshot") &&
+        !root.includes("Static read-only export")
         ? pass()
         : fail(
             pluginReadmeExists || demoReadmeExists
               ? "A non-root README still exists."
-              : "Root README is missing the public product workflow, screenshot, demo, or docs links.",
+              : "Root README is missing the public product workflow, live dashboard screenshot, demo, or docs links.",
           );
     },
   },
@@ -218,11 +223,12 @@ const checks = [
       const agents = await readRootText("AGENTS.md");
       return !changelog.includes("## Unreleased") &&
         includesAll(changelog, [
-          "## 2026-04-22",
-          "single Codex-facing `codex-autoresearch` skill",
-          "root `README.md` is now the only README",
-          "Removed separate command docs",
-          "Users should ask Codex to use Codex Autoresearch directly",
+          "## 1.0.0",
+          "prompt-plan",
+          "prompt_plan",
+          "workflow and architecture diagram docs",
+          "Bumped public package",
+          "Static dashboard exports remain read-only snapshots",
         ]) &&
         includesAll(readme, ["## Changelog", "CHANGELOG.md", "Surface removals"]) &&
         includesAll(agents, [
@@ -239,7 +245,7 @@ const checks = [
     id: "docs-split-and-showcase",
     file: "../../README.md, docs/*.md, examples/, assets/showcase/",
     description:
-      "Detailed guidance lives in focused docs while README surfaces the demo and screenshot.",
+      "Detailed guidance lives in focused docs while README surfaces the live dashboard demo.",
     run: async () => {
       const readme = await readRootText("README.md");
       const docs = await Promise.all([
@@ -247,6 +253,8 @@ const checks = [
         readText("docs/getting-started.md"),
         readText("docs/operator-workflows.md"),
         readText("docs/evidence-and-safety.md"),
+        readText("docs/workflows.md"),
+        readText("docs/architecture.md"),
         readText("docs/mcp-tools.md"),
         readText("docs/maintainers.md"),
         readText("examples/index.md"),
@@ -265,10 +273,18 @@ const checks = [
         !demoExport.includes("C:\\Users\\alber") &&
         !demoExport.includes("C:\\Program Files") &&
         !readme.includes("```mermaid") &&
-        includesAll(readme, ["Dashboard runboard", "Docs index", "dashboard-demo.png"]) &&
+        includesAll(readme, [
+          "Live Demo",
+          "Docs index",
+          "dashboard-demo.png",
+          "serve --cwd examples/demo-session",
+        ]) &&
         includesAll(joined, [
+          "Workflow Diagrams",
+          "Architecture Diagrams",
           "METRIC name=value",
           "quality_gap",
+          "prompt_plan",
           "serve_dashboard",
           "gap-candidates",
           "finalize-preview",
@@ -277,7 +293,7 @@ const checks = [
           "specification-delight-roadmap",
         ])
         ? pass()
-        : fail("Docs split, 100-point screenshot showcase, or scrubbed demo export is incomplete.");
+        : fail("Docs split, visual docs, live demo, or scrubbed demo export is incomplete.");
     },
   },
   {
@@ -408,8 +424,8 @@ const checks = [
       return prompts.length <= 3 &&
         prompts.every((prompt) => prompt.length < 128) &&
         includesAll(promptText, [
-          "Use Codex Autoresearch on this project.",
-          "Run a deep-research quality_gap loop.",
+          "Use Codex Autoresearch to improve this repo.",
+          "Plan an Autoresearch loop from this prompt.",
           "Open the live dashboard and continue.",
         ]) &&
         manifest.interface?.longDescription?.includes("one skill surface")
@@ -618,13 +634,23 @@ const checks = [
       const mcpInterface = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}`;
       return includesAll(cli + cliHandlers + mcpInterface, [
         "setup-plan --cwd <project>",
-        "recipes list|show",
+        "prompt-plan --cwd <project>",
+        "onboarding-packet --cwd <project>",
+        "recommend-next --cwd <project>",
+        "recipes list|show|recommend",
+        "benchmark-lint --cwd <project>",
+        "new-segment --cwd <project>",
         "gap-candidates --cwd <project>",
         "finalize-preview --cwd <project>",
         "serve --cwd <project>",
         "integrations list|doctor|sync-recipes",
         "setup_plan",
+        "prompt_plan",
+        "onboarding_packet",
+        "recommend_next",
         "serve_dashboard",
+        "benchmark_lint",
+        "new_segment",
         "gap_candidates",
         "finalize_preview",
       ])
@@ -665,6 +691,10 @@ const checks = [
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(readme + skill, [
         "setup-plan",
+        "onboarding-packet",
+        "recommend-next",
+        "benchmark-lint",
+        "new-segment",
         "gap-candidates",
         "finalize-preview",
         "guarded local actions",
@@ -686,6 +716,8 @@ const checks = [
         "session core",
         "runner parses metrics",
         "catalog recipes can drive setup-plan",
+        "delight commands provide compact state",
+        "MCP exposes onboarding",
         "setup-plan",
         "gap-candidates",
         "finalize-preview",

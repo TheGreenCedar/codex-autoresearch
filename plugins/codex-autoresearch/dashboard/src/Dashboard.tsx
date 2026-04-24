@@ -58,13 +58,15 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
   });
 
   return (
-    <div className="runboard-shell">
+    <div
+      className={`runboard-shell ${mode.liveActions || mode.showcase ? "mode-live" : "mode-static"}`}
+    >
       <nav className="skip-links" aria-label="Skip links">
+        <a href="#trend-panel">Run chart</a>
         <a href="#decision-rail">Current decision</a>
         <a href="#mission-panel">Mission control</a>
         <a href="#log-decision-panel">Log form</a>
         <a href="#action-receipt">Receipt</a>
-        <a href="#trend-panel">Run chart</a>
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail liveActions={mode.liveActions} showcase={mode.showcase} />

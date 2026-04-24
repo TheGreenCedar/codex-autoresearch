@@ -48,37 +48,46 @@ export function MissionPanel({
         </span>
       </div>
       <div className="mission-grid" id="mission-control-grid">
-        {(mission.steps || []).map((step) => (
-          <div className={`mission-step ${step.state || "idle"}`} key={step.id || step.title}>
-            <span>{step.state || "idle"}</span>
-            <strong>{step.title}</strong>
-            <p>{step.detail}</p>
-            {canRunLive && step.safeAction && (
-              <button
-                className="tool-button mission-run"
-                type="button"
-                data-mission-action={step.safeAction}
-                aria-describedby={`${step.id || step.safeAction}-disabled-reason`}
-                disabled={Boolean(actionsById[step.safeAction]?.pending)}
-                onClick={() => runLiveAction(step.safeAction)}
-              >
-                {actionsById[step.safeAction]?.pending
-                  ? "Running..."
-                  : actionLabel(step.safeAction)}
-              </button>
-            )}
-            {canRunLive && step.safeAction ? (
-              <small
-                className="disabled-reason"
-                id={`${step.id || step.safeAction}-disabled-reason`}
-              >
-                {actionsById[step.safeAction]?.pending
-                  ? `${actionLabel(step.safeAction)} is already running.`
-                  : "Guarded local action; no finalizer mutation."}
-              </small>
-            ) : null}
-          </div>
-        ))}
+        {(mission.steps || []).map((step) => {
+          const isActive = Boolean(
+            active && (step.id === active.id || step.title === active.title),
+          );
+          return (
+            <div
+              className={`mission-step ${step.state || "idle"} ${isActive ? "active-step" : "inactive-step"}`}
+              key={step.id || step.title}
+              aria-current={isActive ? "step" : undefined}
+            >
+              <span>{step.state || "idle"}</span>
+              <strong>{step.title}</strong>
+              <p>{step.detail}</p>
+              {canRunLive && step.safeAction && (
+                <button
+                  className="tool-button mission-run"
+                  type="button"
+                  data-mission-action={step.safeAction}
+                  aria-describedby={`${step.id || step.safeAction}-disabled-reason`}
+                  disabled={Boolean(actionsById[step.safeAction]?.pending)}
+                  onClick={() => runLiveAction(step.safeAction)}
+                >
+                  {actionsById[step.safeAction]?.pending
+                    ? "Running..."
+                    : actionLabel(step.safeAction)}
+                </button>
+              )}
+              {canRunLive && step.safeAction ? (
+                <small
+                  className="disabled-reason"
+                  id={`${step.id || step.safeAction}-disabled-reason`}
+                >
+                  {actionsById[step.safeAction]?.pending
+                    ? `${actionLabel(step.safeAction)} is already running.`
+                    : "Guarded local action; no finalizer mutation."}
+                </small>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
       <LogDecision
         mission={mission}
