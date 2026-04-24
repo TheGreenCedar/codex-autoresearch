@@ -1,6 +1,6 @@
 # Codex Hooks
 
-Hooks are optional future guardrails for Autoresearch. They are not required for the product to work.
+Hooks are optional future guardrails for Autoresearch. Useful, maybe. Load-bearing, no.
 
 ## Current Position
 

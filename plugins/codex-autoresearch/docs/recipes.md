@@ -1,6 +1,6 @@
 # Recipes
 
-Recipes help new users start with a benchmark shape instead of writing one from scratch.
+Recipes give a new loop a benchmark shape before anyone starts hand-carving shell commands out of panic.
 
 ## List Recipes
 

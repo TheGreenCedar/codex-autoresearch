@@ -1,10 +1,10 @@
 # Codex Autoresearch Docs
 
-The root `README.md` is the public front door. These topic pages hold the durable operating detail for people and agents running the plugin.
+The root `README.md` is the front door. These pages are the workshop behind it: practical detail for people and agents running the plugin without losing the evidence trail in a puff of confident nonsense.
 
 ## Read In This Order
 
-1. [Workflow diagrams](workflows.md): first-five-minutes loop, prompt-to-loop planning, active packets, research, and dashboard reading order.
+1. [Workflow diagrams](workflows.md): the motion of the thing, from first prompt to finalization.
 2. [Architecture diagrams](architecture.md): runtime surfaces, trust boundaries, source layout, MCP path, and finalization.
 3. [Start](start.md): first five minutes, session files, benchmark contract, and first packet.
 4. [Operate](operate.md): resume, dashboard, packet logging, quality-gap rounds, and active-loop continuation.
@@ -12,7 +12,7 @@ The root `README.md` is the public front door. These topic pages hold the durabl
 6. [Finish](finish.md): finalization preview, review branches, merge/cleanup, and reporting.
 7. [Recipes](recipes.md): built-in recipes, recommendation flow, benchmark linting, and external catalogs.
 8. [Troubleshooting](troubleshooting.md): symptom-to-layer diagnosis for MCP, cache drift, dashboard, metrics, Git, and stale sessions.
-9. [Hooks](hooks.md): optional Codex hook ideas and current caveats.
+9. [Hooks](hooks.md): optional Codex hook ideas and the caveats that keep them from becoming load-bearing mythology.
 
 Reference pages:
 

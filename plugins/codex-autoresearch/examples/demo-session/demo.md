@@ -2,7 +2,7 @@
 
 This demo is a 100-packet Autoresearch loop for optimizing an indexing pipeline's speed and memory footprint.
 
-The session starts at `10s`, trends down to a best kept `5.62s`, and carries memory footprint on every packet so the dashboard has real tradeoff texture.
+The session starts at `10s`, trends down to a best kept `5.62s`, and carries memory footprint on every packet so the dashboard has real tradeoff texture instead of one lonely number doing interpretive dance.
 
 The ledger includes:
 

@@ -1,6 +1,6 @@
 # MCP Tools
 
-The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are deterministic helpers behind that skill. Prefer MCP tools when available; use the CLI as the fallback.
+The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the deterministic hands behind it. Prefer MCP tools when available; use the CLI as the fallback.
 
 ## Tool Surface
 
@@ -51,7 +51,7 @@ Use `finalize_preview` for readiness. Branch creation stays in the finalizer CLI
 
 ## Argument Safety
 
-Tool arguments are validated before dispatch. Unknown arguments fail loudly so misspelled options do not become silent no-ops.
+Tool arguments are validated before dispatch. Unknown arguments fail loudly so misspelled options do not become silent no-ops. Silent no-ops are where confidence goes to rot.
 
 The public `tools/list` response stays conservative for compatibility with older MCP clients: `name`, `description`, and `inputSchema`. The source also exposes richer internal tool metadata with `outputSchema` and safety annotations so tests, docs, and future modern clients can use the same contracts without weakening lightweight startup.
 

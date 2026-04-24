@@ -7,23 +7,27 @@
 **[Install](#install)** - **[First Five Minutes](#first-five-minutes)** - **[Dashboard](#dashboard)** - **[Docs](#docs)** - **[Changelog](#changelog)**
 </div>
 
-Codex Autoresearch helps Codex improve a repository without losing the plot. You give Codex one goal and one benchmark contract (or talk to it and it figures it out by itself), the plugin helps it run measured packets, keep or discard changes with evidence, preserve ASI and metrics across context loss, and package useful kept work for review.
+Codex Autoresearch is for the moment where "make this better" would otherwise become a fog machine.
 
-It is designed for two onboarding paths at once: a human should know what is safe to do next, and a future AI should be able to resume from durable state instead of guessing from chat memory.
+Give Codex one goal and one benchmark contract, or give it a broad prompt and let it infer the shape. The plugin helps Codex run small measured packets, keep or discard changes with evidence, preserve ASI* and metrics across context loss, and package the useful work for review instead of leaving you with a heroic pile of vibes.
+
+> \* ASI is the structured note attached to each run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk metadata. It is the part that tells the next Codex session "what we thought, what happened, and what not to repeat."
+
+The point is simple: A run should be able to finish uninterrupted, sometimes for hours at a time. If there's an interruption, a future codex session should be able to resume from durable state rather than chat memory, and the interface for the human should be as simple as just invoking the plugin.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
-Inspired by [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch), generalized so that it can work for any research task, and the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
+Inspired by [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch), generalized so it can work for any measured research task, and the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
 ## What It Does
 
-1. Codex identifies the target repo/package and checks whether a session already exists.
+1. Codex identifies the real target repo or child package and checks whether a session already exists.
 2. A benchmark prints one primary metric as `METRIC name=value`.
 3. Codex runs one packet, then logs it as `keep`, `discard`, `crash`, or `checks_failed` with ASI.
-4. The dashboard explains the current trust state, next safe action, blockers, best kept evidence, and metric trend.
-5. When the loop has useful kept work, Codex previews finalization into reviewable branches.
+4. The dashboard shows the trust state, next safe action, blockers, best kept evidence, and metric trend.
+5. When there is useful kept work, Codex previews finalization into reviewable branches.
 
-The important product contract is evidence, not automation spectacle: no invented zeroes, no stale packets, no broad cleanup without consent, and no final claims without verification.
+This is not automation theater. The contract is evidence: no invented zeroes, no stale packets, no broad cleanup without consent, and no triumphant little parade before verification.
 
 ## Install
 
@@ -35,13 +39,15 @@ Then open the repo you want to improve and ask Codex to use Codex Autoresearch.
 
 ## Start With Codex
 
-Use Codex Autoresearch by giving Codex a goal, a benchmark command, a primary metric, and the scope it is allowed to change. Codex should open with an onboarding packet, explain the next safe action, and keep the live dashboard available while it works.
+Use Codex Autoresearch by giving Codex a goal, a benchmark command, a primary metric, and the scope it is allowed to change. Codex should open with an onboarding packet, name the next safe action, and keep the live dashboard available while it works.
+
+If you only know the problem, say the problem. That is fine. The plugin can turn a broad request into a plan before it starts touching files.
 
 ## First Five Minutes
 
 Just ask Codex.
 
-It can be really broad, and codex will either find really good candidates directly or ask you. ie:
+Broad is allowed:
 
 ```text
 Use $Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
@@ -51,13 +57,13 @@ Use $Codex Autoresearch to improve the speed of my indexer's pipeline, while kee
 Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with the most obvious low hanging fruits. Keep doing this 100 times.
 ```
 
-Or you could be more specific, and tell it exactly what to experiment. It will start with a few, and based on the results, optimize which experiments to prioritize. It keeps track of all the different experiments and tells you what won and what didn't, why or why not, etc. ie:
+You can also hand it a sharper investigation. Codex will start with a few lanes, learn from the measurements, and stop wasting time on dead ends.
 
 ```text
 Use $Codex Autoresearch to figure out why my graphql service's p99 latency is so much higher than its p90 latency at 1 minute metric resolution. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. For each, run the 4-5 appropriate experiments @experiments.md and if the results are promising keep iterating, otherwise stop and report back.
 ```
 
-You can trust codex (especially since gpt 5.5) to know that "optimize my unit tests' speed" doesn't mean "delete my unit tests":
+Or be exact about the benchmark and scope:
 
 ```text
 Use $Codex Autoresearch to optimize my unit tests' speed. different libraries are allowed, but try to avoid it.
@@ -84,6 +90,8 @@ Use Codex Autoresearch to study this project and improve the dashboard.
 Turn accepted findings into a quality-gap loop, implement them, and keep the live dashboard open.
 ```
 
+`quality_gap=0` means the accepted checklist for that round is closed. It does not mean the universe has been conquered. Start another round if the question is still alive.
+
 ## Docs
 
 - [Docs index](plugins/codex-autoresearch/docs/index.md)
@@ -97,7 +105,7 @@ Its primary dashboard score is a weighted cost:
 
 `0.7 * (seconds / baseline_seconds) + 0.3 * (memory_mb / baseline_memory_mb)`
 
-Lower is better. The chart can switch between score, percent of baseline, raw value, iteration, and timestamp, while the metric details panel shows the full time and memory breakdown for the selected run.
+Lower is better. The chart can switch between score, percent of baseline, raw value, iteration, and timestamp, while the metric details panel shows the time and memory breakdown for the selected run.
 
 Serve the live demo locally:
 
@@ -153,8 +161,7 @@ Static exports are portable review snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-Static exports are read-only. Serve a fresh dashboard when you need live actions or current packet freshness.
-Use `--showcase` only for checked-in public demo snapshots that must not embed local absolute paths.
+Static exports are read-only. Serve a fresh dashboard when you need live actions or current packet freshness. Use `--showcase` only for checked-in public demo snapshots that must not embed local absolute paths.
 
 ## Tooling
 

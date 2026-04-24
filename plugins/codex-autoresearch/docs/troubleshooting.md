@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Use the failing layer first. Do not repeat a live-service retry when no precondition changed.
+Find the failing layer first. Do not mash retry like a vending machine button when no precondition changed.
 
 | Symptom | Likely Layer | What To Do |
 | --- | --- | --- |

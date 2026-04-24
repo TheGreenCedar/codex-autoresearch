@@ -1,6 +1,6 @@
 # Workflow Diagrams
 
-Codex Autoresearch is easiest to understand as a few small loops. Use this page when words start hiding the actual motion.
+Codex Autoresearch is easiest to understand as a few small loops. Use this page when words start hiding the actual motion and everything starts sounding like a product manager whispered into a blender.
 
 ## First Five Minutes
 

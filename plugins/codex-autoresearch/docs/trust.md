@@ -1,6 +1,6 @@
 # Trust
 
-Autoresearch is only valuable when evidence stays honest.
+Autoresearch is only valuable when evidence stays honest. Otherwise it is just a very elaborate way to lie to yourself with better formatting.
 
 ## Metric Integrity
 

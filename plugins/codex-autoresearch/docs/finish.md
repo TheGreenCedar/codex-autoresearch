@@ -1,6 +1,6 @@
 # Finish
 
-Use finalization when a noisy loop has useful kept commits that should become reviewable work.
+Use finalization when a noisy loop has useful kept commits that should become reviewable work. This is where you stop admiring the evidence pile and turn it into branches other humans can actually review.
 
 ## Preview First
 

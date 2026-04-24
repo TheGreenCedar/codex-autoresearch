@@ -24,6 +24,7 @@ AX, the AI experience:
 - Prefer MCP tools when available. Use CLI helpers only as the deterministic fallback.
 - Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, ASI, continuation data, and the ledger.
+- ASI means the structured memory attached to a run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk metadata.
 
 UX, the user experience:
 

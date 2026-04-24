@@ -2,7 +2,9 @@
 
 For a visual first pass, start with [Workflow diagrams](workflows.md). For the shortest setup path, see [Start](start.md).
 
-Codex Autoresearch turns an open improvement goal into a measured loop: define one primary metric, run a repeatable benchmark, keep or discard each packet with evidence, and preserve the trail in project files.
+Codex Autoresearch turns an open improvement goal into a measured loop: pick one primary metric, run a repeatable benchmark, keep or discard each packet with evidence, and leave the trail in project files instead of in someone's increasingly haunted memory.
+
+ASI is the structured memory attached to a run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk fields. It keeps the next operator from repeating the same mistake with a fresh face.
 
 ## Install
 
@@ -20,7 +22,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 
 ## Start With Codex
 
-In the repo you want to improve, ask Codex for the outcome and give the measurement shape:
+In the repo you want to improve, give Codex the outcome and the measurement shape:
 
 ```text
 Use Codex Autoresearch for indexing pipeline speed and memory footprint optimization.
@@ -30,7 +32,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should identify the owning repo, check Git state, create or resume the session, start the live dashboard, run the first measured packet, log the decision, and continue until there is a real stop condition.
+Codex should identify the owning repo, check Git state, create or resume the session, start the live dashboard, run the first measured packet, log the decision, and continue until there is a real stop condition. "I got tired" is not a stop condition. "The benchmark is blocked and here is the failing layer" is.
 
 ## Create A Session Manually
 

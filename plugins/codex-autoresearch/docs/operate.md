@@ -1,6 +1,6 @@
 # Operate
 
-Use this page while running or resuming a loop.
+Use this page while running or resuming a loop. This is the part where discipline matters, because the benchmark will tempt you with numbers and numbers are very good at wearing little fake mustaches.
 
 ## Resume
 
@@ -68,6 +68,8 @@ After logging, follow `continuation.shouldContinue` and `continuation.forbidFina
 
 ## ASI
 
+ASI is the small structured memory object saved with a packet decision. It is not magic. It is just the useful context the next run needs so it does not walk straight back into the same wall.
+
 Use ASI to make the next agent smarter:
 
 ```json
@@ -93,7 +95,7 @@ node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
 node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug>
 ```
 
-`quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete.
+`quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete. It means this pile is done. There may be another pile. There is usually another pile.
 
 ## Fresh Segment
 

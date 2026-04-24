@@ -15,7 +15,7 @@ Do not assume root-level npm scripts exist. Package scripts live in `plugins/cod
 
 ## Local Plugin Routing
 
-When this repo is the target, use the repo-local plugin before any globally installed or marketplace-cache copy.
+When this repo is the target, use the repo-local plugin before any globally installed or marketplace-cache copy. Installed cache drift is real, annoying, and very good at wearing a source-code costume.
 
 From the wrapper root:
 

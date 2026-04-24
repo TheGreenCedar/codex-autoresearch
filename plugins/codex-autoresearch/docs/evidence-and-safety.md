@@ -2,7 +2,7 @@
 
 For the visual trust boundary, see [Architecture diagrams](architecture.md). For task-oriented evidence rules, see [Trust](trust.md).
 
-Autoresearch is useful only when the loop preserves the truth of what was measured. Treat display surfaces as summaries and session files as the durable evidence.
+Autoresearch is useful only when it preserves what actually happened. Dashboards are summaries. Session files are evidence. Do not confuse the painting of the fire with the fire.
 
 ## Metric Contract
 
@@ -12,7 +12,7 @@ Benchmarks must print the primary metric as:
 METRIC name=value
 ```
 
-The configured primary metric drives decisions. Secondary metric lines can explain tradeoffs but should not silently replace the primary metric.
+The configured primary metric drives decisions. Secondary metric lines can explain tradeoffs, but they should not quietly become the new judge because the first judge was inconvenient.
 
 Do not parse decisions from dashboard snippets, output tails, summaries, or clipped logs. Use the packet data returned by `next_experiment` or `log --from-last`.
 
@@ -41,7 +41,7 @@ Rerun the packet before logging if any of these changed:
 - Git state or relevant files
 - checks policy or checks command
 
-When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` as if a new result was created.
+When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result. That is how tiny lies get gym memberships.
 
 ## Live Versus Static Dashboard
 
@@ -51,7 +51,7 @@ Use the served dashboard for operations:
 node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
-Live dashboard actions are local-only guarded adapters. They are bounded to safe operations such as doctor, setup plan, recipes, gap-candidates preview, finalize preview, export, and confirmed log decisions.
+Live dashboard actions are guarded local actions. They are bounded to safe operations such as doctor, setup plan, recipes, gap-candidates preview, finalize preview, export, and confirmed log decisions.
 
 Static exports are read-only snapshots:
 

@@ -1,6 +1,6 @@
 # Start
 
-Use this page for the first five minutes of a Codex Autoresearch session.
+Use this page for the first five minutes of a Codex Autoresearch session. The goal is not to build a cathedral. The goal is to get one honest packet measured and logged.
 
 ## What You Need
 

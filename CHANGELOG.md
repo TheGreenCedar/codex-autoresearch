@@ -19,6 +19,7 @@ Initial release of the Codex Autoresearch plugin as a single Codex-facing measur
 
 - Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.0.0`.
 - Reframed the root README around human prompts and live demo usage; the README embeds the served live-dashboard screenshot instead of a static report export.
+- Rewrote the root README and linked user-facing docs in a sharper authored voice while preserving the command contracts and safety rules.
 - Promoted visual workflow/architecture docs ahead of long-form reference pages.
 - Rewrote the main skill around a compact state machine and GPT-5.5-friendly active-loop protocol.
 - Moved low-level dashboard diagnostics out of visible warning tags and into the Codex handoff/model data unless they are the actual next action.

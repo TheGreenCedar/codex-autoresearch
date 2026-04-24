@@ -1,6 +1,6 @@
 # Architecture Diagrams
 
-Autoresearch has one product surface and several implementation paths. The rule of thumb: the skill tells Codex how to behave, MCP/CLI execute bounded operations, and durable session files remain the source of truth.
+Autoresearch has one product surface and several implementation paths. The rule of thumb: the skill tells Codex how to behave, MCP/CLI execute bounded operations, and durable session files remain the source of truth. Everything else is plumbing, and plumbing only matters when it leaks.
 
 ## Runtime Surfaces
 
