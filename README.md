@@ -17,7 +17,7 @@ The point is simple: A run should be able to finish uninterrupted, sometimes for
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
-Inspired by [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch), generalized so it can work for any measured research task, and the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
+Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch), and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch), generalized so it can work for any measured research task on a pi harness.
 
 ## What It Does
 
