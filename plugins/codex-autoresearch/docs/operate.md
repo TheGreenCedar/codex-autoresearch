@@ -35,7 +35,7 @@ Use it for:
 - trust blockers
 - best kept change and recent failure
 - metric trajectory
-- mission-control steps
+- setup, gap, packet, log, and finalize readiness
 - strategy lanes and plateau guidance
 - copyable report and AI handoff packet
 

@@ -51,7 +51,7 @@ const toolSchemas = applyToolContracts([
 	},
 	{
 		name: "guided_setup",
-		description: "Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard actions.",
+		description: "Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -668,7 +668,7 @@ const toolSchemas = applyToolContracts([
 		}
 	}
 ]);
-const mcpToolSchemas = toolSchemas.map((tool) => toMcpToolSchema(tool));
+const mcpToolSchemas = toolSchemas.map((tool) => toMcpToolSchema(tool, { includeContracts: true }));
 const mcpToolSchemasWithContracts = toolSchemas.map((tool) => toMcpToolSchema(tool, { includeContracts: true }));
 function validateToolArguments(name, args, options = {}) {
 	const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;

@@ -93,7 +93,7 @@ export function DecisionRail({
         </div>
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
-          <span>{mode.liveActions ? "Live data available" : "Read-only snapshot"}</span>
+          <span>{mode.liveRefresh ? "Live data available" : "Read-only snapshot"}</span>
         </div>
       </div>
       <div className="decision-list" aria-label="Recent decision history">

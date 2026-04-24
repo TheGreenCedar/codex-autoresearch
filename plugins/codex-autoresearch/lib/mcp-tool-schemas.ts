@@ -38,7 +38,7 @@ export const toolSchemas = applyToolContracts([
   {
     name: "guided_setup",
     description:
-      "Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard actions.",
+      "Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance.",
     inputSchema: {
       type: "object",
       properties: {
@@ -501,7 +501,9 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-export const mcpToolSchemas = toolSchemas.map((tool) => toMcpToolSchema(tool));
+export const mcpToolSchemas = toolSchemas.map((tool) =>
+  toMcpToolSchema(tool, { includeContracts: true }),
+);
 export const mcpToolSchemasWithContracts = toolSchemas.map((tool) =>
   toMcpToolSchema(tool, { includeContracts: true }),
 );

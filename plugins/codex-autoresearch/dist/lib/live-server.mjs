@@ -106,14 +106,15 @@ async function serveAutoresearch(args) {
 	const port = Number(args.port || 0);
 	const dashboardHtml = args.dashboardHtml;
 	const viewModel = args.viewModel;
+	const actionsEnabled = Boolean(args.actionsEnabled);
 	const actionNonce = randomBytes(32).toString("base64url");
 	const server = http.createServer(async (req, res) => {
 		try {
 			const url = new URL(req.url, "http://127.0.0.1");
 			if (req.method === "GET" && url.pathname === "/") {
 				send(res, 200, "text/html; charset=utf-8", await dashboardHtml({
-					actionNonce,
-					actionNonceHeader: "X-Autoresearch-Action-Nonce"
+					actionNonce: actionsEnabled ? actionNonce : void 0,
+					actionNonceHeader: actionsEnabled ? "X-Autoresearch-Action-Nonce" : void 0
 				}));
 				return;
 			}
@@ -135,6 +136,10 @@ async function serveAutoresearch(args) {
 			if (req.method === "POST" && url.pathname.startsWith("/actions/")) {
 				const action = url.pathname.split("/").at(-1);
 				try {
+					if (!actionsEnabled) {
+						sendJson(res, actionErrorEnvelope(action, "Live dashboard actions are disabled. Use CLI or MCP for actions.", "actions_disabled"), 403);
+						return;
+					}
 					const policy = DASHBOARD_ACTIONS.get(action);
 					if (!policy || url.pathname !== `/actions/${action}`) {
 						sendJson(res, actionErrorEnvelope(action, "Action is not allowed from the dashboard.", "action_forbidden"), 403);

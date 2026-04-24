@@ -2775,7 +2775,7 @@ test("CLI parser accepts equals-form options", async () => {
 		assert.equal(JSON.parse(state.stdout).config.metricName, "seconds");
 	});
 });
-test("mcp tools/list uses conservative 2024-compatible tool metadata", async () => {
+test("mcp tools/list exposes output contracts and safety annotations", async () => {
 	const child = spawn(process.execPath, [mcpServer], {
 		cwd: pluginRoot,
 		windowsHide: true,
@@ -2817,11 +2817,16 @@ test("mcp tools/list uses conservative 2024-compatible tool metadata", async () 
 	child.kill();
 	const tools = response.result.tools;
 	assert.ok(tools.length >= 6);
-	for (const tool of tools) assert.deepEqual(Object.keys(tool).sort(), [
-		"description",
-		"inputSchema",
-		"name"
-	]);
+	const setupPlan = tools.find((tool) => tool.name === "setup_plan");
+	const nextExperiment = tools.find((tool) => tool.name === "next_experiment");
+	const clearSession = tools.find((tool) => tool.name === "clear_session");
+	assert.equal(setupPlan.outputSchema.type, "object");
+	assert.equal(setupPlan.annotations.readOnlyHint, true);
+	assert.equal(nextExperiment.annotations.readOnlyHint, false);
+	assert.equal(nextExperiment.annotations.destructiveHint, false);
+	assert.equal(nextExperiment.annotations.openWorldHint, true);
+	assert.equal(clearSession.annotations.destructiveHint, true);
+	assert.equal(clearSession.annotations.openWorldHint, false);
 	assert.equal(stderr, "");
 });
 test("mcp tools expose guidance and output contracts", async () => {
@@ -2848,9 +2853,14 @@ test("mcp tools expose guidance and output contracts", async () => {
 	assert.match(next.description, /normal measured loop iteration/);
 	assert.match(serve.description, /live local dashboard/);
 	assert.equal(doctor.annotations.safety, "Read-only unless benchmark check runs configured commands.");
+	assert.equal(guided.annotations.readOnlyHint, true);
+	assert.equal(next.annotations.readOnlyHint, false);
+	assert.equal(next.annotations.openWorldHint, true);
 	const richDoctor = mcpToolSchemasWithContracts.find((tool) => tool.name === "doctor_session");
 	assert.equal(richDoctor.outputSchema.type, "object");
 	assert.equal(richDoctor.annotations.safety, "Read-only unless benchmark check runs configured commands.");
+	assert.equal(richDoctor.annotations.readOnlyHint, false);
+	assert.equal(richDoctor.annotations.openWorldHint, true);
 	assert.equal(cliCommandForTool("next_experiment"), "next");
 	assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
 	assert.equal(toolMutates("next_experiment"), true);
@@ -2937,6 +2947,9 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
 	assert.equal(payload.tool, "setup_plan");
 	assert.equal(payload.workDir, pluginRoot);
 	assert.equal(payload.result.workDir, pluginRoot);
+	assert.equal(tool.result.structuredContent.ok, true);
+	assert.equal(tool.result.structuredContent.tool, "setup_plan");
+	assert.equal(tool.result.structuredContent.workDir, pluginRoot);
 	assert.equal(stderr, "");
 });
 test("mcp server dispatches guided setup through the CLI wrapper", async () => {
@@ -2956,6 +2969,7 @@ test("mcp server rejects unknown arguments and gated command materialization", a
 			typo_argument: true
 		});
 		assert.equal(unknown.result.isError, true);
+		assert.equal(unknown.result.structuredContent.ok, false);
 		assert.match(unknown.result.content[0].text, /Unknown argument/);
 		assert.doesNotMatch(unknown.result.content[0].text, /\n\s+at\s/);
 		const gatedPlan = await callMcpTool("setup_plan", {
@@ -3714,7 +3728,7 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
 		})
 	});
 	assert.equal(report.ok, false);
-	assert.equal(report.local.version, "1.1.1");
+	assert.equal(report.local.version, "1.1.5");
 	assert.equal(report.installed.version, "0.5.1");
 	assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
 	assert.match(report.warnings.join("\n"), /restart Codex/);

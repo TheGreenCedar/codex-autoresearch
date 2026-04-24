@@ -45,13 +45,13 @@ When a `keep` has no source changes, record it as no-change evidence. Do not bor
 
 ## Live Versus Static Dashboard
 
-Use the served dashboard for operations:
+Use the served dashboard for fresh operator evidence:
 
 ```bash
 node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
-Live dashboard actions are guarded local actions. They are bounded to safe operations such as doctor, setup plan, recipes, gap-candidates preview, finalize preview, export, and confirmed log decisions.
+The dashboard is a live readout, not the action surface. It can refresh state, show trust blockers, and make the next safe action obvious. Use CLI commands or MCP tools for setup, packet runs, logging, gap review, export, and finalization preview.
 
 Static exports are read-only snapshots:
 

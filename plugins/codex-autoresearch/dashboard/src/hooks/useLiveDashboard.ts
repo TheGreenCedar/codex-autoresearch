@@ -76,20 +76,20 @@ export function useLiveDashboard({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLiveStatus({
-        title: mode.liveActions ? "Live refresh failed" : "Snapshot refresh failed",
+        title: mode.liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
         detail: message,
       });
       setRefreshState("error");
       setLastError(message);
     }
-  }, [mode.liveActions, mode.refreshDone, setEntries, setMeta, setViewModel]);
+  }, [mode.liveRefresh, mode.refreshDone, setEntries, setMeta, setViewModel]);
 
   const runLiveAction = useCallback(
     async (action: string, bodyOverride: Record<string, unknown> | null = null) => {
       if (!action || !mode.liveActions || typeof fetch !== "function") {
         setLiveStatus({
           title: "Live action unavailable",
-          detail: "Open the dashboard through autoresearch serve to execute guarded actions.",
+          detail: "Use CLI or MCP for actions; the served dashboard is a live readout.",
         });
         return;
       }
@@ -147,12 +147,12 @@ export function useLiveDashboard({
   );
 
   useEffect(() => {
-    if (!liveEnabled || !mode.liveActions) return undefined;
+    if (!liveEnabled || !mode.liveRefresh) return undefined;
     refreshLiveData();
     const refreshMs = Math.max(1, Number(meta.refreshMs || 5000));
     const timer = setInterval(refreshLiveData, refreshMs);
     return () => clearInterval(timer);
-  }, [liveEnabled, meta.refreshMs, mode.liveActions, refreshLiveData]);
+  }, [liveEnabled, meta.refreshMs, mode.liveRefresh, refreshLiveData]);
 
   return {
     liveEnabled,

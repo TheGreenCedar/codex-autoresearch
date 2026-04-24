@@ -177,7 +177,7 @@ function buildTrustState({ state, settings = {}, setupPlan = null, guidedSetup =
 	};
 	if (mode === "static-export") taggedReasons.push({
 		source: "mode",
-		text: "Static export is read-only; serve the dashboard locally for guarded actions.",
+		text: "Static export is read-only; serve the dashboard locally for fresh state.",
 		decisionRelevant: false
 	});
 	if (setupPlan?.ok === false) taggedReasons.push({
@@ -692,8 +692,8 @@ function buildActionRail({ current, bestKept, latestFailure, nextAction, setupPl
 		actionItem({
 			priority: "Safe",
 			title: "Use the live runboard",
-			detail: "Open the served dashboard for live refresh and guarded actions.",
-			utilityCopy: "Static exports are fallback snapshots; the live URL is the operator surface.",
+			detail: "Open the served dashboard for fresh state and next-action context.",
+			utilityCopy: "Static exports are fallback snapshots; CLI or MCP owns actions.",
 			command: commandMap.get("serve dashboard") || commandMap.get("export dashboard"),
 			commandLabel: commandMap.get("serve dashboard") ? "Live" : "Export",
 			tone: "neutral",
@@ -720,7 +720,7 @@ function buildMissionControl({ current, setupPlan, guidedSetup, qualityGap, fina
 	const logCommandsByStatus = Object.fromEntries(allowedStatuses.map((status) => [status, logCommandForStatus(guidedSetup?.commands?.logLast, status)]));
 	return {
 		activeStep,
-		staticFallback: "Serve the dashboard locally for guarded live actions; static snapshots stay read-only.",
+		staticFallback: "Serve the dashboard locally for a fresh readout; use CLI or MCP for actions.",
 		steps: [
 			missionStep({
 				id: "setup",

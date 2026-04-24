@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 
@@ -91,6 +92,7 @@ const ok =
   (await runDashboardBuildWithParity()) &&
   (await runSourceCheckoutArtifactCheck()) &&
   (await runPackageArtifactCheck()) &&
+  (await runDogfoodHealthCheck()) &&
   (await runPhase("product", productChecks));
 
 process.exit(ok ? 0 : 1);
@@ -218,6 +220,129 @@ async function runPackageArtifactCheck() {
   return true;
 }
 
+async function runDogfoodHealthCheck() {
+  console.log("\n== dogfood ==");
+  const qualityOk = await runTrackedDogfoodQualityCheck();
+  const selfOk = await runLocalDogfoodSessionCheck();
+  return qualityOk && selfOk;
+}
+
+async function runTrackedDogfoodQualityCheck() {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-autoresearch-dogfood-"));
+  try {
+    await fsp.writeFile(
+      path.join(tempDir, "autoresearch.jsonl"),
+      `${JSON.stringify({
+        type: "config",
+        name: "codex autoresearch product gate",
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        bestDirection: "lower",
+      })}\n`,
+      "utf8",
+    );
+    const benchmarkCommand = `${shellQuote(node)} ${shellQuote(
+      path.join(ROOT, "scripts", "perfection-benchmark.mjs"),
+    )} --fail-on-gap`;
+    const result = await runCommand([
+      "dogfood:quality-gate",
+      node,
+      [
+        "scripts/autoresearch.mjs",
+        "doctor",
+        "--cwd",
+        tempDir,
+        "--check-benchmark",
+        "--explain",
+        "--command",
+        benchmarkCommand,
+      ],
+    ]);
+    return reportDogfoodDoctorResult("dogfood:quality-gate", result);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function runLocalDogfoodSessionCheck() {
+  const localSessionFiles = [
+    "autoresearch.jsonl",
+    "autoresearch.config.json",
+    "autoresearch.ps1",
+    "autoresearch.sh",
+  ];
+  const hasLocalSession = (
+    await Promise.all(
+      localSessionFiles.map(async (file) => {
+        try {
+          await fsp.access(path.join(ROOT, file));
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    )
+  ).some(Boolean);
+  if (!hasLocalSession) {
+    console.log("skip dogfood:self-session (no local session artifacts)");
+    return true;
+  }
+
+  const result = await runCommand([
+    "dogfood:self-session",
+    node,
+    ["scripts/autoresearch.mjs", "doctor", "--cwd", ".", "--check-benchmark", "--explain"],
+  ]);
+  return reportDogfoodDoctorResult("dogfood:self-session", result);
+}
+
+function reportDogfoodDoctorResult(label: string, result: CommandResult) {
+  if (result.code !== 0) {
+    console.log(`fail ${label}`);
+    const output = `${result.stdout}${result.stderr}`.trim();
+    if (output) console.log(indent(output));
+    return false;
+  }
+
+  let payload: any;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch (error) {
+    console.log(`fail ${label}`);
+    console.log(indent(`Could not parse dogfood doctor JSON: ${String(error)}`));
+    return false;
+  }
+
+  const warningDetails = [
+    ...(Array.isArray(payload.warningDetails) ? payload.warningDetails : []),
+    ...(Array.isArray(payload.state?.warningDetails) ? payload.state.warningDetails : []),
+  ];
+  const warnings = [
+    ...(Array.isArray(payload.warnings) ? payload.warnings.map(String) : []),
+    ...(Array.isArray(payload.state?.warnings) ? payload.state.warnings.map(String) : []),
+  ];
+  const issues = Array.isArray(payload.issues) ? payload.issues.map(String) : [];
+  const failures = [
+    ...issues,
+    ...warningDetails
+      .filter((warning) => warning?.code === "missing_commit_paths")
+      .map((warning) => warning.message || "Configured commitPaths are stale."),
+    ...warnings.filter((warning) => /Benchmark drift/i.test(warning)),
+  ];
+  if (payload.state?.limit?.limitReached) {
+    failures.push("Current dogfood session has reached its active iteration limit.");
+  }
+
+  if (failures.length) {
+    console.log(`fail ${label}`);
+    console.log(indent(failures.join("\n")));
+    return false;
+  }
+
+  console.log(`ok ${label}`);
+  return true;
+}
+
 async function runSourceCheckoutArtifactCheck() {
   console.log("\n== source checkout ==");
   const missing = [];
@@ -316,4 +441,10 @@ function indent(text) {
     .split(/\r?\n/)
     .map((line) => `  ${line}`)
     .join("\n");
+}
+
+function shellQuote(value: string) {
+  const text = String(value);
+  if (process.platform === "win32") return `"${text.replace(/"/g, '""')}"`;
+  return `'${text.replace(/'/g, "'\\''")}'`;
 }

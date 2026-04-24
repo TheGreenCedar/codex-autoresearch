@@ -216,8 +216,8 @@ const checks = [
 				"serve_dashboard",
 				"gap-candidates",
 				"finalize-preview",
-				"guarded local actions",
-				"confirmed log decisions",
+				"Use CLI or MCP for actions and logging",
+				"Tool calls return structured content",
 				"specification-delight-roadmap"
 			]) ? pass() : fail("Docs split, visual docs, live demo, or scrubbed demo export is incomplete.");
 		}
@@ -564,7 +564,7 @@ const checks = [
 				"gap-candidates",
 				"finalize-preview",
 				"visual aid",
-				"confirmed log decisions",
+				"Use CLI or MCP",
 				"serve_dashboard",
 				"recipes"
 			]) ? pass() : fail("Docs are missing full-product workflow terms.");

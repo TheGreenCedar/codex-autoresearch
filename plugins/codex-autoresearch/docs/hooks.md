@@ -44,7 +44,7 @@ They must not replace:
 - CLI validation
 - unsafe command gates
 - last-run freshness checks
-- dashboard action guards
+- dashboard readout freshness checks
 - Git safety
 - human approval for irreversible work
 

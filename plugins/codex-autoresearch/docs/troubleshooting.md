@@ -9,8 +9,8 @@ Find the failing layer first. Do not mash retry like a vending machine button wh
 | Source differs from Codex behavior | Installed runtime drift | Compare source version to `codex mcp get codex-autoresearch`; refresh installed plugin/cache before changing source again. |
 | Benchmark has no primary metric | Benchmark contract | Run `benchmark-lint`; repair output to `METRIC <primary>=<number>`. |
 | Current benchmark is far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor/check-benchmark and start a new segment if the old phase is stale. |
-| Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL for live actions. |
-| Dashboard live action fails | Action guard | Check nonce, same-origin, JSON body, allowed action, packet fingerprint, and command timeout. |
+| Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL for fresh state. |
+| Dashboard looks actionable but does not mutate | Product contract | The dashboard is a readout. Use CLI or MCP for setup, packet runs, logging, gap review, export, and finalization preview. |
 | Last packet will not log | Packet freshness | Rerun `next`; the ledger, config, command, working directory, Git, or relevant file fingerprint changed. |
 | Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or intentionally use `--allow-add-all`. |
 | Configured commit paths are missing | Stale config | Update `autoresearch.config.json` or pass explicit paths on the next log. |

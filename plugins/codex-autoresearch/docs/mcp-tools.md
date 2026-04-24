@@ -7,7 +7,7 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the 
 | Tool | Use |
 | --- | --- |
 | `setup_plan` | Return a read-only setup readiness plan with missing fields, recipe suggestion, and next commands. |
-| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard actions. |
+| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance. |
 | `prompt_plan` | Convert a natural-language request into inferred metric defaults, experiment lanes, missing essentials, and setup commands. |
 | `onboarding_packet` | Return a compact human-and-agent onboarding packet with state, hazards, templates, and commands. |
 | `recommend_next` | Return the single safest next action with evidence and commands. |
@@ -53,7 +53,9 @@ Use `finalize_preview` for readiness. Branch creation stays in the finalizer CLI
 
 Tool arguments are validated before dispatch. Unknown arguments fail loudly so misspelled options do not become silent no-ops. Silent no-ops are where confidence goes to rot.
 
-The public `tools/list` response stays conservative for compatibility with older MCP clients: `name`, `description`, and `inputSchema`. The source also exposes richer internal tool metadata with `outputSchema` and safety annotations so tests, docs, and future modern clients can use the same contracts without weakening lightweight startup.
+The public `tools/list` response includes `name`, `description`, `inputSchema`, `outputSchema`, and standard safety annotations. Those annotations use `readOnlyHint`, `destructiveHint`, and `openWorldHint` so models and MCP hosts can reason about lookup tools, mutating tools, local process-starting tools, and destructive cleanup tools before calling them.
+
+Tool calls return structured content for programmatic clients and the same payload as text JSON for older clients. Keep those two surfaces aligned when adding a tool.
 
 Operational metadata such as CLI command name, mutation status, and command-bearing argument fields lives in the shared tool registry. When adding a tool, update the schema, contract, registry, dispatch handler, CLI fallback, docs, and parity tests together.
 

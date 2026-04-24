@@ -31,7 +31,7 @@ The live dashboard is the normal operator surface:
 node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
-Use it for state, trust warnings, metric trajectory, latest run, best kept run, recent failures, next actions, and guarded local actions. If the server process ended, live refresh fails, or the browser is on a `file://` export but actions are needed, restart `serve` and share the new local URL.
+Use it for state, trust warnings, metric trajectory, latest run, best kept run, recent failures, and next actions. If the server process ended, live refresh fails, or the browser is on a `file://` export but fresh state is needed, restart `serve` and share the new local URL. Use CLI or MCP for actions and logging.
 
 Use static exports only for offline review or archival evidence:
 
@@ -124,4 +124,4 @@ Workflow:
 7. Verify branch union, session-artifact exclusion, generated review summary, and cleanup order.
 8. Merge to trunk, then clean up source branches and session artifacts.
 
-Dashboard live actions can preview finalization. Branch creation and finalizer mutation stay outside the dashboard.
+The dashboard can show finalization readiness. Branch creation and finalizer mutation stay outside the dashboard.

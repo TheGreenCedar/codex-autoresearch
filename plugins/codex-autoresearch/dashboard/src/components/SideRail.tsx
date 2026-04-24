@@ -1,6 +1,6 @@
-export function SideRail({ liveActions, showcase }) {
-  const status = showcase ? "Live" : liveActions ? "Live" : "Static";
-  const detail = showcase ? "Runboard" : liveActions ? "Visual aid" : "Snapshot";
+export function SideRail({ live, showcase }) {
+  const status = showcase ? "Live" : live ? "Live" : "Static";
+  const detail = showcase ? "Runboard" : live ? "Readout" : "Snapshot";
   return (
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>

@@ -1,3 +1,5 @@
+import { actionPolicyForTool } from "./tool-registry.js";
+
 const CONTRACTS = {
   setup_plan: {
     purpose: "Read-only setup readiness and first-run command plan.",
@@ -227,6 +229,27 @@ const CONTRACTS = {
   },
 };
 
+const READ_ONLY_TOOLS = new Set([
+  "setup_plan",
+  "guided_setup",
+  "prompt_plan",
+  "onboarding_packet",
+  "recommend_next",
+  "list_recipes",
+  "read_state",
+  "measure_quality_gap",
+  "finalize_preview",
+]);
+
+const DESTRUCTIVE_TOOLS = new Set(["log_experiment", "clear_session"]);
+const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
+  "benchmark_inspect",
+  "benchmark_lint",
+  "checks_inspect",
+  "doctor_session",
+  "gap_candidates",
+]);
+
 export function applyToolContracts(toolSchemas) {
   return toolSchemas.map((tool) => {
     const contract = CONTRACTS[tool.name];
@@ -237,6 +260,7 @@ export function applyToolContracts(toolSchemas) {
       outputSchema: contract.outputSchema,
       annotations: {
         ...tool.annotations,
+        ...toolHintAnnotations(tool.name),
         safety: contract.safety,
       },
     };
@@ -267,6 +291,26 @@ export function toolGuidanceFor(name) {
 
 export function outputContractFor(name) {
   return CONTRACTS[name]?.outputSchema || null;
+}
+
+function toolHintAnnotations(name) {
+  const readOnly = READ_ONLY_TOOLS.has(name);
+  const policy = actionPolicyForTool(name);
+  const openWorld = policy === "process_start" || CONDITIONALLY_OPEN_WORLD_TOOLS.has(name);
+  return {
+    title: humanizeToolName(name),
+    readOnlyHint: readOnly,
+    destructiveHint: DESTRUCTIVE_TOOLS.has(name),
+    idempotentHint: readOnly,
+    openWorldHint: openWorld,
+  };
+}
+
+function humanizeToolName(name) {
+  return String(name)
+    .split("_")
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function basicOutputSchema(required) {

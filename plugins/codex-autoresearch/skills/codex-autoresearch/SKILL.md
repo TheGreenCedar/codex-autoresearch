@@ -123,7 +123,7 @@ Read dashboard evidence in this order:
 4. Ledger and ASI: what was kept, rejected, crashed, or blocked by checks.
 5. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
 
-Use CLI or MCP for actions and logging. The dashboard should support judgment; it should not become the workflow driver.
+Use CLI or MCP for setup, packet runs, logging, gap review, export, and finalization preview. The dashboard should support judgment; it should not become the workflow driver.
 
 ## Deep Research Loops
 

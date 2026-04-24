@@ -642,7 +642,8 @@ test("stale last-run handling remains visible in dashboard guidance", async () =
 
   const { getById } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     viewModel,
     commands: [],
   });
@@ -679,7 +680,8 @@ test("dashboard copy buttons expose the current URL and next CLI command", async
     entries,
     {
       deliveryMode: "live-server",
-      liveActionsAvailable: true,
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
       liveUrl: "http://127.0.0.1:61234/",
       viewModel,
       commands: [],
@@ -741,7 +743,8 @@ test("dashboard promotes Codex brief and session memory instead of command contr
 
   const { getById, queryById } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     viewModel,
     commands: [],
   });
@@ -1125,7 +1128,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "1.1.1" },
+      local: { version: "1.1.5" },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1143,13 +1146,13 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.1");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.5");
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
 });
 
-test("dashboard distinguishes static snapshot controls from live actions", async () => {
+test("dashboard distinguishes static snapshots from served readouts", async () => {
   const viewModel = {
     nextBestAction: {
       kind: "finalize-preview",
@@ -1195,7 +1198,7 @@ test("dashboard distinguishes static snapshot controls from live actions", async
     liveActionsAvailable: false,
     modeGuidance: {
       title: "Static snapshot",
-      detail: "Read-only export. Use autoresearch serve for executable dashboard actions.",
+      detail: "Read-only export. Serve the dashboard for fresh state.",
     },
     viewModel,
     commands: [],
@@ -1230,7 +1233,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
       liveActionsAvailable: false,
       modeGuidance: {
         title: "Static snapshot",
-        detail: "Read-only export. Use autoresearch serve for executable dashboard actions.",
+        detail: "Read-only export. Serve the dashboard for fresh state.",
       },
       viewModel: {
         nextBestAction: {
@@ -1337,10 +1340,11 @@ test("served dashboard exposes live refresh but no command-center controls", asy
 
   const { getById, queryById } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     modeGuidance: {
       title: "Live dashboard",
-      detail: "Served mode can refresh the view model and run guarded local actions.",
+      detail: "Served mode can refresh the view model; actions stay in CLI or MCP.",
     },
     viewModel,
     commands: [],
@@ -1414,7 +1418,8 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
 
   const { dom, getById, queryById } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     viewModel,
   });
 
@@ -1451,7 +1456,8 @@ test("dashboard surfaces generated suspicious research reasons", async () => {
 
   const { dom } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     viewModel,
   });
 
@@ -1473,7 +1479,8 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   ];
   const { dom } = await runDashboard(entries, {
     deliveryMode: "live-server",
-    liveActionsAvailable: true,
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
     viewModel: {
       missionControl: {
         activeStep: "log",
@@ -1525,7 +1532,8 @@ test("served dashboard live toggle starts automatic refresh", async () => {
     entries,
     {
       deliveryMode: "live-server",
-      liveActionsAvailable: true,
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
       refreshMs: 1234,
       viewModel,
     },

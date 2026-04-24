@@ -298,12 +298,13 @@ async function serveCommand(args, deps) {
 				generatedAt,
 				jsonlName: "autoresearch.jsonl",
 				deliveryMode: "live-server",
-				liveActionsAvailable: true,
+				liveRefreshAvailable: true,
+				liveActionsAvailable: false,
 				actionNonce,
 				actionNonceHeader,
 				modeGuidance: {
 					title: "Live dashboard",
-					detail: "Live refresh and guarded actions are available."
+					detail: "Live refresh is available; actions stay in CLI or MCP."
 				},
 				refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1e3,
 				commands,

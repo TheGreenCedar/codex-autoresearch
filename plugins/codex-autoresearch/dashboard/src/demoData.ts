@@ -21,7 +21,8 @@ export const DEMO_ENTRIES: DashboardEntry[] = [
 
 export const DEMO_META: DashboardMeta = {
   deliveryMode: "live-server",
-  liveActionsAvailable: true,
+  liveRefreshAvailable: true,
+  liveActionsAvailable: false,
   showcaseMode: true,
   generatedAt: new Date().toISOString(),
   modeGuidance: { title: "Live runboard", detail: "100 embedded packets." },

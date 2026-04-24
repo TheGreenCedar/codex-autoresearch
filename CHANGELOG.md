@@ -4,13 +4,18 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## 1.1.1
+## 1.1.5
 
 - Fixed the dashboard timestamp x-axis toggle for exports that embed run timestamps as numeric epoch values.
+- Aligned dashboard docs and skill guidance around the dashboard as a live readout rather than a command center; CLI and MCP own setup, packet runs, logging, gap review, export, and finalization preview.
+- Disabled served-dashboard mutation endpoints by default so the live dashboard contract is enforced by runtime behavior, not just documentation.
+- Expanded MCP tool descriptors with output schemas and standard safety annotations, corrected open-world hints for command-running tools, and returned structured tool content alongside text JSON for clients that can consume it.
+- Added dogfood health gates to the product check: a portable `quality_gap` session must pass, and local self-session artifacts block release-style verification when stale commit paths, benchmark drift, or maxed sessions are present.
+- Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.5`.
 
 ## 1.1.0
 
-Friction-reduction pass from live CodeStory onboarding forensics.
+Friction-reduction pass from live measured-loop onboarding forensics.
 
 ### Changed
 

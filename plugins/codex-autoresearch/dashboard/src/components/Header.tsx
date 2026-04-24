@@ -67,7 +67,7 @@ export function Header({
               id="refresh-now"
               type="button"
               className="tool-button"
-              hidden={!mode.liveActions}
+              hidden={!mode.liveRefresh}
               onClick={refreshLiveData}
             >
               Refresh live data
@@ -76,7 +76,7 @@ export function Header({
               id="live-toggle"
               type="button"
               className="tool-button subtle"
-              hidden={!mode.liveActions}
+              hidden={!mode.liveRefresh}
               onClick={() => setLiveEnabled((value) => !value)}
             >
               {liveEnabled ? "Auto-refresh on" : "Auto-refresh off"}

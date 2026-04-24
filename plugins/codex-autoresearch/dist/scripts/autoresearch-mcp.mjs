@@ -8,7 +8,7 @@ import path from "node:path";
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const CLI_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
-const VERSION = "1.1.1";
+const VERSION = "1.1.5";
 const callCliTool = createCliToolCaller({
 	cliScript: CLI_SCRIPT,
 	pluginRoot: PLUGIN_ROOT
@@ -113,10 +113,13 @@ async function handleMcpMessage(message) {
 			sendMcp({
 				jsonrpc: "2.0",
 				id: message.id,
-				result: { content: [{
-					type: "text",
-					text: JSON.stringify(payload, null, 2)
-				}] }
+				result: {
+					structuredContent: payload,
+					content: [{
+						type: "text",
+						text: JSON.stringify(payload, null, 2)
+					}]
+				}
 			});
 		} catch (error) {
 			const payload = mcpErrorEnvelope(message.params?.name, error);
@@ -125,6 +128,7 @@ async function handleMcpMessage(message) {
 				id: message.id,
 				result: {
 					isError: true,
+					structuredContent: payload,
 					content: [{
 						type: "text",
 						text: JSON.stringify(payload, null, 2)

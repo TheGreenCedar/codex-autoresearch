@@ -267,7 +267,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.1");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.5");
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
@@ -1050,7 +1050,7 @@ test("live server exposes health and view-model endpoints", async () => {
   });
 });
 
-test("live server gap-candidates action uses the active research slug", async () => {
+test("live server rejects dashboard actions because CLI and MCP own mutations", async () => {
   await withTempDir("live-gap-action", async (dir) => {
     await runCli([
       "research-setup",
@@ -1080,21 +1080,22 @@ test("live server gap-candidates action uses the active research slug", async ()
         () => stdout,
         () => stderr,
       );
-      const headers = await liveActionHeaders(payload.url);
       const action = await fetch(`${payload.url}actions/gap-candidates`, {
         method: "POST",
-        headers,
+        headers: { "content-type": "application/json", Origin: new URL(payload.url).origin },
         body: JSON.stringify({}),
-      }).then((res) => res.json());
-      assert.equal(action.ok, true, action.stderr || action.error);
-      assert.match(action.stdout, /"slug": "custom-study"/);
+      });
+      assert.equal(action.status, 403);
+      const body = await action.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.code, "actions_disabled");
     } finally {
       child.kill();
     }
   });
 });
 
-test("live server log action consumes a fresh last-run packet with confirmation", async () => {
+test("live server log actions stay disabled and leave last-run packets untouched", async () => {
   await withTempDir("live-log-action", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "live log", "--metric-name", "seconds"]);
     const benchmarkFile = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
@@ -1128,27 +1129,10 @@ test("live server log action consumes a fresh last-run packet with confirmation"
       );
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.missionControl.logDecision.available, true);
-      const headers = await liveActionHeaders(payload.url);
-
-      const missingNonce = await fetch(`${payload.url}actions/log-keep`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description: "Live kept packet" }),
-      });
-      assert.equal(missingNonce.status, 403);
-
-      const rejected = await fetch(`${payload.url}actions/log-keep`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ description: "Live kept packet" }),
-      });
-      assert.equal(rejected.status, 400);
-      const rejectedPayload = await rejected.json();
-      assert.equal(rejectedPayload.ok, false);
 
       const action = await fetch(`${payload.url}actions/log-keep`, {
         method: "POST",
-        headers,
+        headers: { "content-type": "application/json", Origin: new URL(payload.url).origin },
         body: JSON.stringify({
           confirm: "log-keep",
           lastRunFingerprint: viewModel.missionControl.logDecision.lastRunFingerprint,
@@ -1159,14 +1143,15 @@ test("live server log action consumes a fresh last-run packet with confirmation"
             next_action_hint: "Review finalization.",
           },
         }),
-      }).then((res) => res.json());
-      assert.equal(action.ok, true, action.stderr || action.error);
-      assert.match(action.stdout, /"lastRunCleared": true/);
-      assert.equal(action.receipt.lastRunCleared, true);
+      });
+      assert.equal(action.status, 403);
+      const actionBody = await action.json();
+      assert.equal(actionBody.ok, false);
+      assert.equal(actionBody.code, "actions_disabled");
 
       const state = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
-      assert.equal(state.runs, 1);
-      assert.equal(state.kept, 1);
+      assert.equal(state.runs, 0);
+      assert.equal(state.kept, 0);
     } finally {
       child.kill();
     }
@@ -1181,15 +1166,4 @@ async function waitForServerPayload(stdoutFn, stderrFn) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`serve did not print startup JSON\n${stderrFn()}`);
-}
-
-async function liveActionHeaders(url) {
-  const html = await fetch(url).then((res) => res.text());
-  const match = html.match(/"actionNonce":"([^"]+)"/);
-  assert.ok(match, "served dashboard did not embed action nonce");
-  return {
-    "content-type": "application/json",
-    "X-Autoresearch-Action-Nonce": JSON.parse(`"${match[1]}"`),
-    Origin: new URL(url).origin,
-  };
 }

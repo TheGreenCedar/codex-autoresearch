@@ -22,10 +22,10 @@ const BUILT_IN_INTEGRATIONS = [
     description: "Runs a user-provided command that prints JSON gap candidates.",
   },
   {
-    id: "live-dashboard-actions",
-    title: "Live dashboard actions",
+    id: "live-dashboard-readout",
+    title: "Live dashboard readout",
     status: "available",
-    description: "Provides local HTTP endpoints for safe dashboard actions.",
+    description: "Serves a local dashboard for fresh state while actions stay in CLI or MCP.",
   },
 ];
 

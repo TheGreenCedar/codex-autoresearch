@@ -291,8 +291,8 @@ const checks = [
           "serve_dashboard",
           "gap-candidates",
           "finalize-preview",
-          "guarded local actions",
-          "confirmed log decisions",
+          "Use CLI or MCP for actions and logging",
+          "Tool calls return structured content",
           "specification-delight-roadmap",
         ])
         ? pass()
@@ -737,7 +737,7 @@ const checks = [
         "gap-candidates",
         "finalize-preview",
         "visual aid",
-        "confirmed log decisions",
+        "Use CLI or MCP",
         "serve_dashboard",
         "recipes",
       ])

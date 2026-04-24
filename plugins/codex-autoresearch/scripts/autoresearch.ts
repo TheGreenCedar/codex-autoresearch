@@ -95,7 +95,7 @@ const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
-const PLUGIN_VERSION = "1.1.1";
+const PLUGIN_VERSION = "1.1.5";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -3433,12 +3433,13 @@ async function serveDashboard(args) {
         generatedAt,
         jsonlName: "autoresearch.jsonl",
         deliveryMode: "live-server",
-        liveActionsAvailable: true,
+        liveRefreshAvailable: true,
+        liveActionsAvailable: false,
         actionNonce,
         actionNonceHeader,
         modeGuidance: {
           title: "Live dashboard",
-          detail: "Live refresh and guarded actions are available.",
+          detail: "Live refresh is available; actions stay in CLI or MCP.",
         },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
         commands: dashboardCommands(workDir),
@@ -4940,7 +4941,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "1.1.1" },
+        serverInfo: { name: "codex-autoresearch", version: "1.1.5" },
       },
     });
     return;
@@ -4959,6 +4960,7 @@ async function handleMcpMessage(message) {
         jsonrpc: "2.0",
         id: message.id,
         result: {
+          structuredContent: payload,
           content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });
@@ -4969,6 +4971,7 @@ async function handleMcpMessage(message) {
         id: message.id,
         result: {
           isError: true,
+          structuredContent: payload,
           content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         },
       });

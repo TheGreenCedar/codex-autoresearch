@@ -265,6 +265,7 @@ export interface DashboardViewModel {
 }
 
 export interface DashboardMode {
+  liveRefresh: boolean;
   liveActions: boolean;
   showcase?: boolean;
   title: string;
@@ -275,6 +276,7 @@ export interface DashboardMode {
 
 export interface DashboardMeta {
   deliveryMode?: string;
+  liveRefreshAvailable?: boolean;
   liveActionsAvailable?: boolean;
   showcaseMode?: boolean;
   generatedAt?: string;
