@@ -1,5 +1,6 @@
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
 import { resolvePackageRoot } from "../lib/runtime-paths.mjs";
+import { formatCompactMetricTick } from "../dashboard/src/model/formatting.mjs";
 import path from "node:path";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -437,6 +438,18 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
 	const axisText = Array.from(getById("trend-chart").querySelectorAll(".recharts-cartesian-axis-tick-value")).map((node) => node.textContent?.trim() || "").filter(Boolean);
 	const timestampLikeLabels = axisText.filter((label) => label.includes(":"));
 	assert.ok(timestampLikeLabels.length >= 4, `Expected timestamp labels in x-axis ticks, saw: ${axisText.join(", ")}`);
+});
+test("dashboard formats large raw y-axis labels compactly", () => {
+	const labels = [
+		873376.79,
+		882198.78,
+		891020.77
+	].map((value) => formatCompactMetricTick(value, "score", [873376.79, 891020.77]));
+	assert.deepEqual(labels, [
+		"873k",
+		"882k",
+		"891k"
+	]);
 });
 test("dashboard holds leading crash runs at the next successful metric level", async () => {
 	const { getById } = await runDashboard([

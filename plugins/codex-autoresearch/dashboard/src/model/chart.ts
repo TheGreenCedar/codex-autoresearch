@@ -36,12 +36,14 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
   const values = measured.map((item) => item.value as number);
   const min = Math.min(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
   const max = Math.max(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
-  const span = max - min || Math.max(Math.abs(max), 1);
-  const domainPadding = span * 0.12;
+  const rawSpan = max - min;
+  const zeroSpanPadding = Math.max(Math.abs(max) * 0.01, 1);
+  const domainPadding = rawSpan === 0 ? zeroSpanPadding : rawSpan * 0.12;
   const domain: [number, number] = [round(min - domainPadding), round(max + domainPadding)];
+  const domainSpan = domain[1] - domain[0] || 1;
   const xFor = (index: number) =>
     chartRuns.length === 1 ? 500 : 52 + (index * 880) / (chartRuns.length - 1);
-  const yFor = (value: number) => 276 - ((value - min) / span) * 220;
+  const yFor = (value: number) => 276 - ((value - domain[0]) / domainSpan) * 220;
   const bestRun = readout.bestRun;
   const latest = chartRuns.at(-1);
   const points = chartRuns.map((run, index) => {

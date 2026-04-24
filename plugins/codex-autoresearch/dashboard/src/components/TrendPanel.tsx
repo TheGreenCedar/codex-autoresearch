@@ -19,6 +19,7 @@ import {
   chartPercentValue,
   formatChartPercentValue,
   formatDisplayTime,
+  formatCompactMetricTick,
   formatImprovement,
   formatMetric,
   formatMetricValue,
@@ -162,7 +163,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
           {chart.summary}
         </p>
         <ResponsiveContainer width="100%" height={350}>
-          <LineChart data={chartData} margin={{ top: 18, right: 32, bottom: 8, left: 8 }}>
+          <LineChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
             <CartesianGrid vertical={false} stroke="#A8D8D4" strokeDasharray="6 8" />
             <XAxis
               dataKey={xKey}
@@ -182,9 +183,13 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               tick={{ fill: "#1E8C86", fontSize: 12, fontWeight: 800 }}
             />
             <YAxis
-              width={58}
+              width={74}
               domain={yDomain}
-              tickFormatter={(value) => formatChartAxisValue(Number(value), valueMode, readout)}
+              tickCount={5}
+              tickFormatter={(value) =>
+                formatChartAxisTickValue(Number(value), valueMode, readout, chart.domain)
+              }
+              tickMargin={8}
               tickLine={false}
               axisLine={false}
               tick={{ fill: "#1E8C86", fontSize: 12, fontWeight: 800 }}
@@ -722,6 +727,16 @@ function formatChartAxisValue(
 ): string {
   if (valueMode === "percent") return formatChartPercentValue(value, readout.metricDefinition);
   return formatMetricValue(value, readout.metricDefinition);
+}
+
+function formatChartAxisTickValue(
+  value: number | null | undefined,
+  valueMode: ValueMode,
+  readout: DashboardReadout,
+  domain: [number, number] | null,
+): string {
+  if (valueMode === "percent") return formatChartPercentValue(value, readout.metricDefinition);
+  return formatCompactMetricTick(value, readout.metricDefinition.displayUnit, domain);
 }
 
 function formatMemoryValue(value: number | null | undefined): string {

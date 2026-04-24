@@ -7,6 +7,7 @@ export {
   directionLabel,
   formatChartPercentValue,
   formatChartRunValue,
+  formatCompactMetricTick,
   formatConfidence,
   formatDelta,
   formatDisplayTime,

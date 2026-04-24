@@ -44,6 +44,22 @@ export function formatChartPercentValue(
     : formatImprovement(value);
 }
 
+export function formatCompactMetricTick(
+  value: number | null | undefined,
+  unit: string | undefined,
+  domain: [number, number] | null,
+): string {
+  if (!Number.isFinite(value)) return "-";
+  const number = Number(value);
+  const abs = Math.abs(number);
+  const divisor = abs >= 1_000_000 ? 1_000_000 : abs >= 1_000 ? 1_000 : 1;
+  const suffix = divisor === 1_000_000 ? "M" : divisor === 1_000 ? "k" : "";
+  const span = domain ? Math.abs(domain[1] - domain[0]) / divisor : null;
+  const compact = `${formatAxisNumber(number / divisor, span)}${suffix}`;
+  const unitSuffix = axisUnitSuffix(unit, suffix);
+  return `${compact}${unitSuffix}`;
+}
+
 export function formatPercentOfBaseline(value: number | null | undefined): string {
   if (!Number.isFinite(value)) return "-";
   return `${Number(value)
@@ -99,4 +115,17 @@ export function actionLabel(action: string | null | undefined): string {
 function formatScore(value: number | null | undefined): string {
   if (!finiteMetric(value)) return "-";
   return Number(value).toFixed(2);
+}
+
+function formatAxisNumber(value: number, span: number | null): string {
+  const absSpan = Math.abs(span ?? value);
+  const digits = absSpan < 0.01 ? 3 : absSpan < 0.1 ? 2 : absSpan < 10 ? 1 : 0;
+  return value.toFixed(digits).replace(/\.?0+$/, "");
+}
+
+function axisUnitSuffix(unit: string | undefined, compactSuffix: string): string {
+  const trimmed = (unit || "").trim();
+  if (!trimmed || compactSuffix || trimmed.toLowerCase() === "score" || trimmed.length > 3)
+    return "";
+  return trimmed;
 }

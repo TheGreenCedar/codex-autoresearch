@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { build as viteBuild } from "vite";
+import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 
@@ -501,6 +502,14 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
     timestampLikeLabels.length >= 4,
     `Expected timestamp labels in x-axis ticks, saw: ${axisText.join(", ")}`,
   );
+});
+
+test("dashboard formats large raw y-axis labels compactly", () => {
+  const labels = [873376.79, 882198.78, 891020.77].map((value) =>
+    formatCompactMetricTick(value, "score", [873376.79, 891020.77]),
+  );
+
+  assert.deepEqual(labels, ["873k", "882k", "891k"]);
 });
 
 test("dashboard holds leading crash runs at the next successful metric level", async () => {
