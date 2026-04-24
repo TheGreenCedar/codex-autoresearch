@@ -27,8 +27,6 @@ Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/a
 4. The dashboard shows the metric trend, Codex brief, session memory, next safe action, ledger, and supporting diagnostics.
 5. When there is useful kept work, Codex previews finalization into reviewable branches.
 
-This is not automation theater. The contract is evidence: no invented zeroes, no stale packets, no broad cleanup without consent, and no triumphant little parade before verification.
-
 ## Install
 
 ```bash
