@@ -54,13 +54,17 @@ Use $Codex Autoresearch to improve the speed of my indexer's pipeline, while kee
 ```
 
 ```text
-Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with the most obvious low hanging fruits. Keep doing this 100 times.
+Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with
+the most obvious low hanging fruits. Keep doing this 100 times.
 ```
 
 You can also hand it a sharper investigation. Codex will start with a few lanes, learn from the measurements, and stop wasting time on dead ends.
 
 ```text
-Use $Codex Autoresearch to figure out why my graphql service's p99 latency is so much higher than its p90 latency at 1 minute metric resolution. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. For each, run the 4-5 appropriate experiments @experiments.md and if the results are promising keep iterating, otherwise stop and report back.
+Use $Codex Autoresearch to figure out why my graphql service's p99 latency is so much higher
+than its p90 latency at 1 minute metric resolution. I suspect: DNS lookup, event loop throttling,
+memory spike, CPU spike. For each, run the 4-5 appropriate experiments @experiments.md and if the
+results are promising keep iterating, otherwise stop and report back.
 ```
 
 Or be exact about the benchmark and scope:
