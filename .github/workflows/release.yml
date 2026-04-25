@@ -75,6 +75,14 @@ jobs:
       - name: Create package artifact
         run: npm pack
 
+      - name: Smoke release package
+        run: |
+          set -euo pipefail
+          tarball="$(ls codex-autoresearch-*.tgz | head -n 1)"
+          mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
+          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" mcp-smoke
+
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
