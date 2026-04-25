@@ -146,17 +146,12 @@ async function dashboardAssetHashes() {
 
 async function runPackageArtifactCheck() {
   console.log("\n== package ==");
+
   const npmExecPath = process.env.npm_execpath;
-  const npmCommand = npmExecPath
-    ? node
-    : process.platform === "win32"
-      ? process.env.ComSpec || "cmd.exe"
-      : npm;
+  const npmCommand = npmExecPath ? node : npm;
   const npmArgs = npmExecPath
-    ? [npmExecPath, "pack", "--dry-run", "--json", "--silent"]
-    : process.platform === "win32"
-      ? ["/d", "/s", "/c", "npm pack --dry-run --json --silent"]
-      : ["pack", "--dry-run", "--json", "--silent"];
+    ? [npmExecPath, "pack", "--dry-run", "--json"]
+    : ["pack", "--dry-run", "--json"];
   const result = await runCommand(["package-artifact", npmCommand, npmArgs]);
   if (result.code !== 0) {
     console.log("fail package-artifact");
@@ -165,13 +160,30 @@ async function runPackageArtifactCheck() {
     return false;
   }
 
-  const output = `${result.stdout}${result.stderr}`;
+  // Strip ANSI escape codes that tsdown adds to its output
+  // eslint-disable-next-line no-control-regex
+  const output = `${result.stdout}${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
+
+  // Find the JSON array - look for [ and ] in output
   const start = output.indexOf("[");
-  const end = output.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) {
+  if (start === -1) {
     console.log("fail package-artifact");
-    console.log(indent("Could not parse npm pack --dry-run --json output."));
-    if (output.trim()) console.log(indent(output.trim()));
+    console.log(indent("Could not parse npm pack --dry-run --json output: no JSON array found."));
+    return false;
+  }
+
+  // Find the last ] after the opening [
+  let end = -1;
+  for (let i = output.length - 1; i >= start; i--) {
+    if (output[i] === "]") {
+      end = i;
+      break;
+    }
+  }
+
+  if (end === -1 || end <= start) {
+    console.log("fail package-artifact");
+    console.log(indent("Could not parse npm pack --dry-run --json output: incomplete JSON array."));
     return false;
   }
 

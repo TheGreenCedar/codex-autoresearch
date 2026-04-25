@@ -137,23 +137,16 @@ async function runPackageArtifactCheck() {
 	const npmExecPath = process.env.npm_execpath;
 	const result = await runCommand([
 		"package-artifact",
-		npmExecPath ? node : process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : npm,
+		npmExecPath ? node : npm,
 		npmExecPath ? [
 			npmExecPath,
 			"pack",
 			"--dry-run",
-			"--json",
-			"--silent"
-		] : process.platform === "win32" ? [
-			"/d",
-			"/s",
-			"/c",
-			"npm pack --dry-run --json --silent"
+			"--json"
 		] : [
 			"pack",
 			"--dry-run",
-			"--json",
-			"--silent"
+			"--json"
 		]
 	]);
 	if (result.code !== 0) {
@@ -162,13 +155,21 @@ async function runPackageArtifactCheck() {
 		if (output) console.log(indent(output));
 		return false;
 	}
-	const output = `${result.stdout}${result.stderr}`;
+	const output = `${result.stdout}${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
 	const start = output.indexOf("[");
-	const end = output.lastIndexOf("]");
-	if (start === -1 || end === -1 || end < start) {
+	if (start === -1) {
 		console.log("fail package-artifact");
-		console.log(indent("Could not parse npm pack --dry-run --json output."));
-		if (output.trim()) console.log(indent(output.trim()));
+		console.log(indent("Could not parse npm pack --dry-run --json output: no JSON array found."));
+		return false;
+	}
+	let end = -1;
+	for (let i = output.length - 1; i >= start; i--) if (output[i] === "]") {
+		end = i;
+		break;
+	}
+	if (end === -1 || end <= start) {
+		console.log("fail package-artifact");
+		console.log(indent("Could not parse npm pack --dry-run --json output: incomplete JSON array."));
 		return false;
 	}
 	let packInfo;

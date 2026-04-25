@@ -10,6 +10,14 @@ This project uses a root-only changelog because the root README is the public do
 
 - Clarified licensing at the repository root by adding a full `LICENSE` file and linking it from the root README license section for explicit Apache-2.0 terms.
 
+## 1.1.11
+
+### Fixed
+
+- Fixed Windows cmd.exe output handling in the `npm run check` package artifact verification script by stripping ANSI escape codes before JSON parsing and simplifying the platform-specific CLI invocation logic.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.11`.
+
 ## 1.1.10
 
 ### Changed
