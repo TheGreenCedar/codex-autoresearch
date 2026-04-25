@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version from plugins/codex-autoresearch/package.json, for example 1.1.12'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -56,6 +59,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Refuse non-main release
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::Run the release workflow from main, not $GITHUB_REF_NAME."
+            exit 1
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -65,6 +76,41 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release version must look like 1.2.3, got $INPUT_VERSION."
+            exit 1
+          fi
+          package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+          manifest_version="$(node -p "JSON.parse(require('fs').readFileSync('.codex-plugin/plugin.json', 'utf8')).version")"
+          if [ "$version" != "$package_version" ] || [ "$version" != "$manifest_version" ]; then
+            echo "::error::Input version $version does not match package.json $package_version and plugin.json $manifest_version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse existing tag or release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists. Do not push release tags manually."
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists."
+            exit 1
+          fi
 
       - name: Build node
         run: npm run build:node
@@ -78,13 +124,23 @@ jobs:
       - name: Smoke release package
         run: |
           set -euo pipefail
-          tarball="$(ls codex-autoresearch-*.tgz | head -n 1)"
+          tarball="codex-autoresearch-${{ steps.version.outputs.version }}.tgz"
+          test -f "$tarball"
           mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
           node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" mcp-smoke
 
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
-        with:
-          files: plugins/codex-autoresearch/*.tgz
-          generate_release_notes: true
+      - name: Create GitHub release with tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="codex-autoresearch-${VERSION}.tgz"
+          gh release create "$TAG" "$tarball#$tarball" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --fail-on-no-commits

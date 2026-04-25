@@ -453,7 +453,9 @@ const checks = [
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
       const mcpLauncher = await readText("scripts/autoresearch-mcp.mjs");
       const release = await readRootText(".github/workflows/release.yml");
+      const tagPushTrigger = /push:\s*\n\s*tags:/m.test(release);
       return ignoresDist &&
+        !tagPushTrigger &&
         includesAll(packageFiles, [
           "dist/lib/",
           "dist/scripts/",
@@ -463,10 +465,17 @@ const checks = [
         ]) &&
         autoresearchLauncher.includes("../dist/scripts/autoresearch.mjs") &&
         mcpLauncher.includes("../dist/scripts/autoresearch-mcp.mjs") &&
-        includesAll(release, ["npm pack", "mcp-smoke", "codex-autoresearch-*.tgz"])
+        includesAll(release, [
+          "workflow_dispatch:",
+          "gh release create",
+          '--target "$GITHUB_SHA"',
+          "npm pack",
+          "mcp-smoke",
+          "codex-autoresearch-${VERSION}.tgz",
+        ])
         ? pass()
         : fail(
-            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should point at dist, and release CI should smoke the tarball.",
+            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should point at dist, and release CI should smoke the tarball before creating the release tag.",
           );
     },
   },
