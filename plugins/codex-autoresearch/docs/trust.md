@@ -18,6 +18,8 @@ node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC se
 
 Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 
+`crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep` or `discard` needs a finite primary metric.
+
 ## Stale Packets
 
 Log from `--from-last` only while the packet is fresh against:
@@ -29,6 +31,8 @@ Log from `--from-last` only while the packet is fresh against:
 - Git/file fingerprint
 
 If anything changed, rerun `next` before logging.
+
+When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result.
 
 ## Benchmark Drift
 
@@ -73,3 +77,13 @@ Over MCP, command-bearing fields require `allow_unsafe_command: true`:
 - setup guidance materialized from external recipe catalogs
 
 Prefer project-local `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
+
+## Corrupt Or Partial State
+
+If `autoresearch.jsonl` is corrupt, surface the failing file and line. Do not silently continue from a partial ledger.
+
+If dashboard trust warnings mention stale packets, dirty Git, drift, missing metrics, corrupt state, or static mode, resolve those warnings before claiming a result is final.
+
+---
+
+Previous: [Operate](operate.md) · Next: [Finish](finish.md) — finalization preview, review branches, and merge.

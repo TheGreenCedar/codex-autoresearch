@@ -6,24 +6,20 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 
 1. [Workflow diagrams](workflows.md): the motion of the thing, from first prompt to finalization.
 2. [Architecture diagrams](architecture.md): runtime surfaces, trust boundaries, source layout, MCP path, and finalization.
-3. [Start](start.md): first five minutes, session files, benchmark contract, and first packet.
-4. [Operate](operate.md): resume, dashboard, packet logging, quality-gap rounds, and active-loop continuation.
-5. [Trust](trust.md): metric integrity, stale packets, drift, dirty Git, static exports, and unsafe command gates.
-6. [Finish](finish.md): finalization preview, review branches, merge/cleanup, and reporting.
-7. [Recipes](recipes.md): built-in recipes, recommendation flow, benchmark linting, and external catalogs.
-8. [Troubleshooting](troubleshooting.md): symptom-to-layer diagnosis for MCP, cache drift, dashboard, metrics, Git, and stale sessions.
-9. [Hooks](hooks.md): optional Codex hook ideas and the caveats that keep them from becoming load-bearing mythology.
+3. [Concepts](concepts.md): glossary of packets, ASI, segments, lanes, families, trust blockers, and other domain terms.
+4. [Start](start.md): first five minutes, session files, benchmark contract, and first packet.
+5. [Walkthrough](walkthrough.md): an end-to-end narrated loop showing inputs and real terminal output.
+6. [Operate](operate.md): resume, dashboard, packet logging, quality-gap rounds, and active-loop continuation.
+7. [Trust](trust.md): metric integrity, stale packets, drift, dirty Git, static exports, and unsafe command gates.
+8. [Finish](finish.md): finalization preview, review branches, merge/cleanup, and reporting.
+9. [Recipes](recipes.md): built-in recipes, recommendation flow, benchmark linting, and external catalogs.
+10. [Troubleshooting](troubleshooting.md): symptom-to-layer diagnosis for MCP, cache drift, dashboard, metrics, Git, and stale sessions.
+11. [Hooks](hooks.md): optional Codex hook ideas and the caveats that keep them from becoming load-bearing mythology.
 
 Reference pages:
 
 - [MCP tools](mcp-tools.md)
 - [Maintainers](maintainers.md)
-
-Additional topic pages:
-
-- [Getting started](getting-started.md)
-- [Operator workflows](operator-workflows.md)
-- [Evidence and safety](evidence-and-safety.md)
 
 ## Documentation Boundary
 

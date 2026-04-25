@@ -100,6 +100,7 @@ Turn accepted findings into a quality-gap loop, implement them, and keep the liv
 ## Docs
 
 - [Docs index](plugins/codex-autoresearch/docs/index.md)
+- [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 - [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
 - [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
 

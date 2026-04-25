@@ -8,7 +8,7 @@ This repository is a wrapper for the Codex Autoresearch plugin. The active packa
 - Root `CHANGELOG.md` is the release-note surface for user-facing changes.
 - The main skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
 - Topic docs live in `plugins/codex-autoresearch/docs/`.
-- Current task docs are `start.md`, `operate.md`, `trust.md`, `finish.md`, `recipes.md`, `troubleshooting.md`, and `hooks.md`.
+- Current task docs are `concepts.md`, `start.md`, `walkthrough.md`, `operate.md`, `trust.md`, `finish.md`, `recipes.md`, `troubleshooting.md`, and `hooks.md`.
 - Internal planning archives are not first-run onboarding.
 
 Do not assume root-level npm scripts exist. Package scripts live in `plugins/codex-autoresearch/package.json`.

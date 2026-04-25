@@ -58,3 +58,7 @@ Report:
 - review summary path
 - remaining blockers or risk
 - merge and cleanup order
+
+---
+
+Previous: [Trust](trust.md) · Next: [Recipes](recipes.md) — built-in recipes, recommendation flow, and external catalogs.

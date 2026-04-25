@@ -104,3 +104,7 @@ Use `discard`, `crash`, or `checks_failed` when the packet does not produce a sa
 - The live dashboard URL is available.
 - The last packet is fresh before logging.
 - ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
+
+---
+
+Previous: [Concepts](concepts.md) · Next: [Operate](operate.md) — resume, dashboard, packet logging, and quality-gap rounds.

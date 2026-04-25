@@ -45,7 +45,7 @@ Static exports are offline snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-If you need actions, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth.
+If you need actions, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use CLI or MCP for actions and logging.
 
 ## Packet Loop
 
@@ -64,7 +64,7 @@ Statuses:
 - `crash`: benchmark failed before usable metric evidence.
 - `checks_failed`: metric exists but correctness checks failed.
 
-After logging, follow `continuation.shouldContinue` and `continuation.forbidFinalAnswer`.
+After logging, read the continuation result. If `shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance. If `forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final report — a finite active budget counts.
 
 ## ASI
 
@@ -95,6 +95,17 @@ node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
 node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug>
 ```
 
+The scratchpad lives under `autoresearch.research/<slug>/`:
+
+| File or folder | Role |
+|---|---|
+| `brief.md` | Request, audience, constraints, and success criteria |
+| `plan.md` and `tasks.md` | Independent work streams |
+| `sources.md` | Source, date checked, supported claim, and confidence |
+| `synthesis.md` | Current merged answer |
+| `quality-gaps.md` | Accepted checklist measured by the loop |
+| `notes/` and `deliverables/` | Evidence and requested artifacts |
+
 `quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete. It means this pile is done. There may be another pile. There is usually another pile.
 
 ## Fresh Segment
@@ -107,3 +118,7 @@ node scripts/autoresearch.mjs new-segment --cwd <project> --reason "fresh phase"
 ```
 
 This appends a new config segment to `autoresearch.jsonl` and preserves old history.
+
+---
+
+Previous: [Start](start.md) · Next: [Trust](trust.md) — metric integrity, drift, and Git safety.

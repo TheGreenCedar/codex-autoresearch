@@ -260,9 +260,11 @@ const checks = [
       const readme = await readRootText("README.md");
       const docs = await Promise.all([
         readText("docs/index.md"),
-        readText("docs/getting-started.md"),
-        readText("docs/operator-workflows.md"),
-        readText("docs/evidence-and-safety.md"),
+        readText("docs/concepts.md"),
+        readText("docs/start.md"),
+        readText("docs/walkthrough.md"),
+        readText("docs/operate.md"),
+        readText("docs/trust.md"),
         readText("docs/workflows.md"),
         readText("docs/architecture.md"),
         readText("docs/mcp-tools.md"),

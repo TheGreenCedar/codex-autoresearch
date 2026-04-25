@@ -33,21 +33,42 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the 
 
 ## Adjacent Tool Choices
 
-Use `prompt_plan` when the user starts with a broad request such as "improve indexer speed while keeping memory efficient" or "keep reducing bugs 100 times." Use `setup_plan` before mutation. Use `setup_session` only when essentials are known and the user is ready to create files.
+```mermaid
+flowchart TD
+  Phase{"What phase?"}
+  Phase -->|First prompt| Setup
+  Phase -->|Active loop| Loop
+  Phase -->|Broad discovery| Research
+  Phase -->|Finished| End
 
-Use `onboarding_packet` when a new human or AI needs a compact resume packet. Use `recommend_next` when the question is simply "what is the one safe next action?"
+  Setup --> Broad{"Is request broad?"}
+  Broad -->|Yes| PP["prompt_plan"]
+  Broad -->|No| Ready{"Is setup ready?"}
+  Ready -->|No| SP["setup_plan"]
+  Ready -->|Yes| SS["setup_session"]
 
-Use `guided_setup` when Codex needs setup/resume state in one packet. It is better than separate ad hoc calls during first-run or resume workflows.
+  Loop --> State{"Need state?"}
+  State -->|Yes| GS["guided_setup / read_state"]
+  State -->|No| Packet["next_experiment"]
+  Packet --> Log["log_experiment"]
+  Log --> Check{"Continue?"}
+  Check -->|Yes| Packet
+  Check -->|No| End
 
-Use `next_experiment` for the normal loop. It packages preflight, benchmark, allowed log decisions, ASI fields, and continuation guidance. Use `run_experiment` only when you need a lower-level benchmark run.
+  Research --> RS["setup_research_session"]
+  RS --> MG["measure_quality_gap"]
+  MG --> GC["gap_candidates"]
+  GC -->|Apply / Reject| MG
+  GC -->|Round done| End
 
-Use `measure_quality_gap` to count the current checklist. Use `gap_candidates` to propose or apply candidate checklist items from research evidence.
+  End --> FP["finalize_preview"]
+```
 
-Use `benchmark_lint` before setup or doctor when the benchmark output format is uncertain.
-
-Use `new_segment` when the current segment is maxed, stale, or intentionally entering a new phase. Use dry-run before confirmation.
-
-Use `finalize_preview` for readiness. Branch creation stays in the finalizer CLI, not the dashboard or MCP preview surface.
+- **Starting out**: Use `prompt_plan` for broad requests ("improve speed"). Use `setup_plan` for read-only readiness. Use `setup_session` only when files should be created.
+- **Resuming**: Use `onboarding_packet` or `guided_setup` to catch up on state before editing files.
+- **The Loop**: `next_experiment` packages preflight, benchmark, log options, and ASI. `log_experiment` commits or reverts.
+- **Research**: `measure_quality_gap` counts the checklist. `gap_candidates` proposes or applies new items.
+- **Finish**: `finalize_preview` reports readiness. Branch creation stays in the finalizer CLI.
 
 ## Argument Safety
 
