@@ -62,7 +62,7 @@ node --check scripts/autoresearch-mcp.mjs
 node --test tests/autoresearch-cli.test.mjs
 node --test tests/dashboard-verification.test.mjs
 node scripts/autoresearch.mjs mcp-smoke
-npm pack --dry-run
+npm pack
 git diff --check
 ```
 
@@ -74,7 +74,7 @@ When refreshing the checked-in demo, use the public showcase export so workstati
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
 ```
 
-Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, so a publishable artifact must include the built runtime and exclude authored source and tests.
+Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated and ignored in the Git tree. A publishable release tarball must include the built runtime, exclude authored source and tests, and pass `node <extracted-package>/scripts/autoresearch.mjs mcp-smoke`.
 
 ## Version Surfaces
 

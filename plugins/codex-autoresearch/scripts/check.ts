@@ -61,14 +61,7 @@ const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.css",
 ];
 
-const sourceCheckoutRuntimePaths = [
-  "plugins/codex-autoresearch/dist/lib/cli-handlers.mjs",
-  "plugins/codex-autoresearch/dist/lib/mcp-cli-adapter.mjs",
-  "plugins/codex-autoresearch/dist/lib/mcp-interface.mjs",
-  "plugins/codex-autoresearch/dist/lib/mcp-tool-schemas.mjs",
-  "plugins/codex-autoresearch/dist/lib/session-core.mjs",
-  "plugins/codex-autoresearch/dist/scripts/autoresearch.mjs",
-  "plugins/codex-autoresearch/dist/scripts/autoresearch-mcp.mjs",
+const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs",
 ];
@@ -82,6 +75,7 @@ interface CommandResult {
 
 interface PackageEntry {
   path?: string;
+  size?: number;
 }
 
 interface PackageManifest {
@@ -91,7 +85,7 @@ interface PackageManifest {
 const ok =
   (await runPhase("syntax", syntaxChecks)) &&
   (await runDashboardBuildWithParity()) &&
-  (await runSourceCheckoutArtifactCheck()) &&
+  (await runSourceCheckoutLauncherCheck()) &&
   (await runPackageArtifactCheck()) &&
   (await runDogfoodHealthCheck()) &&
   (await runPhase("product", productChecks));
@@ -147,97 +141,217 @@ async function dashboardAssetHashes() {
 async function runPackageArtifactCheck() {
   console.log("\n== package ==");
 
-  const npmExecPath = process.env.npm_execpath;
+  const packDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-autoresearch-pack-"));
+  const npmExecPath = await resolveNpmExecPath();
   const npmCommand = npmExecPath ? node : npm;
   const npmArgs = npmExecPath
-    ? [npmExecPath, "pack", "--dry-run", "--json"]
-    : ["pack", "--dry-run", "--json"];
-  const result = await runCommand(["package-artifact", npmCommand, npmArgs]);
-  if (result.code !== 0) {
-    console.log("fail package-artifact");
-    const output = `${result.stdout}${result.stderr}`.trim();
+    ? [npmExecPath, "pack", "--json", "--pack-destination", packDir]
+    : ["pack", "--json", "--pack-destination", packDir];
+
+  try {
+    const result = await runCommand(["package-artifact", npmCommand, npmArgs]);
+    if (result.code !== 0) {
+      console.log("fail package-artifact");
+      const output = `${result.stdout}${result.stderr}`.trim();
+      if (output) console.log(indent(output));
+      return false;
+    }
+
+    // Strip ANSI escape codes that tsdown adds to its output
+    // eslint-disable-next-line no-control-regex
+    const output = `${result.stdout}${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
+
+    // Find the JSON array - look for [ and ] in output
+    const start = output.indexOf("[");
+    if (start === -1) {
+      console.log("fail package-artifact");
+      console.log(indent("Could not parse npm pack --json output: no JSON array found."));
+      return false;
+    }
+
+    // Find the last ] after the opening [
+    let end = -1;
+    for (let i = output.length - 1; i >= start; i--) {
+      if (output[i] === "]") {
+        end = i;
+        break;
+      }
+    }
+
+    if (end === -1 || end <= start) {
+      console.log("fail package-artifact");
+      console.log(indent("Could not parse npm pack --json output: incomplete JSON array."));
+      return false;
+    }
+
+    let packInfo: PackageManifest | undefined;
+    try {
+      [packInfo] = JSON.parse(output.slice(start, end + 1));
+    } catch (error) {
+      console.log("fail package-artifact");
+      console.log(indent(`Could not parse npm pack manifest: ${String(error)}`));
+      return false;
+    }
+
+    const packedPaths = new Set(
+      (packInfo?.files || []).map((entry) => String(entry.path || "").replace(/\\/g, "/")),
+    );
+    const packedEntries = new Map(
+      (packInfo?.files || []).map((entry) => [String(entry.path || "").replace(/\\/g, "/"), entry]),
+    );
+    const requiredPaths = [
+      ".codex-plugin/plugin.json",
+      ".mcp.json",
+      "assets/dashboard-build/dashboard-app.js",
+      "dist/lib/mcp-cli-adapter.mjs",
+      "dist/lib/mcp-interface.mjs",
+      "dist/lib/mcp-tool-schemas.mjs",
+      "dist/lib/runtime-paths.mjs",
+      "dist/scripts/autoresearch.mjs",
+      "dist/scripts/autoresearch-mcp.mjs",
+      "scripts/autoresearch.mjs",
+      "scripts/autoresearch-mcp.mjs",
+      "skills/codex-autoresearch/SKILL.md",
+    ];
+    const forbiddenPaths = [
+      "dashboard/src/Dashboard.tsx",
+      "lib/session-core.ts",
+      "scripts/autoresearch.ts",
+      "tests/autoresearch-cli.test.ts",
+    ];
+
+    const missing = requiredPaths.filter((file) => !packedPaths.has(file));
+    const unexpected = forbiddenPaths.filter((file) => packedPaths.has(file));
+    const leakedDirs = Array.from(packedPaths).filter(
+      (file) => file.startsWith("docs/") || file.startsWith("examples/"),
+    );
+    const wrapperProblems = await packageWrapperProblems(packedEntries);
+
+    if (missing.length || unexpected.length || leakedDirs.length || wrapperProblems.length) {
+      console.log("fail package-artifact");
+      if (missing.length) {
+        console.log(indent(`Missing packaged files:\n${missing.join("\n")}`));
+      }
+      if (unexpected.length) {
+        console.log(indent(`Unexpected source files in package:\n${unexpected.join("\n")}`));
+      }
+      if (leakedDirs.length) {
+        console.log(indent(`Leaked directory files in package:\n${leakedDirs.join("\n")}`));
+      }
+      if (wrapperProblems.length) {
+        console.log(indent(`Broken package launchers:\n${wrapperProblems.join("\n")}`));
+      }
+      return false;
+    }
+
+    console.log("ok package-artifact");
+    return await runPackedRuntimeSmokeCheck(packInfo, packDir);
+  } finally {
+    await fsp.rm(packDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {
+  const wrappers = [
+    ["scripts/autoresearch.mjs", "../dist/scripts/autoresearch.mjs"],
+    ["scripts/autoresearch-mcp.mjs", "../dist/scripts/autoresearch-mcp.mjs"],
+  ];
+  const problems: string[] = [];
+
+  for (const [file, target] of wrappers) {
+    let content = "";
+    try {
+      content = await fsp.readFile(path.join(ROOT, file), "utf8");
+    } catch (error) {
+      problems.push(`${file} could not be read: ${String(error)}`);
+      continue;
+    }
+
+    const byteLength = Buffer.byteLength(content, "utf8");
+    const packedSize = packedEntries.get(file)?.size;
+    if (!content.includes(target)) {
+      problems.push(`${file} should import ${target}`);
+    }
+    if (byteLength > 512) {
+      problems.push(`${file} should stay a tiny launcher, but is ${byteLength} bytes`);
+    }
+    if (typeof packedSize === "number" && packedSize !== byteLength) {
+      problems.push(`${file} packs at ${packedSize} bytes, expected ${byteLength}`);
+    }
+  }
+
+  return problems;
+}
+
+async function resolveNpmExecPath() {
+  if (process.env.npm_execpath) return process.env.npm_execpath;
+  if (process.platform !== "win32") return "";
+
+  const candidate = path.join(
+    path.dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  try {
+    await fsp.access(candidate);
+    return candidate;
+  } catch {
+    return "";
+  }
+}
+
+async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined, packDir: string) {
+  const filename = String((packInfo as any)?.filename || "");
+  const tarball = path.join(packDir, path.basename(filename));
+  try {
+    await fsp.access(tarball);
+  } catch {
+    console.log("fail package-runtime-smoke");
+    console.log(indent(`Packed tarball was not created at ${tarball}`));
+    return false;
+  }
+
+  const extractDir = path.join(packDir, "extract");
+  await fsp.mkdir(extractDir, { recursive: true });
+  const extract = await runCommand(["package-extract", "tar", ["-xzf", tarball, "-C", extractDir]]);
+  if (extract.code !== 0) {
+    console.log("fail package-runtime-smoke");
+    const output = `${extract.stdout}${extract.stderr}`.trim();
     if (output) console.log(indent(output));
     return false;
   }
 
-  // Strip ANSI escape codes that tsdown adds to its output
-  // eslint-disable-next-line no-control-regex
-  const output = `${result.stdout}${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
-
-  // Find the JSON array - look for [ and ] in output
-  const start = output.indexOf("[");
-  if (start === -1) {
-    console.log("fail package-artifact");
-    console.log(indent("Could not parse npm pack --dry-run --json output: no JSON array found."));
+  const smoke = await runCommand([
+    "package-runtime-smoke",
+    node,
+    [path.join(extractDir, "package", "scripts", "autoresearch.mjs"), "mcp-smoke"],
+  ]);
+  if (smoke.code !== 0) {
+    console.log("fail package-runtime-smoke");
+    const output = `${smoke.stdout}${smoke.stderr}`.trim();
+    if (output) console.log(indent(output));
     return false;
   }
 
-  // Find the last ] after the opening [
-  let end = -1;
-  for (let i = output.length - 1; i >= start; i--) {
-    if (output[i] === "]") {
-      end = i;
-      break;
-    }
-  }
-
-  if (end === -1 || end <= start) {
-    console.log("fail package-artifact");
-    console.log(indent("Could not parse npm pack --dry-run --json output: incomplete JSON array."));
-    return false;
-  }
-
-  let packInfo: PackageManifest | undefined;
   try {
-    [packInfo] = JSON.parse(output.slice(start, end + 1));
-  } catch (error) {
-    console.log("fail package-artifact");
-    console.log(indent(`Could not parse npm pack manifest: ${String(error)}`));
-    return false;
+    const payload = JSON.parse(smoke.stdout);
+    if (
+      payload?.ok &&
+      payload?.initialize?.serverInfo?.name === "codex-autoresearch" &&
+      Number(payload.toolCount) > 0
+    ) {
+      console.log("ok package-runtime-smoke");
+      return true;
+    }
+  } catch {
+    // Report the raw output below.
   }
 
-  const packedPaths = new Set(
-    (packInfo?.files || []).map((entry) => String(entry.path || "").replace(/\\/g, "/")),
-  );
-  const requiredPaths = [
-    ".codex-plugin/plugin.json",
-    ".mcp.json",
-    "assets/dashboard-build/dashboard-app.js",
-    "dist/scripts/autoresearch.mjs",
-    "dist/scripts/autoresearch-mcp.mjs",
-    "scripts/autoresearch.mjs",
-    "scripts/autoresearch-mcp.mjs",
-    "skills/codex-autoresearch/SKILL.md",
-  ];
-  const forbiddenPaths = [
-    "dashboard/src/Dashboard.tsx",
-    "lib/session-core.ts",
-    "scripts/autoresearch.ts",
-    "tests/autoresearch-cli.test.ts",
-  ];
-
-  const missing = requiredPaths.filter((file) => !packedPaths.has(file));
-  const unexpected = forbiddenPaths.filter((file) => packedPaths.has(file));
-  const leakedDirs = Array.from(packedPaths).filter(
-    (file) => file.startsWith("docs/") || file.startsWith("examples/"),
-  );
-
-  if (missing.length || unexpected.length || leakedDirs.length) {
-    console.log("fail package-artifact");
-    if (missing.length) {
-      console.log(indent(`Missing packaged files:\n${missing.join("\n")}`));
-    }
-    if (unexpected.length) {
-      console.log(indent(`Unexpected source files in package:\n${unexpected.join("\n")}`));
-    }
-    if (leakedDirs.length) {
-      console.log(indent(`Leaked directory files in package:\n${leakedDirs.join("\n")}`));
-    }
-    return false;
-  }
-
-  console.log("ok package-artifact");
-  return true;
+  console.log("fail package-runtime-smoke");
+  console.log(indent(smoke.stdout.trim() || "Package smoke output was not valid MCP smoke JSON."));
+  return false;
 }
 
 async function runDogfoodHealthCheck() {
@@ -363,10 +477,10 @@ function reportDogfoodDoctorResult(label: string, result: CommandResult) {
   return true;
 }
 
-async function runSourceCheckoutArtifactCheck() {
+async function runSourceCheckoutLauncherCheck() {
   console.log("\n== source checkout ==");
   const missing = [];
-  for (const file of sourceCheckoutRuntimePaths) {
+  for (const file of sourceCheckoutLauncherPaths) {
     try {
       await fsp.access(path.join(REPO_ROOT, file));
     } catch {
@@ -375,8 +489,8 @@ async function runSourceCheckoutArtifactCheck() {
   }
 
   if (missing.length) {
-    console.log("fail source-runtime-files");
-    console.log(indent(`Missing source checkout runtime files:\n${missing.join("\n")}`));
+    console.log("fail source-launcher-files");
+    console.log(indent(`Missing source checkout launcher files:\n${missing.join("\n")}`));
     return false;
   }
 
@@ -386,13 +500,13 @@ async function runSourceCheckoutArtifactCheck() {
     ["-C", REPO_ROOT, "rev-parse", "--is-inside-work-tree"],
   ]);
   if (gitProbe.code !== 0) {
-    console.log("ok source-runtime-files");
-    console.log("skip source-runtime-committable (not a Git checkout)");
+    console.log("ok source-launcher-files");
+    console.log("skip source-launcher-committable (not a Git checkout)");
     return true;
   }
 
   const committable = await runCommand([
-    "source-runtime-committable",
+    "source-launcher-committable",
     "git",
     [
       "-C",
@@ -402,40 +516,79 @@ async function runSourceCheckoutArtifactCheck() {
       "--others",
       "--exclude-standard",
       "--",
-      ...sourceCheckoutRuntimePaths,
+      ...sourceCheckoutLauncherPaths,
     ],
   ]);
   if (committable.code !== 0) {
-    console.log("ok source-runtime-files");
-    console.log("fail source-runtime-committable");
+    console.log("ok source-launcher-files");
+    console.log("fail source-launcher-committable");
     const output = `${committable.stdout}${committable.stderr}`.trim();
     if (output) console.log(indent(output));
     return false;
   }
   const committablePaths = new Set(committable.stdout.split(/\r?\n/).filter(Boolean));
-  const ignoredOrInvisible = sourceCheckoutRuntimePaths.filter(
+  const ignoredOrInvisible = sourceCheckoutLauncherPaths.filter(
     (file) => !committablePaths.has(file),
   );
   if (ignoredOrInvisible.length) {
-    console.log("ok source-runtime-files");
-    console.log("fail source-runtime-committable");
+    console.log("ok source-launcher-files");
+    console.log("fail source-launcher-committable");
     console.log(
       indent(
-        `Runtime files are present but ignored or invisible to Git:\n${ignoredOrInvisible.join("\n")}`,
+        `Launcher files are present but ignored or invisible to Git:\n${ignoredOrInvisible.join("\n")}`,
       ),
     );
     return false;
   }
 
-  console.log("ok source-runtime-files");
-  console.log("ok source-runtime-committable");
+  const trackedDist = await runCommand([
+    "source-dist-untracked",
+    "git",
+    ["-C", REPO_ROOT, "ls-files", "--", "plugins/codex-autoresearch/dist"],
+  ]);
+  if (trackedDist.code !== 0) {
+    console.log("ok source-launcher-files");
+    console.log("ok source-launcher-committable");
+    console.log("fail source-dist-untracked");
+    const output = `${trackedDist.stdout}${trackedDist.stderr}`.trim();
+    if (output) console.log(indent(output));
+    return false;
+  }
+  if (trackedDist.stdout.trim()) {
+    console.log("ok source-launcher-files");
+    console.log("ok source-launcher-committable");
+    console.log("fail source-dist-untracked");
+    console.log(indent(`Generated dist files are still tracked:\n${trackedDist.stdout.trim()}`));
+    return false;
+  }
+
+  const ignoredDist = await runCommand([
+    "source-dist-ignored",
+    "git",
+    ["-C", REPO_ROOT, "check-ignore", "-q", "plugins/codex-autoresearch/dist/__codex_check__.mjs"],
+  ]);
+  if (ignoredDist.code !== 0) {
+    console.log("ok source-launcher-files");
+    console.log("ok source-launcher-committable");
+    console.log("ok source-dist-untracked");
+    console.log("fail source-dist-ignored");
+    console.log(indent("plugins/codex-autoresearch/dist/ is not ignored."));
+    return false;
+  }
+
+  console.log("ok source-launcher-files");
+  console.log("ok source-launcher-committable");
+  console.log("ok source-dist-untracked");
+  console.log("ok source-dist-ignored");
   return true;
 }
 
 function runCommand([label, command, args]): Promise<CommandResult> {
   return new Promise((resolve) => {
+    const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
     const child = spawn(command, args, {
       cwd: ROOT,
+      shell: needsShell,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

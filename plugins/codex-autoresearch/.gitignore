@@ -1,4 +1,5 @@
 node_modules/
+/dist/
 .plugin-eval/
 *.log
 autoresearch-dashboard.html

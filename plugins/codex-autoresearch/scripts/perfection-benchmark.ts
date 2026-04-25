@@ -114,18 +114,20 @@ const checks = [
       const manifest = await readJson(".codex-plugin/plugin.json");
       const cli = await readText("scripts/autoresearch.ts");
       const mcp = await readText("scripts/autoresearch-mcp.ts");
+      const pluginVersion = cli.match(/const PLUGIN_VERSION = "([^"]+)"/)?.[1];
       const serverVersion = cli.match(
         /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s,
       )?.[1];
       const mcpVersion = mcp.match(/const VERSION = "([^"]+)"/)?.[1];
       if (
         pkg.version === manifest.version &&
+        pkg.version === pluginVersion &&
         pkg.version === serverVersion &&
         pkg.version === mcpVersion
       )
         return pass();
       return fail(
-        `package=${pkg.version}, manifest=${manifest.version}, server=${serverVersion || "(missing)"}, mcp=${mcpVersion || "(missing)"}`,
+        `package=${pkg.version}, manifest=${manifest.version}, plugin=${pluginVersion || "(missing)"}, server=${serverVersion || "(missing)"}, mcp=${mcpVersion || "(missing)"}`,
       );
     },
   },
@@ -436,35 +438,35 @@ const checks = [
     },
   },
   {
-    id: "source-download-runtime",
-    file: ".gitignore, dist/scripts/*.mjs, dist/lib/*.mjs, scripts/*.mjs",
+    id: "release-tarball-runtime",
+    file: ".gitignore, package.json, scripts/*.mjs, .github/workflows/release.yml",
     description:
-      "Git/marketplace source downloads include the compiled TypeScript runtime used by the public launcher scripts.",
+      "Source checkouts keep generated dist out of Git while release tarballs include the built runtime used by public launchers.",
     run: async () => {
       const gitignore = await readText(".gitignore");
-      const ignoredDist = gitignore
+      const ignoresDist = gitignore
         .split(/\r?\n/)
         .map((line) => line.trim())
         .some((line) => line === "dist/" || line === "/dist/" || line === "dist");
-      const required = [
-        "scripts/autoresearch.mjs",
-        "scripts/autoresearch-mcp.mjs",
-        "dist/scripts/autoresearch.mjs",
-        "dist/scripts/autoresearch-mcp.mjs",
-        "dist/lib/mcp-cli-adapter.mjs",
-        "dist/lib/mcp-tool-schemas.mjs",
-        "dist/lib/session-core.mjs",
-      ];
-      const missing = [];
-      for (const file of required) {
-        if (!(await fileExists(file))) missing.push(file);
-      }
-      return !ignoredDist && missing.length === 0
+      const pkg = await readJson("package.json");
+      const packageFiles = (pkg.files || []).join("\n");
+      const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
+      const mcpLauncher = await readText("scripts/autoresearch-mcp.mjs");
+      const release = await readRootText(".github/workflows/release.yml");
+      return ignoresDist &&
+        includesAll(packageFiles, [
+          "dist/lib/",
+          "dist/scripts/",
+          "scripts/*.mjs",
+          ".codex-plugin/",
+          ".mcp.json",
+        ]) &&
+        autoresearchLauncher.includes("../dist/scripts/autoresearch.mjs") &&
+        mcpLauncher.includes("../dist/scripts/autoresearch-mcp.mjs") &&
+        includesAll(release, ["npm pack", "mcp-smoke", "codex-autoresearch-*.tgz"])
         ? pass()
         : fail(
-            ignoredDist
-              ? "dist is ignored, so source downloads can miss the compiled runtime."
-              : `Missing runtime files: ${missing.join(", ")}`,
+            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should point at dist, and release CI should smoke the tarball.",
           );
     },
   },

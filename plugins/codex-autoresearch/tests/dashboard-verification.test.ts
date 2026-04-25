@@ -1132,7 +1132,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "1.1.10" },
+      local: { version: "1.1.12" },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1150,7 +1150,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.10");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.12");
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
@@ -1200,7 +1200,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
         metricName: "seconds",
         metricUnit: "s",
         bestDirection: "lower",
-        pluginVersion: "1.1.10",
+        pluginVersion: "1.1.12",
       },
       current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
       baseline: 5,
@@ -1209,7 +1209,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
     settings: {
       deliveryMode: "static-export",
       generatedAt: "2026-04-24T00:00:00.000Z",
-      pluginVersion: "1.1.10",
+      pluginVersion: "1.1.12",
       sourceCwd: "C:/repo",
     },
   });
@@ -1230,7 +1230,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
       baseline: 5,
       best: 5,
     },
-    settings: { deliveryMode: "live-server", pluginVersion: "1.1.10" },
+    settings: { deliveryMode: "live-server", pluginVersion: "1.1.12" },
     warnings: ["Git worktree is dirty; review unrelated changes before logging a keep result."],
   });
 
