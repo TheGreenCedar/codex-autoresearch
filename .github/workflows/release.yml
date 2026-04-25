@@ -9,8 +9,11 @@ permissions:
   contents: write
 
 jobs:
-  build_and_release:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: plugins/codex-autoresearch
@@ -42,6 +45,32 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/codex-autoresearch
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: plugins/codex-autoresearch/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build node
+        run: npm run build:node
+
+      - name: Build dashboard
+        run: npm run build:dashboard
 
       - name: Create package artifact
         run: npm pack
