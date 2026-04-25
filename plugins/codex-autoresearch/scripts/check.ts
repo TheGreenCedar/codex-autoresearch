@@ -62,6 +62,7 @@ const dashboardAssets = [
 ];
 
 const sourceCheckoutLauncherPaths = [
+  "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs",
 ];
@@ -209,6 +210,7 @@ async function runPackageArtifactCheck() {
       "dist/lib/runtime-paths.mjs",
       "dist/scripts/autoresearch.mjs",
       "dist/scripts/autoresearch-mcp.mjs",
+      "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
       "scripts/autoresearch-mcp.mjs",
       "skills/codex-autoresearch/SKILL.md",
@@ -253,8 +255,8 @@ async function runPackageArtifactCheck() {
 
 async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {
   const wrappers = [
-    ["scripts/autoresearch.mjs", "../dist/scripts/autoresearch.mjs"],
-    ["scripts/autoresearch-mcp.mjs", "../dist/scripts/autoresearch-mcp.mjs"],
+    ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
+    ["scripts/autoresearch-mcp.mjs", 'ensureRuntime("autoresearch-mcp.mjs"'],
   ];
   const problems: string[] = [];
 
@@ -269,14 +271,36 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
 
     const byteLength = Buffer.byteLength(content, "utf8");
     const packedSize = packedEntries.get(file)?.size;
-    if (!content.includes(target)) {
-      problems.push(`${file} should import ${target}`);
+    if (!content.includes("./bootstrap-runtime.mjs") || !content.includes(target)) {
+      problems.push(`${file} should call ${target} through bootstrap-runtime.mjs`);
     }
     if (byteLength > 512) {
       problems.push(`${file} should stay a tiny launcher, but is ${byteLength} bytes`);
     }
     if (typeof packedSize === "number" && packedSize !== byteLength) {
       problems.push(`${file} packs at ${packedSize} bytes, expected ${byteLength}`);
+    }
+  }
+
+  let bootstrap = "";
+  try {
+    bootstrap = await fsp.readFile(path.join(ROOT, "scripts", "bootstrap-runtime.mjs"), "utf8");
+  } catch (error) {
+    problems.push(`scripts/bootstrap-runtime.mjs could not be read: ${String(error)}`);
+    return problems;
+  }
+
+  if (!packedEntries.has("scripts/bootstrap-runtime.mjs")) {
+    problems.push("scripts/bootstrap-runtime.mjs is missing from the package");
+  }
+  for (const expected of [
+    "github.com/TheGreenCedar/codex-autoresearch/releases/download",
+    'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
+    "tar",
+    "dist",
+  ]) {
+    if (!bootstrap.includes(expected)) {
+      problems.push(`scripts/bootstrap-runtime.mjs should contain ${expected}`);
     }
   }
 

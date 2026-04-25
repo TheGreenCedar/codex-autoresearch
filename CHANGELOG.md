@@ -6,12 +6,21 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 1.1.13
+
+### Fixed
+
+- Added launcher bootstrapping for Git marketplace installs: if `dist/` is missing from a source-shaped plugin cache, `scripts/*.mjs` downloads and extracts the matching GitHub release tarball before importing the compiled runtime.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.13`.
+
 ## 1.1.12
 
 ### Fixed
 
 - Moved the compiled `dist/` runtime out of the Git tree and into the release tarball contract: local checks now pack, extract, and smoke-test the generated package so source/runtime split regressions fail before release.
 - Tightened package artifact verification so published `scripts/*.mjs` launcher files must remain small wrappers into `dist/scripts/` and the compiled MCP support modules under `dist/lib/` must be present, preventing source/runtime split regressions from passing local checks while failing after Codex installs the plugin.
+- Changed release publishing so CI builds and smoke-tests the tarball before creating the GitHub release/tag, avoiding a tag-visible window where update clients could resolve a source archive without `dist/`.
 - Fixed the CLI-reported plugin version surface so internal session and dashboard metadata now reports `1.1.12` instead of the stale `1.1.10` value.
 
 ### Changed
