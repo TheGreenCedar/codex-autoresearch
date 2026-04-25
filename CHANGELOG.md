@@ -6,6 +6,14 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 1.1.13
+
+### Fixed
+
+- Added launcher bootstrapping for Git marketplace installs: if `dist/` is missing from a source-shaped plugin cache, `scripts/*.mjs` downloads and extracts the matching GitHub release tarball before importing the compiled runtime.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.13`.
+
 ## 1.1.12
 
 ### Fixed

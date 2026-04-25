@@ -452,6 +452,7 @@ const checks = [
       const packageFiles = (pkg.files || []).join("\n");
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
       const mcpLauncher = await readText("scripts/autoresearch-mcp.mjs");
+      const bootstrap = await readText("scripts/bootstrap-runtime.mjs");
       const release = await readRootText(".github/workflows/release.yml");
       const tagPushTrigger = /push:\s*\n\s*tags:/m.test(release);
       return ignoresDist &&
@@ -463,8 +464,17 @@ const checks = [
           ".codex-plugin/",
           ".mcp.json",
         ]) &&
-        autoresearchLauncher.includes("../dist/scripts/autoresearch.mjs") &&
-        mcpLauncher.includes("../dist/scripts/autoresearch-mcp.mjs") &&
+        autoresearchLauncher.includes("./bootstrap-runtime.mjs") &&
+        autoresearchLauncher.includes('ensureRuntime("autoresearch.mjs"') &&
+        mcpLauncher.includes("./bootstrap-runtime.mjs") &&
+        mcpLauncher.includes('ensureRuntime("autoresearch-mcp.mjs"') &&
+        includesAll(bootstrap, [
+          "github.com/TheGreenCedar/codex-autoresearch/releases/download",
+          'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
+          "package.json",
+          "tar",
+          "dist",
+        ]) &&
         includesAll(release, [
           "workflow_dispatch:",
           "gh release create",
@@ -475,7 +485,7 @@ const checks = [
         ])
         ? pass()
         : fail(
-            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should point at dist, and release CI should smoke the tarball before creating the release tag.",
+            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should bootstrap missing dist from the matching GitHub release tarball, and release CI should smoke the tarball before creating the release tag.",
           );
     },
   },
