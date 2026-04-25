@@ -4,6 +4,12 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Changed
+
+- Clarified licensing at the repository root by adding a full `LICENSE` file and linking it from the root README license section for explicit Apache-2.0 terms.
+
 ## 1.1.10
 
 ### Changed

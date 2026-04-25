@@ -239,4 +239,4 @@ User-facing changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Apache License 2.0. Copyright (c) 2026 Albert Najjar.
+This project is licensed under the terms of the [Apache License 2.0](./LICENSE). Copyright (c) 2026 Albert Najjar.
