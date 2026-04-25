@@ -2,8 +2,8 @@
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.mjs";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import os from "node:os";
 //#region scripts/check.ts
 const ROOT = resolvePackageRoot(import.meta.url);

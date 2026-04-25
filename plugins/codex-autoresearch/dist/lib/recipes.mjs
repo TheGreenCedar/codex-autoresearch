@@ -6,6 +6,8 @@ import http from "node:http";
 import https from "node:https";
 //#region lib/recipes.ts
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
+const RECIPE_CATALOG_TIMEOUT_MS = 1e4;
 const BUILT_IN_RECIPES = [
 	{
 		id: "node-test-runtime",
@@ -274,11 +276,15 @@ async function recommendRecipe(workDir) {
 }
 async function loadRecipeCatalog(catalog) {
 	if (!catalog) return [];
-	const text = /^https?:\/\//i.test(catalog) ? await fetchText(catalog) : await fsp.readFile(path.resolve(catalog), "utf8");
+	const text = /^https?:\/\//i.test(catalog) ? await fetchText(catalog) : await readBoundedCatalogFile(path.resolve(catalog));
 	const parsed = JSON.parse(text);
 	const recipes = Array.isArray(parsed) ? parsed : parsed.recipes;
 	if (!Array.isArray(recipes)) throw new Error("Recipe catalog must be an array or an object with recipes[].");
 	return recipes.map(validateExternalRecipe);
+}
+async function readBoundedCatalogFile(filePath) {
+	if ((await fsp.stat(filePath)).size > RECIPE_CATALOG_MAX_BYTES) throw new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`);
+	return await fsp.readFile(filePath, "utf8");
 }
 function validateExternalRecipe(recipe) {
 	for (const field of [
@@ -306,19 +312,46 @@ function validateExternalRecipe(recipe) {
 async function fetchText(url) {
 	const client = url.startsWith("https:") ? https : http;
 	return await new Promise((resolve, reject) => {
-		client.get(url, (res) => {
+		let settled = false;
+		const fail = (error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		};
+		const succeed = (value) => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
+		const request = client.get(url, (res) => {
 			if (res.statusCode < 200 || res.statusCode >= 300) {
-				reject(/* @__PURE__ */ new Error(`HTTP ${res.statusCode} while fetching recipe catalog`));
+				fail(/* @__PURE__ */ new Error(`HTTP ${res.statusCode} while fetching recipe catalog`));
 				res.resume();
 				return;
 			}
+			const contentLength = Number(res.headers["content-length"] || 0);
+			if (Number.isFinite(contentLength) && contentLength > RECIPE_CATALOG_MAX_BYTES) {
+				fail(/* @__PURE__ */ new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`));
+				res.destroy();
+				return;
+			}
 			let body = "";
+			let bytes = 0;
 			res.setEncoding("utf8");
 			res.on("data", (chunk) => {
+				bytes += Buffer.byteLength(chunk, "utf8");
+				if (bytes > RECIPE_CATALOG_MAX_BYTES) {
+					fail(/* @__PURE__ */ new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`));
+					res.destroy();
+					return;
+				}
 				body += chunk;
 			});
-			res.on("end", () => resolve(body));
-		}).on("error", reject);
+			res.on("end", () => succeed(body));
+		}).on("error", fail);
+		request.setTimeout(RECIPE_CATALOG_TIMEOUT_MS, () => {
+			request.destroy(/* @__PURE__ */ new Error(`Timed out fetching recipe catalog after ${RECIPE_CATALOG_TIMEOUT_MS}ms.`));
+		});
 	});
 }
 //#endregion

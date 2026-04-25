@@ -1,17 +1,28 @@
+import { runProcess, tailText } from "./runner.mjs";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { spawn } from "node:child_process";
 //#region lib/drift-doctor.ts
 async function inspectVersionSurfaces({ pluginRoot }) {
 	const surfaces = {
 		packageJson: await readJsonVersion(path.join(pluginRoot, "package.json")),
 		manifest: await readJsonVersion(path.join(pluginRoot, ".codex-plugin", "plugin.json")),
-		cliServer: await readRegexVersion(path.join(pluginRoot, "scripts", "autoresearch.mjs"), /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s),
-		mcpEntrypoint: await readRegexVersion(path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs"), /const VERSION = "([^"]+)"/)
+		cliServer: await readRegexVersionCandidate([
+			path.join(pluginRoot, "scripts", "autoresearch.ts"),
+			path.join(pluginRoot, "dist", "scripts", "autoresearch.mjs"),
+			path.join(pluginRoot, "scripts", "autoresearch.mjs")
+		], /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s),
+		mcpEntrypoint: await readRegexVersionCandidate([
+			path.join(pluginRoot, "scripts", "autoresearch-mcp.ts"),
+			path.join(pluginRoot, "dist", "scripts", "autoresearch-mcp.mjs"),
+			path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs")
+		], /const VERSION = "([^"]+)"/)
 	};
 	const values = Object.values(surfaces).filter(Boolean);
 	const unique = [...new Set(values)];
-	const warnings = unique.length > 1 ? [`Local version surfaces disagree: ${Object.entries(surfaces).map(([key, value]) => `${key}=${value || "missing"}`).join(", ")}.`] : [];
+	const missing = Object.entries(surfaces).filter(([, value]) => !value).map(([key]) => key);
+	const warnings = [];
+	if (missing.length) warnings.push(typedWarning("local_version_surface_missing", `Missing local version surfaces: ${missing.join(", ")}.`));
+	if (unique.length > 1) warnings.push(typedWarning("local_version_surface_mismatch", `Local version surfaces disagree: ${Object.entries(surfaces).map(([key, value]) => `${key}=${value || "missing"}`).join(", ")}.`));
 	return {
 		ok: warnings.length === 0,
 		surfaces,
@@ -33,17 +44,19 @@ async function inspectInstalledRouting({ pluginName = "codex-autoresearch", time
 	if (result.code !== 0) return {
 		ok: false,
 		available: false,
-		warning: `Unable to inspect installed MCP routing: ${result.stderr || result.stdout || "codex command failed"}`
+		warning: typedWarning("codex_mcp_route_unavailable", `Unable to inspect installed MCP routing: ${result.stderr || result.stdout || "codex command failed"}`)
 	};
 	const output = `${result.stdout}\n${result.stderr}`;
-	const pathMatch = output.match(/[A-Z]:\\[^\r\n"]*codex-autoresearch[^\r\n"]*/i) || output.match(/\/[^\r\n"]*codex-autoresearch[^\r\n"]*/i);
-	const versionMatch = output.match(/codex-autoresearch[\\/](\d+\.\d+\.\d+)/i) || output.match(/version[^\d]*(\d+\.\d+\.\d+)/i);
+	const structured = parseCodexRoutingJson(output);
+	const pathMatch = structured.path || output.match(/[A-Z]:\\[^\r\n"]*codex-autoresearch[^\r\n"]*/i)?.[0] || output.match(/\/[^\r\n"]*codex-autoresearch[^\r\n"]*/i)?.[0] || "";
+	const versionMatch = structured.version || output.match(/codex-autoresearch[\\/](\d+\.\d+\.\d+)/i)?.[1] || output.match(/version[^\d]*(\d+\.\d+\.\d+)/i)?.[1] || "";
 	return {
 		ok: true,
 		available: true,
 		pluginName,
-		path: pathMatch?.[0] || "",
-		version: versionMatch?.[1] || ""
+		path: pathMatch,
+		version: versionMatch,
+		confidence: structured.found ? versionMatch && pathMatch ? "structured" : "structured-partial" : versionMatch || pathMatch ? "heuristic" : "unavailable"
 	};
 }
 async function buildDriftReport({ pluginRoot, includeInstalled = false, inspectInstalled = inspectInstalledRouting } = {}) {
@@ -58,10 +71,43 @@ async function buildDriftReport({ pluginRoot, includeInstalled = false, inspectI
 		const installed = await inspectInstalled();
 		report.installed = installed;
 		if (!installed.available) report.warnings.push(installed.warning);
-		else if (installed.version && local.version && installed.version !== local.version) report.warnings.push(`Installed Codex MCP runtime is ${installed.version}, while local source is ${local.version}. Run codex mcp get codex-autoresearch for the active route, refresh the plugin cache, then restart Codex before trusting live MCP behavior.`);
+		else if (installed.confidence === "unavailable") report.warnings.push(typedWarning("codex_mcp_route_low_confidence", "Installed Codex MCP route was available, but no version or path could be identified from codex mcp get output."));
+		else if (installed.version && local.version && installed.version !== local.version) report.warnings.push(typedWarning("codex_mcp_version_drift", `Installed Codex MCP runtime is ${installed.version}, while local source is ${local.version}. Run codex mcp get codex-autoresearch for the active route, refresh the plugin cache, then restart Codex before trusting live MCP behavior.`));
 	}
 	report.ok = report.warnings.length === 0;
 	return report;
+}
+function parseCodexRoutingJson(output) {
+	const trimmed = String(output || "").trim();
+	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return { found: false };
+	try {
+		const parsed = JSON.parse(trimmed);
+		return {
+			found: true,
+			version: findStringField(parsed, "version"),
+			path: findPathLikeString(parsed)
+		};
+	} catch {
+		return { found: false };
+	}
+}
+function findStringField(value, field) {
+	if (!value || typeof value !== "object") return "";
+	if (typeof value[field] === "string") return value[field];
+	for (const child of Object.values(value)) {
+		const found = findStringField(child, field);
+		if (found) return found;
+	}
+	return "";
+}
+function findPathLikeString(value) {
+	if (typeof value === "string" && /codex-autoresearch/i.test(value)) return value;
+	if (!value || typeof value !== "object") return "";
+	for (const child of Object.values(value)) {
+		const found = findPathLikeString(child);
+		if (found) return found;
+	}
+	return "";
 }
 async function readJsonVersion(filePath) {
 	try {
@@ -77,72 +123,32 @@ async function readRegexVersion(filePath, regex) {
 		return "";
 	}
 }
+async function readRegexVersionCandidate(filePaths, regex) {
+	for (const filePath of filePaths) {
+		const version = await readRegexVersion(filePath, regex);
+		if (version) return version;
+	}
+	return "";
+}
 async function runCodex(args, timeoutMs) {
-	return await new Promise((resolve) => {
-		let child;
-		try {
-			if (process.platform === "win32") child = spawn("cmd.exe", [
-				"/d",
-				"/s",
-				"/c",
-				["codex", ...args].join(" ")
-			], {
-				windowsHide: true,
-				stdio: [
-					"ignore",
-					"pipe",
-					"pipe"
-				]
-			});
-			else child = spawn("codex", args, {
-				windowsHide: true,
-				stdio: [
-					"ignore",
-					"pipe",
-					"pipe"
-				]
-			});
-		} catch (error) {
-			resolve({
-				code: -1,
-				stdout: "",
-				stderr: String(error?.message || error)
-			});
-			return;
-		}
-		let stdout = "";
-		let stderr = "";
-		const timeout = setTimeout(() => {
-			child.kill();
-			resolve({
-				code: -1,
-				stdout,
-				stderr: `${stderr}\nTimed out inspecting codex routing.`.trim()
-			});
-		}, timeoutMs);
-		child.stdout.on("data", (chunk) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk.toString("utf8");
-		});
-		child.on("error", (error) => {
-			clearTimeout(timeout);
-			resolve({
-				code: -1,
-				stdout,
-				stderr: String(error.message || error)
-			});
-		});
-		child.on("close", (code) => {
-			clearTimeout(timeout);
-			resolve({
-				code,
-				stdout,
-				stderr
-			});
-		});
+	const timeoutSeconds = Math.max(1, Number(timeoutMs) / 1e3);
+	const result = await runProcess(process.platform === "win32" ? "cmd.exe" : "codex", process.platform === "win32" ? [
+		"/d",
+		"/s",
+		"/c",
+		["codex", ...args].join(" ")
+	] : args, {
+		timeoutSeconds,
+		maxOutputBytes: 32 * 1024
 	});
+	return {
+		code: result.timedOut ? -1 : result.code,
+		stdout: result.stdout,
+		stderr: result.timedOut ? `${tailText(result.stderr, 20, 8192)}\nTimed out inspecting codex routing.`.trim() : result.stderr
+	};
+}
+function typedWarning(code, message) {
+	return `[${code}] ${message}`;
 }
 //#endregion
 export { buildDriftReport, inspectInstalledRouting, inspectVersionSurfaces };

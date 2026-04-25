@@ -670,6 +670,70 @@ const toolSchemas = applyToolContracts([
 ]);
 const mcpToolSchemas = toolSchemas.map((tool) => toMcpToolSchema(tool, { includeContracts: true }));
 const mcpToolSchemasWithContracts = toolSchemas.map((tool) => toMcpToolSchema(tool, { includeContracts: true }));
+const CLI_COMMAND_TO_TOOL = {
+	setup: "setup_session",
+	"setup-plan": "setup_plan",
+	guide: "guided_setup",
+	"prompt-plan": "prompt_plan",
+	"onboarding-packet": "onboarding_packet",
+	"recommend-next": "recommend_next",
+	recipes: "list_recipes",
+	"research-setup": "setup_research_session",
+	config: "configure_session",
+	"quality-gap": "measure_quality_gap",
+	"gap-candidates": "gap_candidates",
+	"finalize-preview": "finalize_preview",
+	integrations: "integrations",
+	init: "init_experiment",
+	run: "run_experiment",
+	next: "next_experiment",
+	log: "log_experiment",
+	state: "read_state",
+	doctor: "doctor_session",
+	"benchmark-lint": "benchmark_lint",
+	"benchmark-inspect": "benchmark_inspect",
+	"checks-inspect": "checks_inspect",
+	"new-segment": "new_segment",
+	"promote-gate": "promote_gate",
+	export: "export_dashboard",
+	serve: "serve_dashboard",
+	clear: "clear_session"
+};
+const RUNTIME_ARG_ALIASES = {
+	allow_add_all: "allowAddAll",
+	allow_dirty_revert: "allowDirtyRevert",
+	autonomy_mode: "autonomyMode",
+	benchmark_command: "benchmarkCommand",
+	benchmark_prints_metric: "benchmarkPrintsMetric",
+	check_benchmark: "checkBenchmark",
+	check_installed: "checkInstalled",
+	checks_command: "checksCommand",
+	checks_policy: "checksPolicy",
+	checks_timeout_seconds: "checksTimeoutSeconds",
+	commit_paths: "commitPaths",
+	create_checks: "createChecks",
+	dashboard_refresh_seconds: "dashboardRefreshSeconds",
+	dry_run: "dryRun",
+	files_in_scope: "filesInScope",
+	from_last: "fromLast",
+	gate_name: "gateName",
+	json_full: "jsonFull",
+	keep_policy: "keepPolicy",
+	max_iterations: "maxIterations",
+	metric_name: "metricName",
+	metric_unit: "metricUnit",
+	model_command: "modelCommand",
+	model_timeout_seconds: "modelTimeoutSeconds",
+	off_limits: "offLimits",
+	query_count: "queryCount",
+	recipe_id: "recipeId",
+	research_slug: "researchSlug",
+	revert_paths: "revertPaths",
+	secondary_metrics: "secondaryMetrics",
+	skip_init: "skipInit",
+	timeout_seconds: "timeoutSeconds",
+	working_dir: "cwd"
+};
 function validateToolArguments(name, args, options = {}) {
 	const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
 	if (!schema) throw new Error(`Unknown tool: ${name}`);
@@ -706,9 +770,24 @@ function normalizeToolArguments(name, args = {}) {
 		aliases.set("workingDir", "working_dir");
 		aliases.set("cwd", "working_dir");
 	}
+	if (schema.properties?.recipe_id) aliases.set("recipe", "recipe_id");
+	if (schema.properties?.research_slug) aliases.set("slug", "research_slug");
+	if (schema.properties?.confirm) aliases.set("yes", "confirm");
+	if (schema.properties?.json_full) aliases.set("full", "json_full");
 	const normalized = {};
 	for (const [key, value] of Object.entries(args || {})) normalized[aliases.get(key) || key] = value;
 	return normalized;
+}
+function normalizeRuntimeToolArguments(name, args = {}) {
+	const normalized = normalizeToolArguments(name, args);
+	const runtime = {};
+	for (const [key, value] of Object.entries(normalized)) runtime[RUNTIME_ARG_ALIASES[key] || key] = value;
+	return runtime;
+}
+function normalizeCliCommandArguments(command, args = {}) {
+	const toolName = CLI_COMMAND_TO_TOOL[command];
+	if (!toolName) return args || {};
+	return normalizeRuntimeToolArguments(toolName, args);
 }
 function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
 	const normalized = normalizeToolArguments(toolName, args);
@@ -718,7 +797,7 @@ function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption
 function inferMcpResearchSlug(name, normalized) {
 	if (!MCP_ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
 	if (normalized.research_slug != null && normalized.research_slug !== "") return;
-	normalized.research_slug = resolveResearchSlugForQualityGapSync(normalized, normalized.working_dir).slug;
+	normalized.research_slug = resolveResearchSlugForQualityGapSync(normalized, String(normalized.working_dir || "")).slug;
 }
 function isObjectArgument(value) {
 	return typeof value === "object" && !Array.isArray(value);
@@ -748,4 +827,4 @@ function defaultBoolOption(value, fallback = false) {
 	].includes(String(value).toLowerCase());
 }
 //#endregion
-export { mcpToolSchemas, mcpToolSchemasWithContracts, normalizeToolArguments, requireUnsafeCommandGate, toMcpToolSchema, toolSchemas, validateToolArguments };
+export { mcpToolSchemas, mcpToolSchemasWithContracts, normalizeCliCommandArguments, normalizeRuntimeToolArguments, normalizeToolArguments, requireUnsafeCommandGate, toMcpToolSchema, toolSchemas, validateToolArguments };

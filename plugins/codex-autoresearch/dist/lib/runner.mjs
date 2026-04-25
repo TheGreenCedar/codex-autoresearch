@@ -8,12 +8,31 @@ const DENIED_METRIC_NAMES = new Set([
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
+const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
+const METRIC_OUTPUT_CAPTURE_BYTES = 64 * 1024;
 const PROCESS_OUTPUT_CAPTURE_BYTES = 32768;
 const METRIC_LINE_MAX_CHARS = 4096;
-function parseMetricLines(output) {
+function parseMetricLines(output, options = {}) {
 	const metrics = Object.create(null);
-	for (const line of String(output || "").split(/\r?\n/)) collectMetricLine(metrics, line);
-	return metrics;
+	const maxMetrics = Number.isInteger(options.maxMetrics) && Number(options.maxMetrics) > 0 ? Number(options.maxMetrics) : Infinity;
+	const primaryMetricName = options.primaryMetricName ? String(options.primaryMetricName) : "";
+	const withTruncation = Boolean(options.withTruncation);
+	let retainedCount = 0;
+	let truncated = false;
+	const collect = (line) => {
+		const collected = collectMetricLine(metrics, line, {
+			maxMetrics,
+			primaryMetricName,
+			retainedCount
+		});
+		retainedCount = collected.retainedCount;
+		truncated = truncated || collected.truncated;
+	};
+	for (const line of String(output || "").split(/\r?\n/)) collect(line);
+	return withTruncation ? {
+		metrics,
+		truncated
+	} : metrics;
 }
 function createMetricCollector() {
 	const metrics = Object.create(null);
@@ -35,13 +54,35 @@ function createMetricCollector() {
 		}
 	};
 }
-function collectMetricLine(metrics, line) {
+function collectMetricLine(metrics, line, options = {}) {
+	let retainedCount = Number(options.retainedCount) || 0;
 	const match = String(line).match(/^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/i);
-	if (!match) return;
+	if (!match) return {
+		retainedCount,
+		truncated: false
+	};
 	const name = match[1];
-	if (DENIED_METRIC_NAMES.has(name)) return;
+	if (DENIED_METRIC_NAMES.has(name)) return {
+		retainedCount,
+		truncated: false
+	};
 	const value = Number(match[2]);
-	if (Number.isFinite(value)) metrics[name] = value;
+	if (!Number.isFinite(value)) return {
+		retainedCount,
+		truncated: false
+	};
+	if (Object.hasOwn(metrics, name) || name === options.primaryMetricName || retainedCount < (options.maxMetrics ?? Infinity)) {
+		if (!Object.hasOwn(metrics, name)) retainedCount += 1;
+		metrics[name] = value;
+		return {
+			retainedCount,
+			truncated: false
+		};
+	}
+	return {
+		retainedCount,
+		truncated: true
+	};
 }
 function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
 	let trimmed = text;
@@ -53,7 +94,7 @@ function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES
 	if (lines.length > maxLines) trimmed = lines.slice(-maxLines).join("\n");
 	return trimmed;
 }
-async function runShell(command, cwd, timeoutSeconds = 600) {
+async function runShell(command, cwd, timeoutSeconds = 600, options = {}) {
 	const startedAt = Date.now();
 	return await new Promise((resolve) => {
 		const child = spawn(command, {
@@ -68,15 +109,52 @@ async function runShell(command, cwd, timeoutSeconds = 600) {
 			]
 		});
 		let output = "";
+		let fullOutput = "";
+		let metricOutput = "";
+		let metricOutputBytes = 0;
+		let pendingMetricText = "";
+		const retainedMetricNames = new Set((options.retainMetricNames || []).map(String).filter(Boolean));
+		const retainedMetricLines = /* @__PURE__ */ new Map();
 		let outputTruncated = false;
+		let fullOutputTruncated = false;
+		let metricOutputTruncated = false;
 		let timedOut = false;
 		const metricCollector = createMetricCollector();
+		const maxOutputBytes = positiveByteLimit(options.maxOutputBytes, OUTPUT_CAPTURE_BYTES);
+		const maxFullOutputBytes = positiveByteLimit(options.maxFullOutputBytes, FULL_OUTPUT_CAPTURE_BYTES);
+		const maxMetricOutputBytes = positiveByteLimit(options.maxMetricOutputBytes, METRIC_OUTPUT_CAPTURE_BYTES);
+		const appendMetricLine = (line) => {
+			const name = metricLineName(line);
+			if (name && retainedMetricNames.has(name)) retainedMetricLines.set(name, line);
+			const text = `${line}\n`;
+			const bytes = Buffer.byteLength(text, "utf8");
+			if (metricOutputBytes + bytes > maxMetricOutputBytes) {
+				metricOutputTruncated = true;
+				return;
+			}
+			metricOutput += text;
+			metricOutputBytes += bytes;
+		};
+		const appendMetricLines = (text) => {
+			pendingMetricText += text;
+			const lines = pendingMetricText.split(/\r?\n/);
+			pendingMetricText = lines.pop() || "";
+			if (pendingMetricText.length > METRIC_LINE_MAX_CHARS) pendingMetricText = pendingMetricText.slice(-METRIC_LINE_MAX_CHARS);
+			for (const line of lines) if (/^METRIC\s+/i.test(line.trim())) appendMetricLine(line);
+		};
 		const appendOutput = (text) => {
 			metricCollector.append(text);
+			appendMetricLines(text);
+			fullOutput += text;
+			if (Buffer.byteLength(fullOutput, "utf8") > maxFullOutputBytes) {
+				const buf = Buffer.from(fullOutput, "utf8");
+				fullOutput = buf.subarray(Math.max(0, buf.length - maxFullOutputBytes)).toString("utf8");
+				fullOutputTruncated = true;
+			}
 			output += text;
-			if (Buffer.byteLength(output, "utf8") > OUTPUT_CAPTURE_BYTES) {
+			if (Buffer.byteLength(output, "utf8") > maxOutputBytes) {
 				const buf = Buffer.from(output, "utf8");
-				output = buf.subarray(Math.max(0, buf.length - OUTPUT_CAPTURE_BYTES)).toString("utf8");
+				output = buf.subarray(Math.max(0, buf.length - maxOutputBytes)).toString("utf8");
 				outputTruncated = true;
 			}
 		};
@@ -92,25 +170,40 @@ async function runShell(command, cwd, timeoutSeconds = 600) {
 		});
 		child.on("error", (error) => {
 			clearTimeout(timeout);
+			if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
+			const errorText = String(error.stack || error.message || error);
+			const retainedMetricOutput = retainedMetricText(retainedMetricLines);
 			resolve({
 				command,
 				exitCode: null,
 				timedOut,
 				durationSeconds: (Date.now() - startedAt) / 1e3,
-				output: String(error.stack || error.message || error),
+				output: errorText,
+				fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
+				metricOutput,
+				retainedMetricOutput,
+				metricOutputTruncated,
 				outputTruncated,
+				fullOutputTruncated,
 				parsedMetrics: metricCollector.finish()
 			});
 		});
 		child.on("close", (code) => {
 			clearTimeout(timeout);
+			if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
+			const retainedMetricOutput = retainedMetricText(retainedMetricLines);
 			resolve({
 				command,
 				exitCode: code,
 				timedOut,
 				durationSeconds: (Date.now() - startedAt) / 1e3,
 				output,
+				fullOutput,
+				metricOutput,
+				retainedMetricOutput,
+				metricOutputTruncated,
 				outputTruncated,
+				fullOutputTruncated,
 				parsedMetrics: metricCollector.finish()
 			});
 		});
@@ -217,6 +310,17 @@ function processResult({ commandDisplay, exitCode, stdout, stderr, stdoutTruncat
 function shellDisplayPart(value) {
 	const text = String(value);
 	return /^[A-Za-z0-9_./:=@-]+$/.test(text) ? text : `"${text.replace(/"/g, "\\\"")}"`;
+}
+function metricLineName(line) {
+	const match = String(line || "").trim().match(/^METRIC\s+([^=\s]+)=/i);
+	return match && !DENIED_METRIC_NAMES.has(match[1]) ? match[1] : "";
+}
+function positiveByteLimit(value, fallback) {
+	const numberValue = Number(value);
+	return Number.isFinite(numberValue) && numberValue > 0 ? Math.floor(numberValue) : fallback;
+}
+function retainedMetricText(lines) {
+	return [...lines.values()].map((line) => `${line}\n`).join("");
 }
 function killProcess(pid) {
 	if (!pid) return;

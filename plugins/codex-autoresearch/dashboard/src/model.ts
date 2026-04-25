@@ -32,6 +32,7 @@ export type {
   ActionState,
   ChartModel,
   DashboardEntry,
+  DashboardContext,
   DashboardMeta,
   DashboardMode,
   DashboardReadout,

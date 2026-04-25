@@ -1,6 +1,7 @@
 import { STATUS_VALUES, finiteMetric } from "./session-core.mjs";
 //#region lib/dashboard-view-model.ts
-function buildDashboardViewModel({ state, settings = {}, commands = [], setupPlan = null, guidedSetup = null, qualityGap = null, finalizePreview = null, recipes = [], experimentMemory = null, drift = null, warnings = [] }) {
+function buildDashboardViewModel(context) {
+	const { state, settings, commands = [], setupPlan = null, guidedSetup = null, qualityGap = null, finalizePreview = null, recipes = [], experimentMemory = null, drift = null, warnings = [] } = normalizeDashboardContext(context);
 	const current = state.current || [];
 	const kept = current.filter((run) => run.status === "keep");
 	const failures = current.filter((run) => [
@@ -160,11 +161,39 @@ function buildDashboardViewModel({ state, settings = {}, commands = [], setupPla
 		commands
 	};
 }
+function normalizeDashboardContext(context) {
+	const settings = normalizeDashboardSettings(context.settings, context.state, context.drift);
+	return {
+		...context,
+		settings,
+		commands: Array.isArray(context.commands) ? context.commands : [],
+		setupPlan: context.setupPlan || null,
+		guidedSetup: context.guidedSetup || null,
+		qualityGap: context.qualityGap || null,
+		finalizePreview: context.finalizePreview || null,
+		recipes: Array.isArray(context.recipes) ? context.recipes : [],
+		experimentMemory: context.experimentMemory || null,
+		drift: context.drift || null,
+		warnings: Array.isArray(context.warnings) ? context.warnings : []
+	};
+}
+function normalizeDashboardSettings(rawSettings = {}, state, drift = null) {
+	const settings = rawSettings || {};
+	return {
+		...settings,
+		deliveryMode: cleanText(settings.deliveryMode || settings.mode || settings.dashboardMode),
+		liveUrl: cleanText(settings.liveUrl || settings.url || settings.dashboardUrl),
+		pluginVersion: cleanText(settings.pluginVersion || settings.version || state?.config?.pluginVersion),
+		runtimeDrift: settings.runtimeDrift || drift || null,
+		generatedAt: cleanText(settings.generatedAt || settings.exportedAt || settings.snapshotGeneratedAt),
+		sourceCwd: cleanText(settings.sourceCwd || settings.workDir || settings.cwd || state?.workDir || state?.cwd)
+	};
+}
 const UNKNOWN = "unknown";
 const NO_DATA = "No data";
 function buildTrustState({ state, settings = {}, setupPlan = null, guidedSetup = null, finalizePreview = null, drift = null, warnings = [] }) {
 	const taggedReasons = [];
-	const mode = normalizeMode(firstValue(settings.deliveryMode, settings.mode, settings.dashboardMode));
+	const mode = normalizeMode(settings.deliveryMode);
 	const addReasons = (source, values, decisionRelevant = false, classifyDecisionReason = true) => {
 		for (const value of Array.isArray(values) ? values : []) {
 			const text = warningMessage(value);
@@ -207,11 +236,11 @@ function buildTrustState({ state, settings = {}, setupPlan = null, guidedSetup =
 			mode,
 			status: taggedReasons.some((reason) => reason.decisionRelevant || isTrustDecisionReason(reason.text)) ? "needs-attention" : mode === "static-export" ? "read-only" : mode === UNKNOWN ? UNKNOWN : "trusted",
 			reasons: uniqueReasons,
-			liveUrl: cleanText(firstValue(settings.liveUrl, settings.url, settings.dashboardUrl)) || null,
-			pluginVersion: cleanText(firstValue(settings.pluginVersion, settings.version, state?.config?.pluginVersion)) || UNKNOWN,
-			runtimeDrift: summarizeRuntimeDrift(firstValue(settings.runtimeDrift, drift)),
-			generatedAt: cleanText(firstValue(settings.generatedAt, settings.exportedAt, settings.snapshotGeneratedAt)) || null,
-			sourceCwd: cleanText(firstValue(settings.sourceCwd, settings.workDir, settings.cwd, state?.workDir, state?.cwd)) || UNKNOWN
+			liveUrl: cleanText(settings.liveUrl) || null,
+			pluginVersion: cleanText(settings.pluginVersion) || UNKNOWN,
+			runtimeDrift: summarizeRuntimeDrift(settings.runtimeDrift || drift),
+			generatedAt: cleanText(settings.generatedAt) || null,
+			sourceCwd: cleanText(settings.sourceCwd) || UNKNOWN
 		},
 		decisionWarnings: unique(taggedReasons.filter((reason) => reason.decisionRelevant).map((reason) => reason.text))
 	};
@@ -238,7 +267,7 @@ function buildResearchTruth({ state, settings = {}, current = [], qualityGap = n
 	const holdoutCount = countValue(source.holdoutCount, source.holdout_count, source.holdouts, latestMetrics.holdoutCount, latestMetrics.holdout_count);
 	const adversarialCount = countValue(source.adversarialCount, source.adversarial_count, source.adversarial, latestMetrics.adversarialCount, latestMetrics.adversarial_count);
 	const externalRepoCount = countValue(source.externalRepoCount, source.external_repo_count, source.externalRepos, source.external_repos, latestMetrics.externalRepoCount, latestMetrics.external_repo_count);
-	const promotionGrade = boolOrNull(firstValue(source.promotionGrade, source.promotion_grade, latestMetrics.promotionGrade, latestMetrics.promotion_grade));
+	const promotionGrade = promotionGradeValue(source, latestMetrics);
 	return {
 		queryCount,
 		holdoutCount,
@@ -443,11 +472,20 @@ function normalizeMode(value) {
 function isTrustDecisionReason(value) {
 	return /dirty|corrupt|stale|drift|missing|invalid|parse|failed|error|refusing|changed/i.test(String(value || ""));
 }
-function firstValue(...values) {
-	return values.find((value) => value !== void 0 && value !== null && value !== "");
-}
 function cleanText(value) {
 	return String(value ?? "").trim();
+}
+function promotionGradeValue(source, latestMetrics) {
+	for (const value of [
+		source.promotionGrade,
+		source.promotion_grade,
+		latestMetrics.promotionGrade,
+		latestMetrics.promotion_grade
+	]) {
+		const result = boolOrNull(value);
+		if (result !== null) return result;
+	}
+	return null;
 }
 function countValue(...values) {
 	for (const value of values) {
@@ -1108,4 +1146,4 @@ function compactRun(run) {
 	};
 }
 //#endregion
-export { buildDashboardViewModel };
+export { buildActionRail, buildAiSummary, buildBestVsLatest, buildDashboardViewModel, buildDecisionReceipt, buildEvidenceChips, buildFinalizationChecklist, buildHandoffPacket, buildMissionControl, buildResearchTruth, buildTrustBlockers, buildTrustState };

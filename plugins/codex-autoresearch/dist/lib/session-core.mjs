@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { createInterface } from "node:readline";
 //#region lib/session-core.ts
 const STATUS_VALUES = new Set([
 	"keep",
@@ -73,13 +74,47 @@ function appendJsonl(workDir, entry) {
 function readJsonl(workDir) {
 	const filePath = jsonlPath(workDir);
 	if (!fs.existsSync(filePath)) return [];
-	return fs.readFileSync(filePath, "utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line, index) => {
-		try {
-			return JSON.parse(line);
-		} catch (error) {
-			throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: ${error.message}`);
-		}
+	return parseJsonlLines(fs.readFileSync(filePath, "utf8"), filePath);
+}
+async function* streamJsonl(workDir) {
+	const filePath = jsonlPath(workDir);
+	if (!fs.existsSync(filePath)) return;
+	const stream = fs.createReadStream(filePath, { encoding: "utf8" });
+	const lines = createInterface({
+		input: stream,
+		crlfDelay: Infinity
 	});
+	let index = 0;
+	try {
+		for await (const rawLine of lines) {
+			index += 1;
+			const line = String(rawLine).trim();
+			if (!line) continue;
+			yield parseJsonlLine(line, filePath, index);
+		}
+	} finally {
+		stream.destroy();
+	}
+}
+async function readJsonlTail(workDir, maxEntries = 50) {
+	const limit = Math.max(0, Math.floor(Number(maxEntries) || 0));
+	if (limit === 0) return [];
+	const tail = [];
+	for await (const entry of streamJsonl(workDir)) {
+		tail.push(entry);
+		if (tail.length > limit) tail.shift();
+	}
+	return tail;
+}
+function parseJsonlLines(text, filePath) {
+	return String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line, index) => parseJsonlLine(line, filePath, index + 1));
+}
+function parseJsonlLine(line, filePath, index) {
+	try {
+		return JSON.parse(line);
+	} catch (error) {
+		throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${error.message}`);
+	}
 }
 function bestMetric(runs, direction) {
 	let best = null;
@@ -306,4 +341,4 @@ function researchDirPath(workDir, slug) {
 	return path.join(workDir, RESEARCH_DIR, slug);
 }
 //#endregion
-export { FAILURE_STATUSES, RESEARCH_DIR, STATUS_VALUES, appendJsonl, assertFreshLastRunPacket, bestKeptMetric, bestMetric, buildLastRunFreshnessSnapshot, computeConfidence, currentState, finiteMetric, hasFiniteMetric, isBaselineEligibleMetricRun, isBetter, isFailureStatus, iterationLimitInfo, jsonlPath, lastRunConfigSnapshot, lastRunPacketFreshness, listOption, normalizeScopedFileFingerprints, parseQualityGaps, pathExists, readConfig, readJsonl, researchDirPath, researchSlugFromArgs, resolveWorkDir, safeSlug, shellQuote, statusHash };
+export { FAILURE_STATUSES, RESEARCH_DIR, STATUS_VALUES, appendJsonl, assertFreshLastRunPacket, bestKeptMetric, bestMetric, buildLastRunFreshnessSnapshot, computeConfidence, currentState, finiteMetric, hasFiniteMetric, isBaselineEligibleMetricRun, isBetter, isFailureStatus, iterationLimitInfo, jsonlPath, lastRunConfigSnapshot, lastRunPacketFreshness, listOption, normalizeScopedFileFingerprints, parseQualityGaps, pathExists, readConfig, readJsonl, readJsonlTail, researchDirPath, researchSlugFromArgs, resolveWorkDir, safeSlug, shellQuote, statusHash, streamJsonl };

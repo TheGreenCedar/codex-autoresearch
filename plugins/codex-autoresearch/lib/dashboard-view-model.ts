@@ -1,20 +1,35 @@
 import { STATUS_VALUES, finiteMetric } from "./session-core.js";
+import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
 
-export function buildDashboardViewModel({
-  state,
-  settings = {},
-  commands = [],
-  setupPlan = null,
-  guidedSetup = null,
-  qualityGap = null,
-  finalizePreview = null,
-  recipes = [],
-  experimentMemory = null,
-  drift = null,
-  warnings = [],
-}: LooseObject) {
+interface NormalizedDashboardSettings extends LooseObject {
+  deliveryMode?: string;
+  liveUrl?: string;
+  pluginVersion?: string;
+  runtimeDrift?: LooseObject | null;
+  generatedAt?: string;
+  sourceCwd?: string;
+}
+
+interface NormalizedDashboardContext extends Omit<DashboardContext, "settings"> {
+  settings: NormalizedDashboardSettings;
+}
+
+export function buildDashboardViewModel(context: DashboardContext) {
+  const {
+    state,
+    settings,
+    commands = [],
+    setupPlan = null,
+    guidedSetup = null,
+    qualityGap = null,
+    finalizePreview = null,
+    recipes = [],
+    experimentMemory = null,
+    drift = null,
+    warnings = [],
+  } = normalizeDashboardContext(context);
   const current = state.current || [];
   const kept = current.filter((run) => run.status === "keep");
   const failures = current.filter((run) =>
@@ -180,10 +195,50 @@ export function buildDashboardViewModel({
   };
 }
 
+function normalizeDashboardContext(context: DashboardContext): NormalizedDashboardContext {
+  const settings = normalizeDashboardSettings(context.settings, context.state, context.drift);
+  return {
+    ...context,
+    settings,
+    commands: Array.isArray(context.commands) ? context.commands : [],
+    setupPlan: context.setupPlan || null,
+    guidedSetup: context.guidedSetup || null,
+    qualityGap: context.qualityGap || null,
+    finalizePreview: context.finalizePreview || null,
+    recipes: Array.isArray(context.recipes) ? context.recipes : [],
+    experimentMemory: context.experimentMemory || null,
+    drift: context.drift || null,
+    warnings: Array.isArray(context.warnings) ? context.warnings : [],
+  };
+}
+
+function normalizeDashboardSettings(
+  rawSettings: DashboardContext["settings"] = {},
+  state: DashboardContext["state"],
+  drift: DashboardContext["drift"] = null,
+): NormalizedDashboardSettings {
+  const settings = rawSettings || {};
+  return {
+    ...settings,
+    deliveryMode: cleanText(settings.deliveryMode || settings.mode || settings.dashboardMode),
+    liveUrl: cleanText(settings.liveUrl || settings.url || settings.dashboardUrl),
+    pluginVersion: cleanText(
+      settings.pluginVersion || settings.version || state?.config?.pluginVersion,
+    ),
+    runtimeDrift: (settings.runtimeDrift as LooseObject) || drift || null,
+    generatedAt: cleanText(
+      settings.generatedAt || settings.exportedAt || settings.snapshotGeneratedAt,
+    ),
+    sourceCwd: cleanText(
+      settings.sourceCwd || settings.workDir || settings.cwd || state?.workDir || state?.cwd,
+    ),
+  };
+}
+
 const UNKNOWN = "unknown";
 const NO_DATA = "No data";
 
-function buildTrustState({
+export function buildTrustState({
   state,
   settings = {},
   setupPlan = null,
@@ -193,9 +248,7 @@ function buildTrustState({
   warnings = [],
 }: LooseObject) {
   const taggedReasons = [];
-  const mode = normalizeMode(
-    firstValue(settings.deliveryMode, settings.mode, settings.dashboardMode),
-  );
+  const mode = normalizeMode(settings.deliveryMode);
   const addReasons = (source, values, decisionRelevant = false, classifyDecisionReason = true) => {
     for (const value of Array.isArray(values) ? values : []) {
       const text = warningMessage(value);
@@ -262,26 +315,11 @@ function buildTrustState({
       mode,
       status,
       reasons: uniqueReasons,
-      liveUrl: cleanText(firstValue(settings.liveUrl, settings.url, settings.dashboardUrl)) || null,
-      pluginVersion:
-        cleanText(
-          firstValue(settings.pluginVersion, settings.version, state?.config?.pluginVersion),
-        ) || UNKNOWN,
-      runtimeDrift: summarizeRuntimeDrift(firstValue(settings.runtimeDrift, drift)),
-      generatedAt:
-        cleanText(
-          firstValue(settings.generatedAt, settings.exportedAt, settings.snapshotGeneratedAt),
-        ) || null,
-      sourceCwd:
-        cleanText(
-          firstValue(
-            settings.sourceCwd,
-            settings.workDir,
-            settings.cwd,
-            state?.workDir,
-            state?.cwd,
-          ),
-        ) || UNKNOWN,
+      liveUrl: cleanText(settings.liveUrl) || null,
+      pluginVersion: cleanText(settings.pluginVersion) || UNKNOWN,
+      runtimeDrift: summarizeRuntimeDrift(settings.runtimeDrift || drift),
+      generatedAt: cleanText(settings.generatedAt) || null,
+      sourceCwd: cleanText(settings.sourceCwd) || UNKNOWN,
     },
     decisionWarnings: unique(
       taggedReasons.filter((reason) => reason.decisionRelevant).map((reason) => reason.text),
@@ -301,7 +339,7 @@ function summarizeRuntimeDrift(drift) {
   };
 }
 
-function buildResearchTruth({
+export function buildResearchTruth({
   state,
   settings = {},
   current = [],
@@ -345,14 +383,7 @@ function buildResearchTruth({
     latestMetrics.externalRepoCount,
     latestMetrics.external_repo_count,
   );
-  const promotionGrade = boolOrNull(
-    firstValue(
-      source.promotionGrade,
-      source.promotion_grade,
-      latestMetrics.promotionGrade,
-      latestMetrics.promotion_grade,
-    ),
-  );
+  const promotionGrade = promotionGradeValue(source, latestMetrics);
   const suspiciousReasons = unique([
     ...stringList(source.suspiciousReasons),
     ...stringList(source.suspicious_reasons),
@@ -378,7 +409,7 @@ function buildResearchTruth({
   };
 }
 
-function buildEvidenceChips({
+export function buildEvidenceChips({
   state,
   current = [],
   bestKept = null,
@@ -461,7 +492,7 @@ function buildEvidenceChips({
   ];
 }
 
-function buildFinalizationChecklist({
+export function buildFinalizationChecklist({
   current = [],
   kept = [],
   finalizePreview = null,
@@ -513,7 +544,7 @@ function buildFinalizationChecklist({
   ];
 }
 
-function buildTrustBlockers({
+export function buildTrustBlockers({
   trustWarnings = [],
   guidedSetup = null,
   warnings = [],
@@ -561,7 +592,7 @@ function blockerCommandFor(message, commandMap) {
   return "";
 }
 
-function buildDecisionReceipt({
+export function buildDecisionReceipt({
   state,
   current = [],
   bestKept = null,
@@ -588,7 +619,7 @@ function buildDecisionReceipt({
   };
 }
 
-function buildBestVsLatest({ state, current = [], bestKept = null }: LooseObject) {
+export function buildBestVsLatest({ state, current = [], bestKept = null }: LooseObject) {
   const latest = current.at(-1) || null;
   const latestMetric = finiteMetric(latest?.metric);
   const bestMetric = finiteMetric(bestKept?.metric ?? state.best);
@@ -614,7 +645,7 @@ function buildBestVsLatest({ state, current = [], bestKept = null }: LooseObject
   };
 }
 
-function buildHandoffPacket({
+export function buildHandoffPacket({
   state,
   current = [],
   action = null,
@@ -676,12 +707,21 @@ function isTrustDecisionReason(value) {
   );
 }
 
-function firstValue(...values) {
-  return values.find((value) => value !== undefined && value !== null && value !== "");
-}
-
 function cleanText(value) {
   return String(value ?? "").trim();
+}
+
+function promotionGradeValue(source, latestMetrics) {
+  for (const value of [
+    source.promotionGrade,
+    source.promotion_grade,
+    latestMetrics.promotionGrade,
+    latestMetrics.promotion_grade,
+  ]) {
+    const result = boolOrNull(value);
+    if (result !== null) return result;
+  }
+  return null;
 }
 
 function countValue(...values) {
@@ -789,7 +829,7 @@ function truthBreadthLabel(truth) {
   return `${counts.reduce((sum, value) => sum + value, 0)} checks`;
 }
 
-function buildActionRail({
+export function buildActionRail({
   current,
   bestKept,
   latestFailure,
@@ -1029,7 +1069,7 @@ function buildActionRail({
   return [primary, ...secondary].slice(0, 4);
 }
 
-function buildMissionControl({
+export function buildMissionControl({
   current,
   setupPlan,
   guidedSetup,
@@ -1279,7 +1319,7 @@ function warningMessage(warning) {
   return String(warning || "");
 }
 
-function buildAiSummary({
+export function buildAiSummary({
   state,
   current,
   kept,

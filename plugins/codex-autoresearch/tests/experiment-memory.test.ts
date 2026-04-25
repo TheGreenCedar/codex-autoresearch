@@ -72,7 +72,7 @@ test("incumbent guidance prefers kept families over latest rejected families", (
   assert.equal(memory.diversityGuidance.nextActionHint, "stress the good path");
 });
 
-test("incumbent guidance waits when there are no kept families", () => {
+test("incumbent guidance omits placeholder lanes when there are no kept families", () => {
   const memory = buildExperimentMemory({
     direction: "lower",
     runs: [
@@ -85,7 +85,7 @@ test("incumbent guidance waits when there are no kept families", () => {
   });
   const incumbent = memory.lanePortfolio.find((lane) => lane.id === "incumbent-confirmation");
 
-  assert.equal(incumbent.status, "waiting");
+  assert.equal(incumbent, undefined);
   assert.equal(memory.diversityGuidance.id, "avoid");
   assert.match(memory.diversityGuidance.reason, /regressed/);
 });

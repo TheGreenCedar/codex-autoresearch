@@ -1,6 +1,6 @@
+import { parseMetricLines, runShell, tailText } from "../lib/runner.mjs";
 import { appendJsonl, currentState, iterationLimitInfo, parseQualityGaps } from "../lib/session-core.mjs";
 import { resolvePackageRoot } from "../lib/runtime-paths.mjs";
-import { parseMetricLines, runShell, tailText } from "../lib/runner.mjs";
 import path from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -288,7 +288,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
 		assert.equal(doctor.code, 0, doctor.stderr);
 		const doctorPayload = JSON.parse(doctor.stdout);
 		assert.equal(doctorPayload.ok, true);
-		assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.5");
+		assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.10");
 		assert.equal(doctorPayload.drift.ok, true);
 	});
 });

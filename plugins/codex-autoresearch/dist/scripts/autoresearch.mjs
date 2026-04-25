@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { parseMetricLines, runProcess as runProcess$1, runShell, tailText } from "../lib/runner.mjs";
+import { FAILURE_STATUSES, STATUS_VALUES, appendJsonl, currentState, finiteMetric, isBaselineEligibleMetricRun, iterationLimitInfo, readJsonl } from "../lib/session-core.mjs";
+import { gapCandidates, researchRoundGuidance, resolveResearchSlugForQualityGapSync } from "../lib/research-gaps.mjs";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.mjs";
-import { FAILURE_STATUSES, STATUS_VALUES, finiteMetric, isBaselineEligibleMetricRun } from "../lib/session-core.mjs";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.mjs";
 import { buildDriftReport } from "../lib/drift-doctor.mjs";
 import { buildExperimentMemory } from "../lib/experiment-memory.mjs";
@@ -9,13 +11,14 @@ import { finalizePreview } from "../lib/finalize-preview.mjs";
 import { applyResolvedRecipeDefaults, findRecipe, getBuiltInRecipe, listBuiltInRecipes, loadRecipeCatalog, recommendRecipe } from "../lib/recipes.mjs";
 import { integrationsCommand } from "../lib/integrations.mjs";
 import { serveAutoresearch } from "../lib/live-server.mjs";
-import { gapCandidates, researchRoundGuidance, resolveResearchSlugForQualityGapSync } from "../lib/research-gaps.mjs";
 import { createMcpInterface } from "../lib/mcp-interface.mjs";
+import { createDashboardCommands } from "../lib/commands/dashboard.mjs";
+import { createInspectCommands } from "../lib/commands/inspect.mjs";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -59,16 +62,12 @@ const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
-const OUTPUT_CAPTURE_BYTES = 16384;
-const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
-const METRIC_LINE_MAX_CHARS = 4096;
-const METRIC_OUTPUT_CAPTURE_BYTES = 64 * 1024;
 const MAX_PARSED_METRICS = 512;
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
-const PLUGIN_VERSION = "1.1.5";
+const PLUGIN_VERSION = "1.1.10";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -76,7 +75,35 @@ const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
 const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
 const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
-const liveDashboardServers = /* @__PURE__ */ new Set();
+const { exportDashboard, serveDashboard } = createDashboardCommands({
+	boolOption,
+	buildDriftReport,
+	dashboardCommands,
+	dashboardHtml,
+	dashboardSettings,
+	dashboardViewModel,
+	operationProgress,
+	pluginRoot: PLUGIN_ROOT,
+	pluginVersion: PLUGIN_VERSION,
+	readJsonl,
+	resolveOutputInside,
+	resolveWorkDir,
+	serveAutoresearch,
+	shellQuote,
+	writeFile: fsp.writeFile
+});
+const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands({
+	currentState,
+	defaultBenchmarkCommand,
+	finiteMetric,
+	headText,
+	metricParseSource,
+	numberOption,
+	parseMetricLines,
+	resolveWorkDir,
+	runShell,
+	validateMetricName
+});
 function usage() {
 	return `Codex Autoresearch
 
@@ -254,9 +281,6 @@ function resolveWorkDir(cwdArg) {
 		workDir,
 		config
 	};
-}
-function jsonlPath(workDir) {
-	return path.join(workDir, "autoresearch.jsonl");
 }
 function assetPath(fileName) {
 	return path.join(PLUGIN_ROOT, "assets", fileName);
@@ -1133,7 +1157,8 @@ function renderResumeBlock(workDir) {
 	].join("\n");
 }
 function renderBenchmarkScript(args, shellKind) {
-	const command = args.benchmark_command || args.benchmarkCommand || "# TODO: replace with the real workload";
+	const command = args.benchmark_command || args.benchmarkCommand;
+	if (!command) return renderMissingCommandScript(shellKind, "benchmark", "--benchmark-command");
 	const metricName = validateMetricName(args.metric_name || args.metricName || "elapsed_seconds");
 	const hasExplicitBenchmarkCommand = Boolean(args.benchmark_command || args.benchmarkCommand);
 	if (boolOption(args.benchmark_prints_metric ?? args.benchmarkPrintsMetric, hasExplicitBenchmarkCommand)) {
@@ -1161,8 +1186,27 @@ function renderBenchmarkScript(args, shellKind) {
 	});
 }
 function renderChecksScript(args, shellKind) {
-	const command = args.checks_command || args.checksCommand || "# TODO: add correctness checks";
+	const command = args.checks_command || args.checksCommand;
+	if (!command) return renderMissingCommandScript(shellKind, "checks", "--checks-command");
 	return replaceAllText(readAssetTemplate(shellKind === "bash" ? "autoresearch.checks.sh.template" : "autoresearch.checks.ps1.template"), { "<check command>": command });
+}
+function renderMissingCommandScript(shellKind, kind, optionName) {
+	const message = `Autoresearch ${kind} command is not configured. Re-run setup with ${optionName}.`;
+	if (shellKind === "bash") return [
+		"#!/usr/bin/env bash",
+		"set -euo pipefail",
+		"",
+		`printf '%s\\n' ${shellQuote(message)} >&2`,
+		"exit 2",
+		""
+	].join("\n");
+	return [
+		"$ErrorActionPreference = \"Stop\"",
+		"",
+		`Write-Error ${shellQuote(message)}`,
+		"exit 2",
+		""
+	].join("\n");
 }
 function researchSlugFromArgs(args) {
 	return safeSlug(args.research_slug ?? args.researchSlug ?? args.slug ?? args.name ?? "research");
@@ -1320,78 +1364,6 @@ async function writeSessionFile(filePath, content, options = {}) {
 		action: exists ? "overwritten" : "created"
 	};
 }
-function appendJsonl(workDir, entry) {
-	fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
-}
-function readJsonl(workDir) {
-	const filePath = jsonlPath(workDir);
-	if (!fs.existsSync(filePath)) return [];
-	return fs.readFileSync(filePath, "utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line, index) => {
-		try {
-			return JSON.parse(line);
-		} catch (error) {
-			throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: ${error.message}`);
-		}
-	});
-}
-function currentState(workDir) {
-	const entries = readJsonl(workDir);
-	let config = {
-		name: null,
-		metricName: "metric",
-		metricUnit: "",
-		bestDirection: "lower"
-	};
-	let segment = 0;
-	const results = [];
-	for (const entry of entries) {
-		if (entry.type === "config") {
-			if (results.length > 0) segment += 1;
-			config = {
-				name: entry.name || config.name,
-				metricName: entry.metricName || config.metricName,
-				metricUnit: entry.metricUnit ?? config.metricUnit,
-				bestDirection: entry.bestDirection === "higher" ? "higher" : "lower"
-			};
-			continue;
-		}
-		if (entry.run != null) {
-			const run = {
-				...entry,
-				segment: entry.segment ?? segment
-			};
-			if (Object.hasOwn(entry, "metric")) run.metric = finiteMetric(entry.metric);
-			results.push(run);
-		}
-	}
-	const current = results.filter((run) => run.segment === segment);
-	const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
-	const best = bestKeptMetric(current, config.bestDirection);
-	const confidence = computeConfidence(current, config.bestDirection);
-	return {
-		config,
-		segment,
-		results,
-		current,
-		baseline,
-		best,
-		confidence
-	};
-}
-function iterationLimitInfo(state, runtimeConfig) {
-	const maxIterations = Number(runtimeConfig.maxIterations);
-	if (!Number.isFinite(maxIterations) || maxIterations <= 0) return {
-		maxIterations: null,
-		remainingIterations: null,
-		limitReached: false
-	};
-	const max = Math.floor(maxIterations);
-	return {
-		maxIterations: max,
-		remainingIterations: Math.max(0, max - state.current.length),
-		limitReached: state.current.length >= max
-	};
-}
 function bestMetric(runs, direction) {
 	let best = null;
 	for (const run of runs) {
@@ -1424,31 +1396,6 @@ function computeConfidence(runs, direction) {
 	if (mad === 0) return null;
 	return Math.abs(best - baseline) / mad;
 }
-function parseMetricLines(output, options = {}) {
-	const metrics = {};
-	const maxMetrics = Number.isInteger(options.maxMetrics) && options.maxMetrics > 0 ? options.maxMetrics : Infinity;
-	const primaryMetricName = options.primaryMetricName ? String(options.primaryMetricName) : "";
-	const withTruncation = Boolean(options.withTruncation);
-	let truncated = false;
-	let retainedCount = 0;
-	const regex = /^METRIC\s+([^=\s]+)=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$/gim;
-	let match;
-	while ((match = regex.exec(output)) !== null) {
-		const name = match[1];
-		if (DENIED_METRIC_NAMES.has(name)) continue;
-		const value = Number(match[2]);
-		if (!Number.isFinite(value)) continue;
-		if (Object.hasOwn(metrics, name)) metrics[name] = value;
-		else if (name === primaryMetricName || retainedCount < maxMetrics) {
-			metrics[name] = value;
-			retainedCount += 1;
-		} else truncated = true;
-	}
-	return withTruncation ? {
-		metrics,
-		truncated
-	} : metrics;
-}
 function metricParseSource(result) {
 	if (!result) return "";
 	const retained = result.retainedMetricOutput || "";
@@ -1465,149 +1412,6 @@ function headText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES
 	const lines = trimmed.split(/\r?\n/);
 	if (lines.length > maxLines) trimmed = lines.slice(0, maxLines).join("\n");
 	return trimmed;
-}
-function metricLineName(line) {
-	const match = String(line || "").trim().match(/^METRIC\s+([^=\s]+)=/i);
-	return match && !DENIED_METRIC_NAMES.has(match[1]) ? match[1] : "";
-}
-function tailText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
-	let trimmed = text;
-	if (Buffer.byteLength(trimmed, "utf8") > maxBytes) {
-		const buf = Buffer.from(trimmed, "utf8");
-		trimmed = buf.subarray(Math.max(0, buf.length - maxBytes)).toString("utf8");
-	}
-	const lines = trimmed.split(/\r?\n/);
-	if (lines.length > maxLines) trimmed = lines.slice(-maxLines).join("\n");
-	return trimmed;
-}
-async function runShell(command, cwd, timeoutSeconds, options = {}) {
-	const startedAt = Date.now();
-	return await new Promise((resolve) => {
-		const child = spawn(command, {
-			cwd,
-			shell: true,
-			detached: process.platform !== "win32",
-			windowsHide: true,
-			stdio: [
-				"ignore",
-				"pipe",
-				"pipe"
-			]
-		});
-		let output = "";
-		let fullOutput = "";
-		let metricOutput = "";
-		let metricOutputBytes = 0;
-		let pendingMetricText = "";
-		const retainedMetricNames = new Set((options.retainMetricNames || []).map(String).filter(Boolean));
-		const retainedMetricLines = /* @__PURE__ */ new Map();
-		let outputTruncated = false;
-		let fullOutputTruncated = false;
-		let metricOutputTruncated = false;
-		let timedOut = false;
-		const appendMetricLine = (line) => {
-			const name = metricLineName(line);
-			if (name && retainedMetricNames.has(name)) retainedMetricLines.set(name, line);
-			const text = `${line}\n`;
-			const bytes = Buffer.byteLength(text, "utf8");
-			if (metricOutputBytes + bytes > METRIC_OUTPUT_CAPTURE_BYTES) {
-				metricOutputTruncated = true;
-				return;
-			}
-			metricOutput += text;
-			metricOutputBytes += bytes;
-		};
-		const appendMetricLines = (text) => {
-			pendingMetricText += text;
-			const lines = pendingMetricText.split(/\r?\n/);
-			pendingMetricText = lines.pop() || "";
-			if (pendingMetricText.length > METRIC_LINE_MAX_CHARS) pendingMetricText = pendingMetricText.slice(-METRIC_LINE_MAX_CHARS);
-			for (const line of lines) if (/^METRIC\s+/i.test(line.trim())) appendMetricLine(line);
-		};
-		const appendOutput = (text) => {
-			appendMetricLines(text);
-			fullOutput += text;
-			if (Buffer.byteLength(fullOutput, "utf8") > FULL_OUTPUT_CAPTURE_BYTES) {
-				const buf = Buffer.from(fullOutput, "utf8");
-				fullOutput = buf.subarray(Math.max(0, buf.length - FULL_OUTPUT_CAPTURE_BYTES)).toString("utf8");
-				fullOutputTruncated = true;
-			}
-			output += text;
-			if (Buffer.byteLength(output, "utf8") > OUTPUT_CAPTURE_BYTES) {
-				const buf = Buffer.from(output, "utf8");
-				output = buf.subarray(Math.max(0, buf.length - OUTPUT_CAPTURE_BYTES)).toString("utf8");
-				outputTruncated = true;
-			}
-		};
-		const timeout = setTimeout(() => {
-			timedOut = true;
-			killProcess(child.pid);
-		}, Math.max(1, timeoutSeconds) * 1e3);
-		child.stdout.on("data", (chunk) => {
-			appendOutput(chunk.toString("utf8"));
-		});
-		child.stderr.on("data", (chunk) => {
-			appendOutput(chunk.toString("utf8"));
-		});
-		child.on("error", (error) => {
-			clearTimeout(timeout);
-			if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
-			const retainedMetricOutput = [...retainedMetricLines.values()].map((line) => `${line}\n`).join("");
-			resolve({
-				command,
-				exitCode: null,
-				timedOut,
-				durationSeconds: (Date.now() - startedAt) / 1e3,
-				output: String(error.stack || error.message || error),
-				fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${String(error.stack || error.message || error)}`,
-				metricOutput,
-				retainedMetricOutput,
-				metricOutputTruncated,
-				outputTruncated,
-				fullOutputTruncated
-			});
-		});
-		child.on("close", (code) => {
-			clearTimeout(timeout);
-			if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
-			const retainedMetricOutput = [...retainedMetricLines.values()].map((line) => `${line}\n`).join("");
-			resolve({
-				command,
-				exitCode: code,
-				timedOut,
-				durationSeconds: (Date.now() - startedAt) / 1e3,
-				output,
-				fullOutput,
-				metricOutput,
-				retainedMetricOutput,
-				metricOutputTruncated,
-				outputTruncated,
-				fullOutputTruncated
-			});
-		});
-	});
-}
-function killProcess(pid) {
-	if (!pid) return;
-	if (process.platform === "win32") {
-		spawn("taskkill", [
-			"/pid",
-			String(pid),
-			"/t",
-			"/f"
-		], {
-			windowsHide: true,
-			stdio: "ignore"
-		});
-		return;
-	}
-	try {
-		process.kill(-pid, "SIGTERM");
-	} catch {
-		try {
-			process.kill(pid, "SIGTERM");
-		} catch {}
-	}
 }
 async function defaultBenchmarkCommand(workDir) {
 	if (await pathExists(path.join(workDir, "autoresearch.ps1"))) return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
@@ -1632,36 +1436,15 @@ function shouldRunChecks(policy, context) {
 	return context.explicitChecksCommand;
 }
 async function runProcess(command, args, cwd, options = {}) {
-	return await new Promise((resolve) => {
-		const child = spawn(command, args, {
-			cwd,
-			windowsHide: true,
-			stdio: [
-				"ignore",
-				"pipe",
-				"pipe"
-			]
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (chunk) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk.toString("utf8");
-		});
-		child.on("error", (error) => resolve({
-			code: -1,
-			stdout,
-			stderr: String(error.message || error)
-		}));
-		child.on("close", (code) => resolve({
-			code,
-			stdout,
-			stderr
-		}));
-		if (options.timeoutMs) setTimeout(() => killProcess(child.pid), options.timeoutMs);
+	const result = await runProcess$1(command, args, {
+		cwd,
+		timeoutSeconds: options.timeoutMs ? Math.max(1, Number(options.timeoutMs) / 1e3) : 600
 	});
+	return {
+		code: result.code,
+		stdout: result.stdout,
+		stderr: result.stderr
+	};
 }
 async function git(args, cwd) {
 	return await runProcess("git", args, cwd);
@@ -2634,184 +2417,6 @@ async function logExperiment(args) {
 		continuation: loopContinuation(workDir, stateAfter, config, "logged")
 	};
 }
-async function exportDashboard(args) {
-	const startedAt = Date.now();
-	const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-	const entries = readJsonl(workDir);
-	if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
-	const output = resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
-	const commands = dashboardCommands(workDir);
-	const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-	const showcaseExport = boolOption(args.showcase ?? args.showcaseMode, false);
-	const dashboardContext = {
-		deliveryMode: "static-export",
-		generatedAt,
-		sourceCwd: showcaseExport ? path.relative(PLUGIN_ROOT, workDir).replaceAll("\\", "/") || "." : workDir,
-		pluginVersion: PLUGIN_VERSION,
-		runtimeDrift: await buildDriftReport({
-			pluginRoot: PLUGIN_ROOT,
-			includeInstalled: false
-		}).catch((error) => ({
-			ok: false,
-			warnings: [error.message]
-		})),
-		publicExport: showcaseExport,
-		suppressEnvironmentWarnings: showcaseExport
-	};
-	const viewModel = await dashboardViewModel(workDir, config, dashboardContext);
-	const html = dashboardHtml(entries, {
-		workDir,
-		generatedAt,
-		jsonlName: "autoresearch.jsonl",
-		deliveryMode: "static-export",
-		liveActionsAvailable: false,
-		modeGuidance: {
-			title: "Static snapshot",
-			detail: "Read-only snapshot."
-		},
-		refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1e3,
-		commands,
-		settings: dashboardSettings(config, dashboardContext),
-		viewModel,
-		publicExport: showcaseExport
-	});
-	await fsp.writeFile(output, html, "utf8");
-	const modeGuidance = {
-		staticExport: output,
-		liveDashboardCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`,
-		difference: "The exported HTML is a read-only fallback snapshot; share the served dashboard URL when the operator needs a live link.",
-		fullJson: "Pass --json-full/--verbose on the CLI or full=true over MCP to include the full viewModel in the command response."
-	};
-	const progress = operationProgress({
-		stage: "export",
-		label: "Write dashboard HTML",
-		startedAt,
-		status: "completed",
-		outputTail: output
-	});
-	const fullJson = boolOption(args.json_full ?? args.jsonFull ?? args.full ?? args.verbose, false);
-	const result = {
-		ok: true,
-		workDir,
-		output,
-		summary: viewModel.summary,
-		baseline: viewModel.summary?.baseline ?? null,
-		best: viewModel.summary?.best ?? null,
-		nextAction: viewModel.nextBestAction?.detail || viewModel.readout?.nextAction || "",
-		modeGuidance,
-		progress
-	};
-	if (fullJson) result.viewModel = viewModel;
-	return result;
-}
-async function serveDashboard(args) {
-	const startedAt = Date.now();
-	const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-	let liveUrl = "";
-	const runtimeDrift = await buildDriftReport({
-		pluginRoot: PLUGIN_ROOT,
-		includeInstalled: true
-	}).catch((error) => ({
-		ok: false,
-		warnings: [error.message]
-	}));
-	const serveResult = await serveAutoresearch({
-		cwd: workDir,
-		port: args.port,
-		scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-		dashboardHtml: async ({ actionNonce, actionNonceHeader } = {}) => {
-			const entries = readJsonl(workDir);
-			const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-			const dashboardContext = {
-				deliveryMode: "live-server",
-				liveUrl,
-				generatedAt,
-				sourceCwd: workDir,
-				pluginVersion: PLUGIN_VERSION,
-				runtimeDrift
-			};
-			return dashboardHtml(entries, {
-				workDir,
-				generatedAt,
-				jsonlName: "autoresearch.jsonl",
-				deliveryMode: "live-server",
-				liveRefreshAvailable: true,
-				liveActionsAvailable: false,
-				actionNonce,
-				actionNonceHeader,
-				modeGuidance: {
-					title: "Live dashboard",
-					detail: "Live refresh is available; actions stay in CLI or MCP."
-				},
-				refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1e3,
-				commands: dashboardCommands(workDir),
-				settings: dashboardSettings(config, dashboardContext),
-				viewModel: await dashboardViewModel(workDir, config, dashboardContext)
-			});
-		},
-		viewModel: async () => dashboardViewModel(workDir, config, {
-			deliveryMode: "live-server",
-			liveUrl,
-			generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-			sourceCwd: workDir,
-			pluginVersion: PLUGIN_VERSION,
-			runtimeDrift
-		})
-	});
-	liveUrl = serveResult.url;
-	const health = await verifyLiveDashboardUrl(liveUrl);
-	liveDashboardServers.add(serveResult.server);
-	serveResult.server.on("close", () => {
-		liveDashboardServers.delete(serveResult.server);
-	});
-	return {
-		ok: true,
-		workDir: serveResult.workDir,
-		port: serveResult.port,
-		url: serveResult.url,
-		verified: health.ok,
-		healthUrl: health.url,
-		checkedAt: health.checkedAt,
-		modeGuidance: {
-			deliveryMode: "live-server",
-			difference: health.ok ? "This dashboard link was liveness-checked and can be handed to the operator; exported HTML is only a read-only fallback snapshot." : `Dashboard server started but liveness check failed: ${health.error}. Restart serve before handing this URL to the operator.`
-		},
-		progress: operationProgress({
-			stage: "serve",
-			label: "Start live dashboard",
-			startedAt,
-			status: "completed",
-			outputTail: serveResult.url
-		})
-	};
-}
-async function verifyLiveDashboardUrl(url) {
-	const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
-	const healthUrl = new URL("health", url).toString();
-	try {
-		const response = await fetch(healthUrl);
-		if (!response.ok) return {
-			ok: false,
-			url: healthUrl,
-			checkedAt,
-			error: `GET /health returned ${response.status}`
-		};
-		const payload = await response.json().catch(() => null);
-		return {
-			ok: payload?.ok === true,
-			url: healthUrl,
-			checkedAt,
-			error: payload?.ok === true ? "" : "GET /health did not return ok=true"
-		};
-	} catch (error) {
-		return {
-			ok: false,
-			url: healthUrl,
-			checkedAt,
-			error: error instanceof Error ? error.message : String(error)
-		};
-	}
-}
 async function clearSession(args) {
 	const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
 	if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) throw new Error("clear requires confirm=true for MCP or --yes for CLI");
@@ -3438,189 +3043,6 @@ async function doctorHooks(args = {}) {
 		docs: ["https://developers.openai.com/codex/hooks", "https://developers.openai.com/codex/concepts/customization#skills"]
 	};
 }
-async function benchmarkLint(args) {
-	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-	const state = currentState(workDir);
-	const metricName = validateMetricName(args.metric_name || args.metricName || state.config.metricName || "metric");
-	let sample = args.sample || "";
-	let commandResult = null;
-	let timeoutSeconds = numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
-	if (!sample) {
-		const command = args.command || await defaultBenchmarkCommand(workDir);
-		if (command) {
-			commandResult = await runShell(command, workDir, timeoutSeconds, { retainMetricNames: [metricName] });
-			sample = metricParseSource(commandResult);
-		}
-	}
-	const parsedMetrics = parseMetricLines(sample);
-	const emitsPrimary = finiteMetric(parsedMetrics[metricName]) != null;
-	const issues = [];
-	const warnings = [];
-	if (!sample) issues.push("No sample output, command, or default autoresearch script was available.");
-	else if (!Object.keys(parsedMetrics).length) issues.push("No METRIC name=value lines were parsed.");
-	else if (!emitsPrimary) issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
-	if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) {
-		issues.push(`Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`);
-		if (commandResult.timedOut && !Object.keys(parsedMetrics).length) warnings.push("Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.");
-	}
-	if (Object.keys(parsedMetrics).length > 20) warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
-	return {
-		ok: issues.length === 0,
-		workDir,
-		metricName,
-		checkedCommand: commandResult?.command || args.command || "",
-		parsedMetrics,
-		emitsPrimary,
-		issues,
-		warnings,
-		timeoutSeconds: commandResult ? timeoutSeconds : null,
-		contractCheckHint: "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
-		example: `METRIC ${metricName}=1.23`,
-		nextAction: issues.length ? commandResult?.timedOut ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.` : `Update the benchmark so it prints METRIC ${metricName}=<number>.` : "Benchmark output satisfies the metric contract."
-	};
-}
-async function benchmarkInspect(args) {
-	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-	const state = currentState(workDir);
-	const command = String(args.command || "").trim();
-	const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 5));
-	const warnings = benchmarkInspectWarnings(command);
-	if (!command) return {
-		ok: true,
-		workDir,
-		ranCommand: false,
-		command: "",
-		timeoutSeconds: null,
-		parsedMetrics: {},
-		outputPreview: "",
-		warnings,
-		hints: benchmarkInspectHints(state.config.metricName || ""),
-		nextAction: "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet."
-	};
-	const result = await runShell(command, workDir, timeoutSeconds, { retainMetricNames: [state.config.metricName].filter(Boolean) });
-	const output = metricParseSource(result) || result.fullOutput || result.output || "";
-	const parsedMetrics = parseMetricLines(output);
-	if (result.timedOut && Object.keys(parsedMetrics).length === 0) warnings.push("The inspect command timed out before any METRIC output. Use a benchmark-specific list/dry-run/artifact mode before running the full packet.");
-	if (result.exitCode !== 0 && !result.timedOut) warnings.push(`The inspect command exited ${result.exitCode}; verify the command is a bounded probe.`);
-	return {
-		ok: !result.timedOut && result.exitCode === 0,
-		workDir,
-		ranCommand: true,
-		command: result.command,
-		timeoutSeconds,
-		exitCode: result.exitCode,
-		timedOut: result.timedOut,
-		parsedMetrics,
-		outputPreview: headText(output || result.fullOutput || result.output || "", 30, 12e3),
-		outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
-		warnings,
-		hints: benchmarkInspectHints(state.config.metricName || ""),
-		nextAction: result.timedOut || result.exitCode !== 0 ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract." : "If this is bounded and representative, run benchmark-lint or the first compact next packet."
-	};
-}
-function benchmarkInspectWarnings(command) {
-	const warnings = [];
-	if (!command) return warnings;
-	if (/CODESTORY_PIPELINE_LIST_CASES\s*=\s*1/i.test(command)) warnings.push("This looks like the wrong CodeStory list flag seen in onboarding; use CODESTORY_EMBED_RESEARCH_LIST=1 for the current pipeline list mode.");
-	if (!/(LIST|DRY|INSPECT|SAMPLE|ARTIFACT|LIMIT|COUNT|HELP)/i.test(command)) warnings.push("Command does not advertise an obvious list/dry-run/sample bound. Confirm it will not start the full benchmark.");
-	return warnings;
-}
-function benchmarkInspectHints(metricName = "") {
-	return [
-		"Prefer a benchmark-native list, dry-run, sample, artifact, or small-count mode before a full packet.",
-		"Use benchmark-lint --sample for pure METRIC parser checks when the raw command is expensive.",
-		metricName ? `The primary contract remains METRIC ${metricName}=<number>.` : "After setup, the primary contract is METRIC <name>=<number>.",
-		"For the CodeStory parse/index/embed pipeline, the known case-list switch is CODESTORY_EMBED_RESEARCH_LIST=1."
-	];
-}
-async function checksInspect(args) {
-	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-	const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
-	const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
-	if (!command) return {
-		ok: true,
-		workDir,
-		ranCommand: false,
-		command: "",
-		timeoutSeconds: null,
-		exitCode: null,
-		timedOut: false,
-		failedTests: [],
-		warnings: ["No checks command was provided."],
-		hints: checksInspectHints(),
-		outputPreview: "",
-		nextAction: "Run checks-inspect with the exact correctness command before treating a failed suite as evidence."
-	};
-	const result = await runShell(command, workDir, timeoutSeconds);
-	const output = result.fullOutput || result.output || "";
-	const failedTests = extractFailedTests(output);
-	const warnings = checksInspectWarnings(command, output, result, failedTests);
-	return {
-		ok: !result.timedOut && result.exitCode === 0,
-		workDir,
-		ranCommand: true,
-		command: result.command,
-		timeoutSeconds,
-		exitCode: result.exitCode,
-		timedOut: result.timedOut,
-		failedTests,
-		warnings,
-		hints: checksInspectHints(),
-		outputPreview: headText(output, 50, 16e3),
-		outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
-		nextAction: result.timedOut || result.exitCode !== 0 ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed." : "Checks command completed cleanly; include it as verification evidence before logging or finalizing."
-	};
-}
-function checksInspectWarnings(command, output, result, failedTests) {
-	const warnings = [];
-	if (result.timedOut) warnings.push("The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.");
-	if (cargoUnexpectedArgument(output)) warnings.push("Cargo rejected the check command shape. cargo test accepts one name filter per invocation; run separate exact filters or a package target such as --lib.");
-	if (/cargo(?:\.exe)?\s+test/i.test(command) && looksLikeMultipleCargoFilters(command)) warnings.push("This cargo test command appears to include multiple name filters before --; prefer separate exact test invocations or a broader target filter.");
-	if (failedTests.length > 1) warnings.push(`${failedTests.length} tests failed. Classify touched-path failures separately from pre-existing or broad-suite failures before deciding keep/discard/checks_failed.`);
-	else if (failedTests.length === 1) warnings.push(`One test failed: ${failedTests[0]}. Confirm whether it is caused by the current packet before logging checks_failed.`);
-	if (result.exitCode !== 0 && !result.timedOut && failedTests.length === 0) warnings.push(`The checks command exited ${result.exitCode} without a parsed failed-test list; inspect the output for setup, command, or environment failure.`);
-	return warnings;
-}
-function cargoUnexpectedArgument(output = "") {
-	return /unexpected argument ['"`][^'"`]+['"`] found/i.test(output) && /Usage:\s+cargo(?:\.exe)? test/i.test(output);
-}
-function looksLikeMultipleCargoFilters(command = "") {
-	const tokens = String(command).split(/\s+--\s+/)[0].match(/"[^"]*"|'[^']*'|\S+/g) || [];
-	const testIndex = tokens.findIndex((token, index) => token.replace(/['"]/g, "") === "test" && index > 0);
-	if (testIndex < 0) return false;
-	const filters = [];
-	for (let index = testIndex + 1; index < tokens.length; index += 1) {
-		const token = tokens[index].replace(/^['"]|['"]$/g, "");
-		if (!token || token.startsWith("-")) {
-			if (token === "-p" || token === "--package" || token === "--manifest-path") index += 1;
-			continue;
-		}
-		filters.push(token);
-	}
-	return filters.length > 1;
-}
-function extractFailedTests(output = "") {
-	const tests = [];
-	const seen = /* @__PURE__ */ new Set();
-	for (const pattern of [/test\s+([^\s]+)\s+\.\.\.\s+FAILED/g, /^\s*([A-Za-z0-9_:.-]+)\s+---\s+FAILED/gm]) {
-		let match;
-		while (match = pattern.exec(output)) {
-			const name = match[1];
-			if (!seen.has(name)) {
-				seen.add(name);
-				tests.push(name);
-			}
-		}
-	}
-	return tests.slice(0, 20);
-}
-function checksInspectHints() {
-	return [
-		"For Cargo, do not pass multiple test name filters in one cargo test invocation.",
-		"Use separate exact filters for touched tests, or a broader package target when the goal is suite health.",
-		"If a broad suite fails, record which failures are touched-path, pre-existing, or environment-related before logging checks_failed."
-	];
-}
 async function newSegment(args) {
 	const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
 	const state = currentState(workDir);
@@ -3936,7 +3358,7 @@ async function handleMcpMessage(message) {
 				capabilities: { tools: {} },
 				serverInfo: {
 					name: "codex-autoresearch",
-					version: "1.1.5"
+					version: "1.1.10"
 				}
 			}
 		});

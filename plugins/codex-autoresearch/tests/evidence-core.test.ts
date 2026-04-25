@@ -11,6 +11,8 @@ import {
   finiteMetric,
   lastRunPacketFreshness,
   normalizeScopedFileFingerprints,
+  readJsonlTail,
+  streamJsonl,
   statusHash,
 } from "../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
@@ -110,6 +112,25 @@ test("core metric helpers do not coerce invalid values to numeric zero", async (
     assert.equal(state.current[2].metric, 0);
     assert.equal(state.baseline, 0);
     assert.equal(state.best, 0);
+  });
+});
+
+test("session JSONL helpers can stream and return bounded tails", async () => {
+  await withTempDir("jsonl-tail", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "evidence", metricName: "seconds" });
+    appendJsonl(dir, { run: 1, metric: 3, status: "keep", description: "Baseline." });
+    appendJsonl(dir, { run: 2, metric: 2, status: "discard", description: "Probe." });
+
+    const streamed = [];
+    for await (const entry of streamJsonl(dir)) streamed.push(entry);
+    assert.equal(streamed.length, 3);
+    assert.equal(streamed[0].type, "config");
+
+    const tail = await readJsonlTail(dir, 2);
+    assert.deepEqual(
+      tail.map((entry) => entry.run),
+      [1, 2],
+    );
   });
 });
 

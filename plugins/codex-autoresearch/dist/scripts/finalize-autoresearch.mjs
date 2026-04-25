@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 //#region scripts/finalize-autoresearch.ts
 function usage() {
 	return `Finalize an autoresearch branch into independent review branches.

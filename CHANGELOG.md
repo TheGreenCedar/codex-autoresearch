@@ -4,6 +4,15 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.1.10
+
+- Moved dashboard and inspection CLI logic into focused command modules and clarified the empty top-level commands documentation expectation.
+- Hardened external recipe catalog loading with response size limits and request timeouts.
+- Changed setup-generated missing benchmark/check scripts to fail loudly instead of shipping runnable TODO placeholders.
+- Added typed MCP output schema hints and installed-runtime drift confidence reporting.
+- Made experiment-memory lanes evidence-cited so generic strategic lanes do not render without session evidence.
+- Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.10`.
+
 ## 1.1.5
 
 - Fixed the dashboard timestamp x-axis toggle for exports that embed run timestamps as numeric epoch values.
@@ -65,12 +74,12 @@ Initial release of the Codex Autoresearch plugin as a single Codex-facing measur
 
 ### Changed
 
-- Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.0.0`.
 - Reframed the root README around human prompts and live demo usage; the README embeds the served live-dashboard screenshot instead of a static report export.
 - Rewrote the root README and linked user-facing docs in a sharper authored voice while preserving the command contracts and safety rules.
 - Promoted visual workflow/architecture docs ahead of long-form reference pages.
 - Rewrote the main skill around a compact state machine and GPT-5.5-friendly active-loop protocol.
 - Moved low-level dashboard diagnostics out of visible warning tags and into the Codex handoff/model data unless they are the actual next action.
+- Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.0.0`.
 
 ### Safety Notes
 

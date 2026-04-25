@@ -1,10 +1,11 @@
 import path from "node:path";
+import { normalizeCliCommandArguments } from "./mcp-tool-schemas.js";
 
 type LooseObject = Record<string, any>;
 type CliHandler = (args: LooseObject) => Promise<LooseObject>;
 
 export function createCliCommandHandlers(deps: LooseObject): Record<string, CliHandler> {
-  return {
+  return normalizeCliHandlers({
     setup: async (args) => {
       if (args.interactive) {
         return {
@@ -20,6 +21,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         result: await deps.setupSession({
           cwd: args.cwd,
           recipe: args.recipe,
+          recipeId: args.recipeId,
           catalog: args.catalog,
           name: args.name,
           goal: args.goal,
@@ -317,7 +319,16 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         dryRun: args.dryRun,
       }),
     }),
-  };
+  });
+}
+
+function normalizeCliHandlers(handlers: Record<string, CliHandler>): Record<string, CliHandler> {
+  return Object.fromEntries(
+    Object.entries(handlers).map(([command, handler]) => [
+      command,
+      (args: LooseObject) => handler(normalizeCliCommandArguments(command, args) as LooseObject),
+    ]),
+  );
 }
 
 export async function runCliCommand(

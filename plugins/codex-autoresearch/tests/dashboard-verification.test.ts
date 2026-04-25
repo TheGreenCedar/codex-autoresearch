@@ -6,7 +6,11 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { build as viteBuild } from "vite";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
-import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
+import {
+  buildActionRail,
+  buildDashboardViewModel,
+  buildTrustState,
+} from "../lib/dashboard-view-model.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -1128,7 +1132,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "1.1.5" },
+      local: { version: "1.1.10" },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1146,10 +1150,92 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.5");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.10");
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
+});
+
+test("dashboard action rail prioritizes stale packets before normal next actions", () => {
+  const rail = buildActionRail({
+    current: [
+      {
+        run: 1,
+        metric: 5,
+        status: "keep",
+        description: "Baseline",
+        confidence: 1,
+        asi: { next_action_hint: "Try a cache branch." },
+      },
+    ],
+    bestKept: { run: 1, metric: 5, status: "keep", description: "Baseline" },
+    latestFailure: null,
+    nextAction: "Try a cache branch.",
+    setupPlan: { defaultBenchmarkCommandReady: true },
+    guidedSetup: {
+      stage: "stale-last-run",
+      nextAction: "Replace stale packet.",
+      commands: { replaceLast: "node scripts/autoresearch.mjs next --cwd ." },
+      lastRun: {
+        freshness: {
+          fresh: false,
+          reason: "Last-run packet is stale: history changed.",
+        },
+      },
+    },
+    commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+  });
+
+  assert.equal(rail[0].kind, "stale-packet");
+  assert.equal(rail[0].priority, "Critical");
+  assert.match(rail[0].detail, /stale/);
+  assert.match(rail[0].explanation.avoids, /old metric/);
+});
+
+test("dashboard trust builder separates read-only mode from decision blockers", () => {
+  const clean = buildTrustState({
+    state: {
+      config: {
+        name: "trust clean",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+        pluginVersion: "1.1.10",
+      },
+      current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
+      baseline: 5,
+      best: 5,
+    },
+    settings: {
+      deliveryMode: "static-export",
+      generatedAt: "2026-04-24T00:00:00.000Z",
+      pluginVersion: "1.1.10",
+      sourceCwd: "C:/repo",
+    },
+  });
+
+  assert.equal(clean.trustState.status, "read-only");
+  assert.deepEqual(clean.decisionWarnings, []);
+  assert.match(clean.trustState.reasons.join("\n"), /Static export/);
+
+  const dirty = buildTrustState({
+    state: {
+      config: {
+        name: "trust dirty",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
+      baseline: 5,
+      best: 5,
+    },
+    settings: { deliveryMode: "live-server", pluginVersion: "1.1.10" },
+    warnings: ["Git worktree is dirty; review unrelated changes before logging a keep result."],
+  });
+
+  assert.equal(dirty.trustState.status, "needs-attention");
+  assert.match(dirty.decisionWarnings.join("\n"), /dirty/);
 });
 
 test("dashboard distinguishes static snapshots from served readouts", async () => {

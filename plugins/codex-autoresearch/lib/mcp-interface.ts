@@ -1,6 +1,6 @@
 import {
   mcpToolSchemas,
-  normalizeToolArguments,
+  normalizeRuntimeToolArguments,
   requireUnsafeCommandGate,
   validateToolArguments,
 } from "./mcp-tool-schemas.js";
@@ -9,6 +9,7 @@ import { toolNames } from "./tool-registry.js";
 export {
   mcpToolSchemas,
   mcpToolSchemasWithContracts,
+  normalizeRuntimeToolArguments,
   normalizeToolArguments,
   requireUnsafeCommandGate,
   toolSchemas,
@@ -20,8 +21,9 @@ export function createMcpInterface(deps) {
   const callTool = async (name, args) => {
     const normalizedArgs = validateToolArguments(name, args);
     requireUnsafeCommandGate(name, normalizedArgs, deps.boolOption);
+    const runtimeArgs = normalizeRuntimeToolArguments(name, normalizedArgs);
     const handler = toolHandlers[name];
-    if (handler) return await handler(normalizedArgs);
+    if (handler) return await handler(runtimeArgs);
     throw new Error(`Unknown tool: ${name}`);
   };
 

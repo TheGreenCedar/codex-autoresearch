@@ -645,8 +645,8 @@ test("next writes a reusable last-run packet and log can consume it", async () =
 		assert.equal(packet.decision.metrics.cache_hits, 8);
 		assert.equal(packet.decision.safeSuggestedStatus, "keep");
 		assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
-		assert.ok(packet.decision.diversityGuidance);
-		assert.equal(packet.decision.asiTemplate.lane, packet.decision.diversityGuidance.id);
+		assert.equal(packet.decision.diversityGuidance, null);
+		assert.equal(packet.decision.asiTemplate.lane, "");
 		const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
 		assert.equal(lastRun.decision.metric, 3);
 		assert.equal(lastRun.history.nextRun, 1);
@@ -2858,6 +2858,20 @@ test("mcp tools expose guidance and output contracts", async () => {
 	assert.equal(next.annotations.openWorldHint, true);
 	const richDoctor = mcpToolSchemasWithContracts.find((tool) => tool.name === "doctor_session");
 	assert.equal(richDoctor.outputSchema.type, "object");
+	assert.equal(guided.outputSchema.properties.workDir.type, "string");
+	assert.equal(guided.outputSchema.properties.commands.type, "array");
+	assert.equal(guided.outputSchema.properties.commands.items.type, "string");
+	assert.equal(next.outputSchema.properties.parsedMetrics, void 0);
+	assert.equal(next.outputSchema.properties.decision.type, "object");
+	assert.equal(richDoctor.outputSchema.properties.issues.type, "array");
+	assert.equal(richDoctor.outputSchema.properties.issues.items.type, "string");
+	const qualityGap = toolSchemas.find((tool) => tool.name === "measure_quality_gap");
+	assert.equal(qualityGap.outputSchema.properties.open.type, "number");
+	assert.equal(qualityGap.outputSchema.properties.openItems.items.type, "string");
+	for (const tool of toolSchemas) for (const [field, schema] of Object.entries(tool.outputSchema.properties || {})) {
+		assert.ok(schema.type, `${tool.name}.${field} should expose a concrete output type`);
+		if (schema.type === "array") assert.ok(schema.items, `${tool.name}.${field} needs items`);
+	}
 	assert.equal(richDoctor.annotations.safety, "Read-only unless benchmark check runs configured commands.");
 	assert.equal(richDoctor.annotations.readOnlyHint, false);
 	assert.equal(richDoctor.annotations.openWorldHint, true);
@@ -2865,6 +2879,47 @@ test("mcp tools expose guidance and output contracts", async () => {
 	assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
 	assert.equal(toolMutates("next_experiment"), true);
 	assert.equal(toolMutates("read_state"), false);
+});
+test("CLI and MCP argument normalization share runtime contracts", async () => {
+	const { normalizeCliCommandArguments, normalizeRuntimeToolArguments, normalizeToolArguments, validateToolArguments } = await import("../lib/mcp-tool-schemas.mjs");
+	const mcpArgs = validateToolArguments("setup_plan", {
+		workingDir: "C:/repo",
+		recipe: "node-test-runtime",
+		metricName: "seconds",
+		benchmarkCommand: "node bench.js",
+		commitPaths: ["src"],
+		allowUnsafeCommand: true
+	});
+	assert.deepEqual(mcpArgs, {
+		working_dir: "C:/repo",
+		recipe_id: "node-test-runtime",
+		metric_name: "seconds",
+		benchmark_command: "node bench.js",
+		commit_paths: ["src"],
+		allow_unsafe_command: true
+	});
+	assert.deepEqual(normalizeRuntimeToolArguments("setup_plan", mcpArgs), {
+		cwd: "C:/repo",
+		recipeId: "node-test-runtime",
+		metricName: "seconds",
+		benchmarkCommand: "node bench.js",
+		commitPaths: ["src"],
+		allow_unsafe_command: true
+	});
+	assert.deepEqual(normalizeCliCommandArguments("setup-plan", {
+		cwd: "C:/repo",
+		recipe: "node-test-runtime",
+		metricName: "seconds",
+		benchmarkCommand: "node bench.js",
+		commitPaths: ["src"]
+	}), {
+		cwd: "C:/repo",
+		recipeId: "node-test-runtime",
+		metricName: "seconds",
+		benchmarkCommand: "node bench.js",
+		commitPaths: ["src"]
+	});
+	assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
 });
 test("plugin MCP registration uses the lightweight startup entrypoint", async () => {
 	const registration = JSON.parse(await readFile(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["codex-autoresearch"];
@@ -3477,7 +3532,7 @@ test("next command runs preflight and benchmark as one decision packet", async (
 		assert.equal(payload.decision.safeSuggestedStatus, "keep");
 		assert.match(payload.decision.statusGuidance, /Safe to consider keep/);
 		assert.ok(Array.isArray(payload.decision.lanePortfolio));
-		assert.ok(payload.decision.diversityGuidance);
+		assert.equal(payload.decision.diversityGuidance, null);
 		assert.match(payload.nextAction, /Log this run/);
 	});
 });
@@ -3728,7 +3783,7 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
 		})
 	});
 	assert.equal(report.ok, false);
-	assert.equal(report.local.version, "1.1.5");
+	assert.equal(report.local.version, "1.1.10");
 	assert.equal(report.installed.version, "0.5.1");
 	assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
 	assert.match(report.warnings.join("\n"), /restart Codex/);

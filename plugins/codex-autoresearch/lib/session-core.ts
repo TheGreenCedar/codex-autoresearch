@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { createInterface } from "node:readline";
 
 export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
 export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
@@ -92,18 +93,52 @@ export function appendJsonl(workDir, entry) {
 export function readJsonl(workDir) {
   const filePath = jsonlPath(workDir);
   if (!fs.existsSync(filePath)) return [];
-  return fs
-    .readFileSync(filePath, "utf8")
+  return parseJsonlLines(fs.readFileSync(filePath, "utf8"), filePath);
+}
+
+export async function* streamJsonl(workDir) {
+  const filePath = jsonlPath(workDir);
+  if (!fs.existsSync(filePath)) return;
+  const stream = fs.createReadStream(filePath, { encoding: "utf8" });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  let index = 0;
+  try {
+    for await (const rawLine of lines) {
+      index += 1;
+      const line = String(rawLine).trim();
+      if (!line) continue;
+      yield parseJsonlLine(line, filePath, index);
+    }
+  } finally {
+    stream.destroy();
+  }
+}
+
+export async function readJsonlTail(workDir, maxEntries = 50) {
+  const limit = Math.max(0, Math.floor(Number(maxEntries) || 0));
+  if (limit === 0) return [];
+  const tail = [];
+  for await (const entry of streamJsonl(workDir)) {
+    tail.push(entry);
+    if (tail.length > limit) tail.shift();
+  }
+  return tail;
+}
+
+function parseJsonlLines(text, filePath) {
+  return String(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line, index) => {
-      try {
-        return JSON.parse(line);
-      } catch (error) {
-        throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: ${error.message}`);
-      }
-    });
+    .map((line, index) => parseJsonlLine(line, filePath, index + 1));
+}
+
+function parseJsonlLine(line, filePath, index) {
+  try {
+    return JSON.parse(line);
+  } catch (error) {
+    throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${error.message}`);
+  }
 }
 
 export function bestMetric(runs, direction) {

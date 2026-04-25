@@ -42,7 +42,7 @@ function buildExperimentMemory({ runs = [], direction = "lower", settings = {} }
 			run: run.run,
 			nextActionHint
 		});
-		if (!asi.hypothesis && !asi.evidence && !nextActionHint && !asi.rollback_reason) missingAsiRuns.push(run.run);
+		if (!asi.evidence && !asi.rollback_reason && (run.status === "keep" || !asi.hypothesis)) missingAsiRuns.push(run.run);
 		if (run.status === "keep") kept.push(compact);
 		else if (FAILURE_STATUSES.has(run.status)) rejected.push({
 			...compact,
@@ -188,97 +188,109 @@ function buildLanePortfolio({ runs, direction, families, plateau, latestNextActi
 	const exhaustedFamily = families.find((family) => family.exhausted);
 	const checksPolicy = settings.checksPolicy || "always";
 	const keepPolicy = settings.keepPolicy || "primary-only";
+	const latestRun = runs.at(-1);
+	const latestKept = kept.at(-1);
+	const latestRejected = rejected.at(-1);
+	const lane = (item, evidence) => ({
+		...item,
+		evidence,
+		reason: `${item.reason} Evidence: ${evidence}.`
+	});
 	const aggregateLanes = [
-		{
+		latestKept && lane({
 			id: "promote",
 			label: "Promote",
 			title: "Promote",
 			count: kept.length,
-			priority: kept.length ? "medium" : "low",
-			status: kept.length ? "ready" : "watch",
-			reason: kept.at(-1)?.description || kept.at(-1)?.asi?.hypothesis || "No kept lane yet.",
-			nextActionHint: kept.at(-1)?.asi?.next_action_hint || kept.at(-1)?.description || "Keep measured wins visible for finalization."
-		},
-		{
+			priority: "medium",
+			status: "ready",
+			reason: latestKept.description || latestKept.asi?.hypothesis || "Kept work exists.",
+			nextActionHint: latestKept.asi?.next_action_hint || latestKept.description || "Keep measured wins visible for finalization."
+		}, `run ${latestKept.run} kept metric ${latestKept.metric ?? "unknown"}`),
+		latestRejected && lane({
 			id: "avoid",
 			label: "Avoid",
 			title: "Avoid",
 			count: rejected.length,
-			priority: rejected.length ? "high" : "low",
-			status: rejected.length ? "ready" : "watch",
-			reason: rejected.at(-1)?.asi?.rollback_reason || rejected.at(-1)?.description || "No rejected lane yet.",
-			nextActionHint: rejected.at(-1)?.asi?.next_action_hint || rejected.at(-1)?.asi?.rollback_reason || rejected.at(-1)?.description || "Keep rejected paths visible before the next edit."
-		},
-		{
+			priority: "high",
+			status: "ready",
+			reason: latestRejected.asi?.rollback_reason || latestRejected.description || "Rejected work exists.",
+			nextActionHint: latestRejected.asi?.next_action_hint || latestRejected.asi?.rollback_reason || latestRejected.description || "Keep rejected paths visible before the next edit."
+		}, `run ${latestRejected.run} status ${latestRejected.status}`),
+		latestNextAction && latestRun && lane({
 			id: "explore",
 			label: "Explore",
 			title: "Explore",
-			count: latestNextAction ? 1 : 0,
-			priority: latestNextAction ? "medium" : "low",
+			count: 1,
+			priority: "medium",
 			status: "ready",
-			reason: latestNextAction || "No queued ASI hint yet.",
-			nextActionHint: latestNextAction || "Add ASI next_action_hint when logging the next result."
-		}
-	];
+			reason: latestNextAction,
+			nextActionHint: latestNextAction
+		}, `latest run ${latestRun.run} ASI next action`)
+	].filter(Boolean);
 	return [
-		{
+		plateau.detected && lane({
 			id: "distant-scout",
 			label: "Distant scout",
-			priority: plateau.detected ? "high" : "medium",
+			priority: "high",
 			status: "ready",
-			reason: plateau.detected ? plateau.recommendation : "Reserve one lane for a materially different family each batch.",
+			reason: plateau.recommendation || "Plateau detected.",
 			nextActionHint: "Try a different algorithm, model family, data slice, or architecture knob before another small parameter tweak."
-		},
-		{
+		}, "plateau.detected session state"),
+		topFamily && lane({
 			id: "incumbent-confirmation",
 			label: "Incumbent confirmation",
-			priority: topFamily && !plateau.detected ? "high" : "medium",
-			status: topFamily ? "ready" : "waiting",
-			reason: topFamily ? `Best-known local family: ${topFamily.label}.` : "No kept incumbent yet.",
-			nextActionHint: topFamily ? topFamily.bestKeptRun?.nextActionHint || topFamily.latestRun?.nextActionHint || latestNextAction || "Repeat or stress the best kept idea only after a fresh scout lane exists." : "Keep a baseline before confirmation lanes."
-		},
-		{
+			priority: !plateau.detected ? "high" : "medium",
+			status: "ready",
+			reason: `Best-known local family: ${topFamily.label}.`,
+			nextActionHint: topFamily.bestKeptRun?.nextActionHint || topFamily.latestRun?.nextActionHint || latestNextAction || "Repeat or stress the best kept idea only after a fresh scout lane exists."
+		}, `family ${topFamily.label} best kept metric ${topFamily.bestMetric ?? "unknown"}`),
+		exhaustedFamily && lane({
 			id: "near-neighbor",
 			label: "Near-neighbor tweak",
 			priority: plateau.detected ? "low" : "medium",
 			status: plateau.detected ? "cooldown" : "ready",
-			reason: exhaustedFamily ? `${exhaustedFamily.label} looks exhausted.` : "Small tweaks are useful after the portfolio has enough novelty.",
+			reason: `${exhaustedFamily.label} looks exhausted.`,
 			nextActionHint: "Limit near-neighbor tweaks to one lane when recent runs cluster together."
-		},
-		{
+		}, `family ${exhaustedFamily.label} exhausted after ${exhaustedFamily.runs} run(s)`),
+		recentFailures >= 2 && lane({
 			id: "constraint-removal",
 			label: "Constraint removal",
-			priority: recentFailures >= 2 ? "high" : "medium",
-			status: recentFailures ? "ready" : "watch",
-			reason: recentFailures ? `${recentFailures} recent failed or discarded run(s) need a different blocker hypothesis.` : "Use this lane when failures share a cause.",
+			priority: "high",
+			status: "ready",
+			reason: `${recentFailures} recent failed or discarded run(s) need a different blocker hypothesis.`,
 			nextActionHint: "Change the constraint, benchmark slice, or validation guard before retesting the same idea."
-		},
-		{
+		}, `${recentFailures} failure statuses in the last 5 run(s)`),
+		(missingAsi || checksPolicy === "manual") && lane({
 			id: "measurement-quality",
 			label: "Measurement quality",
-			priority: missingAsi || checksPolicy === "manual" ? "high" : "low",
-			status: missingAsi || checksPolicy === "manual" ? "ready" : "watch",
-			reason: missingAsi ? `${missingAsi} run(s) are missing ASI memory.` : checksPolicy === "manual" ? "Checks are manual, so keep decisions need extra review evidence." : "Keep benchmark noise and ASI quality from hiding real wins.",
+			priority: "high",
+			status: "ready",
+			reason: missingAsi ? `${missingAsi} run(s) are missing ASI memory.` : "Checks are manual, so keep decisions need extra review evidence.",
 			nextActionHint: "Add clearer ASI or tighten the benchmark before spending more iterations."
-		},
-		{
+		}, missingAsi ? `${missingAsi} missing ASI run(s)` : `checksPolicy=${checksPolicy}`),
+		keepPolicy === "primary-or-risk-reduction" && kept.length > 0 && lane({
 			id: "promotion-policy",
 			label: "Promotion policy",
-			priority: keepPolicy === "primary-or-risk-reduction" ? "medium" : "low",
+			priority: "medium",
 			status: "watch",
 			reason: `Keep policy is ${keepPolicy}; use this lane when a run reduces risk without moving the primary metric.`,
 			nextActionHint: "Only promote non-primary wins when ASI evidence names the reduced risk."
-		},
+		}, `keepPolicy=${keepPolicy} with ${kept.length} kept run(s)`),
 		...aggregateLanes,
-		{
+		(plateau.detected || repeatedFamilyEvidence(families)) && lane({
 			id: "wild-card",
 			label: "Wild-card eureka",
-			priority: plateau.detected || runs.length >= 8 ? "high" : "medium",
+			priority: "high",
 			status: "ready",
-			reason: "Always reserve one slot for a non-local solution that could change the search space.",
+			reason: "Current evidence suggests the local search space is stale.",
 			nextActionHint: "Try the idea that would make the current lane obsolete if it worked."
-		}
-	];
+		}, plateau.detected ? "plateau.detected session state" : repeatedFamilyEvidence(families))
+	].filter(Boolean);
+}
+function repeatedFamilyEvidence(families) {
+	const repeated = families.find((family) => family.runs >= 3);
+	return repeated ? `family ${repeated.label} has ${repeated.runs} run(s)` : "";
 }
 function bestIncumbentFamily(families, direction) {
 	let best = null;

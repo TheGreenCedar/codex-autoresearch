@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "1.1.5",
+  "version": "1.1.10",
   "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",

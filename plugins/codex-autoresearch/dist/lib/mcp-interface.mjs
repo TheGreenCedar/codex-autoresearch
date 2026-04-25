@@ -1,13 +1,14 @@
 import { toolNames } from "./tool-registry.mjs";
-import { mcpToolSchemas, mcpToolSchemasWithContracts, normalizeToolArguments, requireUnsafeCommandGate, toolSchemas, validateToolArguments } from "./mcp-tool-schemas.mjs";
+import { mcpToolSchemas, mcpToolSchemasWithContracts, normalizeRuntimeToolArguments, normalizeToolArguments, requireUnsafeCommandGate, toolSchemas, validateToolArguments } from "./mcp-tool-schemas.mjs";
 //#region lib/mcp-interface.ts
 function createMcpInterface(deps) {
 	const toolHandlers = createToolHandlers(deps);
 	const callTool = async (name, args) => {
 		const normalizedArgs = validateToolArguments(name, args);
 		requireUnsafeCommandGate(name, normalizedArgs, deps.boolOption);
+		const runtimeArgs = normalizeRuntimeToolArguments(name, normalizedArgs);
 		const handler = toolHandlers[name];
-		if (handler) return await handler(normalizedArgs);
+		if (handler) return await handler(runtimeArgs);
 		throw new Error(`Unknown tool: ${name}`);
 	};
 	return {
@@ -57,4 +58,4 @@ function ensureToolHandlerCoverage(handlers) {
 	return handlers;
 }
 //#endregion
-export { createMcpInterface, mcpToolSchemas, mcpToolSchemasWithContracts, normalizeToolArguments, requireUnsafeCommandGate, toolSchemas, validateToolArguments };
+export { createMcpInterface, mcpToolSchemas, mcpToolSchemasWithContracts, normalizeRuntimeToolArguments, normalizeToolArguments, requireUnsafeCommandGate, toolSchemas, validateToolArguments };

@@ -157,7 +157,7 @@ const checks = [
   },
   {
     id: "single-skill-surface",
-    file: "skills/codex-autoresearch/SKILL.md, skills/codex-autoresearch/agents/openai.yaml, commands/",
+    file: "skills/codex-autoresearch/SKILL.md, skills/codex-autoresearch/agents/openai.yaml",
     description: "The plugin exposes one Codex-facing skill and no duplicate command docs.",
     run: async () => {
       const files = await skillFiles();
@@ -221,18 +221,25 @@ const checks = [
       const changelog = await readRootText("CHANGELOG.md");
       const readme = await readRootText("README.md");
       const agents = await readRootText("AGENTS.md");
-      return !changelog.includes("## Unreleased") &&
+      const releasedNotesPresent = includesAll(changelog, [
+        "## 1.0.1",
+        "source downloads now include the compiled TypeScript runtime",
+        "tracked `dist/` runtime",
+        "## 1.0.0",
+        "prompt-plan",
+        "prompt_plan",
+        "workflow and architecture diagram docs",
+        "Bumped public package",
+        "Static dashboard exports remain read-only snapshots",
+      ]);
+      const unreleasedNotesOk =
+        !changelog.includes("## Unreleased") ||
         includesAll(changelog, [
-          "## 1.0.1",
-          "source downloads now include the compiled TypeScript runtime",
-          "tracked `dist/` runtime",
-          "## 1.0.0",
-          "prompt-plan",
-          "prompt_plan",
-          "workflow and architecture diagram docs",
-          "Bumped public package",
-          "Static dashboard exports remain read-only snapshots",
-        ]) &&
+          "focused command modules",
+          "empty top-level commands documentation expectation",
+        ]);
+      return releasedNotesPresent &&
+        unreleasedNotesOk &&
         includesAll(readme, ["## Changelog", "CHANGELOG.md", "Surface removals"]) &&
         includesAll(agents, [
           "root `CHANGELOG.md`",

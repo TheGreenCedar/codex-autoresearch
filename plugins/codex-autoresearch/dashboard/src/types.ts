@@ -264,6 +264,42 @@ export interface DashboardViewModel {
   [key: string]: unknown;
 }
 
+export interface DashboardSettingsInput {
+  deliveryMode?: string;
+  liveUrl?: string;
+  pluginVersion?: string;
+  runtimeDrift?: unknown;
+  generatedAt?: string;
+  sourceCwd?: string;
+  researchTruth?: ResearchTruthModel;
+  [key: string]: unknown;
+}
+
+export interface DashboardContext {
+  state: {
+    config: SessionConfig | Record<string, unknown>;
+    segment?: number;
+    current?: SessionRun[];
+    baseline?: number | null;
+    best?: number | null;
+    confidence?: number | null;
+    workDir?: string;
+    cwd?: string;
+    researchTruth?: ResearchTruthModel;
+    [key: string]: unknown;
+  };
+  settings?: DashboardSettingsInput;
+  commands?: Array<{ label?: string; command?: string; [key: string]: unknown }>;
+  setupPlan?: Record<string, unknown> | null;
+  guidedSetup?: Record<string, unknown> | null;
+  qualityGap?: QualityGapModel | null;
+  finalizePreview?: FinalizePreviewModel | null;
+  recipes?: Array<Record<string, unknown>>;
+  experimentMemory?: ExperimentMemoryModel | null;
+  drift?: Record<string, unknown> | null;
+  warnings?: unknown[];
+}
+
 export interface DashboardMode {
   liveRefresh: boolean;
   liveActions: boolean;

@@ -1,7 +1,8 @@
+import { normalizeCliCommandArguments } from "./mcp-tool-schemas.mjs";
 import path from "node:path";
 //#region lib/cli-handlers.ts
 function createCliCommandHandlers(deps) {
-	return {
+	return normalizeCliHandlers({
 		setup: async (args) => {
 			if (args.interactive) return { result: await deps.interactiveSetup({
 				cwd: args.cwd,
@@ -12,6 +13,7 @@ function createCliCommandHandlers(deps) {
 			return { result: await deps.setupSession({
 				cwd: args.cwd,
 				recipe: args.recipe,
+				recipeId: args.recipeId,
 				catalog: args.catalog,
 				name: args.name,
 				goal: args.goal,
@@ -259,7 +261,10 @@ function createCliCommandHandlers(deps) {
 			confirm: args.confirm,
 			dryRun: args.dryRun
 		}) })
-	};
+	});
+}
+function normalizeCliHandlers(handlers) {
+	return Object.fromEntries(Object.entries(handlers).map(([command, handler]) => [command, (args) => handler(normalizeCliCommandArguments(command, args))]));
 }
 async function runCliCommand(command, args, handlers) {
 	const handler = handlers[command];

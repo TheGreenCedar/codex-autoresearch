@@ -1,5 +1,5 @@
-import { RESEARCH_DIR, parseQualityGaps, researchDirPath, safeSlug } from "./session-core.mjs";
 import { runShell } from "./runner.mjs";
+import { RESEARCH_DIR, parseQualityGaps, researchDirPath, safeSlug } from "./session-core.mjs";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";

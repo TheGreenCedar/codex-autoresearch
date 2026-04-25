@@ -1,5 +1,15 @@
 import { actionPolicyForTool } from "./tool-registry.js";
 
+type JsonSchema = {
+  type?: string | string[];
+  description?: string;
+  enum?: string[];
+  items?: JsonSchema;
+  required?: string[];
+  properties?: Record<string, JsonSchema>;
+  additionalProperties?: boolean | JsonSchema;
+};
+
 const CONTRACTS = {
   setup_plan: {
     purpose: "Read-only setup readiness and first-run command plan.",
@@ -313,11 +323,108 @@ function humanizeToolName(name) {
     .join(" ");
 }
 
-function basicOutputSchema(required) {
+function basicOutputSchema(required: string[]): JsonSchema {
+  const properties = Object.fromEntries(
+    required.map((field) => [field, schemaForOutputField(field)]),
+  );
   return {
     type: "object",
     required: required.filter((field) => field === "ok" || field === "workDir"),
-    properties: Object.fromEntries(required.map((field) => [field, {}])),
+    properties,
     additionalProperties: true,
   };
+}
+
+function outputFieldSchemas(): Record<string, JsonSchema> {
+  return {
+    action: stringSchema("Safe next action summary."),
+    best: objectSchema("Best kept run summary."),
+    candidates: arraySchema(objectSchema("Candidate quality-gap item."), "Candidate items."),
+    checkedAt: stringSchema("ISO timestamp for a liveness check."),
+    closed: numberSchema("Closed quality-gap item count."),
+    commands: arraySchema(stringSchema("Command line."), "Copyable command list."),
+    config: objectSchema("Autoresearch session config."),
+    continuation: objectSchema("Active-loop continuation contract."),
+    decision: objectSchema("Allowed logging decision packet."),
+    deleted: arraySchema(stringSchema("Deleted artifact path."), "Deleted artifact paths."),
+    doctor: objectSchema("Doctor readiness result."),
+    drift: objectSchema("Runtime/source drift report."),
+    dryRun: booleanSchema("Whether the mutation was previewed only."),
+    entry: objectSchema("Ledger/config entry."),
+    experiment: objectSchema("Logged experiment entry."),
+    failedTests: arraySchema(stringSchema("Failed test or check."), "Failed tests or checks."),
+    files: arraySchema(stringSchema("Created or touched file path."), "Created or touched files."),
+    finalizePreview: objectSchema("Finalization readiness preview."),
+    guidedFlow: arraySchema(objectSchema("Guided workflow step."), "Guided workflow steps."),
+    healthUrl: stringSchema("Dashboard health-check URL."),
+    hints: arraySchema(stringSchema("Operator hint."), "Operator hints."),
+    init: objectSchema("Initial ledger entry result."),
+    intent: objectSchema("Inferred prompt intent."),
+    issues: arraySchema(stringSchema("Validation or readiness issue."), "Issues."),
+    logHint: objectSchema("Suggested log command or payload."),
+    memory: objectSchema("Experiment memory summary."),
+    missing: arraySchema(stringSchema("Missing required setup field."), "Missing setup fields."),
+    modeGuidance: objectSchema("Dashboard mode guidance."),
+    nextAction: stringSchema("Recommended next operator action."),
+    ok: booleanSchema("True when the tool completed successfully."),
+    open: numberSchema("Open quality-gap item count."),
+    openItems: arraySchema(stringSchema("Open quality-gap item."), "Open quality-gap items."),
+    output: stringSchema("Output file path or command output."),
+    outputPreview: stringSchema("Bounded command output preview."),
+    parsedMetrics: objectSchema("Parsed METRIC values keyed by metric name."),
+    port: numberSchema("Local dashboard port."),
+    protocol: objectSchema("Operator protocol guidance."),
+    qualityGap: objectSchema("Quality-gap scratchpad summary."),
+    ready: booleanSchema("True when the preview is ready to apply."),
+    recipes: arraySchema(objectSchema("Recipe summary."), "Available recipes."),
+    recommendedRecipe: objectSchema("Recommended benchmark recipe."),
+    run: objectSchema("Benchmark run packet."),
+    runs: objectSchema("Run-count summary."),
+    setup: objectSchema("Setup readiness packet."),
+    slug: stringSchema("Research slug."),
+    stage: stringSchema("Setup or resume stage."),
+    stopRecommended: booleanSchema("True when candidate extraction recommends stopping."),
+    stopStatus: stringSchema("Recommended stop status."),
+    summary: objectSchema("Dashboard export summary."),
+    templates: arraySchema(objectSchema("Report template."), "Report templates."),
+    updates: arraySchema(stringSchema("Applied config update."), "Applied updates."),
+    url: stringSchema("Served local dashboard URL."),
+    verified: booleanSchema("True when the dashboard health check passed."),
+    warnings: arraySchema(stringSchema("Warning message."), "Warnings."),
+    whySafe: stringSchema("Evidence explaining why the next action is safe."),
+    workDir: stringSchema("Resolved project working directory."),
+    wouldDelete: arraySchema(
+      stringSchema("Artifact path to delete."),
+      "Previewed deletion targets.",
+    ),
+  };
+}
+
+function schemaForOutputField(field: string): JsonSchema {
+  return (
+    outputFieldSchemas()[field] || {
+      description: `${field} value.`,
+      type: ["string", "number", "boolean", "object", "array", "null"],
+    }
+  );
+}
+
+function stringSchema(description: string): JsonSchema {
+  return { type: "string", description };
+}
+
+function numberSchema(description: string): JsonSchema {
+  return { type: "number", description };
+}
+
+function booleanSchema(description: string): JsonSchema {
+  return { type: "boolean", description };
+}
+
+function objectSchema(description: string): JsonSchema {
+  return { type: "object", description, additionalProperties: true };
+}
+
+function arraySchema(items: JsonSchema, description: string): JsonSchema {
+  return { type: "array", description, items };
 }
