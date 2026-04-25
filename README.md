@@ -1,6 +1,4 @@
 <div align="center">
-<img height="120" alt="Codex Autoresearch" src="plugins/codex-autoresearch/assets/logo.svg" />
-
 # Codex Autoresearch
 
 ### Measured improvement loops for Codex
