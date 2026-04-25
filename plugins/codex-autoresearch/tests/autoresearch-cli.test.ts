@@ -3297,10 +3297,16 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
 });
 
 test("runShell configures a POSIX process group for timeout cleanup", async () => {
-  const [shim, runner] = await Promise.all([
+  const [shim, bootstrap, runner] = await Promise.all([
     readFile(cli, "utf8"),
+    readFile(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs"), "utf8"),
     readFile(path.join(pluginRoot, "lib", "runner.ts"), "utf8"),
   ]);
-  assert.match(shim, /await import\(new URL\("\.\.\/dist\/scripts\/autoresearch\.mjs"/);
+  assert.match(shim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(
+    shim,
+    /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
+  );
+  assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
 });
