@@ -189,14 +189,12 @@ const checks = [
         !demoReadmeExists &&
         includesAll(root, [
           "## Install",
-          "## Start With Codex",
-          "Use Codex Autoresearch",
-          "## Live Demo",
+          "## Try it",
+          "Use $Codex Autoresearch",
+          "## Dashboard",
           "## Docs",
           "![Codex Autoresearch live dashboard",
           "plugins/codex-autoresearch/assets/showcase/dashboard-demo.png",
-          "node scripts/autoresearch.mjs serve --cwd examples/demo-session",
-          "plugins/codex-autoresearch/examples/demo-session/demo.md",
           "plugins/codex-autoresearch/docs/index.md",
           "plugins/codex-autoresearch/docs/workflows.md",
           "plugins/codex-autoresearch/docs/architecture.md",
@@ -234,13 +232,10 @@ const checks = [
       ]);
       const unreleasedNotesOk =
         !changelog.includes("## Unreleased") ||
-        includesAll(changelog, [
-          "focused command modules",
-          "empty top-level commands documentation expectation",
-        ]);
+        includesAll(changelog, ["Clarified licensing", "explicit Apache-2.0 terms"]);
       return releasedNotesPresent &&
         unreleasedNotesOk &&
-        includesAll(readme, ["## Changelog", "CHANGELOG.md", "Surface removals"]) &&
+        includesAll(readme, ["## Changelog", "CHANGELOG.md"]) &&
         includesAll(agents, [
           "root `CHANGELOG.md`",
           "Removed invocation surfaces need migration notes",
@@ -285,12 +280,7 @@ const checks = [
         !demoExport.includes("C:\\Users\\alber") &&
         !demoExport.includes("C:\\Program Files") &&
         !readme.includes("```mermaid") &&
-        includesAll(readme, [
-          "Live Demo",
-          "Docs index",
-          "dashboard-demo.png",
-          "serve --cwd examples/demo-session",
-        ]) &&
+        includesAll(readme, ["Docs index", "dashboard-demo.png"]) &&
         includesAll(joined, [
           "Workflow Diagrams",
           "Architecture Diagrams",

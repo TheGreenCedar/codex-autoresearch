@@ -29,6 +29,7 @@ const productChecks = [
     node,
     [
       "--test",
+      "--test-concurrency",
       "dist/tests/autoresearch-cli.test.mjs",
       "dist/tests/dashboard-verification.test.mjs",
       "dist/tests/evidence-core.test.mjs",
@@ -205,13 +206,20 @@ async function runPackageArtifactCheck() {
 
   const missing = requiredPaths.filter((file) => !packedPaths.has(file));
   const unexpected = forbiddenPaths.filter((file) => packedPaths.has(file));
-  if (missing.length || unexpected.length) {
+  const leakedDirs = Array.from(packedPaths).filter(
+    (file) => file.startsWith("docs/") || file.startsWith("examples/"),
+  );
+
+  if (missing.length || unexpected.length || leakedDirs.length) {
     console.log("fail package-artifact");
     if (missing.length) {
       console.log(indent(`Missing packaged files:\n${missing.join("\n")}`));
     }
     if (unexpected.length) {
       console.log(indent(`Unexpected source files in package:\n${unexpected.join("\n")}`));
+    }
+    if (leakedDirs.length) {
+      console.log(indent(`Leaked directory files in package:\n${leakedDirs.join("\n")}`));
     }
     return false;
   }

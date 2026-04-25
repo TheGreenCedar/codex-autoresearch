@@ -21,8 +21,6 @@
     "assets/",
     "dist/lib/",
     "dist/scripts/",
-    "docs/",
-    "examples/",
     "scripts/*.mjs",
     "skills/"
   ],
@@ -40,7 +38,7 @@
     "format:check": "oxfmt --check --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.json tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts package.json",
     "prepare": "npm run build:node",
     "test": "run-s build:node test:compiled",
-    "test:compiled": "node --test dist/tests/autoresearch-cli.test.mjs dist/tests/dashboard-verification.test.mjs dist/tests/evidence-core.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/finalize-report.test.mjs dist/tests/full-product.test.mjs dist/tests/perfection-benchmark.test.mjs",
+    "test:compiled": "node --test --test-concurrency dist/tests/autoresearch-cli.test.mjs dist/tests/dashboard-verification.test.mjs dist/tests/evidence-core.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/finalize-report.test.mjs dist/tests/full-product.test.mjs dist/tests/perfection-benchmark.test.mjs",
     "check:product": "npm run build:node && node scripts/check.mjs",
     "check": "run-p typecheck lint format:check && npm run check:product"
   },

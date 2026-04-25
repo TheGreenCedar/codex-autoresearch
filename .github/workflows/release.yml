@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build_and_release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/codex-autoresearch
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: plugins/codex-autoresearch/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build node
+        run: npm run build:node
+
+      - name: Build dashboard
+        run: npm run build:dashboard
+
+      - name: Run full check gate
+        run: npm run check
+
+      - name: Run MCP smoke test
+        run: node scripts/autoresearch.mjs mcp-smoke
+
+      - name: Run tests
+        run: npm test
+
+      - name: Create package artifact
+        run: npm pack
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: plugins/codex-autoresearch/*.tgz
+          generate_release_notes: true
