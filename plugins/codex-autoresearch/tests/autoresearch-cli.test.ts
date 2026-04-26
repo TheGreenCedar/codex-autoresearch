@@ -3292,6 +3292,8 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
 
   assert.equal(report.ok, false);
   assert.equal(report.local.version, PLUGIN_VERSION);
+  assert.equal(report.local.surfaces.cliServer, PLUGIN_VERSION);
+  assert.equal(report.local.surfaces.mcpEntrypoint, PLUGIN_VERSION);
   assert.equal(report.installed.version, "0.5.1");
   assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
   assert.match(report.warnings.join("\n"), /restart Codex/);

@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runProcess, tailText } from "./runner.js";
+import { PLUGIN_VERSION } from "./plugin-version.js";
 
 type LooseObject = Record<string, any>;
 
@@ -14,7 +15,8 @@ export async function inspectVersionSurfaces({ pluginRoot }) {
         path.join(pluginRoot, "dist", "scripts", "autoresearch.mjs"),
         path.join(pluginRoot, "scripts", "autoresearch.mjs"),
       ],
-      /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s,
+      /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*(?:"([^"]+)"|PLUGIN_VERSION)/s,
+      PLUGIN_VERSION,
     ),
     mcpEntrypoint: await readRegexVersionCandidate(
       [
@@ -22,7 +24,8 @@ export async function inspectVersionSurfaces({ pluginRoot }) {
         path.join(pluginRoot, "dist", "scripts", "autoresearch-mcp.mjs"),
         path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs"),
       ],
-      /const VERSION = "([^"]+)"/,
+      /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*(?:"([^"]+)"|PLUGIN_VERSION)/s,
+      PLUGIN_VERSION,
     ),
   };
   const values = Object.values(surfaces).filter(Boolean);
@@ -189,18 +192,20 @@ async function readJsonVersion(filePath) {
   }
 }
 
-async function readRegexVersion(filePath, regex) {
+async function readRegexVersion(filePath, regex, fallbackVersion = "") {
   try {
     const text = await fsp.readFile(filePath, "utf8");
-    return text.match(regex)?.[1] || "";
+    const match = text.match(regex);
+    if (!match) return "";
+    return match[1] || fallbackVersion;
   } catch {
     return "";
   }
 }
 
-async function readRegexVersionCandidate(filePaths, regex) {
+async function readRegexVersionCandidate(filePaths, regex, fallbackVersion = "") {
   for (const filePath of filePaths) {
-    const version = await readRegexVersion(filePath, regex);
+    const version = await readRegexVersion(filePath, regex, fallbackVersion);
     if (version) return version;
   }
   return "";

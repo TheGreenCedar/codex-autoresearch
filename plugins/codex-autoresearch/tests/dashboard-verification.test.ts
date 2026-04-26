@@ -20,6 +20,7 @@ const dashboardBuildPath = path.join(pluginRoot, "assets", "dashboard-build", "d
 const dashboardCssPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css");
 let tempBuildDir = "";
 let dashboardAssets = null;
+const dashboardWindows = [];
 
 test.before(async () => {
   tempBuildDir = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-test-"));
@@ -39,6 +40,17 @@ test.before(async () => {
 
 test.after(async () => {
   if (tempBuildDir) await rm(tempBuildDir, { recursive: true, force: true });
+});
+
+test.afterEach(() => {
+  while (dashboardWindows.length > 0) {
+    const window = dashboardWindows.pop();
+    try {
+      window?.close?.();
+    } catch {
+      // Ignore cleanup errors for deterministic teardown.
+    }
+  }
 });
 
 const runDashboard = async (entries, meta = {}, options = {}) => {
@@ -62,6 +74,7 @@ const runDashboard = async (entries, meta = {}, options = {}) => {
         : "file:///autoresearch-dashboard.html"),
     beforeParse: options.beforeParse,
   });
+  dashboardWindows.push(dom.window);
   await waitForDashboardReady(dom.window);
   const getById = (id) => {
     const element = dom.window.document.getElementById(id);
