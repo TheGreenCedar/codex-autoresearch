@@ -34,6 +34,20 @@ UX, the user experience:
 - At session start and resume, start or reuse the live dashboard, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
 - Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/crash/checks decision, the next move, blockers, dashboard URL, and verification.
 
+## Documentation Awareness
+
+The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the source checkout). Use it to understand the product depth, safety rules, and operator workflows before guessing.
+
+- **Start here**: `docs/index.md` is the map.
+- **Workflow & Architecture**: `docs/workflows.md` and `docs/architecture.md` show the motion and boundaries.
+- **Concepts**: `docs/concepts.md` defines terms like ASI, packets, and lanes.
+- **Walkthrough**: `docs/walkthrough.md` is the canonical end-to-end narrated loop.
+- **Onboarding & Operations**: `docs/start.md` and `docs/operate.md` cover first runs and daily use.
+- **Safety & Trust**: `docs/trust.md` details metric integrity, drift, and Git safety.
+- **Finalization**: `docs/finish.md` covers the cleanup and review branch flow.
+- **Tools**: `docs/mcp-tools.md` contains the full tool contract and error reference.
+- **Troubleshooting**: `docs/troubleshooting.md` for diagnosis of MCP, cache, and metrics issues.
+
 ## Start Or Resume
 
 1. Identify the owning repo or child package before Git, installs, tests, builds, or autoresearch commands.

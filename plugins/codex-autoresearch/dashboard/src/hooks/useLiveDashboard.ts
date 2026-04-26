@@ -33,7 +33,7 @@ export function useLiveDashboard({
       ? mode.detail
       : `${mode.detail}${meta.generatedAt ? ` Generated ${formatDisplayTime(meta.generatedAt)}.` : ""}`,
   }));
-  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [liveEnabled, setLiveEnabled] = useState(mode.liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
   const [actionsById, setActionsById] = useState<Record<string, ActionState>>({});
   const [lastReceipt, setLastReceipt] = useState<ActionReceipt | null>(null);

@@ -6,6 +6,18 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 1.1.14
+
+### Fixed
+
+- Restored published plugin reliability around runtime bootstrap behavior by ensuring the release artifact includes docs and runtime metadata checks are included in artifact verification.
+
+### Changed
+
+- Default the served dashboard live-refresh control to "on" when the dashboard is in a live-readout mode, so sessions now begin with automatic refresh enabled and stay up-to-date by default.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.14`.
+
 ## 1.1.13
 
 ### Fixed

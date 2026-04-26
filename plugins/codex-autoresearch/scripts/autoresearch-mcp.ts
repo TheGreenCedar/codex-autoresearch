@@ -7,11 +7,11 @@ import {
   validateToolArguments,
 } from "../lib/mcp-interface.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const CLI_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
-const VERSION = "1.1.13";
 const callCliTool = createCliToolCaller({ cliScript: CLI_SCRIPT, pluginRoot: PLUGIN_ROOT });
 
 let buffer = Buffer.alloc(0);
@@ -85,7 +85,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: VERSION },
+        serverInfo: { name: "codex-autoresearch", version: PLUGIN_VERSION },
       },
     });
     return;

@@ -47,6 +47,7 @@ import {
   isBaselineEligibleMetricRun,
 } from "../lib/session-core.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 type LooseObject = Record<string, any>;
 
@@ -89,7 +90,6 @@ const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
-const PLUGIN_VERSION = "1.1.13";
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -4237,7 +4237,7 @@ async function handleMcpMessage(message) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "codex-autoresearch", version: "1.1.13" },
+        serverInfo: { name: "codex-autoresearch", version: PLUGIN_VERSION },
       },
     });
     return;

@@ -204,6 +204,7 @@ async function runPackageArtifactCheck() {
       ".codex-plugin/plugin.json",
       ".mcp.json",
       "assets/dashboard-build/dashboard-app.js",
+      "docs/index.md",
       "dist/lib/mcp-cli-adapter.mjs",
       "dist/lib/mcp-interface.mjs",
       "dist/lib/mcp-tool-schemas.mjs",
@@ -224,12 +225,10 @@ async function runPackageArtifactCheck() {
 
     const missing = requiredPaths.filter((file) => !packedPaths.has(file));
     const unexpected = forbiddenPaths.filter((file) => packedPaths.has(file));
-    const leakedDirs = Array.from(packedPaths).filter(
-      (file) => file.startsWith("docs/") || file.startsWith("examples/"),
-    );
+    const leakedExamples = Array.from(packedPaths).filter((file) => file.startsWith("examples/"));
     const wrapperProblems = await packageWrapperProblems(packedEntries);
 
-    if (missing.length || unexpected.length || leakedDirs.length || wrapperProblems.length) {
+    if (missing.length || unexpected.length || leakedExamples.length || wrapperProblems.length) {
       console.log("fail package-artifact");
       if (missing.length) {
         console.log(indent(`Missing packaged files:\n${missing.join("\n")}`));
@@ -237,8 +236,8 @@ async function runPackageArtifactCheck() {
       if (unexpected.length) {
         console.log(indent(`Unexpected source files in package:\n${unexpected.join("\n")}`));
       }
-      if (leakedDirs.length) {
-        console.log(indent(`Leaked directory files in package:\n${leakedDirs.join("\n")}`));
+      if (leakedExamples.length) {
+        console.log(indent(`Leaked examples files in package:\n${leakedExamples.join("\n")}`));
       }
       if (wrapperProblems.length) {
         console.log(indent(`Broken package launchers:\n${wrapperProblems.join("\n")}`));
