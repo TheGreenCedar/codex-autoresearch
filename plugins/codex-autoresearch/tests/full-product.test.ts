@@ -12,6 +12,7 @@ import {
 } from "../lib/session-core.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
@@ -267,7 +268,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
-    assert.equal(doctorPayload.drift.local.surfaces.packageJson, "1.1.13");
+    assert.equal(doctorPayload.drift.local.surfaces.packageJson, PLUGIN_VERSION);
     assert.equal(doctorPayload.drift.ok, true);
   });
 });
