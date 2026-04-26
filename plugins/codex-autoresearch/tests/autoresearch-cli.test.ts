@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
@@ -3290,7 +3291,7 @@ test("drift report warns when installed Codex MCP runtime lags source", async ()
   });
 
   assert.equal(report.ok, false);
-  assert.equal(report.local.version, "1.1.13");
+  assert.equal(report.local.version, PLUGIN_VERSION);
   assert.equal(report.installed.version, "0.5.1");
   assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
   assert.match(report.warnings.join("\n"), /restart Codex/);

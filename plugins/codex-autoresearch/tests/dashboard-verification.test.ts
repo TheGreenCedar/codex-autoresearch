@@ -12,6 +12,7 @@ import {
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const dashboardTemplatePath = path.join(pluginRoot, "assets", "template.html");
@@ -1132,7 +1133,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
     },
     drift: {
       ok: false,
-      local: { version: "1.1.13" },
+      local: { version: PLUGIN_VERSION },
       installed: {
         available: true,
         version: "0.5.1",
@@ -1150,7 +1151,7 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt/);
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
-  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, "1.1.13");
+  assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, PLUGIN_VERSION);
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
   assert.equal(viewModel.nextBestAction.kind, "stale-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
@@ -1200,7 +1201,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
         metricName: "seconds",
         metricUnit: "s",
         bestDirection: "lower",
-        pluginVersion: "1.1.13",
+        pluginVersion: PLUGIN_VERSION,
       },
       current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
       baseline: 5,
@@ -1209,7 +1210,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
     settings: {
       deliveryMode: "static-export",
       generatedAt: "2026-04-24T00:00:00.000Z",
-      pluginVersion: "1.1.13",
+      pluginVersion: PLUGIN_VERSION,
       sourceCwd: "C:/repo",
     },
   });
@@ -1230,7 +1231,7 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
       baseline: 5,
       best: 5,
     },
-    settings: { deliveryMode: "live-server", pluginVersion: "1.1.13" },
+    settings: { deliveryMode: "live-server", pluginVersion: PLUGIN_VERSION },
     warnings: ["Git worktree is dirty; review unrelated changes before logging a keep result."],
   });
 
@@ -1439,7 +1440,7 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(getById("live-title").textContent, "Live dashboard");
   assert.equal(queryById("trust-strip"), null);
   assert.equal(getById("refresh-now").textContent, "Refresh live data");
-  assert.equal(getById("live-toggle").textContent, "Auto-refresh off");
+  assert.equal(getById("live-toggle").textContent, "Auto-refresh on");
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-toggle").hidden, false);
   assert.equal(queryById("action-note"), null);
@@ -1600,7 +1601,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   dom.window.close();
 });
 
-test("served dashboard live toggle starts automatic refresh", async () => {
+test("served dashboard live refresh starts by default and can be stopped", async () => {
   const entries = [
     {
       type: "config",
@@ -1647,13 +1648,15 @@ test("served dashboard live toggle starts automatic refresh", async () => {
     },
   );
 
-  getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => dom.window.__liveInterval, "Live toggle did not start an interval.");
+  await waitFor(
+    () => dom.window.__liveInterval,
+    "Live dashboard did not start refresh automatically.",
+  );
 
   assert.equal(dom.window.__liveInterval.ms, 1234);
   await waitFor(
     () => dom.window.__refreshFetches.length >= 2,
-    "Live toggle did not refresh immediately.",
+    "Live dashboard did not refresh immediately.",
   );
   assert.deepEqual(dom.window.__refreshFetches.slice(0, 2), [
     "autoresearch.jsonl",

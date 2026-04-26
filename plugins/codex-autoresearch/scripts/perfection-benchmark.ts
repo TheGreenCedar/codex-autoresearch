@@ -2,6 +2,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -114,20 +115,22 @@ const checks = [
       const manifest = await readJson(".codex-plugin/plugin.json");
       const cli = await readText("scripts/autoresearch.ts");
       const mcp = await readText("scripts/autoresearch-mcp.ts");
-      const pluginVersion = cli.match(/const PLUGIN_VERSION = "([^"]+)"/)?.[1];
-      const serverVersion = cli.match(
-        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*"([^"]+)"/s,
-      )?.[1];
-      const mcpVersion = mcp.match(/const VERSION = "([^"]+)"/)?.[1];
+      const cliVersionBound =
+        cli.includes('from "../lib/plugin-version.js"') &&
+        /pluginVersion:\s*PLUGIN_VERSION/.test(cli) &&
+        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*PLUGIN_VERSION/.test(cli);
+      const mcpVersionBound =
+        mcp.includes('from "../lib/plugin-version.js"') &&
+        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*PLUGIN_VERSION/.test(mcp);
       if (
         pkg.version === manifest.version &&
-        pkg.version === pluginVersion &&
-        pkg.version === serverVersion &&
-        pkg.version === mcpVersion
+        pkg.version === PLUGIN_VERSION &&
+        cliVersionBound &&
+        mcpVersionBound
       )
         return pass();
       return fail(
-        `package=${pkg.version}, manifest=${manifest.version}, plugin=${pluginVersion || "(missing)"}, server=${serverVersion || "(missing)"}, mcp=${mcpVersion || "(missing)"}`,
+        `package=${pkg.version}, manifest=${manifest.version}, CLI version-bound=${cliVersionBound}, MCP version-bound=${mcpVersionBound}, shared=${PLUGIN_VERSION}`,
       );
     },
   },
