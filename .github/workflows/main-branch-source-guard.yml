@@ -9,6 +9,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - edited
 
 permissions:
   contents: read
@@ -18,12 +19,15 @@ jobs:
     name: Enforce source branch
     runs-on: ubuntu-latest
     steps:
-      - name: Require dev source branch
+      - name: Require repository dev source branch
         env:
           HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
-          if [ "$HEAD_REF" != "dev" ]; then
-            echo "Pull requests into main must use dev as the source branch. Current source: $HEAD_REF"
+          if [ "$HEAD_REF" != "dev" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "Pull requests into main must use $BASE_REPO:dev as the source branch."
+            echo "Current source: $HEAD_REPO:$HEAD_REF"
             exit 1
           fi
-          echo "Pull requests into main are allowed from dev."
+          echo "Pull requests into main are allowed from $BASE_REPO:dev."
