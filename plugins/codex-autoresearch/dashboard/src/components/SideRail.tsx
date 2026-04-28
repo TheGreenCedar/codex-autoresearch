@@ -5,13 +5,13 @@ export function SideRail({ live, showcase }) {
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>
       <nav className="side-nav">
-        <a href="#decision-rail">
-          <span className="nav-icon">1</span>
-          <span>Move</span>
-        </a>
         <a href="#trend-panel">
-          <span className="nav-icon">2</span>
+          <span className="nav-icon">1</span>
           <span>Metric</span>
+        </a>
+        <a href="#decision-rail">
+          <span className="nav-icon">2</span>
+          <span>Move</span>
         </a>
         <a href="#codex-brief">
           <span className="nav-icon">3</span>

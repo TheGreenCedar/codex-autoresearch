@@ -5,6 +5,8 @@
 - This repository is a wrapper for the Codex Autoresearch plugin. The active product code lives under `plugins/codex-autoresearch`.
 - Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, the main plugin skill, MCP server code, and dashboard assets.
 - The root `README.md` is the only README and the public-facing documentation surface. Keep root-relative links valid.
+- Do not put AI/operator self-instructions, implementation notes, or workflow reminders in the root `README.md`; keep it friendly for users evaluating or installing the plugin.
+- When leaving instructions for future Codex work, update only this `AGENTS.md`, the AI-facing plugin skill at `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`, or the plugin docs under `plugins/codex-autoresearch/docs/`.
 - The root `CHANGELOG.md` is the release-note surface. Update it for user-facing behavior, docs, skill, command-surface, dashboard, MCP, migration, or version changes.
 - Do not assume root-level npm scripts exist. The package scripts live in `plugins/codex-autoresearch/package.json`.
 

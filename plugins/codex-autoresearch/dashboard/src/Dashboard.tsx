@@ -51,9 +51,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     >
       <nav className="skip-links" aria-label="Skip links">
         <a href="#trend-panel">Run chart</a>
+        <a href="#decision-rail">Current decision</a>
         <a href="#codex-brief">Codex brief</a>
         <a href="#strategy-memory">Session memory</a>
-        <a href="#decision-rail">Current decision</a>
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail live={mode.liveRefresh} showcase={mode.showcase} />
@@ -74,17 +74,18 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         />
 
         <section className="metric-layout" aria-label="Metric evidence">
-          <TrendPanel session={session} readout={readout} />
+          <div className="metric-primary-column">
+            <TrendPanel session={session} readout={readout} />
+            <section className="decision-layout" aria-label="Current operator decision">
+              <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
+            </section>
+          </div>
           <ScoreStrip session={session} readout={readout} />
         </section>
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />
           <StrategyMemory viewModel={viewModel} />
-        </section>
-
-        <section className="decision-layout" aria-label="Current operator decision">
-          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
         </section>
 
         <Ledger session={session} readout={readout} />

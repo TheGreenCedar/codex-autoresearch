@@ -147,7 +147,7 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.notEqual(rail.includes("No decisions yet"), true);
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
-  assert.equal(metricDetails.open, true);
+  assert.equal(metricDetails.open, false);
   assert.match(getById("metric-detail-primary").textContent, /4\.8/);
 });
 
@@ -1019,6 +1019,42 @@ test("dashboard view model marks perfect quality metrics suspicious without fres
   );
 });
 
+test("dashboard view model treats perfect secondary metrics as suspicious", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "perfect secondary",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 1,
+          status: "keep",
+          description: "Thin perfect score",
+          metrics: {
+            mrr_at_10: 1,
+            hit_at_1: 1,
+            quality_component: 1,
+          },
+        },
+      ],
+      baseline: 1,
+      best: 1,
+      confidence: null,
+    },
+  });
+
+  const reasons = viewModel.researchTruth.suspiciousReasons.join("\n");
+  assert.match(reasons, /mrr_at_10/);
+  assert.match(reasons, /hit_at_1/);
+  assert.match(reasons, /quality_component/);
+  assert.match(reasons, /promotion-grade/);
+});
+
 test("dashboard view model clears suspicious-perfect reasons when breadth and promotion evidence are present", () => {
   const viewModel = buildDashboardViewModel({
     state: {
@@ -1206,6 +1242,51 @@ test("dashboard action rail prioritizes stale packets before normal next actions
   assert.match(rail[0].explanation.avoids, /old metric/);
 });
 
+test("dashboard action rail keeps active research ahead of ready finalization", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "active research",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 0.5,
+          status: "keep",
+          description: "Baseline",
+          asi: { next_action_hint: "Run the holdout scorer packet next." },
+        },
+      ],
+      baseline: 0.5,
+      best: 0.5,
+      confidence: null,
+    },
+    guidedSetup: {
+      stage: "ready",
+      state: { limit: { limitReached: false, remainingIterations: 3 } },
+    },
+    finalizePreview: {
+      ready: true,
+      nextAction: "Preview finalization.",
+      warnings: [],
+    },
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
+      {
+        label: "Finalize preview",
+        command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
+      },
+    ],
+  });
+
+  assert.equal(viewModel.nextBestAction.kind, "continue");
+  assert.match(viewModel.nextBestAction.detail, /holdout scorer/);
+});
+
 test("dashboard trust builder separates read-only mode from decision blockers", () => {
   const clean = buildTrustState({
     state: {
@@ -1304,8 +1385,8 @@ test("dashboard distinguishes static snapshots from served readouts", async () =
     commands: [],
   });
 
-  assert.equal(getById("live-title").textContent, "Static snapshot");
-  assert.match(getById("live-detail").textContent, /Read-only export/);
+  assert.ok(getById("dashboard-toolbar"));
+  assert.equal(queryById("live-region"), null);
   assert.equal(queryById("trust-strip"), null);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
@@ -1349,7 +1430,8 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
     },
   );
 
-  assert.equal(getById("live-title").textContent, "Static snapshot");
+  assert.ok(getById("dashboard-toolbar"));
+  assert.equal(queryById("live-region"), null);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
   assert.equal(queryById("live-actions-panel"), null);
@@ -1404,15 +1486,16 @@ test("showcase dashboard presents the demo as live while keeping diagnostics in 
     },
   });
 
-  assert.equal(getById("live-title").textContent, "Live runboard");
-  assert.match(getById("live-detail").textContent, /100 embedded packets/);
+  assert.ok(getById("dashboard-toolbar"));
+  assert.equal(queryById("live-region"), null);
+  assert.equal(getById("refresh-now").hidden, true);
+  assert.equal(getById("live-toggle").hidden, true);
   assert.equal(queryById("trust-strip"), null);
   assert.equal(
     getById("next-action-detail").textContent,
     "Check memory footprint before keeping the path.",
   );
   assert.equal(getById("decision-evidence-chips").textContent.includes("Needs attention"), false);
-  assert.equal(getById("refresh-now").hidden, false);
   assert.equal(queryById("live-actions-panel"), null);
 });
 
@@ -1450,7 +1533,8 @@ test("served dashboard exposes live refresh but no command-center controls", asy
     commands: [],
   });
 
-  assert.equal(getById("live-title").textContent, "Live dashboard");
+  assert.ok(getById("dashboard-toolbar"));
+  assert.equal(queryById("live-region"), null);
   assert.equal(queryById("trust-strip"), null);
   assert.equal(getById("refresh-now").textContent, "Refresh live data");
   assert.equal(getById("live-toggle").textContent, "Auto-refresh on");
@@ -1594,14 +1678,42 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
+  const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
+    item.textContent?.trim(),
+  );
 
   assert.deepEqual(hrefs, [
     "#trend-panel",
+    "#decision-rail",
     "#codex-brief",
     "#strategy-memory",
-    "#decision-rail",
     "#ledger",
   ]);
+  assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
+  assert.equal(dom.window.document.querySelector(".masthead"), null);
+  const decisionRail = dom.window.document.getElementById("decision-rail");
+  const trendPanel = dom.window.document.getElementById("trend-panel");
+  const scoreStrip = dom.window.document.querySelector(".score-strip");
+  assert.ok(decisionRail);
+  assert.ok(trendPanel);
+  assert.ok(scoreStrip);
+  assert.equal(
+    Boolean(
+      trendPanel.compareDocumentPosition(decisionRail) &
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    ),
+    true,
+    "Current decision should render directly below the run chart.",
+  );
+  assert.equal(
+    Boolean(
+      decisionRail.compareDocumentPosition(scoreStrip) &
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    ),
+    true,
+    "Score strip should not sit between the chart and current decision.",
+  );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
     assert.ok(target, `Missing skip target ${href}`);

@@ -359,7 +359,66 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
     assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
 
+    const compositePromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Optimize a composite score: 0.7 quality + 0.2 speed + 0.1 memory.",
+    ]);
+    assert.equal(compositePromptPlan.code, 0, compositePromptPlan.stderr);
+    const compositePayload = JSON.parse(compositePromptPlan.stdout);
+    assert.equal(compositePayload.intent.metric.name, "score");
+    assert.equal(compositePayload.intent.metric.direction, "higher");
+
+    await writeFile(
+      path.join(dir, "Cargo.toml"),
+      [
+        "[package]",
+        'name = "bench-target"',
+        'version = "0.1.0"',
+        "",
+        "[[bench]]",
+        'name = "criterion_score"',
+        "harness = false",
+        "",
+      ].join("\n"),
+    );
+    const cargoPromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Optimize the Cargo criterion benchmark performance score.",
+    ]);
+    assert.equal(cargoPromptPlan.code, 0, cargoPromptPlan.stderr);
+    const cargoPayload = JSON.parse(cargoPromptPlan.stdout);
+    assert.equal(cargoPayload.intent.inferredFrom.discoveredBenchmark.path, "Cargo.toml#bench");
+    assert.equal(cargoPayload.intent.setupDefaults.benchmarkCommand, "");
+    assert.ok(cargoPayload.intent.missing.includes("benchmark_command"));
+    assert.match(cargoPayload.intent.setupDefaults.constraints.join("\n"), /wrapper/);
+    await rm(path.join(dir, "Cargo.toml"), { force: true });
+
     await mkdir(path.join(dir, "scripts"), { recursive: true });
+    await writeFile(
+      path.join(dir, "scripts", "semantic-domain-benchmark.mjs"),
+      "console.log('METRIC semantic_score=0.5')\n",
+    );
+    const domainPromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Start a new Autoresearch session for the semantic domain benchmark.",
+    ]);
+    assert.equal(domainPromptPlan.code, 0, domainPromptPlan.stderr);
+    const domainPayload = JSON.parse(domainPromptPlan.stdout);
+    assert.equal(domainPayload.intent.metric.name, "semantic_score");
+    assert.match(
+      domainPayload.intent.setupDefaults.benchmarkCommand,
+      /scripts\/semantic-domain-benchmark\.mjs/,
+    );
+
     await writeFile(
       path.join(dir, "scripts", "autoresearch-indexer-embedder-pipeline.mjs"),
       "console.log('METRIC pipeline_score=123')\nconsole.log('METRIC quality_component=1')\n",

@@ -149,8 +149,8 @@ Usage:
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
-  node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
@@ -174,6 +174,7 @@ Usage:
 
 Benchmark output format:
   METRIC name=value
+  ARTIFACT name=path
 `;
 }
 
@@ -576,6 +577,7 @@ async function setupPlan(args) {
   const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
   const guideCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`;
   const scopeWarnings = scopeWarningsFromArgs(planArgs);
+  const integrityPreflight = await benchmarkIntegrityPreflight(workDir, config, state);
   const preSetupCheckpoint =
     commitPaths.length > 0
       ? {
@@ -621,6 +623,7 @@ async function setupPlan(args) {
     benchmarkMode,
     benchmarkLintCommand,
     scopeWarnings,
+    integrityPreflight,
     nextCommand: command,
     guideCommand,
     baselineCommand,
@@ -735,11 +738,12 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     useDiscoveredBenchmark?.direction ||
     (metricName === "quality_gap" ||
     metricName === "p99_p90_ratio" ||
-    metricName === "score" ||
     metricName === "seconds" ||
     metricName === "rss_mb"
       ? "lower"
-      : repoRecipe?.direction || "lower");
+      : metricLooksHigherIsBetter(metricName)
+        ? "higher"
+        : repoRecipe?.direction || "lower");
   const metricUnit =
     explicit.metricUnit ||
     useDiscoveredBenchmark?.metricUnit ||
@@ -856,26 +860,23 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
 }
 
 async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
-  const scriptsDir = path.join(workDir, "scripts");
-  if (!(await pathExists(scriptsDir))) return null;
   const candidates = [];
-  for (const entry of await fsp.readdir(scriptsDir, { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isFile()) continue;
-    if (!/^autoresearch[-_].+\.(?:mjs|js|cjs|ts)$/.test(entry.name)) continue;
-    const absolute = path.join(scriptsDir, entry.name);
+  for (const script of await discoverBenchmarkFiles(workDir)) {
+    const absolute = path.join(workDir, script.path);
     const text = await fsp.readFile(absolute, "utf8").catch(() => "");
     const metrics = metricNamesFromScript(text);
     if (!metrics.length) continue;
-    const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
     candidates.push({
-      path: relative,
-      command: `node ${relative}`,
+      path: script.path,
+      command: script.command,
       metricName: choosePrimaryMetricName(metrics),
       metrics,
-      score: benchmarkPromptScore(prompt, relative, text, metrics),
-      constraints: benchmarkConstraintsFromScript(relative, metrics),
+      score: benchmarkPromptScore(prompt, script.path, text, metrics),
+      constraints: benchmarkConstraintsFromScript(script.path, metrics),
     });
   }
+  candidates.push(...(await discoverPackageBenchmarkScripts(workDir, prompt)));
+  candidates.push(...(await discoverCargoBenchmarkHints(workDir, prompt)));
   candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   const best = candidates[0];
   if (!best || best.score <= 0) return null;
@@ -886,6 +887,109 @@ async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
       ? "points"
       : inferMetricUnit(best.metricName),
   };
+}
+
+async function discoverBenchmarkFiles(workDir: string) {
+  const roots = ["scripts", "bench", "benches", "benchmarks", "test", "tests", "docs"];
+  const candidates = [];
+  for (const rootName of roots) {
+    const root = path.join(workDir, rootName);
+    if (!(await pathExists(root))) continue;
+    await collectBenchmarkFiles(workDir, root, candidates, 0);
+  }
+  const gitHints = path.join(workDir, ".git", "autoresearch");
+  if (await pathExists(gitHints)) await collectBenchmarkFiles(workDir, gitHints, candidates, 0);
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.path)) return false;
+    seen.add(candidate.path);
+    return true;
+  });
+}
+
+async function collectBenchmarkFiles(workDir: string, dir: string, candidates, depth: number) {
+  if (depth > 3 || candidates.length >= 200) return;
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "target") continue;
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectBenchmarkFiles(workDir, absolute, candidates, depth + 1);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
+    if (!benchmarkFileNameLooksRelevant(relative)) continue;
+    const command = commandForBenchmarkFile(relative);
+    if (!command) continue;
+    candidates.push({ path: relative, command });
+  }
+}
+
+function benchmarkFileNameLooksRelevant(relativePath: string) {
+  return (
+    /\.(?:mjs|js|cjs|ts|py|ps1|sh)$/i.test(relativePath) &&
+    /autoresearch|benchmark|bench|perf|score|quality|eval|evaluator|holdout|promotion|research/i.test(
+      relativePath,
+    )
+  );
+}
+
+function commandForBenchmarkFile(relativePath: string) {
+  const quoted = shellQuote(relativePath);
+  if (/\.(?:mjs|js|cjs|ts)$/i.test(relativePath)) return `node ${quoted}`;
+  if (/\.py$/i.test(relativePath)) return `python ${quoted}`;
+  if (/\.ps1$/i.test(relativePath)) {
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File ${quoted}`;
+  }
+  if (/\.sh$/i.test(relativePath)) return `bash ${quoted}`;
+  return "";
+}
+
+async function discoverPackageBenchmarkScripts(workDir: string, prompt: string) {
+  const packagePath = path.join(workDir, "package.json");
+  if (!(await pathExists(packagePath))) return [];
+  const parsed = JSON.parse(await fsp.readFile(packagePath, "utf8"));
+  const scripts = parsed?.scripts || {};
+  const candidates = [];
+  for (const [name, command] of Object.entries(scripts)) {
+    if (
+      !/autoresearch|benchmark|bench|perf|score|quality|eval|holdout|promotion|research/i.test(name)
+    )
+      continue;
+    const text = String(command || "");
+    const metrics = metricNamesFromScript(text);
+    if (!metrics.length) continue;
+    candidates.push({
+      path: `package.json#scripts.${name}`,
+      command: `npm run ${shellQuote(name)}`,
+      metricName: choosePrimaryMetricName(metrics),
+      metrics,
+      score: benchmarkPromptScore(prompt, `package.json ${name}`, text, metrics) + 1,
+      constraints: benchmarkConstraintsFromScript(`package.json#scripts.${name}`, metrics),
+    });
+  }
+  return candidates;
+}
+
+async function discoverCargoBenchmarkHints(workDir: string, prompt: string) {
+  const cargoPath = path.join(workDir, "Cargo.toml");
+  if (!(await pathExists(cargoPath))) return [];
+  const text = await fsp.readFile(cargoPath, "utf8").catch(() => "");
+  if (!/\[\[bench\]\]|\bcriterion\b|\biai\b/i.test(text)) return [];
+  const score = benchmarkPromptScore(prompt, "Cargo.toml cargo bench", text, ["score"]) + 1;
+  return [
+    {
+      path: "Cargo.toml#bench",
+      command: "",
+      metricName: "score",
+      metrics: ["score"],
+      requiresWrapper: true,
+      score,
+      constraints: [
+        "Create or choose a Cargo benchmark wrapper that prints METRIC score=<number>; raw cargo bench output is not a valid Autoresearch packet command.",
+      ],
+    },
+  ];
 }
 
 function metricNamesFromScript(text: string) {
@@ -1819,6 +1923,24 @@ function metricParseSource(result) {
   return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
 }
 
+function parseArtifactLines(output, workDir) {
+  const artifacts = {};
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const match = line.match(/^ARTIFACT\s+([A-Za-z_][A-Za-z0-9_.:-]*)=(.+)$/);
+    if (!match) continue;
+    const name = match[1];
+    const value = match[2].trim();
+    if (!value) continue;
+    const absolute = path.isAbsolute(value) ? value : path.resolve(workDir, value);
+    const relative = path.relative(workDir, absolute);
+    artifacts[name] =
+      relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+        ? relative.replace(/\\/g, "/")
+        : absolute;
+  }
+  return artifacts;
+}
+
 function headText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
   let trimmed = text;
   if (Buffer.byteLength(trimmed, "utf8") > maxBytes) {
@@ -1847,6 +1969,85 @@ async function defaultBenchmarkCommandExists(workDir) {
     (await pathExists(path.join(workDir, "autoresearch.ps1"))) ||
     (await pathExists(path.join(workDir, "autoresearch.sh")))
   );
+}
+
+async function benchmarkCommandFromArgs(args: LooseObject, workDir) {
+  const commandFile = args.command_file ?? args.commandFile;
+  if (args.command && commandFile) {
+    throw new Error("Use either --command or --command-file, not both.");
+  }
+  const command =
+    args.command ||
+    (commandFile
+      ? await readCommandFile(commandFile, workDir)
+      : await defaultBenchmarkCommand(workDir));
+  const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
+  const env = envFile ? await readEnvFile(envFile, workDir) : null;
+  return {
+    command,
+    env: env?.values || undefined,
+    commandFile: commandFile ? resolveOptionPath(commandFile, workDir) : "",
+    envFile: envFile ? env.path : "",
+    envKeys: env ? Object.keys(env.values).sort((a, b) => a.localeCompare(b)) : [],
+  };
+}
+
+function resolveOptionPath(filePath, workDir) {
+  const input = String(filePath || "").trim();
+  return path.isAbsolute(input) ? input : path.resolve(workDir, input);
+}
+
+async function readCommandFile(filePath, workDir) {
+  const resolved = resolveOptionPath(filePath, workDir);
+  const text = (await fsp.readFile(resolved, "utf8")).trim();
+  if (!text) throw new Error(`--command-file is empty: ${resolved}`);
+  return text;
+}
+
+async function readEnvFile(filePath, workDir) {
+  const resolved = resolveOptionPath(filePath, workDir);
+  const text = await fsp.readFile(resolved, "utf8");
+  const trimmed = text.trim();
+  if (!trimmed) return { path: resolved, values: {} };
+  if (trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`--env-file JSON must be an object: ${resolved}`);
+    }
+    return {
+      path: resolved,
+      values: Object.fromEntries(
+        Object.entries(parsed).map(([key, value]) => [validateEnvName(key), String(value ?? "")]),
+      ),
+    };
+  }
+  const values = {};
+  for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) throw new Error(`Invalid --env-file line ${index + 1}: expected NAME=value.`);
+    values[validateEnvName(match[1])] = unquoteEnvValue(match[2].trim());
+  }
+  return { path: resolved, values };
+}
+
+function validateEnvName(name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || ""))) {
+    throw new Error(`Invalid environment variable name in --env-file: ${name}`);
+  }
+  return String(name);
+}
+
+function unquoteEnvValue(value) {
+  const text = String(value ?? "");
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
+    return text.slice(1, -1);
+  }
+  return text;
 }
 
 async function defaultChecksCommand(workDir) {
@@ -1909,6 +2110,51 @@ async function gitPrivatePath(cwd, relativePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
 }
 
+async function assertNoGitIndexLock(workDir, phase = "git operation") {
+  const lockPath = await gitPrivatePath(workDir, "index.lock");
+  if (!(await pathExists(lockPath))) return;
+  throw new Error(await gitIndexLockMessage(workDir, lockPath, phase, false));
+}
+
+function gitIndexLockFailure(result) {
+  return /index\.lock|another git process|Unable to create/i.test(gitOutput(result, ""));
+}
+
+async function gitIndexLockMessage(workDir, lockPath, phase, stagedMayHaveChanged) {
+  const liveGit = await liveGitProcessSummary(workDir);
+  return [
+    `Git index lock blocked ${phase}: ${lockPath}.`,
+    `Live git process check: ${liveGit}.`,
+    stagedMayHaveChanged
+      ? "Autoresearch could not prove whether staging partially changed; inspect git status before retrying."
+      : "Autoresearch has not staged or committed anything for this log attempt.",
+    "Wait for active Git commands to finish, then retry. If no Git process is active, remove the index.lock file and rerun the exact log command.",
+  ].join(" ");
+}
+
+async function liveGitProcessSummary(workDir) {
+  try {
+    const result =
+      process.platform === "win32"
+        ? await runProcess(
+            "powershell",
+            [
+              "-NoProfile",
+              "-Command",
+              "Get-Process git -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
+            ],
+            workDir,
+            { timeoutMs: 2000 },
+          )
+        : await runProcess("pgrep", ["-fl", "git"], workDir, { timeoutMs: 2000 });
+    const outputText = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
+    if (!outputText) return "no live git process found";
+    return outputText.split(/\r?\n/).slice(0, 5).join(", ");
+  } catch (error) {
+    return `process check unavailable (${error?.message || String(error)})`;
+  }
+}
+
 async function shortHead(cwd) {
   const result = await git(["rev-parse", "--short=7", "HEAD"], cwd);
   return result.code === 0 ? result.stdout.trim() : "";
@@ -1953,6 +2199,31 @@ function shouldWarnEmptyCommitPaths({
   allowAddAll = false,
 }: LooseObject = {}) {
   return Boolean(inGit && !explicitCommit && !allowAddAll && commitPaths.length === 0);
+}
+
+async function assertCommitPathsExist(workDir, commitPaths) {
+  const missing = [];
+  for (const relative of commitPaths) {
+    if (await pathExists(path.join(workDir, relative))) continue;
+    if (await gitPathIsTracked(workDir, relative)) continue;
+    missing.push(relative);
+  }
+  if (!missing.length) return;
+  const remaining = commitPaths.filter((item) => !missing.includes(item));
+  throw new Error(
+    [
+      `Configured commitPaths do not exist before git add: ${missing.slice(0, 8).join(", ")}.`,
+      remaining.length
+        ? `Repair with: node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} config --cwd ${shellQuote(workDir)} --commit-paths ${shellQuote(remaining.join(","))}`
+        : "Repair by configuring commitPaths that exist or by passing --commit-paths for this log.",
+      "No git add or commit was attempted.",
+    ].join(" "),
+  );
+}
+
+async function gitPathIsTracked(workDir, relativePath) {
+  const result = await git(["ls-files", "--", relativePath], workDir);
+  return result.code === 0 && result.stdout.trim().length > 0;
 }
 
 async function gitStatusShort(cwd) {
@@ -2090,6 +2361,103 @@ async function lastRunGitSnapshot(workDir, config: LooseObject = {}) {
   };
 }
 
+async function benchmarkContractSnapshot(workDir, context: LooseObject = {}) {
+  const fixedFiles = [
+    "autoresearch.sh",
+    "autoresearch.ps1",
+    "autoresearch.checks.sh",
+    "autoresearch.checks.ps1",
+    "autoresearch.config.json",
+    "package.json",
+    "Cargo.toml",
+  ];
+  const fileFingerprints = [];
+  for (const relative of fixedFiles) {
+    const filePath = path.join(workDir, relative);
+    if (!(await pathExists(filePath))) continue;
+    fileFingerprints.push(await contractFileFingerprint(workDir, filePath, relative));
+  }
+  const command = String(context.command || "").trim();
+  const checksCommand = String(context.checksCommand || "").trim();
+  const commandFile = contractPathLabel(workDir, context.commandFile);
+  const envFile = contractPathLabel(workDir, context.envFile);
+  for (const [label, filePath] of [
+    [commandFile, context.commandFile],
+    [envFile, context.envFile],
+  ]) {
+    if (filePath) fileFingerprints.push(await contractFileFingerprint(workDir, filePath, label));
+  }
+  const surfaceHash = hashText(
+    JSON.stringify({
+      command,
+      checksCommand,
+      commandFile,
+      envFile,
+      files: fileFingerprints,
+    }),
+  );
+  return {
+    command,
+    checksCommand,
+    commandFile,
+    envFile,
+    surfaceHash,
+    files: fileFingerprints,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+async function contractFileFingerprint(workDir, filePath, label = "") {
+  const resolved = resolveOptionPath(filePath, workDir);
+  const display = label || contractPathLabel(workDir, resolved);
+  try {
+    const bytes = await fsp.readFile(resolved);
+    return {
+      path: display,
+      hash: createHash("sha256").update(bytes).digest("hex"),
+    };
+  } catch (error) {
+    return {
+      path: display,
+      missing: true,
+      error: error?.code || error?.message || String(error),
+    };
+  }
+}
+
+function contractPathLabel(workDir, filePath) {
+  const input = String(filePath || "").trim();
+  if (!input) return "";
+  const resolved = resolveOptionPath(input, workDir);
+  const relative = path.relative(workDir, resolved);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+    ? relative.replace(/\\/g, "/")
+    : resolved;
+}
+
+async function benchmarkContractDrift(workDir, state) {
+  const latest = [...(state.current || [])]
+    .reverse()
+    .find((run) => run?.benchmarkContract?.surfaceHash);
+  if (!latest) return null;
+  const current = await benchmarkContractSnapshot(workDir, {
+    command: latest.benchmarkContract.command,
+    checksCommand: latest.benchmarkContract.checksCommand,
+    commandFile: latest.benchmarkContract.commandFile,
+    envFile: latest.benchmarkContract.envFile,
+  });
+  if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
+  return {
+    code: "benchmark_contract_changed",
+    severity: "error",
+    run: latest.run,
+    message: `Benchmark/check/config contract changed since logged run #${latest.run}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
+    action: "Run new-segment --dry-run, then --yes after reviewing the changed benchmark contract.",
+    previousHash: latest.benchmarkContract.surfaceHash,
+    currentHash: current.surfaceHash,
+  };
+}
+
 async function preserveSessionFiles(workDir) {
   const saved = new Map();
   for (const file of SESSION_FILES) {
@@ -2125,6 +2493,8 @@ async function restoreSessionFiles(workDir, saved) {
 async function appendSessionRunNote(workDir, experiment, state, messages: LooseObject = {}) {
   const filePath = path.join(workDir, "autoresearch.md");
   if (!(await pathExists(filePath))) return;
+  const startMarker = "<!-- AUTORESEARCH_RUN_LEDGER:START -->";
+  const endMarker = "<!-- AUTORESEARCH_RUN_LEDGER:END -->";
   const parts = [
     `- Run ${experiment.run} ${experiment.status}: ${experiment.description}`,
     `metric=${experiment.metric}`,
@@ -2133,7 +2503,15 @@ async function appendSessionRunNote(workDir, experiment, state, messages: LooseO
   if (experiment.commit) parts.push(`commit=${experiment.commit}`);
   if (messages.revertMessage) parts.push(messages.revertMessage);
   if (messages.gitMessage && experiment.status === "keep") parts.push(messages.gitMessage);
-  await fsp.appendFile(filePath, `\n${parts.join("; ")}.\n`, "utf8");
+  const line = `${parts.join("; ")}.`;
+  const existing = await fsp.readFile(filePath, "utf8");
+  if (existing.includes(startMarker) && existing.includes(endMarker)) {
+    const next = existing.replace(endMarker, `${line}\n${endMarker}`);
+    await fsp.writeFile(filePath, next, "utf8");
+    return;
+  }
+  const block = ["", "## Run Ledger", "", startMarker, `${line}`, endMarker, ""].join("\n");
+  await fsp.writeFile(filePath, `${existing.trimEnd()}\n${block}`, "utf8");
 }
 
 async function revertExceptSessionFiles(workDir) {
@@ -2180,8 +2558,7 @@ async function revertScopedPathsExceptSessionFiles(workDir, paths) {
   return `Git: reverted scoped experiment paths (${safePaths.join(", ")}); autoresearch files preserved.`;
 }
 
-async function cleanupDiscardChanges(workDir, args, config) {
-  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
+async function discardCleanupPlan(workDir, args, config) {
   const scopedPaths = normalizeRelativePaths(
     args.revert_paths ??
       args.revertPaths ??
@@ -2190,10 +2567,41 @@ async function cleanupDiscardChanges(workDir, args, config) {
       config.commitPaths,
     "revertPaths",
   );
-  if (scopedPaths.length > 0)
-    return await revertScopedPathsExceptSessionFiles(workDir, scopedPaths);
-  const dirty = await gitStatusShort(workDir);
-  if (!dirty) return "Git: clean tree, no discard cleanup needed.";
+  const statusShort = await gitStatusShort(workDir);
+  const dirtyPaths = dirtyPathsFromStatus(statusShort);
+  const ownedDirtyPaths = dirtyPaths.filter((dirtyPath) =>
+    scopedPaths.some((scopedPath) => pathIsCoveredByScope(dirtyPath, scopedPath)),
+  );
+  const unownedDirtyPaths = dirtyPaths.filter((dirtyPath) => !ownedDirtyPaths.includes(dirtyPath));
+  return {
+    scopedPaths,
+    dirtyPaths,
+    ownedDirtyPaths,
+    unownedDirtyPaths,
+    fingerprint: hashText(
+      JSON.stringify({ scopedPaths, ownedDirtyPaths, unownedDirtyPaths, statusShort }),
+    ),
+    willRevert: scopedPaths.length > 0 ? ownedDirtyPaths : dirtyPaths,
+  };
+}
+
+function pathIsCoveredByScope(filePath, scopePath) {
+  const file = slashPath(filePath);
+  const scope = slashPath(scopePath);
+  return file === scope || file.startsWith(`${scope}/`);
+}
+
+async function cleanupDiscardChanges(workDir, args, config) {
+  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
+  const plan = await discardCleanupPlan(workDir, args, config);
+  if (plan.scopedPaths.length > 0) {
+    if (!plan.ownedDirtyPaths.length) {
+      return `Git: no scoped experiment changes to revert; preserved ${plan.unownedDirtyPaths.length} unowned dirty path(s). cleanup=${plan.fingerprint.slice(0, 12)}.`;
+    }
+    const message = await revertScopedPathsExceptSessionFiles(workDir, plan.scopedPaths);
+    return `${message} Preserved ${plan.unownedDirtyPaths.length} unowned dirty path(s). cleanup=${plan.fingerprint.slice(0, 12)}.`;
+  }
+  if (!plan.dirtyPaths.length) return "Git: clean tree, no discard cleanup needed.";
   if (boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false)) {
     return await revertExceptSessionFiles(workDir);
   }
@@ -2673,6 +3081,7 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
 async function operatorWarningsForWorkDir(workDir) {
   const inGit = await insideGitRepo(workDir);
   const config = readConfig(workDir);
+  const state = currentState(workDir);
   const warnings = [];
   if (inGit && (await isGitClean(workDir)) === false) {
     warnings.push({
@@ -2696,7 +3105,66 @@ async function operatorWarningsForWorkDir(workDir) {
         "Update commitPaths before relying on keep commits or use explicit --commit-paths for the next log.",
     });
   }
+  const contractDrift = await benchmarkContractDrift(workDir, state);
+  if (contractDrift) warnings.push(contractDrift);
+  warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state)));
   return warnings;
+}
+
+async function benchmarkIntegrityPreflight(workDir, config, state) {
+  const warnings = [];
+  const hasIntegrityGuard = Boolean(
+    config.benchmarkIntegrityCommand ||
+    config.benchmark_integrity_command ||
+    config.contaminationCheckCommand ||
+    config.contamination_check_command ||
+    config.promotionBenchmarkCommand ||
+    config.promotion_benchmark_command ||
+    config.holdoutCommand ||
+    config.holdout_command ||
+    config.devHoldoutSplit ||
+    config.dev_holdout_split,
+  );
+  if (state.current.length === 0 && !hasIntegrityGuard) {
+    warnings.push({
+      code: "benchmark_integrity_preflight_missing",
+      severity: "warning",
+      message:
+        "No evaluator-contamination guard is configured for the first packet: benchmark leakage, stale artifacts, cache reuse, and dev/holdout split are unproven.",
+      action:
+        "Add a benchmarkIntegrityCommand/holdout or run benchmark-inspect plus benchmark-lint before trusting the baseline.",
+    });
+  }
+  const staleArtifactRoots = [];
+  for (const relative of ["target/autoresearch", ".autoresearch-cache"]) {
+    if (await pathExists(path.join(workDir, relative))) staleArtifactRoots.push(relative);
+  }
+  if (
+    (await insideGitRepo(workDir).catch(() => false)) &&
+    (await gitPrivateDirectoryHasBenchmarkArtifacts(workDir, "autoresearch"))
+  ) {
+    staleArtifactRoots.push(".git/autoresearch");
+  }
+  if (staleArtifactRoots.length && !boolOption(config.allowStaleArtifacts, false)) {
+    warnings.push({
+      code: "stale_benchmark_artifacts",
+      severity: "warning",
+      message: `Previous benchmark/autoresearch artifacts exist: ${staleArtifactRoots.join(", ")}.`,
+      action:
+        "Clear or namespace benchmark artifacts before the first packet, or set an explicit freshness guard in the benchmark contract.",
+    });
+  }
+  return warnings;
+}
+
+async function gitPrivateDirectoryHasBenchmarkArtifacts(workDir, relativePath) {
+  try {
+    const directory = await gitPrivatePath(workDir, relativePath);
+    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch(() => []);
+    return entries.some((entry) => entry.name !== "last-run.json");
+  } catch {
+    return false;
+  }
 }
 
 function suppressEnvironmentWarningsFromPreview(preview) {
@@ -2773,21 +3241,28 @@ async function runExperiment(args: LooseObject) {
       `maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`,
     );
   }
-  const command = args.command || (await defaultBenchmarkCommand(workDir));
+  const commandInput = await benchmarkCommandFromArgs(args, workDir);
+  const { command } = commandInput;
   const benchmark = await runShell(
     command,
     workDir,
     numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
     {
+      env: commandInput.env,
       retainMetricNames: [state.config.metricName],
     },
   );
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
-  const parsedMetricResult = parseMetricLines(metricParseSource(benchmark), {
+  const parseSource = metricParseSource(benchmark);
+  const parsedMetricResult = parseMetricLines(parseSource, {
     primaryMetricName: state.config.metricName,
     maxMetrics: MAX_PARSED_METRICS,
     withTruncation: true,
   });
+  const artifacts = parseArtifactLines(
+    benchmark.fullOutput || benchmark.output || parseSource,
+    workDir,
+  );
   const parsedMetrics = parsedMetricResult.metrics;
   const primary = parsedMetrics[state.config.metricName] ?? null;
   const primaryPresent = finiteMetric(primary) != null;
@@ -2817,6 +3292,7 @@ async function runExperiment(args: LooseObject) {
         args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
         DEFAULT_CHECKS_TIMEOUT_SECONDS,
       ),
+      { env: commandInput.env },
     );
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
@@ -2849,10 +3325,14 @@ async function runExperiment(args: LooseObject) {
     ok: passed,
     workDir,
     command,
+    commandFile: commandInput.commandFile,
+    envFile: commandInput.envFile,
+    envKeys: commandInput.envKeys,
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut,
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
+    artifacts,
     parsedPrimary: primary,
     metricError,
     checksPolicy,
@@ -2893,6 +3373,12 @@ async function runExperiment(args: LooseObject) {
       allowedStatuses,
     },
     limit,
+    benchmarkContract: await benchmarkContractSnapshot(workDir, {
+      command,
+      checksCommand,
+      commandFile: commandInput.commandFile,
+      envFile: commandInput.envFile,
+    }),
   };
 }
 
@@ -3001,6 +3487,7 @@ async function logExperiment(args) {
   const description = args.description || lastPacket?.run?.description || "";
   if (!description) throw new Error("description is required");
   const metrics = args.metrics ?? lastPacket?.decision?.metrics ?? {};
+  const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
   const asiFilePath = args.asi_file ?? args.asiFile;
   if (asiFilePath && args.asi != null) {
     throw new Error("Use either --asi or --asi-file, not both.");
@@ -3042,11 +3529,17 @@ async function logExperiment(args) {
           `${emptyCommitPathsWarning().message} Pass --allow-add-all only when every dirty file belongs in the kept commit.`,
         );
       }
+      if (commitPaths.length > 0) await assertCommitPathsExist(workDir, commitPaths);
+      await assertNoGitIndexLock(workDir, "git add");
       const addResult =
         commitPaths.length > 0
           ? await git(["add", "--", ...commitPaths], workDir)
           : await git(["add", "-A"], workDir);
       if (addResult.code !== 0) {
+        if (gitIndexLockFailure(addResult)) {
+          const lockPath = await gitPrivatePath(workDir, "index.lock");
+          throw new Error(await gitIndexLockMessage(workDir, lockPath, "git add", true));
+        }
         throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
       }
       if (await hasStagedChanges(workDir)) {
@@ -3083,6 +3576,14 @@ async function logExperiment(args) {
     confidence: null,
   };
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
+  if (artifacts && Object.keys(artifacts).length > 0) experiment.artifacts = artifacts;
+  const benchmarkContract =
+    lastPacket?.history?.benchmarkContract ||
+    (await benchmarkContractSnapshot(workDir, {
+      command: lastPacket?.history?.command || "",
+      checksCommand: lastPacket?.run?.checks?.command || "",
+    }));
+  if (benchmarkContract?.surfaceHash) experiment.benchmarkContract = benchmarkContract;
   experiment.confidence = computeConfidence(
     [...currentRuns, experiment],
     stateBefore.config.bestDirection,
@@ -3470,6 +3971,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     checksFailed: statusCounts.checks_failed,
     baseline: state.baseline,
     best: state.best,
+    development: state.development,
+    promotion: state.promotion,
     confidence: state.confidence,
     limit: iterationLimitInfo(state, config),
     settings: {
@@ -3509,6 +4012,8 @@ function compactPublicState(state: LooseObject) {
     discarded: state.discarded,
     baseline: state.baseline,
     best: state.best,
+    developmentBest: state.development?.best ?? null,
+    promotionBest: state.promotion?.best ?? null,
     limitReached: Boolean(limit.limitReached),
     remainingIterations: limit.remainingIterations ?? null,
     nextAction: continuation.nextAction || "Run doctor, then next.",
@@ -3749,6 +4254,13 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     warnings.push(
       "Working directory is not a Git repository; keep commits and discard reverts are unavailable.",
     );
+  const operatorDetails = Array.isArray(state.warningDetails) ? state.warningDetails : [];
+  for (const detail of operatorDetails) {
+    if (!detail?.message) continue;
+    warningDetails.push(detail);
+    if (detail.code === "benchmark_contract_changed") issues.push(detail.message);
+    else warnings.push(detail.message);
+  }
   const drift = await buildDriftReport({
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
@@ -3812,7 +4324,10 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   }
 
   let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (issues.some((issue) => /primary metric|Benchmark/.test(issue))) {
+  if (issues.some((issue) => /contract changed/i.test(issue))) {
+    nextAction =
+      "Start a new segment or explicitly invalidate the old evidence before running another packet.";
+  } else if (issues.some((issue) => /primary metric|Benchmark/.test(issue))) {
     nextAction =
       "Fix the benchmark command so it emits the configured primary metric before continuing.";
   } else if (state.runs === 0) {
@@ -4065,6 +4580,7 @@ async function nextExperiment(args) {
       currentRuns: stateBeforeLog.current.length,
       totalRuns: stateBeforeLog.results.length,
       nextRun: stateBeforeLog.results.length + 1,
+      benchmarkContract: run.benchmarkContract || null,
       git: await lastRunGitSnapshot(run.workDir, config).catch((error) => ({
         inside: null,
         error: error.message || String(error),
