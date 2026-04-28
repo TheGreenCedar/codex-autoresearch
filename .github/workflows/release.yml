@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     strategy:
@@ -22,12 +25,12 @@ jobs:
         working-directory: plugins/codex-autoresearch
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: 'npm'
           cache-dependency-path: plugins/codex-autoresearch/package-lock.json
 
@@ -57,7 +60,7 @@ jobs:
         working-directory: plugins/codex-autoresearch
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Refuse non-main release
         run: |
@@ -68,9 +71,9 @@ jobs:
           fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: 'npm'
           cache-dependency-path: plugins/codex-autoresearch/package-lock.json
 
