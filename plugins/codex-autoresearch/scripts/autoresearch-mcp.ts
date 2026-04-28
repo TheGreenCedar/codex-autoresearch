@@ -6,6 +6,13 @@ import {
   requireUnsafeCommandGate,
   validateToolArguments,
 } from "../lib/mcp-interface.js";
+import {
+  getMcpPrompt,
+  listMcpPrompts,
+  listMcpResourceTemplates,
+  listMcpResources,
+  readMcpResource,
+} from "../lib/mcp-protocol.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
@@ -84,7 +91,7 @@ async function handleMcpMessage(message) {
       id: message.id,
       result: {
         protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: "codex-autoresearch", version: PLUGIN_VERSION },
       },
     });
@@ -95,6 +102,49 @@ async function handleMcpMessage(message) {
 
   if (message.method === "tools/list") {
     sendMcp({ jsonrpc: "2.0", id: message.id, result: { tools: mcpToolSchemas } });
+    return;
+  }
+
+  if (message.method === "resources/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResources() });
+    return;
+  }
+
+  if (message.method === "resources/templates/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResourceTemplates() });
+    return;
+  }
+
+  if (message.method === "resources/read") {
+    try {
+      const result = await readMcpResource(message.params?.uri, callValidatedCliTool);
+      sendMcp({ jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      sendMcp({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32602, message: error.message || String(error) },
+      });
+    }
+    return;
+  }
+
+  if (message.method === "prompts/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpPrompts() });
+    return;
+  }
+
+  if (message.method === "prompts/get") {
+    try {
+      const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+      sendMcp({ jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      sendMcp({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32602, message: error.message || String(error) },
+      });
+    }
     return;
   }
 
@@ -136,6 +186,12 @@ async function handleMcpMessage(message) {
       error: { code: -32601, message: `Unknown method: ${message.method}` },
     });
   }
+}
+
+async function callValidatedCliTool(name, args) {
+  const normalizedArgs = validateToolArguments(name, args || {});
+  requireUnsafeCommandGate(name, normalizedArgs, boolOption);
+  return await callCliTool(name, normalizedArgs);
 }
 
 function mcpSuccessEnvelope(tool, result) {

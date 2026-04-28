@@ -68,6 +68,9 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
   if (name === "gap_candidates" && (args.apply || args.apply === "true")) {
     return "state_mutation";
   }
+  if (name === "guided_setup" && (args.start_dashboard || args.startDashboard)) {
+    return "process_start";
+  }
   if (name === "doctor_session" && args.check_benchmark) return "process_start";
   if (name === "benchmark_inspect" && args.command) return "process_start";
   if (name === "checks_inspect" && (args.command || args.checks_command || args.checksCommand))

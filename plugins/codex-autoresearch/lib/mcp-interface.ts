@@ -4,6 +4,13 @@ import {
   requireUnsafeCommandGate,
   validateToolArguments,
 } from "./mcp-tool-schemas.js";
+import {
+  getMcpPrompt,
+  listMcpPrompts,
+  listMcpResourceTemplates,
+  listMcpResources,
+  readMcpResource,
+} from "./mcp-protocol.js";
 import { toolNames } from "./tool-registry.js";
 
 export {
@@ -29,6 +36,11 @@ export function createMcpInterface(deps) {
 
   return {
     callTool,
+    getPrompt: (name, args) => getMcpPrompt(name, args),
+    listPrompts: listMcpPrompts,
+    listResourceTemplates: listMcpResourceTemplates,
+    listResources: listMcpResources,
+    readResource: (uri) => readMcpResource(uri, callTool),
     toolSchemas: mcpToolSchemas,
     validateToolArguments,
   };
@@ -37,7 +49,15 @@ export function createMcpInterface(deps) {
 function createToolHandlers(deps) {
   return ensureToolHandlerCoverage({
     setup_plan: (args) => deps.setupPlan(args),
-    guided_setup: (args) => deps.guidedSetup(args),
+    guided_setup: async (args) => {
+      const startDashboard = deps.boolOption(args.startDashboard ?? args.start_dashboard, false);
+      const guide = await deps.guidedSetup({
+        ...args,
+        startDashboard: false,
+        start_dashboard: false,
+      });
+      return await attachGuidedDashboard(guide, args, deps, startDashboard);
+    },
     prompt_plan: (args) => deps.promptPlan(args),
     onboarding_packet: (args) => deps.onboardingPacket(args),
     recommend_next: (args) => deps.recommendNext(args),
@@ -69,6 +89,53 @@ function createToolHandlers(deps) {
     doctor_session: (args) => (args.hooks ? deps.doctorHooks(args) : deps.doctorSession(args)),
     clear_session: (args) => deps.clearSession(args),
   });
+}
+
+async function attachGuidedDashboard(guide, args, deps, startDashboard) {
+  if (!startDashboard) {
+    return {
+      ...guide,
+      dashboard: guide.dashboard || {
+        requested: false,
+        started: false,
+        url: "",
+        healthUrl: "",
+        verified: false,
+        modeGuidance: null,
+      },
+    };
+  }
+  try {
+    const served = await deps.serveDashboard({
+      cwd: guide.workDir || args.cwd || args.working_dir,
+      port: args.port,
+      dashboardRefreshSeconds: args.dashboardRefreshSeconds,
+    });
+    return {
+      ...guide,
+      dashboard: {
+        requested: true,
+        started: served.ok !== false,
+        url: served.url || "",
+        healthUrl: served.healthUrl || "",
+        verified: Boolean(served.verified),
+        modeGuidance: served.modeGuidance || null,
+      },
+    };
+  } catch (error) {
+    return {
+      ...guide,
+      dashboard: {
+        requested: true,
+        started: false,
+        url: "",
+        healthUrl: "",
+        verified: false,
+        modeGuidance: null,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
 }
 
 function ensureToolHandlerCoverage(handlers) {

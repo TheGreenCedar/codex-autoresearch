@@ -7,7 +7,7 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the 
 | Tool | Use |
 | --- | --- |
 | `setup_plan` | Return a read-only setup readiness plan with missing fields, recipe suggestion, and next commands. |
-| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance. |
+| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance; pass `start_dashboard: true` to also start and verify the live local dashboard. |
 | `prompt_plan` | Convert a natural-language request into inferred metric defaults, experiment lanes, missing essentials, and setup commands. |
 | `onboarding_packet` | Return a compact human-and-agent onboarding packet with state, hazards, templates, and commands. |
 | `recommend_next` | Return the single safest next action with evidence and commands. |
@@ -78,6 +78,25 @@ The public `tools/list` response includes `name`, `description`, `inputSchema`, 
 
 Tool calls return structured content for programmatic clients and the same payload as text JSON for older clients. Keep those two surfaces aligned when adding a tool.
 
+## MCP Resources And Prompts
+
+The server also exposes read-only MCP resource templates so clients can inspect session truth without turning state reads into tool calls. Discover them through `resources/templates/list`, then read the resolved URI:
+
+| Resource Template | Use |
+| --- | --- |
+| `autoresearch://state{?working_dir}` | Compact session state, run counts, best metric, warnings, memory, and continuation context. |
+| `autoresearch://last-run{?working_dir}` | Last-run decision packet summary, allowed statuses, freshness, and ASI template. |
+| `autoresearch://quality-gaps{?working_dir,research_slug}` | Active or requested quality-gap checklist counts. Add `research_slug=<slug>` when needed. |
+| `autoresearch://dashboard-summary{?working_dir}` | Dashboard-style stage, next action, dashboard command, warnings, and memory summary without exporting HTML or starting a server. |
+
+Prompt templates point agents at the right resources and tools without embedding stale state:
+
+| Prompt | Use |
+| --- | --- |
+| `continue-loop` | Resume a loop from durable state and last-run evidence. |
+| `review-last-packet` | Review the latest packet before choosing keep, discard, crash, or checks_failed. |
+| `first-valid-loop` | Drive the first valid loop path through `guided_setup` with `start_dashboard=true`, setup/checks/doctor, baseline, log, and continuation. |
+
 Operational metadata such as CLI command name, mutation status, and command-bearing argument fields lives in the shared tool registry. When adding a tool, update the schema, contract, registry, dispatch handler, CLI fallback, docs, and parity tests together.
 
 Command-bearing fields require `allow_unsafe_command: true` over MCP:
@@ -89,6 +108,8 @@ Command-bearing fields require `allow_unsafe_command: true` over MCP:
 - setup guidance that materializes commands from an external recipe catalog
 
 Prefer project-local benchmark scripts over inline shell commands. If a custom command is necessary, keep it narrow and explain why the gate is being opened.
+
+`guided_setup` is read-only unless `start_dashboard: true` is passed. With that flag it starts a local process bound to `127.0.0.1` and returns `dashboard.requested`, `dashboard.started`, `dashboard.url`, `dashboard.healthUrl`, `dashboard.verified`, and `dashboard.modeGuidance`.
 
 ## CLI Fallbacks
 

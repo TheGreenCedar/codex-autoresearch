@@ -684,13 +684,13 @@ const checks = [
   },
   {
     id: "full-product-cli-surface",
-    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.ts",
+    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.ts, lib/mcp-protocol.ts",
     description:
       "CLI and MCP expose guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.ts");
       const cliHandlers = await readText("lib/cli-handlers.ts");
-      const mcpInterface = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}`;
+      const mcpInterface = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}\n${await readText("lib/mcp-protocol.ts")}`;
       return includesAll(cli + cliHandlers + mcpInterface, [
         "setup-plan --cwd <project>",
         "prompt-plan --cwd <project>",
@@ -709,6 +709,11 @@ const checks = [
         "onboarding_packet",
         "recommend_next",
         "serve_dashboard",
+        "resources/list",
+        "resources/templates/list",
+        "prompts/list",
+        "autoresearch://state",
+        "first-valid-loop",
         "benchmark_lint",
         "checks_inspect",
         "new_segment",
@@ -731,6 +736,7 @@ const checks = [
         "lib/mcp-interface.ts",
         "lib/mcp-tool-schemas.ts",
         "lib/mcp-cli-adapter.ts",
+        "lib/mcp-protocol.ts",
         "lib/recipes.ts",
         "lib/dashboard-view-model.ts",
         "lib/research-gaps.ts",
@@ -762,6 +768,8 @@ const checks = [
         "visual aid",
         "Use CLI or MCP",
         "serve_dashboard",
+        "autoresearch://state",
+        "first-valid-loop",
         "recipes",
       ])
         ? pass()
@@ -786,6 +794,9 @@ const checks = [
         "integrations",
         "live server",
         "serve_dashboard",
+        "resources/list",
+        "resources/templates/list",
+        "prompts/get",
       ])
         ? pass()
         : fail("Missing focused full-product regression tests.");

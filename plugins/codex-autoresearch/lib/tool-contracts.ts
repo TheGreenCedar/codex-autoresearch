@@ -29,8 +29,15 @@ const CONTRACTS = {
     purpose: "Return a complete first-run or resume action packet.",
     whenToUse: "Use when an operator asks what to do next from an existing or new session.",
     contrast: "Use setup_plan for read-only setup fields without resume state.",
-    safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "stage", "commands", "nextAction"]),
+    safety: "Read-only by default; starts a local dashboard only when start_dashboard=true.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "stage",
+      "commands",
+      "nextAction",
+      "dashboard",
+    ]),
   },
   prompt_plan: {
     purpose: "Convert a natural-language request into an Autoresearch loop plan.",
@@ -241,7 +248,6 @@ const CONTRACTS = {
 
 const READ_ONLY_TOOLS = new Set([
   "setup_plan",
-  "guided_setup",
   "prompt_plan",
   "onboarding_packet",
   "recommend_next",
@@ -253,6 +259,7 @@ const READ_ONLY_TOOLS = new Set([
 
 const DESTRUCTIVE_TOOLS = new Set(["log_experiment", "clear_session"]);
 const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
+  "guided_setup",
   "benchmark_inspect",
   "benchmark_lint",
   "checks_inspect",
@@ -350,6 +357,7 @@ function outputFieldSchemas(): Record<string, JsonSchema> {
     doctor: objectSchema("Doctor readiness result."),
     drift: objectSchema("Runtime/source drift report."),
     dryRun: booleanSchema("Whether the mutation was previewed only."),
+    dashboard: objectSchema("Live dashboard startup status for guided setup."),
     entry: objectSchema("Ledger/config entry."),
     experiment: objectSchema("Logged experiment entry."),
     failedTests: arraySchema(stringSchema("Failed test or check."), "Failed tests or checks."),
