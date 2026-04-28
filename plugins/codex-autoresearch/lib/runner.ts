@@ -27,6 +27,7 @@ export interface ProcessRunOptions {
 }
 
 export interface ShellRunOptions {
+  env?: NodeJS.ProcessEnv;
   maxFullOutputBytes?: number;
   maxMetricOutputBytes?: number;
   maxOutputBytes?: number;
@@ -178,6 +179,7 @@ export async function runShell(
   return await new Promise<ShellRunResult>((resolve) => {
     const child = spawn(command, {
       cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
       shell: true,
       detached: process.platform !== "win32",
       windowsHide: true,

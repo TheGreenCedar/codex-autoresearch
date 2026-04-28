@@ -158,6 +158,73 @@ export function bestKeptMetric(runs, direction) {
   );
 }
 
+function bestMetricRun(runs, direction) {
+  let bestRun = null;
+  let best = null;
+  for (const run of runs) {
+    const metric = finiteMetric(run?.metric);
+    if (metric == null) continue;
+    if (best == null || isBetter(metric, best, direction)) {
+      best = metric;
+      bestRun = run;
+    }
+  }
+  return bestRun;
+}
+
+function boolOrNull(value) {
+  if (value === true || value === false) return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    if (/^(true|yes|1|promotion|promoted)$/i.test(value.trim())) return true;
+    if (/^(false|no|0|dev|development)$/i.test(value.trim())) return false;
+  }
+  return null;
+}
+
+export function promotionGradeValue(run) {
+  const metrics = run?.metrics || {};
+  const asi = run?.asi || {};
+  for (const value of [
+    run?.promotionGrade,
+    run?.promotion_grade,
+    run?.promotionEligible,
+    run?.promotion_eligible,
+    metrics.promotionGrade,
+    metrics.promotion_grade,
+    metrics.promotionEligible,
+    metrics.promotion_eligible,
+    asi.promotionGrade,
+    asi.promotion_grade,
+    asi.promotionEligible,
+    asi.promotion_eligible,
+  ]) {
+    const result = boolOrNull(value);
+    if (result !== null) return result;
+  }
+  return null;
+}
+
+export function isPromotionGradeRun(run) {
+  return promotionGradeValue(run) === true;
+}
+
+function evidenceTrack(runs, direction) {
+  const kept = runs.filter((run) => run.status === "keep");
+  const bestRun = bestMetricRun(kept, direction);
+  return {
+    count: runs.length,
+    kept: kept.length,
+    baseline: finiteMetric(runs.find(isBaselineEligibleMetricRun)?.metric),
+    best: finiteMetric(bestRun?.metric),
+    bestRun: bestRun || null,
+    latest: runs.at(-1) || null,
+  };
+}
+
 export function isBetter(value, current, direction) {
   return direction === "higher" ? value > current : value < current;
 }
@@ -212,7 +279,18 @@ export function currentState(workDir) {
   const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
-  return { config, segment, results, current, baseline, best, confidence };
+  const promotionRuns = current.filter(isPromotionGradeRun);
+  return {
+    config,
+    segment,
+    results,
+    current,
+    baseline,
+    best,
+    confidence,
+    development: evidenceTrack(current, config.bestDirection),
+    promotion: evidenceTrack(promotionRuns, config.bestDirection),
+  };
 }
 
 export function lastRunConfigSnapshot(config: LooseObject = {}) {

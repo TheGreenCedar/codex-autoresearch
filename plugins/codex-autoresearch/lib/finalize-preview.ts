@@ -70,6 +70,17 @@ export async function finalizePreview(args) {
   const baseResult = await gitOk(["merge-base", trunk, "HEAD"], workDir);
   if (baseResult.ok) base = baseResult.stdout.trim();
   else warnings.push(`Could not find merge-base with ${trunk}.`);
+  const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
+  const excludedCommits = base ? await unkeptCommitsSinceBase(base, groups, workDir) : [];
+  if (excludedCommits.length) {
+    const sample = excludedCommits
+      .slice(0, 3)
+      .map((commit) => `${commit.shortCommit} ${commit.subject}`.trim())
+      .join(", ");
+    warnings.push(
+      `Excluded ${excludedCommits.length} unkept non-session commit${excludedCommits.length === 1 ? "" : "s"} from base..HEAD: ${sample}${excludedCommits.length > 3 ? ", ..." : ""}.`,
+    );
+  }
   if (dirty)
     warnings.push("Working tree is dirty; finalization branch creation will refuse to run.");
   if (!branch)
@@ -81,7 +92,20 @@ export async function finalizePreview(args) {
   if (overlaps.length)
     warnings.push("Some kept runs touch the same files; finalization may need collapsed groups.");
 
-  const ready = groups.length > 0 && !dirty && branch && branch !== trunk && baseResult.ok;
+  const finalTreeCoverage = {
+    mode: "final-tree",
+    finalTree,
+    keptCommitCount: groups.length,
+    excludedCommitCount: excludedCommits.length,
+    covered: excludedCommits.length === 0,
+  };
+  const ready =
+    groups.length > 0 &&
+    !dirty &&
+    branch &&
+    branch !== trunk &&
+    baseResult.ok &&
+    excludedCommits.length === 0;
   const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
   const planArgv = [
     process.execPath,
@@ -96,9 +120,11 @@ export async function finalizePreview(args) {
   ];
   const nextAction = ready
     ? "Review the preview, then run the suggested finalizer plan command."
-    : groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length
-      ? "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment."
-      : "Resolve preview warnings before creating review branches.";
+    : excludedCommits.length
+      ? "Log prerequisite/support commits with keep --commit or collapse the review plan so final tree coverage includes every non-session commit."
+      : groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length
+        ? "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment."
+        : "Resolve preview warnings before creating review branches.";
   return withProgress(
     {
       ok: true,
@@ -109,6 +135,8 @@ export async function finalizePreview(args) {
       ready,
       groups,
       missingCommitCount,
+      excludedCommits,
+      finalTreeCoverage,
       overlaps,
       warnings,
       suggestedCommand: planArgv.map(shellQuote).join(" "),
@@ -184,6 +212,25 @@ async function changedFilesForCommit(hash, cwd) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((file) => !isSessionFile(file));
+}
+
+async function unkeptCommitsSinceBase(base, groups, cwd) {
+  const kept = new Set(groups.map((group) => group.commit));
+  const result = await git(["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`], cwd);
+  const commits = [];
+  for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [hash, subject = ""] = line.split("\x1f");
+    if (!hash || kept.has(hash)) continue;
+    const files = await changedFilesForCommit(hash, cwd);
+    if (!files.length) continue;
+    commits.push({
+      commit: hash,
+      shortCommit: hash.slice(0, 12),
+      subject,
+      files,
+    });
+  }
+  return commits;
 }
 
 function isSessionFile(file) {

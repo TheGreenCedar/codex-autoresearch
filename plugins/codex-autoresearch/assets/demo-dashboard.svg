@@ -1,37 +1,55 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Codex Autoresearch dashboard preview">
-  <rect width="1280" height="720" fill="#f5f7fb"/>
-  <rect x="72" y="58" width="1136" height="604" rx="8" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="112" y="118" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">AUTORESEARCH RUNBOARD</text>
-  <text x="112" y="156" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800">Indexing Pipeline Speed and</text>
-  <text x="112" y="192" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800">Memory Footprint Optimization</text>
-  <rect x="112" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
-  <rect x="322" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
-  <rect x="532" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
-  <rect x="742" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
-  <rect x="952" y="210" width="190" height="86" rx="8" fill="#f9fafb" stroke="#d7ded9"/>
-  <text x="132" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BASELINE</text>
-  <text x="132" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">10s</text>
-  <text x="342" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BEST</text>
-  <text x="342" y="276" fill="#0f9f8f" font-family="Consolas, monospace" font-size="30" font-weight="800">5.62s</text>
-  <text x="552" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">IMPROVEMENT</text>
-  <text x="552" y="276" fill="#0f9f8f" font-family="Consolas, monospace" font-size="30" font-weight="800">+43.8%</text>
-  <text x="762" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">CONFIDENCE</text>
-  <text x="762" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">0.82</text>
-  <text x="972" y="240" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">KEPT / RUNS</text>
-  <text x="972" y="276" fill="#15201c" font-family="Consolas, monospace" font-size="30" font-weight="800">29 / 100</text>
-  <rect x="112" y="328" width="690" height="250" rx="8" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="140" y="370" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Metric trajectory</text>
-  <line x1="160" y1="525" x2="750" y2="525" stroke="#ebefec"/>
-  <line x1="160" y1="460" x2="750" y2="460" stroke="#ebefec"/>
-  <line x1="160" y1="395" x2="750" y2="395" stroke="#ebefec"/>
-  <polyline points="182,430 450,485 720,380" fill="none" stroke="#194b45" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="182" cy="430" r="11" fill="#0f9f8f" stroke="#ffffff" stroke-width="4"/>
-  <circle cx="450" cy="485" r="11" fill="#0f9f8f" stroke="#ffffff" stroke-width="4"/>
-  <circle cx="720" cy="380" r="11" fill="#be3455" stroke="#ffffff" stroke-width="4"/>
-  <rect x="832" y="328" width="310" height="250" rx="8" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="860" y="370" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800">Operator readout</text>
-  <text x="860" y="420" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">BEST KEPT CHANGE</text>
-  <text x="860" y="450" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="800">#100 5.62s</text>
-  <text x="860" y="500" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">NEXT ACTION</text>
-  <text x="860" y="530" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">Confirm memory-aware indexing win</text>
+  <rect width="1280" height="720" fill="#f6f7ef"/>
+  <rect x="72" y="48" width="1136" height="624" rx="8" fill="#ffffff" stroke="#d7ded9"/>
+
+  <text x="112" y="88" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="23" font-weight="800">Indexing Pipeline Speed and Memory Footprint Optimization</text>
+  <text x="112" y="116" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">seconds</text>
+  <text x="188" y="116" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">lower is better</text>
+  <text x="322" y="116" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">100 runs</text>
+
+  <rect x="1040" y="68" width="104" height="34" rx="17" fill="#ffd23f" stroke="#e4a24f"/>
+  <text x="1062" y="91" fill="#0d5c58" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="800">Refresh</text>
+
+  <rect x="112" y="140" width="760" height="286" rx="8" fill="#fffdf5" stroke="#ffd23f" stroke-width="3"/>
+  <rect x="112" y="140" width="7" height="286" rx="4" fill="#ffd23f"/>
+  <text x="140" y="180" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">Run chart</text>
+  <text x="140" y="210" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="800">METRIC FORMULA</text>
+  <text x="265" y="210" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">seconds = wall-clock time; lower is better</text>
+  <line x1="156" y1="354" x2="820" y2="354" stroke="#bfe8e5" stroke-dasharray="8 10"/>
+  <line x1="156" y1="302" x2="820" y2="302" stroke="#bfe8e5" stroke-dasharray="8 10"/>
+  <line x1="156" y1="250" x2="820" y2="250" stroke="#bfe8e5" stroke-dasharray="8 10"/>
+  <line x1="156" y1="274" x2="820" y2="274" stroke="#ef6c4a" stroke-width="2" stroke-dasharray="9 9"/>
+  <line x1="156" y1="382" x2="820" y2="382" stroke="#ffd23f" stroke-width="4" stroke-dasharray="6 8"/>
+  <polyline points="166,276 210,264 252,286 302,322 350,330 398,302 452,338 506,360 560,344 610,372 668,384 722,400 808,382" fill="none" stroke="#1e8c86" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="166" cy="276" r="8" fill="#2ba84a" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="302" cy="322" r="8" fill="#2ba84a" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="398" cy="302" r="8" fill="#ef6c4a" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="610" cy="372" r="8" fill="#2ba84a" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="808" cy="382" r="15" fill="#2ba84a" fill-opacity="0.22" stroke="#ffd23f" stroke-width="4"/>
+  <circle cx="808" cy="382" r="8" fill="#2ba84a" stroke="#ffffff" stroke-width="4"/>
+
+  <rect x="900" y="140" width="252" height="52" rx="8" fill="#ffffff" stroke="#a8d8d4"/>
+  <text x="924" y="162" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800">BASELINE</text>
+  <text x="924" y="184" fill="#15201c" font-family="Consolas, monospace" font-size="25" font-weight="800">10s</text>
+  <rect x="900" y="204" width="252" height="52" rx="8" fill="#ffffff" stroke="#a8d8d4"/>
+  <text x="924" y="226" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800">BEST</text>
+  <text x="924" y="248" fill="#15201c" font-family="Consolas, monospace" font-size="25" font-weight="800">5.62s</text>
+  <rect x="900" y="268" width="252" height="52" rx="8" fill="#ffffff" stroke="#a8d8d4"/>
+  <text x="924" y="290" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800">IMPROVEMENT</text>
+  <text x="924" y="312" fill="#15201c" font-family="Consolas, monospace" font-size="25" font-weight="800">+43.8%</text>
+  <rect x="900" y="332" width="252" height="52" rx="8" fill="#ffffff" stroke="#a8d8d4"/>
+  <text x="924" y="354" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800">RUNS</text>
+  <text x="924" y="376" fill="#15201c" font-family="Consolas, monospace" font-size="25" font-weight="800">100 (29 kept)</text>
+
+  <rect x="112" y="454" width="1038" height="154" rx="8" fill="#fffaf4" stroke="#ef6c4a" stroke-width="2"/>
+  <rect x="112" y="454" width="8" height="154" rx="4" fill="#ef6c4a"/>
+  <text x="144" y="494" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">Next</text>
+  <text x="144" y="532" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="36" font-weight="900">Next action</text>
+  <text x="144" y="566" fill="#44504a" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="650">Confirm the faster path against memory footprint and index correctness checks.</text>
+  <rect x="820" y="486" width="104" height="42" rx="6" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="846" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">#100</text>
+  <rect x="940" y="486" width="104" height="42" rx="6" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="966" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">Keep</text>
+  <rect x="820" y="544" width="224" height="34" rx="6" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="842" y="566" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Actions stay in CLI or MCP</text>
 </svg>

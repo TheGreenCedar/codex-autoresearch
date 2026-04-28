@@ -41,6 +41,7 @@ export function Header({
   const generated = meta.generatedAt ? formatDisplayTime(meta.generatedAt) : "Snapshot";
   const metricLabel = readout.metricDefinition.metricName || session.config.metricName || "metric";
   const dashboardUrl = useMemo(() => dashboardUrlFrom(meta), [meta]);
+  const attentionStatus = attentionStatusFor(liveStatus);
   const copyDashboardUrl = async () => {
     if (!dashboardUrl) return;
     const copied = await copyText(dashboardUrl);
@@ -48,12 +49,12 @@ export function Header({
     if (copied) window.setTimeout(() => setCopiedUrl(false), 1600);
   };
   return (
-    <header className="masthead">
-      <div className="masthead-top">
-        <div className="session-contract">
-          <h1>Autoresearch Runboard</h1>
-          <p className="eyebrow">{session.config.name || "Autoresearch session"}</p>
-          <div className="metric-line">
+    <header id="dashboard-toolbar" className="dashboard-toolbar" aria-label="Dashboard controls">
+      <h1 className="sr-only">Autoresearch dashboard</h1>
+      <div className="toolbar-main">
+        <div className="toolbar-session" aria-label="Current session">
+          <strong>{session.config.name || "Autoresearch session"}</strong>
+          <div className="metric-line toolbar-metric-line">
             <span>{metricLabel}</span>
             <span>{directionLabel(readout.metricDefinition.bestDirection)}</span>
             <span>
@@ -61,7 +62,7 @@ export function Header({
             </span>
           </div>
         </div>
-        <div className="header-utility">
+        <div className="toolbar-actions">
           <div className="header-actions">
             <button
               id="refresh-now"
@@ -95,38 +96,56 @@ export function Header({
             <span>Generated</span>
             <strong>{generated}</strong>
           </div>
-        </div>
-      </div>
-      <div className="header-controls">
-        <div className="status-strip" id="live-region" aria-live="polite">
-          <span id="live-title">{liveStatus.title || mode.title}</span>
-          <strong id="live-detail">{liveStatus.detail || mode.detail}</strong>
-          <em id="copy-dashboard-url-status" hidden={!copiedUrl}>
+          <em id="copy-dashboard-url-status" className="copy-status" hidden={!copiedUrl}>
             Dashboard URL copied.
           </em>
         </div>
-        <span id="segment-select-wrap" hidden={!hasMultipleSegments} className="segment-control">
-          <label htmlFor="segment-select">Segment</label>
-          <select
-            id="segment-select"
-            value={activeSegment}
-            onChange={(event) => setActiveSegment(Number(event.target.value))}
-          >
-            {normalized.segments.map((item) => (
-              <option key={item.segment} value={item.segment}>
-                {`Segment ${item.segment + 1} - ${item.config.name || "Autoresearch"} (${item.runs.length} runs)`}
-              </option>
-            ))}
-          </select>
-        </span>
-        {hasMultipleSegments ? (
-          <p id="segment-note" className="segment-note">
-            {`Showing segment ${activeSegment + 1} of ${normalized.segments.length}`}
-          </p>
-        ) : null}
       </div>
+      {attentionStatus || hasMultipleSegments ? (
+        <div className="toolbar-controls">
+          {attentionStatus ? (
+            <p className="toolbar-status" id="live-region" aria-live="polite">
+              <span id="live-title">{attentionStatus.title}</span>
+              <strong id="live-detail">{attentionStatus.detail}</strong>
+            </p>
+          ) : null}
+          <span id="segment-select-wrap" hidden={!hasMultipleSegments} className="segment-control">
+            <label htmlFor="segment-select">Segment</label>
+            <select
+              id="segment-select"
+              value={activeSegment}
+              onChange={(event) => setActiveSegment(Number(event.target.value))}
+            >
+              {normalized.segments.map((item) => (
+                <option key={item.segment} value={item.segment}>
+                  {`Segment ${item.segment + 1} - ${item.config.name || "Autoresearch"} (${item.runs.length} runs)`}
+                </option>
+              ))}
+            </select>
+          </span>
+          {hasMultipleSegments ? (
+            <p id="segment-note" className="segment-note">
+              {`Showing segment ${activeSegment + 1} of ${normalized.segments.length}`}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </header>
   );
+}
+
+function attentionStatusFor(liveStatus: { title?: string; detail?: string }) {
+  if (isAttentionStatus(liveStatus.title)) {
+    return {
+      title: liveStatus.title || "Dashboard notice",
+      detail: liveStatus.detail || "Review the latest dashboard status.",
+    };
+  }
+  return null;
+}
+
+function isAttentionStatus(title: unknown) {
+  return typeof title === "string" && /(failed|unavailable|error|running)/i.test(title);
 }
 
 function dashboardUrlFrom(meta: DashboardMeta) {

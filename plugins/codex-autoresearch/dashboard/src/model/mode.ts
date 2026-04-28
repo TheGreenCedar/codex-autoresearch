@@ -8,7 +8,7 @@ export function dashboardMode(meta: DashboardMeta = {}): DashboardMode {
   const guidance = meta.modeGuidance || {};
   if (showcase) {
     return {
-      liveRefresh: true,
+      liveRefresh: false,
       liveActions: false,
       showcase: true,
       title: guidance.title || "Live runboard",
