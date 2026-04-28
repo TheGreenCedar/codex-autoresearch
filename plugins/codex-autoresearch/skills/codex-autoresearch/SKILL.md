@@ -20,6 +20,8 @@ Target -> Onboard -> Setup -> Doctor -> Dashboard -> Packet -> Log -> Continue o
 AX, the AI experience:
 
 - Start by getting machine-readable context: MCP `onboarding_packet`, then `recommend_next`, `read_state`, `guided_setup`, or `doctor_session`.
+- Prefer MCP resource templates for read-only session truth when the host supports them: `autoresearch://state{?working_dir}`, `autoresearch://last-run{?working_dir}`, `autoresearch://quality-gaps{?working_dir,research_slug}`, and `autoresearch://dashboard-summary{?working_dir}`.
+- Prefer MCP prompts when available for common handoffs: `first-valid-loop`, `continue-loop`, and `review-last-packet`.
 - When the user gives a broad natural-language goal without a benchmark contract, call MCP `prompt_plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has `scripts/autoresearch-*` benchmark scripts, prefer those as the starting benchmark surface. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
 - Prefer MCP tools when available. Use CLI helpers only as the deterministic fallback.
@@ -31,7 +33,7 @@ UX, the user experience:
 
 - Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
-- At session start and resume, start or reuse the live dashboard, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
+- At session start and resume, call MCP `guided_setup` with `start_dashboard=true` when available, or otherwise start/reuse the live dashboard, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
 - Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/crash/checks decision, the next move, blockers, dashboard URL, and verification.
 
 ## Documentation Awareness
@@ -79,6 +81,8 @@ node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
 Over MCP, pass `allow_unsafe_command: true` before materializing custom benchmark/check commands, model commands, or external recipe-catalog commands.
+
+Over MCP, `guided_setup` is read-only by default. Pass `start_dashboard: true` only when the operator wants Codex to start the local live dashboard process and return a verified URL in `dashboard.url`.
 
 ## Active Loop Contract
 

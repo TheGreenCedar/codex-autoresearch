@@ -17,6 +17,13 @@ import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview
 import { integrationsCommand } from "../lib/integrations.js";
 import { createMcpInterface } from "../lib/mcp-interface.js";
 import {
+  getMcpPrompt,
+  listMcpPrompts,
+  listMcpResourceTemplates,
+  listMcpResources,
+  readMcpResource,
+} from "../lib/mcp-protocol.js";
+import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
   resolveResearchSlugForQualityGapSync,
@@ -1172,6 +1179,14 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     firstRunChecklist: setup.firstRunChecklist,
     scopeWarnings: setup.scopeWarnings,
     settings: dashboardSettings(config),
+    dashboard: {
+      requested: boolOption(args.startDashboard ?? args.start_dashboard, false),
+      started: false,
+      url: "",
+      healthUrl: "",
+      verified: false,
+      modeGuidance: null,
+    },
     diversityGuidance: state.memory?.diversityGuidance || null,
     lanePortfolio: state.memory?.lanePortfolio || [],
     nextAction,
@@ -4236,7 +4251,7 @@ async function handleMcpMessage(message) {
       id: message.id,
       result: {
         protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: "codex-autoresearch", version: PLUGIN_VERSION },
       },
     });
@@ -4245,6 +4260,49 @@ async function handleMcpMessage(message) {
   if (message.method === "notifications/initialized") return;
   if (message.method === "tools/list") {
     sendMcp({ jsonrpc: "2.0", id: message.id, result: { tools: toolSchemas } });
+    return;
+  }
+
+  if (message.method === "resources/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResources() });
+    return;
+  }
+
+  if (message.method === "resources/templates/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResourceTemplates() });
+    return;
+  }
+
+  if (message.method === "resources/read") {
+    try {
+      const result = await readMcpResource(message.params?.uri, callTool);
+      sendMcp({ jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      sendMcp({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32602, message: error.message || String(error) },
+      });
+    }
+    return;
+  }
+
+  if (message.method === "prompts/list") {
+    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpPrompts() });
+    return;
+  }
+
+  if (message.method === "prompts/get") {
+    try {
+      const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+      sendMcp({ jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      sendMcp({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32602, message: error.message || String(error) },
+      });
+    }
     return;
   }
   if (message.method === "tools/call") {

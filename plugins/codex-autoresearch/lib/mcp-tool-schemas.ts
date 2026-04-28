@@ -75,6 +75,9 @@ export const toolSchemas = applyToolContracts([
         secondary_metrics: { type: "array", items: { type: "string" } },
         commit_paths: { type: "array", items: { type: "string" } },
         max_iterations: { type: "integer" },
+        start_dashboard: { type: "boolean" },
+        port: { type: "number" },
+        dashboard_refresh_seconds: { type: "number" },
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -586,6 +589,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   revert_paths: "revertPaths",
   secondary_metrics: "secondaryMetrics",
   skip_init: "skipInit",
+  start_dashboard: "startDashboard",
   timeout_seconds: "timeoutSeconds",
   working_dir: "cwd",
 };
