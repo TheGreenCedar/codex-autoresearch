@@ -1,0 +1,29 @@
+name: Main branch source guard
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+jobs:
+  enforce-source-branch:
+    name: Enforce source branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev source branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REF" != "dev" ]; then
+            echo "Pull requests into main must use dev as the source branch. Current source: $HEAD_REF"
+            exit 1
+          fi
+          echo "Pull requests into main are allowed from dev."
