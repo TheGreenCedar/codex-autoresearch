@@ -89,6 +89,10 @@ async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
 }
 
 async function callMcpTool(name, args) {
+  return await callMcpRequest("tools/call", { name, arguments: args });
+}
+
+async function callMcpRequest(method, params = {}) {
   const child = spawn(process.execPath, [mcpServer], {
     cwd: pluginRoot,
     windowsHide: true,
@@ -114,7 +118,7 @@ async function callMcpTool(name, args) {
       params: { protocolVersion: "2024-11-05", capabilities: {} },
     });
     send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
-    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } });
+    send({ jsonrpc: "2.0", id: 2, method, params });
     return await waitForMcpResponseById(
       () => stdout,
       () => stderr,
@@ -2348,10 +2352,14 @@ test("mcp tools/list exposes output contracts and safety annotations", async () 
   const tools = response.result.tools;
   assert.ok(tools.length >= 6);
   const setupPlan = tools.find((tool) => tool.name === "setup_plan");
+  const guidedSetup = tools.find((tool) => tool.name === "guided_setup");
   const nextExperiment = tools.find((tool) => tool.name === "next_experiment");
   const clearSession = tools.find((tool) => tool.name === "clear_session");
   assert.equal(setupPlan.outputSchema.type, "object");
+  assert.equal(setupPlan.inputSchema.properties.start_dashboard, undefined);
   assert.equal(setupPlan.annotations.readOnlyHint, true);
+  assert.equal(guidedSetup.annotations.readOnlyHint, false);
+  assert.equal(guidedSetup.annotations.openWorldHint, true);
   assert.equal(nextExperiment.annotations.readOnlyHint, false);
   assert.equal(nextExperiment.annotations.destructiveHint, false);
   assert.equal(nextExperiment.annotations.openWorldHint, true);
@@ -2393,15 +2401,23 @@ test("mcp tools expose guidance and output contracts", async () => {
     doctor.annotations.safety,
     "Read-only unless benchmark check runs configured commands.",
   );
-  assert.equal(guided.annotations.readOnlyHint, true);
+  assert.equal(
+    guided.annotations.safety,
+    "Read-only by default; starts a local dashboard only when start_dashboard=true.",
+  );
+  assert.equal(guided.annotations.readOnlyHint, false);
+  assert.equal(guided.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
 
   const richDoctor = mcpToolSchemasWithContracts.find((tool) => tool.name === "doctor_session");
   assert.equal(richDoctor.outputSchema.type, "object");
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
+  assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
+  assert.equal(guided.inputSchema.properties.port.type, "number");
   assert.equal(guided.outputSchema.properties.commands.type, "array");
   assert.equal(guided.outputSchema.properties.commands.items.type, "string");
+  assert.equal(guided.outputSchema.properties.dashboard.type, "object");
   assert.equal(next.outputSchema.properties.parsedMetrics, undefined);
   assert.equal(next.outputSchema.properties.decision.type, "object");
   assert.equal(richDoctor.outputSchema.properties.issues.type, "array");
@@ -2549,6 +2565,8 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
   child.kill();
 
   assert.equal(init.result.serverInfo.name, "codex-autoresearch");
+  assert.ok(init.result.capabilities.resources);
+  assert.ok(init.result.capabilities.prompts);
   const payload = JSON.parse(tool.result.content[0].text);
   assert.equal(payload.ok, true);
   assert.equal(payload.tool, "setup_plan");
@@ -2569,6 +2587,92 @@ test("mcp server dispatches guided setup through the CLI wrapper", async () => {
     assert.equal(payload.ok, true);
     assert.equal(payload.workDir, dir);
     assert.equal(payload.setup.ok, true);
+    assert.equal(payload.dashboard.requested, false);
+  });
+});
+
+test("mcp guided_setup can explicitly start a verified live dashboard", async () => {
+  await withTempDir("mcp-guided-dashboard", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "mcp guided dashboard",
+      "--metric-name",
+      "seconds",
+    ]);
+    const response = await callMcpTool("guided_setup", {
+      working_dir: dir,
+      start_dashboard: true,
+      port: 0,
+    });
+    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
+    const payload = JSON.parse(response.result.content[0].text);
+    assert.equal(payload.dashboard.requested, true);
+    assert.equal(payload.dashboard.started, true);
+    assert.equal(payload.dashboard.verified, true);
+    assert.match(payload.dashboard.url, /^http:\/\/127\.0\.0\.1:/);
+    assert.match(payload.dashboard.healthUrl, /\/health$/);
+  });
+});
+
+test("mcp resources and prompts expose read-only session truth", async () => {
+  await withTempDir("mcp-resources-prompts", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "mcp resources", "--metric-name", "seconds"]);
+    const researchDir = path.join(dir, "autoresearch.research", "resource-study");
+    await mkdir(researchDir, { recursive: true });
+    await writeFile(
+      path.join(researchDir, "quality-gaps.md"),
+      "- [ ] Resource gap\n- [x] Closed resource gap\n",
+      "utf8",
+    );
+
+    const resources = await callMcpRequest("resources/list");
+    assert.equal(resources.result.resources.length, 0);
+
+    const resourceTemplates = await callMcpRequest("resources/templates/list");
+    assert.equal(resourceTemplates.result.resourceTemplates.length, 4);
+    assert.ok(
+      resourceTemplates.result.resourceTemplates.some(
+        (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
+      ),
+    );
+
+    const stateUri = `autoresearch://state?working_dir=${encodeURIComponent(dir)}`;
+    const state = await callMcpRequest("resources/read", { uri: stateUri });
+    assert.equal(state.result.contents[0].mimeType, "application/json");
+    const statePayload = JSON.parse(state.result.contents[0].text);
+    assert.equal(statePayload.ok, true);
+    assert.equal(statePayload.workDir, dir);
+
+    const qualityUri = `autoresearch://quality-gaps?working_dir=${encodeURIComponent(dir)}&research_slug=resource-study`;
+    const quality = await callMcpRequest("resources/read", { uri: qualityUri });
+    const qualityPayload = JSON.parse(quality.result.contents[0].text);
+    assert.equal(qualityPayload.open, 1);
+    assert.equal(qualityPayload.closed, 1);
+
+    const dashboardUri = `autoresearch://dashboard-summary?working_dir=${encodeURIComponent(dir)}`;
+    const dashboard = await callMcpRequest("resources/read", { uri: dashboardUri });
+    const dashboardPayload = JSON.parse(dashboard.result.contents[0].text);
+    assert.equal(dashboardPayload.workDir, dir);
+    assert.match(dashboardPayload.dashboardCommand, /serve --cwd/);
+
+    const missing = await callMcpRequest("resources/read", { uri: "autoresearch://state" });
+    assert.equal(missing.error.code, -32602);
+    assert.match(missing.error.message, /working_dir/);
+
+    const prompts = await callMcpRequest("prompts/list");
+    assert.ok(prompts.result.prompts.some((prompt) => prompt.name === "first-valid-loop"));
+
+    const prompt = await callMcpRequest("prompts/get", {
+      name: "first-valid-loop",
+      arguments: { working_dir: dir },
+    });
+    const text = prompt.result.messages[0].content.text;
+    assert.match(text, /guided_setup/);
+    assert.match(text, /start_dashboard=true/);
+    assert.match(text, /autoresearch:\/\/state/);
   });
 });
 

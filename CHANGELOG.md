@@ -6,6 +6,15 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+### Added
+
+- Added MCP resource templates and prompts for read-only session truth: state, last-run, quality-gap, dashboard-summary, continue-loop, review-last-packet, and first-valid-loop.
+- Added explicit `guided_setup` dashboard startup support over MCP with `start_dashboard`, returning a verified live dashboard URL when requested.
+
+### Changed
+
+- Clarified that `guided_setup` is read-only by default but becomes a local process-starting operation when `start_dashboard=true`.
+
 ## 1.1.14
 
 ### Fixed

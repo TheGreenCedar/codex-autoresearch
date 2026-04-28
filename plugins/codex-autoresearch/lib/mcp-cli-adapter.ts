@@ -97,6 +97,48 @@ export function createCliToolCaller({
 
   return async function callCliTool(name, args) {
     if (name === "serve_dashboard") return await startLiveDashboard(args);
+    if (name === "guided_setup" && boolOption(args.start_dashboard ?? args.startDashboard, false)) {
+      const guideArgs = { ...args, start_dashboard: false, startDashboard: false };
+      const guideInvocation = buildCliInvocationForTool(name, guideArgs, {
+        cliScript,
+        cwd: pluginRoot,
+        timeoutSeconds: toolTimeoutSeconds,
+      });
+      const guideResult = await runCliInvocation(guideInvocation);
+      if (guideResult.code !== 0) {
+        throw new Error(
+          `autoresearch CLI failed (${guideResult.code})\n${guideResult.stderr || guideResult.stdout}`,
+        );
+      }
+      const guide = JSON.parse(guideResult.stdout);
+      try {
+        const served = await startLiveDashboard(args);
+        return {
+          ...guide,
+          dashboard: {
+            requested: true,
+            started: served.ok !== false,
+            url: served.url || "",
+            healthUrl: served.healthUrl || "",
+            verified: Boolean(served.verified),
+            modeGuidance: served.modeGuidance || null,
+          },
+        };
+      } catch (error) {
+        return {
+          ...guide,
+          dashboard: {
+            requested: true,
+            started: false,
+            url: "",
+            healthUrl: "",
+            verified: false,
+            modeGuidance: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
     const invocation = buildCliInvocationForTool(name, args, {
       cliScript,
       cwd: pluginRoot,

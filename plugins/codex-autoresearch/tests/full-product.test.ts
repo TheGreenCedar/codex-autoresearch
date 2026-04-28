@@ -90,6 +90,10 @@ const git = async (cwd, args) => {
 };
 
 async function callMcpTool(name, args) {
+  return await callMcpRequest("tools/call", { name, arguments: args });
+}
+
+async function callMcpRequest(method, params = {}) {
   const child = spawn(process.execPath, [cli, "--mcp"], {
     cwd: pluginRoot,
     windowsHide: true,
@@ -106,8 +110,8 @@ async function callMcpTool(name, args) {
   const request = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
-    method: "tools/call",
-    params: { name, arguments: args },
+    method,
+    params,
   });
   child.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
   try {
@@ -512,6 +516,32 @@ test("MCP exposes onboarding, prompt planning, benchmark probes, recommend-next,
     });
     assert.equal(promote.result?.isError, undefined, promote.result?.content?.[0]?.text);
     assert.match(promote.result.content[0].text, /"queryCount": 20/);
+  });
+});
+
+test("MCP exposes resource templates and prompts/get for session truth handoffs", async () => {
+  await withTempDir("mcp-resources-prompts", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "mcp resources", "--metric-name", "seconds"]);
+
+    const resources = await callMcpRequest("resources/list");
+    assert.deepEqual(resources.result.resources, []);
+
+    const resourceTemplates = await callMcpRequest("resources/templates/list");
+    assert.ok(
+      resourceTemplates.result.resourceTemplates.some(
+        (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
+      ),
+    );
+
+    const stateUri = `autoresearch://state?working_dir=${encodeURIComponent(dir)}`;
+    const state = await callMcpRequest("resources/read", { uri: stateUri });
+    assert.equal(JSON.parse(state.result.contents[0].text).workDir, dir);
+
+    const prompt = await callMcpRequest("prompts/get", {
+      name: "first-valid-loop",
+      arguments: { working_dir: dir },
+    });
+    assert.match(prompt.result.messages[0].content.text, /start_dashboard=true/);
   });
 });
 
