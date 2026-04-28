@@ -6,6 +6,8 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 1.1.15
+
 ### Added
 
 - Added MCP resource templates and prompts for read-only session truth: state, last-run, quality-gap, dashboard-summary, continue-loop, review-last-packet, and first-valid-loop.
@@ -14,6 +16,8 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - Clarified that `guided_setup` is read-only by default but becomes a local process-starting operation when `start_dashboard=true`.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.15`.
 
 ## 1.1.14
 
