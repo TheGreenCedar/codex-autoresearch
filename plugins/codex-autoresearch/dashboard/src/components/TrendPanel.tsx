@@ -607,7 +607,7 @@ function MetricDetails({
 }) {
   const breakdown = point?.breakdown;
   return (
-    <details className="metric-details-panel" id="metric-details" aria-label="Metric details" open>
+    <details className="metric-details-panel" id="metric-details" aria-label="Metric details">
       <summary className="metric-details-summary">
         <span className="metric-details-summary-copy">
           <span className="eyebrow">Metric details</span>

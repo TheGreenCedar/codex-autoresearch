@@ -21,7 +21,7 @@ export const DEMO_ENTRIES: DashboardEntry[] = [
 
 export const DEMO_META: DashboardMeta = {
   deliveryMode: "live-server",
-  liveRefreshAvailable: true,
+  liveRefreshAvailable: false,
   liveActionsAvailable: false,
   showcaseMode: true,
   generatedAt: new Date().toISOString(),

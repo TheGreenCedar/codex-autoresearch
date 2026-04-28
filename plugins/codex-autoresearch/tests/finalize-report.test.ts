@@ -8,6 +8,7 @@ import { resolvePackageRoot } from "../lib/runtime-paths.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const finalizer = path.join(pluginRoot, "scripts", "finalize-autoresearch.mjs");
+const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 
 async function run(command, args, cwd, allowFailure = false) {
   const result = await new Promise((resolve) => {
@@ -154,6 +155,60 @@ test("finalizer writes an ignored review summary and preserves verification", as
 
   const status = (await git(["status", "--porcelain"], repo)).stdout.trim();
   assert.equal(status, "");
+});
+
+test("finalize preview blocks unlogged non-session commits from the final tree", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-preview-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-preview"], repo);
+  await writeFile(path.join(repo, "src", "guardrails.txt"), "leakage guard\n");
+  await git(["add", "src/guardrails.txt"], repo);
+  await git(["commit", "-m", "add leakage guardrails"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "kept metric improvement"], repo);
+  const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "preview",
+        metricName: "score",
+        bestDirection: "higher",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        metric: 1,
+        description: "kept metric improvement",
+        commit: kept.slice(0, 12),
+      }),
+      "",
+    ].join("\n"),
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "log autoresearch session"], repo);
+
+  const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+  const payload = JSON.parse(preview.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.finalTreeCoverage.covered, false);
+  assert.equal(payload.excludedCommits.length, 1);
+  assert.match(payload.warnings.join("\n"), /Excluded 1 unkept non-session commit/);
+  assert.deepEqual(payload.excludedCommits[0].files, ["src/guardrails.txt"]);
 });
 
 test("finalizer rejects crafted plan paths before filesystem deletion", async () => {

@@ -102,12 +102,15 @@ Operational metadata such as CLI command name, mutation status, and command-bear
 Command-bearing fields require `allow_unsafe_command: true` over MCP:
 
 - `command`
+- `command_file`
+- `env_file`
+- `packet_env_file`
 - `benchmark_command`
 - `checks_command`
 - `model_command`
 - setup guidance that materializes commands from an external recipe catalog
 
-Prefer project-local benchmark scripts over inline shell commands. If a custom command is necessary, keep it narrow and explain why the gate is being opened.
+Prefer project-local benchmark scripts over inline shell commands. If a custom command is necessary, keep it narrow and explain why the gate is being opened. For Windows packets, prefer `command_file` and `env_file` over fragile one-line PowerShell quoting; CLI fallback uses `--command-file` and `--packet-env-file` because Node itself reserves `--env-file`.
 
 `guided_setup` is read-only unless `start_dashboard: true` is passed. With that flag it starts a local process bound to `127.0.0.1` and returns `dashboard.requested`, `dashboard.started`, `dashboard.url`, `dashboard.healthUrl`, `dashboard.verified`, and `dashboard.modeGuidance`.
 
@@ -123,6 +126,7 @@ node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC seconds=1.23" --metric-name seconds
 node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs next --cwd <project> --command-file packet.command --packet-env-file packet.env
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs state --cwd <project>
 node scripts/autoresearch.mjs serve --cwd <project>

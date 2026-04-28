@@ -258,6 +258,9 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         command: { type: "string" },
+        command_file: { type: "string" },
+        env_file: { type: "string" },
+        packet_env_file: { type: "string" },
         timeout_seconds: { type: "number" },
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
@@ -276,6 +279,9 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         command: { type: "string" },
+        command_file: { type: "string" },
+        env_file: { type: "string" },
+        packet_env_file: { type: "string" },
         timeout_seconds: { type: "number" },
         checks_command: { type: "string" },
         checks_timeout_seconds: { type: "number" },
@@ -568,10 +574,12 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   checks_command: "checksCommand",
   checks_policy: "checksPolicy",
   checks_timeout_seconds: "checksTimeoutSeconds",
+  command_file: "commandFile",
   commit_paths: "commitPaths",
   create_checks: "createChecks",
   dashboard_refresh_seconds: "dashboardRefreshSeconds",
   dry_run: "dryRun",
+  env_file: "envFile",
   files_in_scope: "filesInScope",
   from_last: "fromLast",
   gate_name: "gateName",
@@ -583,6 +591,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   model_command: "modelCommand",
   model_timeout_seconds: "modelTimeoutSeconds",
   off_limits: "offLimits",
+  packet_env_file: "packetEnvFile",
   query_count: "queryCount",
   recipe_id: "recipeId",
   research_slug: "researchSlug",
@@ -674,6 +683,9 @@ export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoo
     (toolName === "setup_plan" || toolName === "guided_setup") && Boolean(normalized.catalog);
   const hasCustomCommand = Boolean(
     normalized.command ||
+    normalized.command_file ||
+    normalized.env_file ||
+    normalized.packet_env_file ||
     normalized.benchmark_command ||
     normalized.checks_command ||
     normalized.model_command ||

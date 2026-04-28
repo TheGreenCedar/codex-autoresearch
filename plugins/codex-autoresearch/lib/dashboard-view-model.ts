@@ -170,6 +170,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
       failed: failures.length,
       baseline: state.baseline,
       best: state.best,
+      development: state.development || null,
+      promotion: state.promotion || null,
       confidence: state.confidence,
       statusCounts: Object.fromEntries(
         [...STATUS_VALUES].map((status) => [
@@ -762,8 +764,9 @@ function perfectMetricSuspicion({
   externalRepoCount,
   promotionGrade,
 }: LooseObject) {
-  if (!isPerfectMetricState({ state, qualityGap })) return [];
   const latest = current.at(-1) || null;
+  const perfectMetricNames = perfectQualityMetricNames({ state, latest });
+  if (!isPerfectMetricState({ state, qualityGap }) && !perfectMetricNames.length) return [];
   const reasons = [];
   const hasFreshness = Boolean(
     settings.researchTruth?.fresh ||
@@ -776,10 +779,29 @@ function perfectMetricSuspicion({
   const hasBreadth = [queryCount, holdoutCount, adversarialCount, externalRepoCount].some(
     (value) => Number.isFinite(value) && value > 0,
   );
+  if (perfectMetricNames.length) {
+    reasons.push(`Perfect secondary metrics need corroboration: ${perfectMetricNames.join(", ")}.`);
+  }
   if (!hasFreshness) reasons.push("Perfect metrics have no freshness evidence.");
   if (!hasBreadth) reasons.push("Perfect metrics have no breadth evidence.");
   if (promotionGrade !== true) reasons.push("Perfect metrics are not marked promotion-grade.");
   return reasons;
+}
+
+function perfectQualityMetricNames({ state, latest }) {
+  const names = new Set<string>();
+  const addIfPerfect = (name, value) => {
+    if (!/mrr|hit|accuracy|quality|score/i.test(String(name || ""))) return;
+    if (/promotion|query|holdout|adversarial|external/i.test(String(name || ""))) return;
+    if (finiteMetric(value) === 1) names.add(String(name));
+  };
+  if (state?.config?.bestDirection === "higher") {
+    addIfPerfect(state?.config?.metricName, state?.best);
+  }
+  for (const [name, value] of Object.entries(latest?.metrics || {})) {
+    addIfPerfect(name, value);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
 }
 
 function isPerfectMetricState({ state, qualityGap }) {
@@ -829,6 +851,26 @@ function truthBreadthLabel(truth) {
   return `${counts.reduce((sum, value) => sum + value, 0)} checks`;
 }
 
+function shouldPrioritizeFinalization({
+  canFinalize,
+  guidedSetup,
+  hasQualityGaps,
+  hasClosedQualityGapSet,
+  lastMemoryAction,
+  nextAction,
+}: LooseObject) {
+  if (!canFinalize || hasQualityGaps) return false;
+  if (hasClosedQualityGapSet) return true;
+  const action = cleanText(lastMemoryAction || nextAction);
+  if (/^(stop|finali[sz]e|review|package|handoff|done)\b/i.test(action)) return true;
+  if (/no credible next|no next packet|no remaining hypothesis/i.test(action)) return true;
+  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
+  if (limit.limitReached === true) return true;
+  const remaining = Number(limit.remainingIterations);
+  if (Number.isFinite(remaining) && remaining <= 0) return true;
+  return false;
+}
+
 export function buildActionRail({
   current,
   bestKept,
@@ -851,6 +893,14 @@ export function buildActionRail({
     qualityGapOpen === 0 &&
     Number(qualityGap?.total) > 0;
   const canFinalize = Boolean(finalizePreview?.ready);
+  const shouldFinalizeNow = shouldPrioritizeFinalization({
+    canFinalize,
+    guidedSetup,
+    hasQualityGaps,
+    hasClosedQualityGapSet,
+    lastMemoryAction,
+    nextAction,
+  });
 
   let primary;
   if (guidedSetup?.stage === "needs-setup") {
@@ -947,7 +997,7 @@ export function buildActionRail({
       tone: "warn",
       source: lane?.id || "plateau",
     });
-  } else if (canFinalize) {
+  } else if (shouldFinalizeNow) {
     primary = actionItem({
       kind: "finalize-preview",
       priority: "Review",

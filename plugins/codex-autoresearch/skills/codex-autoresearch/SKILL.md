@@ -23,7 +23,7 @@ AX, the AI experience:
 - Prefer MCP resource templates for read-only session truth when the host supports them: `autoresearch://state{?working_dir}`, `autoresearch://last-run{?working_dir}`, `autoresearch://quality-gaps{?working_dir,research_slug}`, and `autoresearch://dashboard-summary{?working_dir}`.
 - Prefer MCP prompts when available for common handoffs: `first-valid-loop`, `continue-loop`, and `review-last-packet`.
 - When the user gives a broad natural-language goal without a benchmark contract, call MCP `prompt_plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
-- If the target repo already has `scripts/autoresearch-*` benchmark scripts, prefer those as the starting benchmark surface. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
+- If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
 - Prefer MCP tools when available. Use CLI helpers only as the deterministic fallback.
 - Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, ASI, continuation data, and the ledger.
@@ -64,7 +64,7 @@ The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the so
 10. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
 11. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
 
-Explicit benchmark commands are assumed to print `METRIC name=value` lines. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
+Explicit benchmark commands are assumed to print `METRIC name=value` lines. They may also print `ARTIFACT name=path` for manifests or reports the dashboard/last-run packet should link. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 
 CLI fallback from `plugins/codex-autoresearch`:
 
@@ -95,6 +95,7 @@ After `next_experiment`, log the packet. After `log_experiment`, read the return
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer. A finite active budget counts: do not stop at a report while iterations remain and there is no blocker.
 - Prefer `next --compact` or MCP `next_experiment` with `compact=true` for live-loop reporting; the full decision packet stays in `lastRunPath` for `log --from-last` and audit.
+- Use `--command-file <path>` plus `--packet-env-file <path>` for Windows/PowerShell packets that would otherwise need fragile inline quoting. Over MCP, use `command_file` and `env_file`.
 - If correctness checks fail, run `checks_inspect` or `checks-inspect` before deciding. Fix malformed command shapes first, then separate touched-path failures from broad-suite, pre-existing, or environment failures.
 - Stop only when the user interrupts, the limit is reached, benchmark/checks are blocked, cleanup would be unsafe, a fresh segment is needed, or the goal is genuinely exhausted.
 
@@ -110,16 +111,19 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next_experiment` before logging.
+- If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
+- Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - If doctor reports benchmark drift, treat the old best as historical evidence, not current runtime proof.
 - If the session is maxed, stale, or intentionally changing phase, use `new_segment` or `new-segment --cwd <project> --dry-run` first; confirmed segment creation appends to `autoresearch.jsonl`.
 - If the benchmark contract is being promoted, use `promote_gate` or `promote-gate --cwd <project> --reason "<why>" --dry-run` so the new segment records the gate, sample size, and measurement reason.
-- If `commitPaths` are missing or stale, repair them before relying on keep commits.
+- If `commitPaths` are missing or stale, repair them before relying on keep commits. `log keep` should fail before `git add` when paths are missing.
 
 Git safety:
 
 - Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
 - Use `--commit <hash>` when a kept change was already committed outside the helper.
 - Use scoped `commitPaths` or `revertPaths` for discard/crash/checks-failed cleanup.
+- If a Git index lock appears, report the lock path, live-process check, partial-write state, and safe retry/removal guidance before retrying.
 - Use `--allow-add-all` or broad dirty cleanup only when the user explicitly accepts that every dirty file is in scope.
 
 ## Dashboard
@@ -165,7 +169,7 @@ Use finalization when noisy loop history has useful kept commits.
 1. Run MCP `finalize_preview` or `scripts/autoresearch.mjs finalize-preview --cwd <project>`.
 2. Keep only `status: "keep"` evidence.
 3. Treat previews and plans as read-only.
-4. Review dirty tree, stale plan, overlap, excluded commits, and excluded-file warnings.
+4. Review dirty tree, stale plan, overlap, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
 5. Ask before creating branches unless the user already approved finalization.
 6. Run the finalizer from the autoresearch source branch.
 7. Verify branch union, session-artifact exclusion, review summary, and cleanup order.

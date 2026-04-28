@@ -441,6 +441,246 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
   });
 });
 
+test("next supports command-file, env-file, and ARTIFACT output contracts", async () => {
+  await withTempDir("command-env-artifact", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "artifact packet",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
+    await writeFile(
+      path.join(dir, "packet-runner.mjs"),
+      "console.log(`METRIC score=${process.env.SCORE}`);\nconsole.log('ARTIFACT manifest=out/manifest.json');\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs\n", "utf8");
+    await writeFile(path.join(dir, ".packet.env"), "SCORE=7\n", "utf8");
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command-file",
+      "packet.command",
+      "--packet-env-file",
+      ".packet.env",
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const payload = JSON.parse(packet.stdout);
+    assert.equal(payload.run.parsedPrimary, 7);
+    assert.equal(payload.run.artifacts.manifest, "out/manifest.json");
+    assert.deepEqual(payload.run.envKeys, ["SCORE"]);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep artifact packet",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "out/manifest.json");
+  });
+});
+
+test("command and env files are included in benchmark contract drift", async () => {
+  await withTempDir("command-env-contract-drift", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "contract files",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(
+      path.join(dir, "packet-runner.mjs"),
+      "console.log(`METRIC score=${process.env.SCORE}`);\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs\n", "utf8");
+    await writeFile(path.join(dir, ".packet.env"), "SCORE=7\n", "utf8");
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command-file",
+      "packet.command",
+      "--packet-env-file",
+      ".packet.env",
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    assert.equal(JSON.parse(packet.stdout).run.parsedPrimary, 7);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep first packet",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    await writeFile(path.join(dir, ".packet.env"), "SCORE=8\n", "utf8");
+    const blocked = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command-file",
+      "packet.command",
+      "--packet-env-file",
+      ".packet.env",
+    ]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.doctor.issues.join("\n"), /contract changed/i);
+  });
+});
+
+test("state separates development best from promotion-grade best", async () => {
+  await withTempDir("promotion-tracks", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "promotion",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    for (const [metric, promotionGrade] of [
+      [0.6, 0],
+      [0.8, 1],
+      [0.9, 0],
+    ]) {
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        String(metric),
+        "--status",
+        "keep",
+        "--description",
+        `score ${metric}`,
+        "--metrics",
+        JSON.stringify({ promotionGrade }),
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+    }
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.best, 0.9);
+    assert.equal(payload.development.best, 0.9);
+    assert.equal(payload.promotion.best, 0.8);
+    assert.equal(payload.promotion.kept, 1);
+  });
+});
+
+test("run notes append inside the managed ledger block", async () => {
+  await withTempDir("managed-ledger", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "ledger", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "autoresearch.md"),
+      "# Session\n\n## Guardrails\nKeep this section stable.\n",
+      "utf8",
+    );
+    for (const metric of ["3", "2"]) {
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        metric,
+        "--status",
+        "keep",
+        "--description",
+        `Run ${metric}`,
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+    }
+    const note = await readFile(path.join(dir, "autoresearch.md"), "utf8");
+    assert.match(note, /## Run Ledger/);
+    assert.equal((note.match(/AUTORESEARCH_RUN_LEDGER:START/g) || []).length, 1);
+    assert.match(note, /Run 1 keep: Run 3[\s\S]+Run 2 keep: Run 2/);
+    assert.match(note, /## Guardrails\nKeep this section stable\.\n\n## Run Ledger/);
+  });
+});
+
+test("benchmark contract changes block the next packet until a new segment", async () => {
+  await withTempDir("contract-drift", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "contract",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 5 }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "packet.cmd"),
+      "node -e \"console.log('METRIC score=1')\"\n",
+      "utf8",
+    );
+
+    const packet = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline contract",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 8 }, null, 2),
+      "utf8",
+    );
+    const blocked = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.doctor.issues.join("\n"), /Benchmark\/check\/config contract changed/);
+    assert.match(payload.nextAction, /new segment|old evidence|contract/i);
+  });
+});
+
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
@@ -1574,6 +1814,157 @@ test("keep logs require scoped commit paths or explicit add-all in git repos", a
   });
 });
 
+test("keep logs preflight missing commit paths before git add mutates the index", async () => {
+  await withTempDir("missing-commit-path-preflight", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "missing path", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ commitPaths: ["docs/testing/research-data-catalog.md"] }, null, 2),
+      "utf8",
+    );
+    await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+
+    const blocked = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Blocked missing path",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /Configured commitPaths do not exist before git add/);
+    assert.doesNotMatch(blocked.stderr, /pathspec/);
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "");
+    assert.match(await git(dir, ["status", "--short"]), /M tracked\.txt/);
+  });
+});
+
+test("keep logs allow tracked deletions in commit paths", async () => {
+  await withTempDir("tracked-deletion-commit-path", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "delete tracked", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await rm(path.join(dir, "tracked.txt"));
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Delete tracked file",
+      "--commit-paths",
+      "tracked.txt",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const latestCommit = JSON.parse(logged.stdout).experiment.commit;
+    assert.match(latestCommit, /^[0-9a-f]{7,12}$/);
+    assert.match(
+      await git(dir, ["show", "--name-status", "--format=", "HEAD"]),
+      /D\s+tracked\.txt/,
+    );
+  });
+});
+
+test("keep logs report structured git index lock recovery", async () => {
+  await withTempDir("git-index-lock", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "lock", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await writeFile(path.join(dir, ".git", "index.lock"), "stale lock\n", "utf8");
+
+    const blocked = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Blocked lock",
+      "--commit-paths",
+      "tracked.txt",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /Git index lock blocked git add/);
+    assert.match(blocked.stderr, /Live git process check/);
+    assert.match(blocked.stderr, /has not staged or committed anything/);
+  });
+});
+
+test("logged packets do not leave .git autoresearch runtime dirs as stale artifacts", async () => {
+  await withTempDir("git-runtime-dir-not-stale", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "runtime dir", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "packet.command"),
+      "node -e \"console.log('METRIC seconds=1')\"\n",
+      "utf8",
+    );
+    await git(dir, ["add", "autoresearch.jsonl", "packet.command"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const packet = await runCli(["next", "--cwd", dir, "--command-file", "packet.command"]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Record clean packet",
+      "--allow-add-all",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    await access(path.join(dir, ".git", "autoresearch"));
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const warningCodes = JSON.parse(state.stdout).warningDetails.map((warning) => warning.code);
+    assert.ok(!warningCodes.includes("stale_benchmark_artifacts"));
+  });
+});
+
 test("keep logs can record an existing commit without staging dirty work", async () => {
   await withTempDir("keep-existing-commit", async (dir) => {
     await git(dir, ["init"]);
@@ -1732,7 +2123,7 @@ test("keep logs fail instead of recording success when git add fails", async () 
       "missing.txt",
     ]);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /Git add failed/);
+    assert.match(result.stderr, /Configured commitPaths do not exist before git add/);
 
     const log = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
     assert.doesNotMatch(log, /Should not be logged/);

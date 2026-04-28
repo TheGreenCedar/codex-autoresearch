@@ -204,6 +204,9 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.runExperiment({
         cwd: args.cwd,
         command: args.command,
+        commandFile: args.commandFile,
+        envFile: args.envFile,
+        packetEnvFile: args.packetEnvFile,
         timeoutSeconds: args.timeoutSeconds,
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
@@ -214,6 +217,9 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.nextExperiment({
         cwd: args.cwd,
         command: args.command,
+        commandFile: args.commandFile,
+        envFile: args.envFile,
+        packetEnvFile: args.packetEnvFile,
         compact: args.compact,
         timeoutSeconds: args.timeoutSeconds,
         checksCommand: args.checksCommand,

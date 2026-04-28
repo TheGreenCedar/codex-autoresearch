@@ -4,7 +4,29 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 1.2.0
+
+### Added
+
+- Added packet `command_file` / env-file support (`--command-file` and CLI-safe `--packet-env-file`) plus `ARTIFACT name=path` parsing for benchmark-produced manifests.
+- Added development-vs-promotion evidence tracks in state/dashboard data and broader prompt-plan benchmark discovery across scripts, package/cargo hints, docs, and autoresearch hints.
+- Added finalizer-preview blockers for unkept non-session commits between base and HEAD, with final-tree coverage metadata.
+
+### Changed
+
+- Changed score-like composite prompt inference so generic `score` defaults higher-is-better unless the user states otherwise.
+- Changed dashboard action ranking so ready finalization no longer outranks active ASI next-action research while budget remains.
+- Changed the dashboard masthead status strip to show metric evidence instead of generic live-refresh boilerplate.
+- Changed run-note writes to use a managed ledger block in `autoresearch.md` instead of appending at arbitrary markdown positions.
+
+### Fixed
+
+- Fixed dashboard mobile overflow and stopped showcase/demo mode from polling live-refresh endpoints that are unavailable in static or Vite preview contexts.
+- Moved the dashboard current-decision rail directly below the chart so chart evidence stays first while the next safe operator action is no longer buried under context panels.
+- Added preflight diagnostics for evaluator-contamination risk, benchmark contract changes after logged runs, missing commit paths before `git add`, Git index-lock recovery, discard cleanup ownership, and suspicious perfect secondary metrics.
+- Fixed those diagnostics to hash command/env files, ignore internal empty Git runtime directories, allow tracked deletions in `commitPaths`, and require a metric wrapper before suggesting Cargo bench packets.
+
+Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.2.0`.
 
 ## 1.1.15
 
