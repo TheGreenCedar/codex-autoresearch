@@ -44,6 +44,11 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     setViewModel,
     viewModel,
   });
+  const decisionRail = (
+    <section className="decision-layout" aria-label="Current operator decision">
+      <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
+    </section>
+  );
 
   return (
     <div
@@ -76,9 +81,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         <section className="metric-layout" aria-label="Metric evidence">
           <div className="metric-primary-column">
             <TrendPanel session={session} readout={readout} />
-            <section className="decision-layout" aria-label="Current operator decision">
-              <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
-            </section>
+            {mode.liveRefresh ? decisionRail : null}
           </div>
           <ScoreStrip session={session} readout={readout} />
         </section>
@@ -87,6 +90,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           <CodexBrief session={session} viewModel={viewModel} />
           <StrategyMemory viewModel={viewModel} />
         </section>
+        {mode.liveRefresh ? null : decisionRail}
 
         <Ledger session={session} readout={readout} />
 

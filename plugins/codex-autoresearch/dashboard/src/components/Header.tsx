@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
   DashboardMeta,
@@ -7,7 +7,8 @@ import type {
   NormalizedEntries,
   SessionSegment,
 } from "../types";
-import { directionLabel, formatDisplayTime } from "../model";
+import { directionLabel, formatDisplayTime, recordFrom } from "../model";
+import { useCopyText } from "../hooks/useCopyText";
 
 interface HeaderProps {
   session: SessionSegment;
@@ -36,7 +37,7 @@ export function Header({
   refreshLiveData,
   readout,
 }: HeaderProps) {
-  const [copiedUrl, setCopiedUrl] = useState(false);
+  const { copied: copiedUrl, copy: copyDashboardUrlText } = useCopyText();
   const hasMultipleSegments = normalized.segments.length > 1;
   const generated = meta.generatedAt ? formatDisplayTime(meta.generatedAt) : "Snapshot";
   const metricLabel = readout.metricDefinition.metricName || session.config.metricName || "metric";
@@ -44,9 +45,7 @@ export function Header({
   const attentionStatus = attentionStatusFor(liveStatus);
   const copyDashboardUrl = async () => {
     if (!dashboardUrl) return;
-    const copied = await copyText(dashboardUrl);
-    setCopiedUrl(copied);
-    if (copied) window.setTimeout(() => setCopiedUrl(false), 1600);
+    await copyDashboardUrlText(dashboardUrl);
   };
   return (
     <header id="dashboard-toolbar" className="dashboard-toolbar" aria-label="Dashboard controls">
@@ -166,19 +165,4 @@ function firstString(...values: unknown[]) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
-}
-
-function recordFrom(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-async function copyText(value: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-    return true;
-  } catch {
-    return false;
-  }
 }

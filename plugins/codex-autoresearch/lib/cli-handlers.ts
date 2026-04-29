@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeCliCommandArguments } from "./mcp-tool-schemas.js";
 
 type LooseObject = Record<string, any>;
@@ -187,7 +186,13 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         trunk: args.trunk,
       }),
     }),
-    serve: async (args) => await serveCommand(args, deps),
+    serve: async (args) => ({
+      keepAlive: true,
+      result: await deps.serveDashboard({
+        cwd: args.cwd,
+        port: args.port,
+      }),
+    }),
     integrations: async (args) => ({
       result: await deps.integrationsCommand(args._[1] || "list", args),
     }),
@@ -345,118 +350,4 @@ export async function runCliCommand(
   const handler = handlers[command];
   if (!handler) throw new Error(`Unknown command: ${command}`);
   return await handler(args);
-}
-
-async function serveCommand(args: LooseObject, deps: LooseObject) {
-  const resolved = deps.resolveWorkDir(args.cwd);
-  let liveUrl = "";
-  const runtimeDrift = deps.buildDriftReport
-    ? await deps
-        .buildDriftReport({
-          pluginRoot: deps.pluginRoot,
-          includeInstalled: true,
-        })
-        .catch((error) => ({
-          ok: false,
-          warnings: [error.message],
-        }))
-    : null;
-  const serveResult = await deps.serveAutoresearch({
-    cwd: resolved.workDir,
-    port: args.port,
-    scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
-    dashboardHtml: async ({ actionNonce, actionNonceHeader }: LooseObject = {}) => {
-      const { workDir, config } = deps.resolveWorkDir(args.cwd);
-      const entries = deps.readJsonl(workDir);
-      const commands = deps.dashboardCommands(workDir);
-      const generatedAt = new Date().toISOString();
-      const dashboardContext = {
-        deliveryMode: "live-server",
-        liveUrl,
-        generatedAt,
-        sourceCwd: workDir,
-        pluginVersion: deps.pluginVersion || "unknown",
-        runtimeDrift,
-      };
-      return deps.dashboardHtml(entries, {
-        workDir,
-        generatedAt,
-        jsonlName: "autoresearch.jsonl",
-        deliveryMode: "live-server",
-        liveRefreshAvailable: true,
-        liveActionsAvailable: false,
-        actionNonce,
-        actionNonceHeader,
-        modeGuidance: {
-          title: "Live dashboard",
-          detail: "Live refresh is available; actions stay in CLI or MCP.",
-        },
-        refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
-        commands,
-        settings: deps.dashboardSettings(config, dashboardContext),
-        viewModel: await deps.dashboardViewModel(workDir, config, dashboardContext),
-      });
-    },
-    viewModel: async () => {
-      const { workDir, config } = deps.resolveWorkDir(args.cwd);
-      return deps.dashboardViewModel(workDir, config, {
-        deliveryMode: "live-server",
-        liveUrl,
-        generatedAt: new Date().toISOString(),
-        sourceCwd: workDir,
-        pluginVersion: deps.pluginVersion || "unknown",
-        runtimeDrift,
-      });
-    },
-  });
-  liveUrl = serveResult.url;
-  const health = await verifyLiveDashboardUrl(liveUrl);
-  return {
-    keepAlive: true,
-    result: {
-      ok: true,
-      workDir: serveResult.workDir,
-      port: serveResult.port,
-      url: serveResult.url,
-      verified: health.ok,
-      healthUrl: health.url,
-      checkedAt: health.checkedAt,
-      modeGuidance: {
-        deliveryMode: "live-server",
-        difference: health.ok
-          ? "This served URL was liveness-checked for live refresh; use CLI or MCP for actions, while exported file:// dashboards remain read-only snapshots."
-          : `Dashboard server started but liveness check failed: ${health.error}. Restart serve before handing this URL to a user.`,
-      },
-    },
-  };
-}
-
-async function verifyLiveDashboardUrl(url: string) {
-  const checkedAt = new Date().toISOString();
-  const healthUrl = new URL("health", url).toString();
-  try {
-    const response = await fetch(healthUrl);
-    if (!response.ok) {
-      return {
-        ok: false,
-        url: healthUrl,
-        checkedAt,
-        error: `GET /health returned ${response.status}`,
-      };
-    }
-    const payload = (await response.json().catch(() => null)) as LooseObject | null;
-    return {
-      ok: payload?.ok === true,
-      url: healthUrl,
-      checkedAt,
-      error: payload?.ok === true ? "" : "GET /health did not return ok=true",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      url: healthUrl,
-      checkedAt,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
 }

@@ -10,6 +10,14 @@ import type {
   DashboardViewModel,
 } from "../types";
 
+type LiveStatus = { title: string; detail: string };
+type ActionPayload = {
+  ok?: boolean;
+  error?: string;
+  stderr?: string;
+  receipt?: ActionReceipt;
+};
+
 interface UseLiveDashboardArgs {
   meta: DashboardMeta;
   mode: DashboardMode;
@@ -27,12 +35,7 @@ export function useLiveDashboard({
   setViewModel,
   viewModel,
 }: UseLiveDashboardArgs) {
-  const [liveStatus, setLiveStatus] = useState(() => ({
-    title: mode.title,
-    detail: mode.showcase
-      ? mode.detail
-      : `${mode.detail}${meta.generatedAt ? ` Generated ${formatDisplayTime(meta.generatedAt)}.` : ""}`,
-  }));
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => liveStatusFor(mode, meta));
   const [liveEnabled, setLiveEnabled] = useState(mode.liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
   const [actionsById, setActionsById] = useState<Record<string, ActionState>>({});
@@ -42,10 +45,7 @@ export function useLiveDashboard({
 
   const refreshLiveData = useCallback(async () => {
     if (typeof fetch !== "function") {
-      setLiveStatus({
-        title: "Snapshot refresh unavailable",
-        detail: "This browser context does not expose fetch.",
-      });
+      setLiveStatus(refreshUnavailableStatus());
       return;
     }
     try {
@@ -96,11 +96,7 @@ export function useLiveDashboard({
       try {
         setActionsById((current) => ({ ...current, [action]: { pending: true, error: "" } }));
         setLiveStatus({ title: `${actionLabel(action)} action`, detail: "Running..." });
-        const body =
-          bodyOverride ||
-          (action === "gap-candidates"
-            ? { researchSlug: viewModel?.qualityGap?.slug || "research" }
-            : {});
+        const body = bodyOverride || actionBodyFor(action, viewModel?.qualityGap?.slug);
         const response = await fetch(`actions/${action}`, {
           method: "POST",
           headers: {
@@ -111,20 +107,8 @@ export function useLiveDashboard({
         });
         const payload = (await response
           .json()
-          .catch(() => ({ ok: false, error: `HTTP ${response.status}` }))) as {
-          ok?: boolean;
-          error?: string;
-          stderr?: string;
-          receipt?: ActionReceipt;
-        };
-        const receipt =
-          payload.receipt ||
-          ({
-            ok: Boolean(payload.ok),
-            action,
-            status: payload.ok ? "completed" : "failed",
-            stderrSummary: payload.stderr || payload.error || "Failed",
-          } satisfies ActionReceipt);
+          .catch(() => ({ ok: false, error: `HTTP ${response.status}` }))) as ActionPayload;
+        const receipt = receiptFromPayload(action, payload);
         setLastReceipt(receipt);
         setLiveStatus({
           title: `${actionLabel(action)} action`,
@@ -166,4 +150,39 @@ export function useLiveDashboard({
     runLiveAction,
     setLiveEnabled,
   };
+}
+
+function liveStatusFor(mode: DashboardMode, meta: DashboardMeta): LiveStatus {
+  return {
+    title: mode.title,
+    detail: mode.showcase
+      ? mode.detail
+      : `${mode.detail}${meta.generatedAt ? ` Generated ${formatDisplayTime(meta.generatedAt)}.` : ""}`,
+  };
+}
+
+function refreshUnavailableStatus(): LiveStatus {
+  return {
+    title: "Snapshot refresh unavailable",
+    detail: "This browser context does not expose fetch.",
+  };
+}
+
+function actionBodyFor(action: string, researchSlug: string | undefined): Record<string, unknown> {
+  if (action === "gap-candidates") {
+    return { researchSlug: researchSlug || "research" };
+  }
+  return {};
+}
+
+function receiptFromPayload(action: string, payload: ActionPayload): ActionReceipt {
+  return (
+    payload.receipt ||
+    ({
+      ok: Boolean(payload.ok),
+      action,
+      status: payload.ok ? "completed" : "failed",
+      stderrSummary: payload.stderr || payload.error || "Failed",
+    } satisfies ActionReceipt)
+  );
 }

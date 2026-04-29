@@ -12,10 +12,12 @@ export async function inspectVersionSurfaces({ pluginRoot }) {
     cliServer: await readRegexVersionCandidate(
       [
         path.join(pluginRoot, "scripts", "autoresearch.ts"),
+        path.join(pluginRoot, "lib", "mcp-stdio-server.ts"),
         path.join(pluginRoot, "dist", "scripts", "autoresearch.mjs"),
+        path.join(pluginRoot, "dist", "lib", "mcp-stdio-server.mjs"),
         path.join(pluginRoot, "scripts", "autoresearch.mjs"),
       ],
-      /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*(?:"([^"]+)"|PLUGIN_VERSION)/s,
+      /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*(?:"([^"]+)"|PLUGIN_VERSION|serverVersion)/s,
       PLUGIN_VERSION,
     ),
     mcpEntrypoint: await readRegexVersionCandidate(

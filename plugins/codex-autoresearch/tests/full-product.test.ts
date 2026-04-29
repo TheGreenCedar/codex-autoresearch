@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -13,80 +11,36 @@ import {
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { callMcpRequest as callMcpRequestWithServer } from "./helpers/mcp.js";
+import {
+  createCliRunner,
+  createInteractiveCliRunner,
+  runGit,
+  withProcess,
+  withTempDir as withNamedTempDir,
+} from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
-
-const runProcess = (command, args, cwd) => {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-};
-
-const runCli = (args, options = {}) => {
-  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
-};
-
-const runCliWithAnswers = (args, answers, options = {}) => {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], {
-      cwd: options.cwd || pluginRoot,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let answered = 0;
-    let seenPrompts = 0;
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-      const promptCount = (stdout.match(/: /g) || []).length;
-      while (seenPrompts < promptCount && answered < answers.length) {
-        child.stdin.write(`${answers[answered]}\n`);
-        answered += 1;
-        seenPrompts += 1;
-      }
-      if (answered === answers.length && !child.stdin.destroyed) child.stdin.end();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-};
-
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-full-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-};
+const runCli = createCliRunner(cli, pluginRoot);
+const runCliWithAnswers = createInteractiveCliRunner(cli, pluginRoot);
 
 const git = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
-  assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-  return result.stdout.trim();
+  return await runGit(cwd, args);
+};
+
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch-full", name, fn);
+
+const withLiveServer = (dir, fn) => {
+  return withProcess(
+    process.execPath,
+    [cli, "serve", "--cwd", dir, "--port", "0"],
+    pluginRoot,
+    async (_child, stdout, stderr) => {
+      const payload = await waitForServerPayload(stdout, stderr);
+      return await fn(payload);
+    },
+  );
 };
 
 async function callMcpTool(name, args) {
@@ -94,58 +48,14 @@ async function callMcpTool(name, args) {
 }
 
 async function callMcpRequest(method, params = {}) {
-  const child = spawn(process.execPath, [cli, "--mcp"], {
+  const response = await callMcpRequestWithServer({
+    args: [cli, "--mcp"],
     cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-  const request = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
     method,
     params,
   });
-  child.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
-  try {
-    const response = await waitForMcpResponse(
-      () => stdout,
-      () => stderr,
-    );
-    assert.equal(response.id, 1);
-    return response;
-  } finally {
-    child.kill();
-  }
-}
-
-async function waitForMcpResponse(stdoutFn, stderrFn) {
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    const frame = parseFirstMcpFrame(stdoutFn());
-    if (frame) return frame;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`MCP response timed out\n${stderrFn()}`);
-}
-
-function parseFirstMcpFrame(stdout) {
-  const headerEnd = stdout.indexOf("\r\n\r\n");
-  if (headerEnd < 0) return null;
-  const header = stdout.slice(0, headerEnd);
-  const match = header.match(/Content-Length:\s*(\d+)/i);
-  if (!match) return null;
-  const length = Number(match[1]);
-  const bodyStart = headerEnd + 4;
-  if (stdout.length < bodyStart + length) return null;
-  return JSON.parse(stdout.slice(bodyStart, bodyStart + length));
+  assert.equal(response.id, 1);
+  return response;
 }
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
@@ -1104,24 +1014,7 @@ test("live server exposes health and view-model endpoints", async () => {
       "Baseline",
     ]);
 
-    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
-      cwd: pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    try {
-      const payload = await waitForServerPayload(
-        () => stdout,
-        () => stderr,
-      );
+    await withLiveServer(dir, async (payload) => {
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
       assert.equal(payload.verified, true);
       assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
@@ -1134,9 +1027,7 @@ test("live server exposes health and view-model endpoints", async () => {
       assert.doesNotMatch(html, /live-actions-panel/);
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
-    } finally {
-      child.kill();
-    }
+    });
   });
 });
 
@@ -1152,24 +1043,7 @@ test("live server rejects dashboard actions because CLI and MCP own mutations", 
       "Study live gaps",
     ]);
 
-    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
-      cwd: pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    try {
-      const payload = await waitForServerPayload(
-        () => stdout,
-        () => stderr,
-      );
+    await withLiveServer(dir, async (payload) => {
       const action = await fetch(`${payload.url}actions/gap-candidates`, {
         method: "POST",
         headers: { "content-type": "application/json", Origin: new URL(payload.url).origin },
@@ -1179,9 +1053,7 @@ test("live server rejects dashboard actions because CLI and MCP own mutations", 
       const body = await action.json();
       assert.equal(body.ok, false);
       assert.equal(body.code, "actions_disabled");
-    } finally {
-      child.kill();
-    }
+    });
   });
 });
 
@@ -1199,24 +1071,7 @@ test("live server log actions stay disabled and leave last-run packets untouched
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.continuation.stage, "needs-log-decision");
 
-    const child = spawn(process.execPath, [cli, "serve", "--cwd", dir, "--port", "0"], {
-      cwd: pluginRoot,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    try {
-      const payload = await waitForServerPayload(
-        () => stdout,
-        () => stderr,
-      );
+    await withLiveServer(dir, async (payload) => {
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.missionControl.logDecision.available, true);
 
@@ -1242,9 +1097,7 @@ test("live server log actions stay disabled and leave last-run packets untouched
       const state = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
       assert.equal(state.runs, 0);
       assert.equal(state.kept, 0);
-    } finally {
-      child.kill();
-    }
+    });
   });
 });
 

@@ -83,6 +83,10 @@ interface PackageManifest {
   files?: PackageEntry[];
 }
 
+type PackageManifestParse =
+  | { ok: true; manifest: PackageManifest | undefined }
+  | { error: string; ok: false };
+
 const ok =
   (await runPhase("syntax", syntaxChecks)) &&
   (await runDashboardBuildWithParity()) &&
@@ -158,48 +162,17 @@ async function runPackageArtifactCheck() {
       return false;
     }
 
-    // Strip ANSI escape codes that tsdown adds to its output
-    // eslint-disable-next-line no-control-regex
-    const output = `${result.stdout}${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, "");
-
-    // Find the JSON array - look for [ and ] in output
-    const start = output.indexOf("[");
-    if (start === -1) {
+    const parsedPack = parseNpmPackManifest(`${result.stdout}${result.stderr}`);
+    if (parsedPack.ok === false) {
       console.log("fail package-artifact");
-      console.log(indent("Could not parse npm pack --json output: no JSON array found."));
+      console.log(indent(parsedPack.error));
       return false;
     }
 
-    // Find the last ] after the opening [
-    let end = -1;
-    for (let i = output.length - 1; i >= start; i--) {
-      if (output[i] === "]") {
-        end = i;
-        break;
-      }
-    }
+    const packInfo = parsedPack.manifest;
 
-    if (end === -1 || end <= start) {
-      console.log("fail package-artifact");
-      console.log(indent("Could not parse npm pack --json output: incomplete JSON array."));
-      return false;
-    }
-
-    let packInfo: PackageManifest | undefined;
-    try {
-      [packInfo] = JSON.parse(output.slice(start, end + 1));
-    } catch (error) {
-      console.log("fail package-artifact");
-      console.log(indent(`Could not parse npm pack manifest: ${String(error)}`));
-      return false;
-    }
-
-    const packedPaths = new Set(
-      (packInfo?.files || []).map((entry) => String(entry.path || "").replace(/\\/g, "/")),
-    );
-    const packedEntries = new Map(
-      (packInfo?.files || []).map((entry) => [String(entry.path || "").replace(/\\/g, "/"), entry]),
-    );
+    const packedPaths = packagePathSet(packInfo);
+    const packedEntries = packageEntryMap(packInfo);
     const requiredPaths = [
       ".codex-plugin/plugin.json",
       ".mcp.json",
@@ -250,6 +223,44 @@ async function runPackageArtifactCheck() {
   } finally {
     await fsp.rm(packDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+function parseNpmPackManifest(output: string): PackageManifestParse {
+  // Strip ANSI escape codes that tsdown adds to its output.
+  // eslint-disable-next-line no-control-regex
+  const cleanOutput = output.replace(/\u001b\[[0-9;]*m/g, "");
+  const start = cleanOutput.indexOf("[");
+  if (start === -1) {
+    return {
+      ok: false,
+      error: "Could not parse npm pack --json output: no JSON array found.",
+    };
+  }
+  const end = cleanOutput.lastIndexOf("]");
+  if (end === -1 || end <= start) {
+    return {
+      ok: false,
+      error: "Could not parse npm pack --json output: incomplete JSON array.",
+    };
+  }
+  try {
+    const [manifest] = JSON.parse(cleanOutput.slice(start, end + 1));
+    return { ok: true, manifest };
+  } catch (error) {
+    return { ok: false, error: `Could not parse npm pack manifest: ${String(error)}` };
+  }
+}
+
+function packagePathSet(packInfo: PackageManifest | undefined) {
+  return new Set((packInfo?.files || []).map((entry) => normalizedPackagePath(entry)));
+}
+
+function packageEntryMap(packInfo: PackageManifest | undefined) {
+  return new Map((packInfo?.files || []).map((entry) => [normalizedPackagePath(entry), entry]));
+}
+
+function normalizedPackagePath(entry: PackageEntry) {
+  return String(entry.path || "").replace(/\\/g, "/");
 }
 
 async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {

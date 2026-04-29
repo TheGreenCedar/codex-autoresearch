@@ -15,6 +15,39 @@ const FAMILY_IGNORE_KEYS = new Set([
   "r",
 ]);
 
+function getAsi(run) {
+  return run.asi || {};
+}
+
+function isKeepStatus(status) {
+  return status === "keep";
+}
+
+function isRejectedStatus(status) {
+  return FAILURE_STATUSES.has(status);
+}
+
+function nextActionHintFromAsi(asi) {
+  return asi.next_action_hint || asi.nextAction || asi.next_action || "";
+}
+
+function compactMemoryRun(run, asi = getAsi(run)) {
+  return {
+    run: run.run,
+    metric: finiteMetric(run.metric),
+    status: run.status,
+    description: run.description || "",
+    hypothesis: asi.hypothesis || "",
+    evidence: asi.evidence || "",
+    commit: run.commit || "",
+    family: run.family.label,
+  };
+}
+
+function isMissingAsiMemory(run, asi = getAsi(run)) {
+  return !asi.evidence && !asi.rollback_reason && (isKeepStatus(run.status) || !asi.hypothesis);
+}
+
 export function buildExperimentMemory({
   runs = [],
   direction = "lower",
@@ -27,27 +60,18 @@ export function buildExperimentMemory({
   const enriched = runs.map((run) => ({ ...run, family: familyForRun(run) }));
 
   for (const run of enriched) {
-    const asi = run.asi || {};
-    const compact = {
-      run: run.run,
-      metric: finiteMetric(run.metric),
-      status: run.status,
-      description: run.description || "",
-      hypothesis: asi.hypothesis || "",
-      evidence: asi.evidence || "",
-      commit: run.commit || "",
-      family: run.family.label,
-    };
-    const nextActionHint = asi.next_action_hint || asi.nextAction || asi.next_action || "";
+    const asi = getAsi(run);
+    const compact = compactMemoryRun(run, asi);
+    const nextActionHint = nextActionHintFromAsi(asi);
     if (nextActionHint) {
       nextActions.push({ run: run.run, nextActionHint });
     }
-    if (!asi.evidence && !asi.rollback_reason && (run.status === "keep" || !asi.hypothesis)) {
+    if (isMissingAsiMemory(run, asi)) {
       missingAsiRuns.push(run.run);
     }
-    if (run.status === "keep") {
+    if (isKeepStatus(run.status)) {
       kept.push(compact);
-    } else if (FAILURE_STATUSES.has(run.status)) {
+    } else if (isRejectedStatus(run.status)) {
       rejected.push({
         ...compact,
         rollbackReason: asi.rollback_reason || asi.failure || "",
@@ -111,16 +135,7 @@ export function detectRepeatedHypothesis({ proposed = "", memory = {} }: LooseOb
     const previous = normalizeHypothesis(item.hypothesis || item.description);
     const previousFamily = canonicalFamilyKey(item.family || item.hypothesis || item.description);
     if (!previous) continue;
-    if (
-      previous === key ||
-      previous.includes(key) ||
-      key.includes(previous) ||
-      (proposedFamily &&
-        previousFamily &&
-        (proposedFamily === previousFamily ||
-          proposedFamily.includes(previousFamily) ||
-          previousFamily.includes(proposedFamily)))
-    ) {
+    if (matchesPreviousHypothesis({ key, previous, proposedFamily, previousFamily })) {
       return {
         matchedRun: item.run,
         status: item.status,
@@ -129,6 +144,24 @@ export function detectRepeatedHypothesis({ proposed = "", memory = {} }: LooseOb
     }
   }
   return null;
+}
+
+function matchesPreviousHypothesis({ key, previous, proposedFamily, previousFamily }) {
+  return hypothesisTextMatches(previous, key) || familyKeyMatches(proposedFamily, previousFamily);
+}
+
+function hypothesisTextMatches(previous, key) {
+  return previous === key || previous.includes(key) || key.includes(previous);
+}
+
+function familyKeyMatches(proposedFamily, previousFamily) {
+  return Boolean(
+    proposedFamily &&
+    previousFamily &&
+    (proposedFamily === previousFamily ||
+      proposedFamily.includes(previousFamily) ||
+      previousFamily.includes(proposedFamily)),
+  );
 }
 
 function summarizeFamilies(runs, direction) {
@@ -152,8 +185,8 @@ function summarizeFamilies(runs, direction) {
     family.runs += 1;
     family.latestRun = compactFamilyRun(run);
     family.statuses[run.status] = (family.statuses[run.status] || 0) + 1;
-    if (run.status === "keep") family.kept += 1;
-    if (FAILURE_STATUSES.has(run.status)) family.rejected += 1;
+    if (isKeepStatus(run.status)) family.kept += 1;
+    if (isRejectedStatus(run.status)) family.rejected += 1;
     const metric = finiteMetric(run.metric);
     const bestMetric = finiteMetric(family.bestRun?.metric);
     const bestKeptMetric = finiteMetric(family.bestKeptRun?.metric);
@@ -161,7 +194,7 @@ function summarizeFamilies(runs, direction) {
       family.bestRun = compactFamilyRun(run);
     }
     if (
-      run.status === "keep" &&
+      isKeepStatus(run.status) &&
       metric != null &&
       (bestKeptMetric == null || isBetter(metric, bestKeptMetric, direction))
     ) {
@@ -184,19 +217,16 @@ function summarizeFamilies(runs, direction) {
 }
 
 function detectPlateau({ runs, families, direction }) {
-  const finiteRuns = runs.filter((run) => Number.isFinite(Number(run.metric)));
-  const keptFinite = finiteRuns.filter((run) => run.status === "keep");
+  const finiteRuns = runs.filter(hasNumericMetricForPlateau);
+  const keptFinite = finiteRuns.filter((run) => isKeepStatus(run.status));
   const best = bestRun(keptFinite, direction);
   const bestIndex = best ? runs.findIndex((run) => run.run === best.run) : -1;
   const runsSinceBest = bestIndex >= 0 ? runs.length - bestIndex - 1 : runs.length;
   const recent = runs.slice(-Math.min(6, runs.length));
-  const recentFailures = recent.filter((run) => FAILURE_STATUSES.has(run.status)).length;
-  const familyCounts = new Map();
-  for (const run of recent) {
-    familyCounts.set(run.family.key, (familyCounts.get(run.family.key) || 0) + 1);
-  }
+  const recentFailures = recent.filter((run) => isRejectedStatus(run.status)).length;
+  const familyCounts = countRunsByFamily(recent);
   const repeatedFamilyRuns = Math.max(0, ...familyCounts.values());
-  const repeatedFamilyKey = [...familyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  const repeatedFamilyKey = mostRepeatedFamilyKey(familyCounts);
   const repeatedFamily = families.find((family) => family.key === repeatedFamilyKey) || null;
   const detected = Boolean(
     best &&
@@ -221,19 +251,32 @@ function detectPlateau({ runs, families, direction }) {
   };
 }
 
+function hasNumericMetricForPlateau(run) {
+  return Number.isFinite(Number(run.metric));
+}
+
 function noveltySummary(runs) {
   const recent = runs.slice(-Math.min(6, runs.length));
-  const unique = new Set(recent.map((run) => run.family.key));
-  const topCount = Math.max(
-    0,
-    ...[...unique].map((key) => recent.filter((run) => run.family.key === key).length),
-  );
+  const familyCounts = countRunsByFamily(recent);
+  const topCount = Math.max(0, ...familyCounts.values());
   return {
     recentWindow: recent.length,
-    uniqueFamilies: unique.size,
+    uniqueFamilies: familyCounts.size,
     repeatedFamilyRuns: topCount,
-    score: recent.length ? Number((unique.size / recent.length).toFixed(3)) : null,
+    score: recent.length ? Number((familyCounts.size / recent.length).toFixed(3)) : null,
   };
+}
+
+function countRunsByFamily(runs) {
+  const familyCounts = new Map();
+  for (const run of runs) {
+    familyCounts.set(run.family.key, (familyCounts.get(run.family.key) || 0) + 1);
+  }
+  return familyCounts;
+}
+
+function mostRepeatedFamilyKey(familyCounts) {
+  return [...familyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
 }
 
 function buildLanePortfolio({
@@ -245,9 +288,9 @@ function buildLanePortfolio({
   missingAsi,
   settings = {},
 }: LooseObject) {
-  const recentFailures = runs.slice(-5).filter((run) => FAILURE_STATUSES.has(run.status)).length;
-  const kept = runs.filter((run) => run.status === "keep");
-  const rejected = runs.filter((run) => FAILURE_STATUSES.has(run.status));
+  const recentFailures = runs.slice(-5).filter((run) => isRejectedStatus(run.status)).length;
+  const kept = runs.filter((run) => isKeepStatus(run.status));
+  const rejected = runs.filter((run) => isRejectedStatus(run.status));
   const topFamily = bestIncumbentFamily(families, direction);
   const exhaustedFamily = families.find((family) => family.exhausted);
   const checksPolicy = settings.checksPolicy || "always";
@@ -437,7 +480,7 @@ function bestIncumbentFamily(families, direction) {
 }
 
 function familyForRun(run) {
-  const asi = run.asi || {};
+  const asi = getAsi(run);
   const explicit = asi.family || asi.family_key || asi.strategy || asi.lane;
   const settings = asi.settings || asi.params || asi.parameters || asi.config;
   const settingsKey = settingsSignature(settings);
@@ -493,7 +536,7 @@ function compactFamilyRun(run) {
     metric: finiteMetric(run.metric),
     status: run.status,
     description: run.description || "",
-    nextActionHint: run.asi?.next_action_hint || run.asi?.nextAction || run.asi?.next_action || "",
+    nextActionHint: nextActionHintFromAsi(run.asi || {}),
   };
 }
 
