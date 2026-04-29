@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 export const quoteForShell = (value) => {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+  return JSON.stringify(String(value));
 };
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
