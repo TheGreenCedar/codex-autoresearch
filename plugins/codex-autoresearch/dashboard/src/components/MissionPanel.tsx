@@ -139,14 +139,11 @@ function LogDecision({
   const logDecision = mission.logDecision || {};
   const available = Boolean(logDecision.available);
   const statuses = useMemo(
-    () =>
-      Array.isArray(logDecision.allowedStatuses) && logDecision.allowedStatuses.length
-        ? logDecision.allowedStatuses
-        : ["keep", "discard"],
+    () => defaultStatusesFor(logDecision.allowedStatuses),
     [logDecision.allowedStatuses],
   );
-  const [status, setStatus] = useState(logDecision.suggestedStatus || statuses[0] || "keep");
-  const [description, setDescription] = useState(logDecision.defaultDescription || "");
+  const [status, setStatus] = useState(() => logDecisionStatusFor(logDecision, statuses));
+  const [description, setDescription] = useState(() => logDecision.defaultDescription || "");
   const [structuredAsi, setStructuredAsi] = useState(() =>
     structuredAsiFrom(logDecision.asiTemplate),
   );
@@ -162,12 +159,22 @@ function LogDecision({
     [logDecision.command, logDecision.suggestedStatus, packetFingerprint],
   );
   useEffect(() => {
-    setStatus(logDecision.suggestedStatus || statuses[0] || "keep");
-    setDescription(logDecision.defaultDescription || "");
-    setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
-    setAsi(stringifyAsi(logDecision.asiTemplate));
-    setRawDirty(false);
-    setError("");
+    resetLogDecisionForm(
+      {
+        asiTemplate: logDecision.asiTemplate,
+        defaultDescription: logDecision.defaultDescription,
+        suggestedStatus: logDecision.suggestedStatus,
+      },
+      statuses,
+      {
+        setAsi,
+        setDescription,
+        setError,
+        setRawDirty,
+        setStatus,
+        setStructuredAsi,
+      },
+    );
   }, [
     formKey,
     logDecision.asiTemplate,
@@ -178,10 +185,12 @@ function LogDecision({
   useEffect(() => {
     if (lastReceipt?.ok && String(lastReceipt.action || "").startsWith("log-")) {
       setDescription("");
-      setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
-      setAsi(stringifyAsi(logDecision.asiTemplate));
-      setRawDirty(false);
-      setError("");
+      resetAsiFields(logDecision.asiTemplate, {
+        setAsi,
+        setError,
+        setRawDirty,
+        setStructuredAsi,
+      });
     }
   }, [lastReceipt?.receiptId, lastReceipt?.ok, lastReceipt?.action, logDecision.asiTemplate]);
   const liveAvailable = mode.liveActions && available;
@@ -302,6 +311,55 @@ function LogDecision({
       </button>
     </div>
   );
+}
+
+function defaultStatusesFor(allowedStatuses: unknown): string[] {
+  return Array.isArray(allowedStatuses) && allowedStatuses.length
+    ? (allowedStatuses as string[])
+    : ["keep", "discard"];
+}
+
+function logDecisionStatusFor(logDecision: MissionControlModel["logDecision"], statuses: string[]) {
+  return logDecision?.suggestedStatus || statuses[0] || "keep";
+}
+
+function resetLogDecisionForm(
+  logDecision: {
+    asiTemplate?: RunAsi;
+    defaultDescription?: string;
+    suggestedStatus?: string;
+  },
+  statuses: string[],
+  setters: {
+    setAsi: (value: string) => void;
+    setDescription: (value: string) => void;
+    setError: (value: string) => void;
+    setRawDirty: (value: boolean) => void;
+    setStatus: (value: string) => void;
+    setStructuredAsi: (value: ReturnType<typeof structuredAsiFrom>) => void;
+  },
+) {
+  setters.setStatus(logDecisionStatusFor(logDecision, statuses));
+  setters.setDescription(logDecision?.defaultDescription || "");
+  setters.setStructuredAsi(structuredAsiFrom(logDecision?.asiTemplate));
+  setters.setAsi(stringifyAsi(logDecision?.asiTemplate));
+  setters.setRawDirty(false);
+  setters.setError("");
+}
+
+function resetAsiFields(
+  asiTemplate: RunAsi | undefined,
+  setters: {
+    setAsi: (value: string) => void;
+    setError: (value: string) => void;
+    setRawDirty: (value: boolean) => void;
+    setStructuredAsi: (value: ReturnType<typeof structuredAsiFrom>) => void;
+  },
+) {
+  setters.setStructuredAsi(structuredAsiFrom(asiTemplate));
+  setters.setAsi(stringifyAsi(asiTemplate));
+  setters.setRawDirty(false);
+  setters.setError("");
 }
 
 function AsiTextField({

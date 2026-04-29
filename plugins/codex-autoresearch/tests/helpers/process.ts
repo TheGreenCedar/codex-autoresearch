@@ -32,9 +32,70 @@ export const runProcess = (command, args, cwd) => {
   });
 };
 
+export const runInteractiveProcess = (command, args, answers, cwd) => {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let answered = 0;
+    let seenPrompts = 0;
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      const promptCount = (stdout.match(/: /g) || []).length;
+      while (seenPrompts < promptCount && answered < answers.length) {
+        child.stdin.write(`${answers[answered]}\n`);
+        answered += 1;
+        seenPrompts += 1;
+      }
+      if (answered === answers.length && !child.stdin.destroyed) child.stdin.end();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve(processResult(-1, stdout, String(error.message || error))),
+    );
+    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
+  });
+};
+
 export const createCliRunner = (cli, defaultCwd) => {
   return (args, options = {}) =>
     runProcess(process.execPath, [cli, ...args], options.cwd || defaultCwd);
+};
+
+export const createInteractiveCliRunner = (cli, defaultCwd) => {
+  return (args, answers, options = {}) =>
+    runInteractiveProcess(process.execPath, [cli, ...args], answers, options.cwd || defaultCwd);
+};
+
+export const withProcess = async (command, args, cwd, fn) => {
+  const child = spawn(command, args, {
+    cwd,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  try {
+    return await fn(
+      child,
+      () => stdout,
+      () => stderr,
+    );
+  } finally {
+    child.kill();
+  }
 };
 
 export const withTempDir = async (prefix, name, fn) => {

@@ -236,18 +236,12 @@ export async function runShell(
     const appendOutput = (text: string) => {
       metricCollector.append(text);
       appendMetricLines(text);
-      fullOutput += text;
-      if (Buffer.byteLength(fullOutput, "utf8") > maxFullOutputBytes) {
-        const buf = Buffer.from(fullOutput, "utf8");
-        fullOutput = buf.subarray(Math.max(0, buf.length - maxFullOutputBytes)).toString("utf8");
-        fullOutputTruncated = true;
-      }
-      output += text;
-      if (Buffer.byteLength(output, "utf8") > maxOutputBytes) {
-        const buf = Buffer.from(output, "utf8");
-        output = buf.subarray(Math.max(0, buf.length - maxOutputBytes)).toString("utf8");
-        outputTruncated = true;
-      }
+      const boundedFullOutput = appendBoundedOutput(fullOutput, text, maxFullOutputBytes);
+      fullOutput = boundedFullOutput.text;
+      fullOutputTruncated = fullOutputTruncated || boundedFullOutput.truncated;
+      const boundedOutput = appendBoundedOutput(output, text, maxOutputBytes);
+      output = boundedOutput.text;
+      outputTruncated = outputTruncated || boundedOutput.truncated;
     };
     const timeout = setTimeout(
       () => {
@@ -333,12 +327,9 @@ export async function runProcess(
       metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
       let truncated = target === "stdout" ? stdoutTruncated : stderrTruncated;
-      value += text;
-      if (Buffer.byteLength(value, "utf8") > maxOutputBytes) {
-        const buf = Buffer.from(value, "utf8");
-        value = buf.subarray(Math.max(0, buf.length - maxOutputBytes)).toString("utf8");
-        truncated = true;
-      }
+      const bounded = appendBoundedOutput(value, text, maxOutputBytes);
+      value = bounded.text;
+      truncated = truncated || bounded.truncated;
       if (target === "stdout") {
         stdout = value;
         stdoutTruncated = truncated;
@@ -393,6 +384,18 @@ export async function runProcess(
       );
     });
   });
+}
+
+function appendBoundedOutput(current: string, text: string, maxBytes: number) {
+  const appended = current + text;
+  if (Buffer.byteLength(appended, "utf8") <= maxBytes) {
+    return { text: appended, truncated: false };
+  }
+  const buf = Buffer.from(appended, "utf8");
+  return {
+    text: buf.subarray(Math.max(0, buf.length - maxBytes)).toString("utf8"),
+    truncated: true,
+  };
 }
 
 function processResult({
