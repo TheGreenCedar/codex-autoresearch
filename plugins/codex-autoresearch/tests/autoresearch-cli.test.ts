@@ -12,6 +12,11 @@ import {
   runGit,
   withTempDir as withNamedTempDir,
 } from "./helpers/process.js";
+import {
+  callMcpRequest as callMcpRequestWithServer,
+  mcpFrame,
+  waitForMcpResponseById,
+} from "./helpers/mcp.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
@@ -23,77 +28,18 @@ const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
 
-function mcpFrame(message) {
-  const body = JSON.stringify(message);
-  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
-}
-
-function parseMcpFrames(stdout) {
-  const frames = [];
-  let remaining = Buffer.from(stdout, "utf8");
-  for (;;) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd < 0) return frames;
-    const header = remaining.subarray(0, headerEnd).toString("utf8");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) return frames;
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    if (remaining.length < bodyStart + length) return frames;
-    frames.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
-    remaining = remaining.subarray(bodyStart + length);
-  }
-}
-
-async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    const found = parseMcpFrames(stdoutFn()).find((message) => message.id === id);
-    if (found) return found;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`No MCP response for ${id}\nstdout=${stdoutFn()}\nstderr=${stderrFn()}`);
-}
-
 async function callMcpTool(name, args) {
   return await callMcpRequest("tools/call", { name, arguments: args });
 }
 
 async function callMcpRequest(method, params = {}) {
-  const child = spawn(process.execPath, [mcpServer], {
+  return await callMcpRequestWithServer({
+    args: [mcpServer],
     cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
+    initialize: true,
+    method,
+    params,
   });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-  const send = (message) => {
-    child.stdin.write(mcpFrame(message));
-  };
-
-  try {
-    send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {} },
-    });
-    send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
-    send({ jsonrpc: "2.0", id: 2, method, params });
-    return await waitForMcpResponseById(
-      () => stdout,
-      () => stderr,
-      2,
-    );
-  } finally {
-    child.kill();
-  }
 }
 
 async function renderExportedDashboard(html) {
@@ -2877,31 +2823,7 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
   });
 
   const send = (message) => {
-    const body = JSON.stringify(message);
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-  };
-  const responseWithId = async (id) => {
-    const started = Date.now();
-    while (Date.now() - started < 5000) {
-      const parsed = [];
-      let remaining = Buffer.from(stdout, "utf8");
-      for (;;) {
-        const headerEnd = remaining.indexOf("\r\n\r\n");
-        if (headerEnd < 0) break;
-        const header = remaining.subarray(0, headerEnd).toString("utf8");
-        const match = header.match(/Content-Length:\s*(\d+)/i);
-        if (!match) break;
-        const length = Number(match[1]);
-        const bodyStart = headerEnd + 4;
-        if (remaining.length < bodyStart + length) break;
-        parsed.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
-        remaining = remaining.subarray(bodyStart + length);
-      }
-      const found = parsed.find((message) => message.id === id);
-      if (found) return found;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error(`No MCP response for ${id}\nstdout=${stdout}\nstderr=${stderr}`);
+    child.stdin.write(mcpFrame(message));
   };
 
   send({
@@ -2918,8 +2840,16 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
     params: { name: "setup_plan", arguments: { working_dir: pluginRoot } },
   });
 
-  const init = await responseWithId(1);
-  const tool = await responseWithId(2);
+  const init = await waitForMcpResponseById(
+    () => stdout,
+    () => stderr,
+    1,
+  );
+  const tool = await waitForMcpResponseById(
+    () => stdout,
+    () => stderr,
+    2,
+  );
   child.kill();
 
   assert.equal(init.result.serverInfo.name, "codex-autoresearch");

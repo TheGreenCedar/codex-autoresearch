@@ -12,6 +12,7 @@ import {
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { callMcpRequest as callMcpRequestWithServer } from "./helpers/mcp.js";
 import { createCliRunner, runGit, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -60,58 +61,14 @@ async function callMcpTool(name, args) {
 }
 
 async function callMcpRequest(method, params = {}) {
-  const child = spawn(process.execPath, [cli, "--mcp"], {
+  const response = await callMcpRequestWithServer({
+    args: [cli, "--mcp"],
     cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-  const request = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
     method,
     params,
   });
-  child.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
-  try {
-    const response = await waitForMcpResponse(
-      () => stdout,
-      () => stderr,
-    );
-    assert.equal(response.id, 1);
-    return response;
-  } finally {
-    child.kill();
-  }
-}
-
-async function waitForMcpResponse(stdoutFn, stderrFn) {
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    const frame = parseFirstMcpFrame(stdoutFn());
-    if (frame) return frame;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`MCP response timed out\n${stderrFn()}`);
-}
-
-function parseFirstMcpFrame(stdout) {
-  const headerEnd = stdout.indexOf("\r\n\r\n");
-  if (headerEnd < 0) return null;
-  const header = stdout.slice(0, headerEnd);
-  const match = header.match(/Content-Length:\s*(\d+)/i);
-  if (!match) return null;
-  const length = Number(match[1]);
-  const bodyStart = headerEnd + 4;
-  if (stdout.length < bodyStart + length) return null;
-  return JSON.parse(stdout.slice(bodyStart, bodyStart + length));
+  assert.equal(response.id, 1);
+  return response;
 }
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {

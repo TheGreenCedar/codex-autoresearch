@@ -1,5 +1,6 @@
-import { useState } from "react";
 import { STATUS_LABELS, TONES } from "../constants";
+import { recordFrom } from "../model";
+import { useCopyText } from "../hooks/useCopyText";
 import type { DashboardMode, DashboardReadout, DashboardViewModel, NextBestAction } from "../types";
 
 export function DecisionRail({
@@ -13,8 +14,8 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const chips = evidenceChipsFor(viewModel, action, readout);
-  const [copiedReport, setCopiedReport] = useState(false);
-  const [copiedHandoff, setCopiedHandoff] = useState(false);
+  const reportCopy = useCopyText();
+  const handoffCopy = useCopyText();
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
@@ -67,30 +68,14 @@ export function DecisionRail({
             {readout.latestFailure?.description || "No recent failure."}
           </strong>
         </div>
-        <div className="decision-copy-actions" aria-label="Copyable decision outputs">
-          <button
-            type="button"
-            className="tool-button subtle"
-            onClick={async () => {
-              const copied = await copyText(userReportFor(viewModel, readout, action));
-              setCopiedReport(copied);
-              if (copied) window.setTimeout(() => setCopiedReport(false), 1600);
-            }}
-          >
-            {copiedReport ? "Copied report" : "Copy report"}
-          </button>
-          <button
-            type="button"
-            className="tool-button subtle"
-            onClick={async () => {
-              const copied = await copyText(JSON.stringify(viewModel.handoffPacket || {}, null, 2));
-              setCopiedHandoff(copied);
-              if (copied) window.setTimeout(() => setCopiedHandoff(false), 1600);
-            }}
-          >
-            {copiedHandoff ? "Copied handoff" : "Copy handoff"}
-          </button>
-        </div>
+        <DecisionCopyActions
+          reportCopied={reportCopy.copied}
+          handoffCopied={handoffCopy.copied}
+          copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
+          copyHandoff={() =>
+            handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
+          }
+        />
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
           <span>{mode.liveRefresh ? "Live data available" : "Read-only snapshot"}</span>
@@ -106,6 +91,29 @@ export function DecisionRail({
         ))}
       </div>
     </section>
+  );
+}
+
+function DecisionCopyActions({
+  reportCopied,
+  handoffCopied,
+  copyReport,
+  copyHandoff,
+}: {
+  reportCopied: boolean;
+  handoffCopied: boolean;
+  copyReport: () => Promise<boolean>;
+  copyHandoff: () => Promise<boolean>;
+}) {
+  return (
+    <div className="decision-copy-actions" aria-label="Copyable decision outputs">
+      <button type="button" className="tool-button subtle" onClick={copyReport}>
+        {reportCopied ? "Copied report" : "Copy report"}
+      </button>
+      <button type="button" className="tool-button subtle" onClick={copyHandoff}>
+        {handoffCopied ? "Copied handoff" : "Copy handoff"}
+      </button>
+    </div>
   );
 }
 
@@ -168,19 +176,4 @@ function toList(value: unknown) {
       return String(item || "");
     })
     .filter(Boolean);
-}
-
-function recordFrom(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-async function copyText(value: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-    return true;
-  } catch {
-    return false;
-  }
 }
