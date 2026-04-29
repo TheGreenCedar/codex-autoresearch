@@ -861,14 +861,24 @@ function shouldPrioritizeFinalization({
 }: LooseObject) {
   if (!canFinalize || hasQualityGaps) return false;
   if (hasClosedQualityGapSet) return true;
-  const action = cleanText(lastMemoryAction || nextAction);
-  if (/^(stop|finali[sz]e|review|package|handoff|done)\b/i.test(action)) return true;
-  if (/no credible next|no next packet|no remaining hypothesis/i.test(action)) return true;
+  return (
+    actionSuggestsFinalization(lastMemoryAction || nextAction) || iterationLimitReached(guidedSetup)
+  );
+}
+
+function actionSuggestsFinalization(value) {
+  const action = cleanText(value);
+  return (
+    /^(stop|finali[sz]e|review|package|handoff|done)\b/i.test(action) ||
+    /no credible next|no next packet|no remaining hypothesis/i.test(action)
+  );
+}
+
+function iterationLimitReached(guidedSetup) {
   const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
   if (limit.limitReached === true) return true;
   const remaining = Number(limit.remainingIterations);
-  if (Number.isFinite(remaining) && remaining <= 0) return true;
-  return false;
+  return Number.isFinite(remaining) && remaining <= 0;
 }
 
 export function buildActionRail({

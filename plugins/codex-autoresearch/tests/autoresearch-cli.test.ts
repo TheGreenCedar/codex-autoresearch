@@ -1,59 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import {
+  createCliRunner,
+  quoteForShell,
+  runGit,
+  withTempDir as withNamedTempDir,
+} from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const mcpServer = path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs");
-
-const quoteForShell = (value) => {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-};
-
-const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
-
-const runProcess = (command, args, cwd) => {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
-  });
-};
-
-const runCli = (args, options = {}) => {
-  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
-};
-
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-};
+const runCli = createCliRunner(cli, pluginRoot);
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
 const git = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
-  assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-  return result.stdout.trim();
+  return await runGit(cwd, args);
 };
 
 function mcpFrame(message) {

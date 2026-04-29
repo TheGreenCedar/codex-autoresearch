@@ -6,6 +6,7 @@ import type {
   DashboardMode,
   DashboardViewModel,
   MissionControlModel,
+  MissionStep,
   RunAsi,
 } from "../types";
 
@@ -53,39 +54,14 @@ export function MissionPanel({
             active && (step.id === active.id || step.title === active.title),
           );
           return (
-            <div
-              className={`mission-step ${step.state || "idle"} ${isActive ? "active-step" : "inactive-step"}`}
+            <MissionStepCard
               key={step.id || step.title}
-              aria-current={isActive ? "step" : undefined}
-            >
-              <span>{step.state || "idle"}</span>
-              <strong>{step.title}</strong>
-              <p>{step.detail}</p>
-              {canRunLive && step.safeAction && (
-                <button
-                  className="tool-button mission-run"
-                  type="button"
-                  data-mission-action={step.safeAction}
-                  aria-describedby={`${step.id || step.safeAction}-disabled-reason`}
-                  disabled={Boolean(actionsById[step.safeAction]?.pending)}
-                  onClick={() => runLiveAction(step.safeAction)}
-                >
-                  {actionsById[step.safeAction]?.pending
-                    ? "Running..."
-                    : actionLabel(step.safeAction)}
-                </button>
-              )}
-              {canRunLive && step.safeAction ? (
-                <small
-                  className="disabled-reason"
-                  id={`${step.id || step.safeAction}-disabled-reason`}
-                >
-                  {actionsById[step.safeAction]?.pending
-                    ? `${actionLabel(step.safeAction)} is already running.`
-                    : "Guarded local action; no finalizer mutation."}
-                </small>
-              ) : null}
-            </div>
+              step={step}
+              active={isActive}
+              canRunLive={canRunLive}
+              actionState={step.safeAction ? actionsById[step.safeAction] : undefined}
+              runLiveAction={runLiveAction}
+            />
           );
         })}
       </div>
@@ -97,6 +73,53 @@ export function MissionPanel({
         lastReceipt={lastReceipt}
       />
     </section>
+  );
+}
+
+function MissionStepCard({
+  step,
+  active,
+  canRunLive,
+  actionState,
+  runLiveAction,
+}: {
+  step: MissionStep;
+  active: boolean;
+  canRunLive: boolean;
+  actionState?: ActionState;
+  runLiveAction: RunLiveAction;
+}) {
+  const action = step.safeAction || "";
+  const disabledReasonId = `${step.id || action}-disabled-reason`;
+  const pending = Boolean(actionState?.pending);
+  return (
+    <div
+      className={`mission-step ${step.state || "idle"} ${active ? "active-step" : "inactive-step"}`}
+      aria-current={active ? "step" : undefined}
+    >
+      <span>{step.state || "idle"}</span>
+      <strong>{step.title}</strong>
+      <p>{step.detail}</p>
+      {canRunLive && action && (
+        <button
+          className="tool-button mission-run"
+          type="button"
+          data-mission-action={action}
+          aria-describedby={disabledReasonId}
+          disabled={pending}
+          onClick={() => runLiveAction(action)}
+        >
+          {pending ? "Running..." : actionLabel(action)}
+        </button>
+      )}
+      {canRunLive && action ? (
+        <small className="disabled-reason" id={disabledReasonId}>
+          {pending
+            ? `${actionLabel(action)} is already running.`
+            : "Guarded local action; no finalizer mutation."}
+        </small>
+      ) : null}
+    </div>
   );
 }
 
@@ -215,45 +238,35 @@ function LogDecision({
       </div>
       <fieldset className="asi-structured" id="log-asi-field" hidden={hidden}>
         <legend>ASI</legend>
-        <label className="log-field" htmlFor="asi-hypothesis">
-          <span>Hypothesis</span>
-          <input
-            id="asi-hypothesis"
-            type="text"
-            value={structuredAsi.hypothesis}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("hypothesis", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-evidence">
-          <span>Evidence</span>
-          <textarea
-            id="asi-evidence"
-            value={structuredAsi.evidence}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("evidence", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-rollback-reason">
-          <span>Rollback reason</span>
-          <input
-            id="asi-rollback-reason"
-            type="text"
-            value={structuredAsi.rollback_reason}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("rollback_reason", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-next-action-hint">
-          <span>Next action hint</span>
-          <input
-            id="asi-next-action-hint"
-            type="text"
-            value={structuredAsi.next_action_hint}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("next_action_hint", event.target.value)}
-          />
-        </label>
+        <AsiTextField
+          id="asi-hypothesis"
+          label="Hypothesis"
+          value={structuredAsi.hypothesis}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("hypothesis", value)}
+        />
+        <AsiTextField
+          id="asi-evidence"
+          label="Evidence"
+          value={structuredAsi.evidence}
+          disabled={!liveAvailable || pending}
+          multiline
+          onChange={(value) => updateStructuredAsi("evidence", value)}
+        />
+        <AsiTextField
+          id="asi-rollback-reason"
+          label="Rollback reason"
+          value={structuredAsi.rollback_reason}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("rollback_reason", value)}
+        />
+        <AsiTextField
+          id="asi-next-action-hint"
+          label="Next action hint"
+          value={structuredAsi.next_action_hint}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("next_action_hint", value)}
+        />
         <details className="raw-asi-panel">
           <summary>Raw JSON</summary>
           <label htmlFor="log-decision-asi">ASI JSON</label>
@@ -288,6 +301,44 @@ function LogDecision({
         {pending ? "Logging..." : "Log decision"}
       </button>
     </div>
+  );
+}
+
+function AsiTextField({
+  id,
+  label,
+  value,
+  disabled,
+  multiline = false,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  disabled: boolean;
+  multiline?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="log-field" htmlFor={id}>
+      <span>{label}</span>
+      {multiline ? (
+        <textarea
+          id={id}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <input
+          id={id}
+          type="text"
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+    </label>
   );
 }
 

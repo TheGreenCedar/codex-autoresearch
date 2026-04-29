@@ -73,28 +73,13 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
   const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
   const chartData = useMemo(() => buildChartData(chart, readout), [chart, readout]);
-  const timestampTicks = useMemo(() => buildTimestampTicks(chartData), [chartData]);
-  const usesTimestampScale = axisMode === "timestamp" && timestampTicks.length >= 2;
-  const yKey = valueMode === "percent" ? "chartPercent" : "metric";
-  const xKey = usesTimestampScale
-    ? "timestampValue"
-    : axisMode === "timestamp"
-      ? "timestampLabel"
-      : "runLabel";
-  const yDomain = valueMode === "percent" ? ["auto", "auto"] : chart.domain || ["auto", "auto"];
-  const baselineLine =
-    valueMode === "percent"
-      ? readout.metricDefinition.mode === "weighted_cost"
-        ? 100
-        : 0
-      : chart.baselineValue;
-  const bestLine =
-    valueMode === "percent"
-      ? readout.metricDefinition.mode === "weighted_cost"
-        ? chartPercentValue(readout.best, readout.metricDefinition)
-        : improvementPercent(readout.baseline, readout.best, readout.metricDefinition.bestDirection)
-      : chart.bestValue;
+  const chartState = useMemo(
+    () => buildTrendChartState({ axisMode, chart, chartData, readout, valueMode }),
+    [axisMode, chart, chartData, readout, valueMode],
+  );
   const detailPoint = selectedPoint || chartData.at(-1) || null;
+  const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
+    chartState;
   return (
     <section
       className="panel trend-panel"
@@ -110,26 +95,13 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
           </p>
           <h2>Run chart</h2>
         </div>
-        <div className="chart-controls" aria-label="Chart display controls">
-          <SegmentedControl
-            label="Value"
-            value={valueMode}
-            options={[
-              ["value", readout.metricDefinition.valueLabel],
-              ["percent", readout.metricDefinition.percentLabel],
-            ]}
-            onChange={(nextValue) => setValueMode(nextValue as ValueMode)}
-          />
-          <SegmentedControl
-            label="X-axis"
-            value={axisMode}
-            options={[
-              ["iteration", "Iteration"],
-              ["timestamp", "Timestamp"],
-            ]}
-            onChange={(nextValue) => setAxisMode(nextValue as AxisMode)}
-          />
-        </div>
+        <ChartControls
+          axisMode={axisMode}
+          metricDefinition={readout.metricDefinition}
+          setAxisMode={setAxisMode}
+          setValueMode={setValueMode}
+          valueMode={valueMode}
+        />
         <span id="chart-note" className="panel-note">
           {chart.note}
         </span>
@@ -255,16 +227,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       <p id="trend-chart-summary" className="sr-summary">
         {chart.summary}
       </p>
-      <ul className="chart-data-list sr-only" aria-label="Chart data points">
-        {chartData.map((item) => (
-          <li key={`data-${item.runNumber}`}>
-            {item.runLabel}: {item.statusLabel}, {item.metricDisplay}, {item.description}
-            {item.heldMetric ? ", crash held at nearest successful metric" : ""}
-            {item.best ? ", best kept" : ""}
-            {item.latest ? ", latest" : ""}
-          </li>
-        ))}
-      </ul>
+      <ChartDataList chartData={chartData} />
 
       <MetricDetails readout={readout} point={detailPoint} />
 
@@ -278,6 +241,104 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       )}
     </section>
   );
+}
+
+function ChartControls({
+  axisMode,
+  metricDefinition,
+  setAxisMode,
+  setValueMode,
+  valueMode,
+}: {
+  axisMode: AxisMode;
+  metricDefinition: DashboardReadout["metricDefinition"];
+  setAxisMode: (value: AxisMode) => void;
+  setValueMode: (value: ValueMode) => void;
+  valueMode: ValueMode;
+}) {
+  return (
+    <div className="chart-controls" aria-label="Chart display controls">
+      <SegmentedControl
+        label="Value"
+        value={valueMode}
+        options={[
+          ["value", metricDefinition.valueLabel],
+          ["percent", metricDefinition.percentLabel],
+        ]}
+        onChange={(nextValue) => setValueMode(nextValue as ValueMode)}
+      />
+      <SegmentedControl
+        label="X-axis"
+        value={axisMode}
+        options={[
+          ["iteration", "Iteration"],
+          ["timestamp", "Timestamp"],
+        ]}
+        onChange={(nextValue) => setAxisMode(nextValue as AxisMode)}
+      />
+    </div>
+  );
+}
+
+function ChartDataList({ chartData }: { chartData: ChartDatum[] }) {
+  return (
+    <ul className="chart-data-list sr-only" aria-label="Chart data points">
+      {chartData.map((item) => (
+        <li key={`data-${item.runNumber}`}>
+          {item.runLabel}: {item.statusLabel}, {item.metricDisplay}, {item.description}
+          {item.heldMetric ? ", crash held at nearest successful metric" : ""}
+          {item.best ? ", best kept" : ""}
+          {item.latest ? ", latest" : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function buildTrendChartState({
+  axisMode,
+  chart,
+  chartData,
+  readout,
+  valueMode,
+}: {
+  axisMode: AxisMode;
+  chart: ChartModel;
+  chartData: ChartDatum[];
+  readout: DashboardReadout;
+  valueMode: ValueMode;
+}) {
+  const timestampTicks = buildTimestampTicks(chartData);
+  const usesTimestampScale = axisMode === "timestamp" && timestampTicks.length >= 2;
+  const yKey = valueMode === "percent" ? "chartPercent" : "metric";
+  const xKey = usesTimestampScale
+    ? "timestampValue"
+    : axisMode === "timestamp"
+      ? "timestampLabel"
+      : "runLabel";
+  const yDomain = valueMode === "percent" ? ["auto", "auto"] : chart.domain || ["auto", "auto"];
+  return {
+    baselineLine: chartBaselineLine(chart, readout, valueMode),
+    bestLine: chartBestLine(chart, readout, valueMode),
+    timestampTicks,
+    usesTimestampScale,
+    xKey,
+    yDomain,
+    yKey,
+  };
+}
+
+function chartBaselineLine(chart: ChartModel, readout: DashboardReadout, valueMode: ValueMode) {
+  if (valueMode !== "percent") return chart.baselineValue;
+  return readout.metricDefinition.mode === "weighted_cost" ? 100 : 0;
+}
+
+function chartBestLine(chart: ChartModel, readout: DashboardReadout, valueMode: ValueMode) {
+  if (valueMode !== "percent") return chart.bestValue;
+  if (readout.metricDefinition.mode === "weighted_cost") {
+    return chartPercentValue(readout.best, readout.metricDefinition);
+  }
+  return improvementPercent(readout.baseline, readout.best, readout.metricDefinition.bestDirection);
 }
 
 function buildChartData(chart: ChartModel, readout: DashboardReadout): ChartDatum[] {

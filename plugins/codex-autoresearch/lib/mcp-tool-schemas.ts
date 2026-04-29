@@ -608,7 +608,7 @@ export function validateToolArguments(name: string, args, options: ToolArgs = {}
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
   for (const required of schema.required || []) {
-    if (normalized[required] == null || normalized[required] === "")
+    if (missingArgumentValue(normalized[required]))
       throw new Error(`Missing required argument: ${required}`);
   }
   const rejectUnknown = options.rejectUnknown !== false;
@@ -619,20 +619,7 @@ export function validateToolArguments(name: string, args, options: ToolArgs = {}
       continue;
     }
     if (value == null) continue;
-    if (property.type === "array" && !Array.isArray(value))
-      throw new Error(`Argument ${key} must be an array.`);
-    if (property.type === "object" && !isObjectArgument(value))
-      throw new Error(`Argument ${key} must be an object.`);
-    if (property.type === "number" && typeof value !== "number")
-      throw new Error(`Argument ${key} must be a number.`);
-    if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value)))
-      throw new Error(`Argument ${key} must be an integer.`);
-    if (property.type === "boolean" && typeof value !== "boolean")
-      throw new Error(`Argument ${key} must be a boolean.`);
-    if (property.type === "string" && typeof value !== "string")
-      throw new Error(`Argument ${key} must be a string.`);
-    if (property.enum && !property.enum.includes(value))
-      throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
+    assertSchemaArgument(key, value, property);
   }
   inferMcpResearchSlug(name, normalized);
   return normalized;
@@ -705,6 +692,27 @@ function inferMcpResearchSlug(name: string, normalized: ToolArgs) {
     normalized,
     String(normalized.working_dir || ""),
   ).slug;
+}
+
+function missingArgumentValue(value: unknown) {
+  return value == null || value === "";
+}
+
+function assertSchemaArgument(key: string, value: unknown, property: Record<string, any>) {
+  if (property.type === "array" && !Array.isArray(value))
+    throw new Error(`Argument ${key} must be an array.`);
+  if (property.type === "object" && !isObjectArgument(value))
+    throw new Error(`Argument ${key} must be an object.`);
+  if (property.type === "number" && typeof value !== "number")
+    throw new Error(`Argument ${key} must be a number.`);
+  if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value)))
+    throw new Error(`Argument ${key} must be an integer.`);
+  if (property.type === "boolean" && typeof value !== "boolean")
+    throw new Error(`Argument ${key} must be a boolean.`);
+  if (property.type === "string" && typeof value !== "string")
+    throw new Error(`Argument ${key} must be a string.`);
+  if (property.enum && !property.enum.includes(value))
+    throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
 }
 
 function isObjectArgument(value: unknown) {

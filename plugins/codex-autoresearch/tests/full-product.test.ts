@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -13,35 +12,11 @@ import {
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { createCliRunner, runGit, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
-
-const runProcess = (command, args, cwd) => {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-};
-
-const runCli = (args, options = {}) => {
-  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
-};
+const runCli = createCliRunner(cli, pluginRoot);
 
 const runCliWithAnswers = (args, answers, options = {}) => {
   return new Promise((resolve) => {
@@ -74,20 +49,11 @@ const runCliWithAnswers = (args, answers, options = {}) => {
   });
 };
 
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-full-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+const git = async (cwd, args) => {
+  return await runGit(cwd, args);
 };
 
-const git = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
-  assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-  return result.stdout.trim();
-};
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch-full", name, fn);
 
 async function callMcpTool(name, args) {
   return await callMcpRequest("tools/call", { name, arguments: args });
