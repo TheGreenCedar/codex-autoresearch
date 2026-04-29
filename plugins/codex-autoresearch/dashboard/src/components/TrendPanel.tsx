@@ -330,28 +330,19 @@ function buildTrendChartState({
 
 function chartBaselineLine(chart: ChartModel, readout: DashboardReadout, valueMode: ValueMode) {
   if (valueMode !== "percent") return chart.baselineValue;
-  return readout.metricDefinition.mode === "weighted_cost" ? 100 : 0;
+  return isWeightedMetric(readout) ? 100 : 0;
 }
 
 function chartBestLine(chart: ChartModel, readout: DashboardReadout, valueMode: ValueMode) {
   if (valueMode !== "percent") return chart.bestValue;
-  if (readout.metricDefinition.mode === "weighted_cost") {
-    return chartPercentValue(readout.best, readout.metricDefinition);
-  }
-  return improvementPercent(readout.baseline, readout.best, readout.metricDefinition.bestDirection);
+  return chartPercentForMetric(readout.best, readout);
 }
 
 function buildChartData(chart: ChartModel, readout: DashboardReadout): ChartDatum[] {
   return chart.points.map((point) => {
     const breakdown = breakdownForRun(point.run, readout.metricDefinition);
-    const chartPercent =
-      readout.metricDefinition.mode === "weighted_cost"
-        ? chartPercentValue(point.chartMetric, readout.metricDefinition)
-        : improvementPercent(
-            readout.baseline,
-            point.chartMetric,
-            readout.metricDefinition.bestDirection,
-          );
+    const chartPercent = chartPercentForMetric(point.chartMetric, readout);
+    const metricDisplay = formatMetricValue(point.chartMetric, readout.metricDefinition);
     return {
       runLabel: `#${point.run.run}`,
       timestampLabel: formatDisplayTime(point.run.timestamp),
@@ -360,9 +351,7 @@ function buildChartData(chart: ChartModel, readout: DashboardReadout): ChartDatu
       metric: point.chartMetric,
       chartPercent,
       rawMetric: point.run.metric,
-      metricDisplay: point.heldMetric
-        ? `${formatMetricValue(point.chartMetric, readout.metricDefinition)} (held)`
-        : formatMetricValue(point.chartMetric, readout.metricDefinition),
+      metricDisplay: point.heldMetric ? `${metricDisplay} (held)` : metricDisplay,
       status: point.run.status,
       statusLabel: STATUS_LABELS[point.run.status] || point.run.status || "Run",
       description: point.run.description || "No description",
@@ -374,10 +363,19 @@ function buildChartData(chart: ChartModel, readout: DashboardReadout): ChartDatu
       best: point.best,
       latest: point.latest,
       heldMetric: point.heldMetric,
-      label: `#${point.run.run} ${formatMetricValue(point.chartMetric, readout.metricDefinition)} ${point.run.status}`,
+      label: `#${point.run.run} ${metricDisplay} ${point.run.status}`,
       breakdown,
     };
   });
+}
+
+function isWeightedMetric(readout: DashboardReadout): boolean {
+  return readout.metricDefinition.mode === "weighted_cost";
+}
+
+function chartPercentForMetric(value: number | null, readout: DashboardReadout): number | null {
+  if (isWeightedMetric(readout)) return chartPercentValue(value, readout.metricDefinition);
+  return improvementPercent(readout.baseline, value, readout.metricDefinition.bestDirection);
 }
 
 function buildTimestampTicks(chartData: ChartDatum[]): number[] {
@@ -623,20 +621,14 @@ function ExperimentModal({
                 <dt>Time</dt>
                 <dd>
                   {formatMetric(breakdown.timeValue, "s")} / score{" "}
-                  {formatMetricValue(breakdown.timeScore, {
-                    ...readout.metricDefinition,
-                    mode: "weighted_cost",
-                  })}
+                  {formatWeightedScoreValue(breakdown.timeScore, readout)}
                 </dd>
               </div>
               <div>
                 <dt>Memory</dt>
                 <dd>
                   {formatMemoryValue(breakdown.memoryValue)} / score{" "}
-                  {formatMetricValue(breakdown.memoryScore, {
-                    ...readout.metricDefinition,
-                    mode: "weighted_cost",
-                  })}
+                  {formatWeightedScoreValue(breakdown.memoryScore, readout)}
                 </dd>
               </div>
             </>
@@ -691,104 +683,133 @@ function MetricDetails({
             {readout.metricDefinition.fallbackNote}
           </p>
         )}
-        <div className="metric-details-grid">
-          {readout.metricDefinition.mode === "weighted_cost" ? (
-            <>
-              <div className="metric-detail-card">
-                <span>Baseline time</span>
-                <strong id="metric-detail-baseline-time">
-                  {formatMetric(readout.metricDefinition.baselineTime, "s")}
-                </strong>
-              </div>
-              <div className="metric-detail-card">
-                <span>Baseline memory</span>
-                <strong id="metric-detail-baseline-memory">
-                  {formatMemoryValue(readout.metricDefinition.baselineMemory)}
-                </strong>
-              </div>
-            </>
-          ) : (
-            <div className="metric-detail-card">
-              <span>Baseline {readout.metricDefinition.valueLabel.toLowerCase()}</span>
-              <strong id="metric-detail-baseline-value">
-                {formatMetricValue(readout.baseline, readout.metricDefinition)}
-              </strong>
-            </div>
-          )}
-          <div className="metric-detail-card">
-            <span>{readout.metricDefinition.valueLabel}</span>
-            <strong id="metric-detail-score">
-              {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-            </strong>
-          </div>
-          <div className="metric-detail-card">
-            <span>{readout.metricDefinition.percentLabel}</span>
-            <strong id="metric-detail-percent">
-              {readout.metricDefinition.mode === "weighted_cost"
-                ? formatPercentOfBaseline(breakdown?.chartPercentValue ?? null)
-                : formatImprovement(breakdown?.improvement ?? null)}
-            </strong>
-          </div>
-        </div>
-        {readout.metricDefinition.mode === "weighted_cost" ? (
-          <dl className="metric-detail-list">
-            <div>
-              <dt>Time component</dt>
-              <dd id="metric-detail-time">
-                {formatMetric(breakdown?.timeValue ?? null, "s")} /{" "}
-                {formatMetric(readout.metricDefinition.baselineTime, "s")} ={" "}
-                {formatMetricValue(breakdown?.timeScore ?? null, {
-                  ...readout.metricDefinition,
-                  mode: "weighted_cost",
-                })}
-              </dd>
-            </div>
-            <div>
-              <dt>Memory component</dt>
-              <dd id="metric-detail-memory">
-                {formatMemoryValue(breakdown?.memoryValue ?? null)} /{" "}
-                {formatMemoryValue(readout.metricDefinition.baselineMemory)} ={" "}
-                {formatMetricValue(breakdown?.memoryScore ?? null, {
-                  ...readout.metricDefinition,
-                  mode: "weighted_cost",
-                })}
-              </dd>
-            </div>
-            <div>
-              <dt>Weighted score</dt>
-              <dd id="metric-detail-equation">
-                (0.7 *{" "}
-                {formatMetricValue(breakdown?.timeScore ?? null, {
-                  ...readout.metricDefinition,
-                  mode: "weighted_cost",
-                })}
-                ) + (0.3 *{" "}
-                {formatMetricValue(breakdown?.memoryScore ?? null, {
-                  ...readout.metricDefinition,
-                  mode: "weighted_cost",
-                })}
-                ) = {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-              </dd>
-            </div>
-          </dl>
-        ) : (
-          <dl className="metric-detail-list">
-            <div>
-              <dt>Primary metric</dt>
-              <dd id="metric-detail-primary">
-                {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-              </dd>
-            </div>
-            <div>
-              <dt>Improvement</dt>
-              <dd id="metric-detail-improvement">
-                {formatImprovement(breakdown?.improvement ?? null)}
-              </dd>
-            </div>
-          </dl>
-        )}
+        <MetricDetailsGrid readout={readout} breakdown={breakdown} />
+        <MetricBreakdownList readout={readout} breakdown={breakdown} />
       </div>
     </details>
+  );
+}
+
+function MetricDetailsGrid({
+  readout,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  breakdown?: RunMetricBreakdown;
+}) {
+  return (
+    <div className="metric-details-grid">
+      {readout.metricDefinition.mode === "weighted_cost" ? (
+        <>
+          <div className="metric-detail-card">
+            <span>Baseline time</span>
+            <strong id="metric-detail-baseline-time">
+              {formatMetric(readout.metricDefinition.baselineTime, "s")}
+            </strong>
+          </div>
+          <div className="metric-detail-card">
+            <span>Baseline memory</span>
+            <strong id="metric-detail-baseline-memory">
+              {formatMemoryValue(readout.metricDefinition.baselineMemory)}
+            </strong>
+          </div>
+        </>
+      ) : (
+        <div className="metric-detail-card">
+          <span>Baseline {readout.metricDefinition.valueLabel.toLowerCase()}</span>
+          <strong id="metric-detail-baseline-value">
+            {formatMetricValue(readout.baseline, readout.metricDefinition)}
+          </strong>
+        </div>
+      )}
+      <div className="metric-detail-card">
+        <span>{readout.metricDefinition.valueLabel}</span>
+        <strong id="metric-detail-score">
+          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
+        </strong>
+      </div>
+      <div className="metric-detail-card">
+        <span>{readout.metricDefinition.percentLabel}</span>
+        <strong id="metric-detail-percent">
+          {readout.metricDefinition.mode === "weighted_cost"
+            ? formatPercentOfBaseline(breakdown?.chartPercentValue ?? null)
+            : formatImprovement(breakdown?.improvement ?? null)}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+function MetricBreakdownList({
+  readout,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  breakdown?: RunMetricBreakdown;
+}) {
+  if (readout.metricDefinition.mode === "weighted_cost") {
+    return <WeightedMetricBreakdownList readout={readout} breakdown={breakdown} />;
+  }
+  return <PrimaryMetricBreakdownList readout={readout} breakdown={breakdown} />;
+}
+
+function WeightedMetricBreakdownList({
+  readout,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  breakdown?: RunMetricBreakdown;
+}) {
+  return (
+    <dl className="metric-detail-list">
+      <div>
+        <dt>Time component</dt>
+        <dd id="metric-detail-time">
+          {formatMetric(breakdown?.timeValue ?? null, "s")} /{" "}
+          {formatMetric(readout.metricDefinition.baselineTime, "s")} ={" "}
+          {formatWeightedScoreValue(breakdown?.timeScore ?? null, readout)}
+        </dd>
+      </div>
+      <div>
+        <dt>Memory component</dt>
+        <dd id="metric-detail-memory">
+          {formatMemoryValue(breakdown?.memoryValue ?? null)} /{" "}
+          {formatMemoryValue(readout.metricDefinition.baselineMemory)} ={" "}
+          {formatWeightedScoreValue(breakdown?.memoryScore ?? null, readout)}
+        </dd>
+      </div>
+      <div>
+        <dt>Weighted score</dt>
+        <dd id="metric-detail-equation">
+          (0.7 * {formatWeightedScoreValue(breakdown?.timeScore ?? null, readout)}) + (0.3 *{" "}
+          {formatWeightedScoreValue(breakdown?.memoryScore ?? null, readout)}) ={" "}
+          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+function PrimaryMetricBreakdownList({
+  readout,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  breakdown?: RunMetricBreakdown;
+}) {
+  return (
+    <dl className="metric-detail-list">
+      <div>
+        <dt>Primary metric</dt>
+        <dd id="metric-detail-primary">
+          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
+        </dd>
+      </div>
+      <div>
+        <dt>Improvement</dt>
+        <dd id="metric-detail-improvement">{formatImprovement(breakdown?.improvement ?? null)}</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -809,6 +830,13 @@ function formatChartAxisTickValue(
 ): string {
   if (valueMode === "percent") return formatChartPercentValue(value, readout.metricDefinition);
   return formatCompactMetricTick(value, readout.metricDefinition.displayUnit, domain);
+}
+
+function formatWeightedScoreValue(value: number | null | undefined, readout: DashboardReadout) {
+  return formatMetricValue(value, {
+    ...readout.metricDefinition,
+    mode: "weighted_cost",
+  });
 }
 
 function formatMemoryValue(value: number | null | undefined): string {

@@ -1393,44 +1393,88 @@ export function buildAiSummary({
   experimentMemory,
   warnings,
 }: LooseObject) {
+  const context = summaryMetricContext({ state, current });
   const metricName = state.config.metricName || "metric";
-  const unit = state.config.metricUnit ? ` ${state.config.metricUnit}` : "";
-  const direction =
-    state.config.bestDirection === "higher" ? "higher is better" : "lower is better";
-  const baseline = finiteMetric(state.baseline);
-  const bestMetric = finiteMetric(state.best);
-  const latest = current.at(-1) || null;
-  const latestMetric = finiteMetric(latest?.metric);
-  const delta =
-    baseline != null && bestMetric != null
-      ? percentChange(bestMetric, baseline, state.config.bestDirection)
-      : null;
-  const happened = [];
-  const plan = [];
   const blockers = [
     ...(Array.isArray(warnings) ? warnings.map(warningMessage) : []),
     ...(Array.isArray(finalizePreview?.warnings) ? finalizePreview.warnings : []),
   ].filter(Boolean);
 
-  if (!current.length) {
-    happened.push("No experiments have been logged yet; the loop needs a measured baseline.");
-  } else {
-    happened.push(
-      `${current.length} run${current.length === 1 ? "" : "s"} logged: ${kept.length} kept and ${failures.length} rejected or failed.`,
-    );
-    if (baseline != null && bestMetric != null) {
-      const movement = delta == null ? "" : ` (${delta >= 0 ? "+" : ""}${round(delta)}%)`;
-      happened.push(
-        `The best ${metricName} is ${formatSummaryMetric(bestMetric, unit)} against a ${formatSummaryMetric(baseline, unit)} baseline${movement}; ${direction}.`,
-      );
-    }
-    if (latest) {
-      happened.push(
-        `Most recent run #${latest.run} was ${latest.status}${latestMetric == null ? "" : ` at ${formatSummaryMetric(latestMetric, unit)}`}.`,
-      );
-    }
-  }
+  return {
+    title: current.length ? "Next move is ready." : "Run a baseline.",
+    subtitle: nextTitle || "Ledger, ASI, gap state, and finalization preview.",
+    happened: buildSummaryHappened({ current, kept, failures, metricName, ...context }).slice(0, 3),
+    plan: unique(
+      buildSummaryPlan({ bestKept, latestFailure, qualityGap, nextAction, finalizePreview }),
+    ).slice(0, 3),
+    blockers: blockers.slice(0, 2),
+    generatedFrom: {
+      runs: current.length,
+      latestRun: context.latest?.run || null,
+      latestActionHint: experimentMemory?.latestNextAction || "",
+    },
+  };
+}
 
+function summaryMetricContext({ state, current }: LooseObject) {
+  const baseline = finiteMetric(state.baseline);
+  const bestMetric = finiteMetric(state.best);
+  const latest = current.at(-1) || null;
+  return {
+    unit: state.config.metricUnit ? ` ${state.config.metricUnit}` : "",
+    direction: state.config.bestDirection === "higher" ? "higher is better" : "lower is better",
+    baseline,
+    bestMetric,
+    latest,
+    latestMetric: finiteMetric(latest?.metric),
+    delta:
+      baseline != null && bestMetric != null
+        ? percentChange(bestMetric, baseline, state.config.bestDirection)
+        : null,
+  };
+}
+
+function buildSummaryHappened({
+  current,
+  kept,
+  failures,
+  metricName,
+  unit,
+  direction,
+  baseline,
+  bestMetric,
+  latest,
+  latestMetric,
+  delta,
+}: LooseObject) {
+  if (!current.length) {
+    return ["No experiments have been logged yet; the loop needs a measured baseline."];
+  }
+  const happened = [
+    `${current.length} run${current.length === 1 ? "" : "s"} logged: ${kept.length} kept and ${failures.length} rejected or failed.`,
+  ];
+  if (baseline != null && bestMetric != null) {
+    const movement = delta == null ? "" : ` (${delta >= 0 ? "+" : ""}${round(delta)}%)`;
+    happened.push(
+      `The best ${metricName} is ${formatSummaryMetric(bestMetric, unit)} against a ${formatSummaryMetric(baseline, unit)} baseline${movement}; ${direction}.`,
+    );
+  }
+  if (latest) {
+    happened.push(
+      `Most recent run #${latest.run} was ${latest.status}${latestMetric == null ? "" : ` at ${formatSummaryMetric(latestMetric, unit)}`}.`,
+    );
+  }
+  return happened;
+}
+
+function buildSummaryPlan({
+  bestKept,
+  latestFailure,
+  qualityGap,
+  nextAction,
+  finalizePreview,
+}: LooseObject) {
+  const plan = [];
   if (bestKept) {
     plan.push(
       `Use kept run #${bestKept.run} as the comparison anchor unless the next packet beats it.`,
@@ -1459,19 +1503,7 @@ export function buildAiSummary({
       "Capture a clean baseline, then log the decision with ASI before the next experiment.",
     );
   }
-
-  return {
-    title: current.length ? "Next move is ready." : "Run a baseline.",
-    subtitle: nextTitle || "Ledger, ASI, gap state, and finalization preview.",
-    happened: happened.slice(0, 3),
-    plan: unique(plan).slice(0, 3),
-    blockers: blockers.slice(0, 2),
-    generatedFrom: {
-      runs: current.length,
-      latestRun: latest?.run || null,
-      latestActionHint: experimentMemory?.latestNextAction || "",
-    },
-  };
+  return plan;
 }
 
 function percentChange(best, baseline, direction) {

@@ -1,114 +1,37 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import test from "node:test";
-import { JSDOM } from "jsdom";
-import { build as viteBuild } from "vite";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import {
   buildActionRail,
   buildDashboardViewModel,
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
-import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import {
+  createDashboardHarness,
+  dashboardConfigEntry,
+  emptyCommandMeta,
+  waitFor,
+} from "./helpers/dashboard.js";
 
-const pluginRoot = resolvePackageRoot(import.meta.url);
-const dashboardTemplatePath = path.join(pluginRoot, "assets", "template.html");
-const dashboardBuildPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js");
-const dashboardCssPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css");
-let tempBuildDir = "";
-let dashboardAssets = null;
-const dashboardWindows = [];
+const dashboard = createDashboardHarness();
+const { runDashboard } = dashboard;
 
 test.before(async () => {
-  tempBuildDir = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-test-"));
-  await viteBuild({
-    configFile: path.join(pluginRoot, "vite.dashboard.config.ts"),
-    logLevel: "silent",
-    build: {
-      outDir: tempBuildDir,
-      emptyOutDir: true,
-    },
-  });
-  dashboardAssets = {
-    app: await readFile(path.join(tempBuildDir, "dashboard-app.js"), "utf8"),
-    css: await readFile(path.join(tempBuildDir, "dashboard-app.css"), "utf8"),
-  };
+  await dashboard.buildDashboardAssets();
 });
 
 test.after(async () => {
-  if (tempBuildDir) await rm(tempBuildDir, { recursive: true, force: true });
+  await dashboard.cleanupBuildAssets();
 });
 
 test.afterEach(() => {
-  while (dashboardWindows.length > 0) {
-    const window = dashboardWindows.pop();
-    try {
-      window?.close?.();
-    } catch {
-      // Ignore cleanup errors for deterministic teardown.
-    }
-  }
+  dashboard.closeDashboardWindows();
 });
-
-const runDashboard = async (entries, meta = {}, options = {}) => {
-  const template = await readFile(dashboardTemplatePath, "utf8");
-  const app = dashboardAssets?.app || (await readFile(dashboardBuildPath, "utf8"));
-  const css = dashboardAssets?.css || (await readFile(dashboardCssPath, "utf8"));
-  const html = template
-    .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
-      JSON.stringify(entries).replace(/</g, "\\u003c"),
-    )
-    .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replace(/</g, "\\u003c"))
-    .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
-    .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
-  const dom = new JSDOM(html, {
-    pretendToBeVisual: true,
-    runScripts: "dangerously",
-    url:
-      options.url ||
-      (meta.deliveryMode === "live-server"
-        ? "http://127.0.0.1/"
-        : "file:///autoresearch-dashboard.html"),
-    beforeParse: options.beforeParse,
-  });
-  dashboardWindows.push(dom.window);
-  await waitForDashboardReady(dom.window);
-  const getById = (id) => {
-    const element = dom.window.document.getElementById(id);
-    assert.ok(element, `Missing dashboard element: ${id}`);
-    return element;
-  };
-  const queryById = (id) => dom.window.document.getElementById(id);
-  return { dom, getById, queryById };
-};
-
-async function waitForDashboardReady(window) {
-  await waitFor(
-    () => window.__AUTORESEARCH_DASHBOARD_READY__,
-    "Dashboard React app did not finish rendering.",
-  );
-}
-
-async function waitFor(predicate, message) {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > 2000) throw new Error(message);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
   const entries = [
-    {
-      type: "config",
-      name: "zero path",
-      metricName: "seconds",
-      bestDirection: "lower",
-      metricUnit: "s",
-    },
+    dashboardConfigEntry({ name: "zero path", metricName: "seconds", metricUnit: "s" }),
     {
       type: "run",
       run: 1,
@@ -136,7 +59,7 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
     },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const rail = getById("decision-rail").innerHTML;
   const nextActionDetail = getById("next-action-detail").textContent.trim();
   const nextActionTitle = getById("next-action-title").textContent.trim();
@@ -153,13 +76,7 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
 
 test("dashboard ledger and truth meter do not coerce unknown evidence to zero", async () => {
   const entries = [
-    {
-      type: "config",
-      name: "unknown evidence",
-      metricName: "seconds",
-      bestDirection: "lower",
-      metricUnit: "s",
-    },
+    dashboardConfigEntry({ name: "unknown evidence", metricName: "seconds", metricUnit: "s" }),
     {
       type: "run",
       run: 1,
@@ -170,7 +87,7 @@ test("dashboard ledger and truth meter do not coerce unknown evidence to zero", 
     },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const ledger = getById("ledger").textContent;
   assert.doesNotMatch(ledger, /0%/);
   assert.match(ledger, /-/);
@@ -182,13 +99,7 @@ test("dashboard ledger and truth meter do not coerce unknown evidence to zero", 
 
 test("dashboard family/plateau display marks best row and zero-delta plateau clearly", async () => {
   const entries = [
-    {
-      type: "config",
-      name: "plateau path",
-      metricName: "seconds",
-      bestDirection: "lower",
-      metricUnit: "s",
-    },
+    dashboardConfigEntry({ name: "plateau path", metricName: "seconds", metricUnit: "s" }),
     {
       type: "run",
       run: 1,
@@ -216,7 +127,7 @@ test("dashboard family/plateau display marks best row and zero-delta plateau cle
     },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const ledgerHtml = getById("ledger-body").innerHTML;
   const readout = getById("best-kept-detail").textContent;
 
@@ -228,13 +139,7 @@ test("dashboard family/plateau display marks best row and zero-delta plateau cle
 
 test("dashboard renders the full run log without blank scroll space", async () => {
   const entries = [
-    {
-      type: "config",
-      name: "long log path",
-      metricName: "seconds",
-      bestDirection: "lower",
-      metricUnit: "s",
-    },
+    dashboardConfigEntry({ name: "long log path", metricName: "seconds", metricUnit: "s" }),
     ...Array.from({ length: 100 }, (_, index) => ({
       type: "run",
       run: index + 1,
@@ -246,7 +151,7 @@ test("dashboard renders the full run log without blank scroll space", async () =
     })),
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const ledgerHtml = getById("ledger-body").innerHTML;
   const renderedRows = ledgerHtml.match(/ledger-row/g) || [];
 
@@ -314,7 +219,7 @@ test("dashboard renders a generated Codex summary of history and plan", async ()
     experimentMemory: { latestNextAction: "Stress the cache path." },
   });
 
-  const { getById } = await runDashboard(entries, { viewModel, commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
 
   assert.match(getById("ai-summary-title").textContent, /Next move is ready/);
   assert.match(getById("ai-summary-happened").innerHTML, /3 runs/);
@@ -358,7 +263,7 @@ test("dashboard handles zero and negative metrics without unsafe percent or sign
     },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const chart = getById("trend-chart").innerHTML;
   const improvement = getById("improvement-value").textContent;
   const baseline = getById("baseline-value").textContent;
@@ -404,7 +309,7 @@ test("dashboard holds crash runs at the nearest successful metric level", async 
     { type: "run", run: 4, metric: 106, status: "keep", description: "Recovered", confidence: 1 },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const chart = getById("trend-chart").innerHTML;
   const note = getById("chart-note").textContent;
   const summary = getById("trend-chart-summary").textContent;
@@ -437,7 +342,7 @@ test("dashboard does not label raw score metrics as baseline time", async () => 
     },
   ];
 
-  const { queryById, getById } = await runDashboard(entries, { commands: [] });
+  const { queryById, getById } = await runDashboard(entries, emptyCommandMeta());
 
   assert.equal(queryById("metric-detail-baseline-time"), null);
   assert.equal(getById("metric-detail-baseline-value").textContent, "873608.88points");
@@ -467,58 +372,54 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
     })),
   ];
 
-  const { dom, getById } = await runDashboard(
-    entries,
-    { commands: [] },
-    {
-      beforeParse(window) {
-        window.ResizeObserver = class {
-          callback: ResizeObserverCallback;
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), {
+    beforeParse(window) {
+      window.ResizeObserver = class {
+        callback: ResizeObserverCallback;
 
-          constructor(callback: ResizeObserverCallback) {
-            this.callback = callback;
-          }
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback;
+        }
 
-          observe(target: Element) {
-            this.callback([
-              {
-                target,
-                contentRect: {
-                  width: 960,
-                  height: 350,
-                  top: 0,
-                  left: 0,
-                  bottom: 350,
-                  right: 960,
-                  x: 0,
-                  y: 0,
-                },
+        observe(target: Element) {
+          this.callback([
+            {
+              target,
+              contentRect: {
+                width: 960,
+                height: 350,
+                top: 0,
+                left: 0,
+                bottom: 350,
+                right: 960,
+                x: 0,
+                y: 0,
               },
-            ]);
-          }
-
-          disconnect() {}
-          unobserve() {}
-        };
-
-        window.HTMLElement.prototype.getBoundingClientRect = function () {
-          return {
-            width: 960,
-            height: 350,
-            top: 0,
-            left: 0,
-            bottom: 350,
-            right: 960,
-            x: 0,
-            y: 0,
-            toJSON() {
-              return this;
             },
-          };
+          ]);
+        }
+
+        disconnect() {}
+        unobserve() {}
+      };
+
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return {
+          width: 960,
+          height: 350,
+          top: 0,
+          left: 0,
+          bottom: 350,
+          right: 960,
+          x: 0,
+          y: 0,
+          toJSON() {
+            return this;
+          },
         };
-      },
+      };
     },
-  );
+  });
   const buttons = Array.from(dom.window.document.querySelectorAll("button"));
   const timestampButton = buttons.find((button) => button.textContent?.trim() === "Timestamp");
   assert.ok(timestampButton, "Missing timestamp axis toggle");
@@ -571,7 +472,7 @@ test("dashboard holds leading crash runs at the next successful metric level", a
     { type: "run", run: 3, metric: 10, status: "keep", description: "Improved", confidence: 1 },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const chart = getById("trend-chart").innerHTML;
   const summary = getById("trend-chart-summary").textContent;
 
@@ -603,7 +504,7 @@ test("dashboard does not let held crash metrics become best evidence", async () 
     { type: "run", run: 3, metric: 95, status: "keep", description: "Recovered", confidence: 1 },
   ];
 
-  const { getById } = await runDashboard(entries, { commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
   const note = getById("chart-note").textContent;
   const summary = getById("trend-chart-summary").textContent;
 
@@ -805,7 +706,7 @@ test("dashboard explains that zero quality gaps still need a fresh research roun
     },
   ];
 
-  const { getById } = await runDashboard(entries, { viewModel, commands: [] });
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
 
   assert.equal(getById("quality-gap-title").textContent, "0 open / 3 total");
   assert.match(getById("quality-gap-detail").textContent, /Accepted gaps closed/);
