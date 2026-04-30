@@ -10,11 +10,28 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Preview is read-only. It should report readiness, blockers, overlap, dirty-tree status, and a next action.
 
+Preview also reports semantic safety:
+
+- kept commits later logged as discard, crash, or checks_failed
+- kept commits whose ASI or description says they were invalidated, contaminated, tainted, cache-replayed, or failed repeat
+- kept commits later reverted on the branch
+- final non-session branch files not covered by the selected review groups
+
 ## Review What Counts
 
 Only `status: "keep"` entries are candidates for review branches.
 
 Discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
+
+If the branch contents are right but the commit-level kept evidence is stale, package the final branch content instead:
+
+```bash
+node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts
+```
+
+Session artifacts are excluded by default; the flag is accepted for operators who want the command to say that out loud.
+
+Use this for current-final-tree finalization after stale bests, contaminated evaluators, failed repeats, cache replay, reverted kept commits, or manual safety commits made outside normal keep logging. Explain why the current tree is the review unit.
 
 ## Plan Branches
 
@@ -30,6 +47,8 @@ Review the plan before mutation:
 - merge base
 - planned file sets
 - excluded commits
+- semantic safety blockers
+- final-tree coverage
 - overlap/collapse decisions
 - plan fingerprint
 

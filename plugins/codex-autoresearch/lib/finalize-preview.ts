@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolvePackageRoot } from "./runtime-paths.js";
@@ -28,6 +29,7 @@ export async function finalizePreview(args) {
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
+  const ledgerRuns = await readLedgerRuns(workDir);
   const keptRuns = await readKeptRuns(workDir);
   const groups = [];
   const warnings = [];
@@ -71,7 +73,22 @@ export async function finalizePreview(args) {
   if (baseResult.ok) base = baseResult.stdout.trim();
   else warnings.push(`Could not find merge-base with ${trunk}.`);
   const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
+  const finalChangedFiles = base ? await changedFilesBetween(base, "HEAD", workDir) : [];
   const excludedCommits = base ? await unkeptCommitsSinceBase(base, groups, workDir) : [];
+  const plannedFiles = [...new Set(groups.flatMap((group) => group.files || []))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const missingFinalTreeFiles = finalChangedFiles.filter((file) => !plannedFiles.includes(file));
+  const excludedPlannedFileConflicts = findExcludedPlannedFileConflicts(
+    excludedCommits,
+    plannedFiles,
+  );
+  const semanticSafety = await buildSemanticSafety({
+    workDir,
+    groups,
+    ledgerRuns,
+    base,
+  });
   if (excludedCommits.length) {
     const sample = excludedCommits
       .slice(0, 3)
@@ -81,6 +98,21 @@ export async function finalizePreview(args) {
       `Excluded ${excludedCommits.length} unkept non-session commit${excludedCommits.length === 1 ? "" : "s"} from base..HEAD: ${sample}${excludedCommits.length > 3 ? ", ..." : ""}.`,
     );
   }
+  if (missingFinalTreeFiles.length) {
+    warnings.push(
+      `Final tree coverage is missing ${missingFinalTreeFiles.length} non-session file${missingFinalTreeFiles.length === 1 ? "" : "s"}: ${missingFinalTreeFiles.slice(0, 6).join(", ")}${missingFinalTreeFiles.length > 6 ? ", ..." : ""}.`,
+    );
+  }
+  if (excludedPlannedFileConflicts.length) {
+    const sample = excludedPlannedFileConflicts
+      .slice(0, 3)
+      .map((commit) => `${commit.shortCommit} ${commit.files.slice(0, 4).join(", ")}`.trim())
+      .join("; ");
+    warnings.push(
+      `Excluded commits touch planned files and cannot be safely omitted: ${sample}${excludedPlannedFileConflicts.length > 3 ? "; ..." : ""}.`,
+    );
+  }
+  warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
   if (dirty)
     warnings.push("Working tree is dirty; finalization branch creation will refuse to run.");
   if (!branch)
@@ -97,7 +129,11 @@ export async function finalizePreview(args) {
     finalTree,
     keptCommitCount: groups.length,
     excludedCommitCount: excludedCommits.length,
-    covered: excludedCommits.length === 0,
+    excludedPlannedFileConflictCount: excludedPlannedFileConflicts.length,
+    finalChangedFiles,
+    plannedFiles,
+    missingFiles: missingFinalTreeFiles,
+    covered: missingFinalTreeFiles.length === 0,
   };
   const ready =
     groups.length > 0 &&
@@ -105,7 +141,9 @@ export async function finalizePreview(args) {
     branch &&
     branch !== trunk &&
     baseResult.ok &&
-    excludedCommits.length === 0;
+    finalTreeCoverage.covered &&
+    excludedPlannedFileConflicts.length === 0 &&
+    semanticSafety.ok;
   const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
   const planArgv = [
     process.execPath,
@@ -120,11 +158,17 @@ export async function finalizePreview(args) {
   ];
   const nextAction = ready
     ? "Review the preview, then run the suggested finalizer plan command."
-    : excludedCommits.length
-      ? "Log prerequisite/support commits with keep --commit or collapse the review plan so final tree coverage includes every non-session commit."
-      : groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length
-        ? "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment."
-        : "Resolve preview warnings before creating review branches.";
+    : !semanticSafety.ok
+      ? "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence."
+      : excludedPlannedFileConflicts.length
+        ? "Rework the kept plan, collapse overlapping history, or use finalize-current-tree so omitted commits cannot affect planned files."
+        : !finalTreeCoverage.covered
+          ? "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff."
+          : excludedCommits.length
+            ? "Review excluded history; it does not change final tree coverage, but may still need explanation in the handoff."
+            : groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length
+              ? "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment."
+              : "Resolve preview warnings before creating review branches.";
   return withProgress(
     {
       ok: true,
@@ -136,7 +180,10 @@ export async function finalizePreview(args) {
       groups,
       missingCommitCount,
       excludedCommits,
+      excludedHistoryCommits: excludedCommits,
+      excludedPlannedFileConflicts,
       finalTreeCoverage,
+      semanticSafety,
       overlaps,
       warnings,
       suggestedCommand: planArgv.map(shellQuote).join(" "),
@@ -156,6 +203,109 @@ export async function finalizePreview(args) {
   );
 }
 
+export async function finalizeCurrentTree(args) {
+  const startedAt = Date.now();
+  const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
+  const trunk = args.trunk || "main";
+  const excludeSessionArtifacts =
+    args.exclude_session_artifacts ?? args.excludeSessionArtifacts ?? true;
+  const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
+  if (!inside.ok || inside.stdout.trim() !== "true") {
+    return withProgress(
+      {
+        ok: true,
+        workDir,
+        ready: false,
+        files: [],
+        warnings: ["Working directory is not a Git repository."],
+        nextAction: "Run current-tree finalization from a Git-backed autoresearch branch.",
+      },
+      startedAt,
+      "blocked",
+    );
+  }
+  const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
+  const baseResult = await gitOk(["merge-base", trunk, "HEAD"], workDir);
+  const warnings = [];
+  if (!baseResult.ok) warnings.push(`Could not find merge-base with ${trunk}.`);
+  const base = baseResult.ok ? baseResult.stdout.trim() : "";
+  const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
+  const allFiles = base ? await changedFilesBetween(base, "HEAD", workDir, false) : [];
+  const files = excludeSessionArtifacts
+    ? allFiles.filter((file) => !isSessionFile(file))
+    : allFiles;
+  const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
+  if (dirty)
+    warnings.push("Working tree is dirty; current-tree plan requires a clean source branch.");
+  if (!branch)
+    warnings.push("Detached HEAD; switch to the autoresearch source branch before planning.");
+  if (branch === trunk) warnings.push(`On trunk (${trunk}); switch to the source branch first.`);
+  if (!files.length) warnings.push("No current non-session branch diff files were found.");
+
+  const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
+  const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
+  const plan = {
+    mode: "current-final-tree",
+    source_branch: branch,
+    planned_at: new Date().toISOString(),
+    base,
+    trunk,
+    final_tree: finalTree,
+    goal: safeSlug(branch || "autoresearch"),
+    kept_commits: [],
+    kept_run_count: 0,
+    excluded_commits: [],
+    excluded_commit_count: 0,
+    overlap_files: [],
+    current_tree_coverage: {
+      covered: ready,
+      file_count: files.length,
+      exclude_session_artifacts: Boolean(excludeSessionArtifacts),
+    },
+    groups: [
+      {
+        title: `Current final tree for ${branch || "autoresearch"}`,
+        body: "Packages the current non-session branch diff as the review unit when commit-level kept evidence is stale or incomplete.",
+        last_commit: finalTree,
+        slug: "current-final-tree",
+        files,
+      },
+    ],
+  };
+  const planWithFingerprint = {
+    ...plan,
+    plan_fingerprint: planFingerprint(plan),
+  };
+  await fsp.mkdir(path.dirname(planOutput), { recursive: true });
+  await fsp.writeFile(planOutput, `${JSON.stringify(planWithFingerprint, null, 2)}\n`, "utf8");
+  return withProgress(
+    {
+      ok: true,
+      workDir,
+      trunk,
+      branch,
+      base,
+      finalTree,
+      ready,
+      files,
+      planOutput,
+      planFingerprint: planWithFingerprint.plan_fingerprint,
+      currentTreeCoverage: {
+        covered: ready,
+        files,
+        fileCount: files.length,
+        excludeSessionArtifacts: Boolean(excludeSessionArtifacts),
+      },
+      warnings,
+      nextAction: ready
+        ? "Review the current-final-tree plan, then run the finalizer with that plan file."
+        : "Resolve current-tree finalization warnings before running the finalizer.",
+    },
+    startedAt,
+    ready ? "completed" : "blocked",
+  );
+}
+
 async function defaultPlanOutput(workDir, branch) {
   const gitPath = await gitOk(
     ["rev-parse", "--git-path", `autoresearch-finalize/${safeSlug(branch)}.groups.json`],
@@ -163,6 +313,24 @@ async function defaultPlanOutput(workDir, branch) {
   );
   if (gitPath.ok && gitPath.stdout.trim()) return path.resolve(workDir, gitPath.stdout.trim());
   return path.join(workDir, ".git", "autoresearch-finalize", `${safeSlug(branch)}.groups.json`);
+}
+
+async function defaultCurrentTreePlanOutput(workDir, branch) {
+  const gitPath = await gitOk(
+    [
+      "rev-parse",
+      "--git-path",
+      `autoresearch-finalize/${safeSlug(branch)}.current-final-tree.json`,
+    ],
+    workDir,
+  );
+  if (gitPath.ok && gitPath.stdout.trim()) return path.resolve(workDir, gitPath.stdout.trim());
+  return path.join(
+    workDir,
+    ".git",
+    "autoresearch-finalize",
+    `${safeSlug(branch)}.current-final-tree.json`,
+  );
 }
 
 function withProgress(result, startedAt, status) {
@@ -205,6 +373,20 @@ async function readKeptRuns(cwd) {
   }
 }
 
+async function readLedgerRuns(cwd) {
+  try {
+    const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.run != null);
+  } catch {
+    return [];
+  }
+}
+
 async function changedFilesForCommit(hash, cwd) {
   const result = await git(["show", "--name-only", "--format=", hash], cwd);
   return result.stdout
@@ -212,6 +394,90 @@ async function changedFilesForCommit(hash, cwd) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((file) => !isSessionFile(file));
+}
+
+async function changedFilesBetween(left, right, cwd, filterSession = true) {
+  const result = await git(["diff", "--name-only", `${left}..${right}`], cwd);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((file) => !filterSession || !isSessionFile(file))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function buildSemanticSafety({ workDir, groups, ledgerRuns, base }) {
+  const blockers = [];
+  for (const group of groups) {
+    const later = ledgerRuns.filter(
+      (run) =>
+        run.run > group.run &&
+        run.commit &&
+        commitRefsMayMatch(run.commit, group.commit) &&
+        run.status !== "keep" &&
+        explicitEvidenceInvalidationText(run),
+    );
+    if (later.length) {
+      blockers.push({
+        code: "later_invalidated_keep",
+        run: group.run,
+        commit: group.shortCommit || group.commit,
+        message: `Kept run #${group.run} (${group.shortCommit}) was later explicitly invalidated for the same commit.`,
+      });
+    }
+    if (explicitEvidenceInvalidationText(group)) {
+      blockers.push({
+        code: "invalidated_keep",
+        run: group.run,
+        commit: group.shortCommit || group.commit,
+        message: `Kept run #${group.run} is marked invalidated or contaminated in ASI/description.`,
+      });
+    }
+    if (base && (await keptCommitWasReverted(workDir, group))) {
+      blockers.push({
+        code: "reverted_keep",
+        run: group.run,
+        commit: group.shortCommit || group.commit,
+        message: `Kept run #${group.run} (${group.shortCommit}) appears to have been reverted later in the branch.`,
+      });
+    }
+  }
+  return {
+    ok: blockers.length === 0,
+    blockers,
+  };
+}
+
+async function keptCommitWasReverted(workDir, group) {
+  const files = Array.isArray(group.files) ? group.files.filter(Boolean) : [];
+  if (!files.length) return false;
+  const log = await gitOk(
+    ["log", "--format=%H%x1f%s", `${group.commit}..HEAD`, "--", ...files],
+    workDir,
+  );
+  if (!log.ok) return false;
+  return log.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .some((line) => {
+      const [, subject = ""] = line.split("\x1f");
+      return /^Revert\s+/i.test(subject) || subject.includes(group.shortCommit);
+    });
+}
+
+function commitRefsMayMatch(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  return Boolean(a && b && (a.startsWith(b) || b.startsWith(a)));
+}
+
+function explicitEvidenceInvalidationText(run) {
+  const text = `${run.description || ""} ${run.title || ""} ${JSON.stringify(run.asi || {})}`;
+  return /invalidat|contaminat|taint|cache replay|failed repeat|(?:source|query|holdout|evaluator|benchmark|cache|data)\s+leak(?:age)?/i.test(
+    text,
+  )
+    ? text
+    : "";
 }
 
 async function unkeptCommitsSinceBase(base, groups, cwd) {
@@ -233,9 +499,59 @@ async function unkeptCommitsSinceBase(base, groups, cwd) {
   return commits;
 }
 
+function findExcludedPlannedFileConflicts(excludedCommits, plannedFiles) {
+  const planned = new Set(plannedFiles);
+  if (!planned.size) return [];
+  return excludedCommits
+    .map((commit) => ({
+      ...commit,
+      files: (commit.files || []).filter((file) => planned.has(file)),
+    }))
+    .filter((commit) => commit.files.length > 0);
+}
+
+function normalizedExcludedCommits(plan) {
+  return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : []).map((item) => ({
+    commit: String(item?.commit || ""),
+    status: String(item?.status || ""),
+    subject: String(item?.subject || ""),
+  }));
+}
+
+function planFingerprint(plan) {
+  const stable = {
+    source_branch: plan.source_branch || "",
+    base: plan.base || "",
+    trunk: plan.trunk || "",
+    final_tree: plan.final_tree || "",
+    goal: plan.goal || "",
+    kept_commits: plan.kept_commits || [],
+    kept_run_count: plan.kept_run_count || 0,
+    excluded_commits: normalizedExcludedCommits(plan),
+    excluded_commit_count: plan.excluded_commit_count || 0,
+    overlap_files: plan.overlap_files || [],
+    groups: (plan.groups || []).map((group) => ({
+      title: group.title || "",
+      last_commit: group.last_commit || "",
+      slug: group.slug || "",
+      files: group.files || [],
+      source_groups: (group.source_groups || []).map((source) => ({
+        last_commit: source.last_commit || "",
+        parent_commit: source.parent_commit || "",
+        files: source.files || [],
+      })),
+    })),
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
 function isSessionFile(file) {
   const normalized = file.replace(/\\/g, "/");
-  return normalized.startsWith("autoresearch.") || normalized.startsWith("autoresearch.research/");
+  return (
+    normalized.startsWith("autoresearch.") ||
+    normalized.startsWith("autoresearch-") ||
+    normalized.startsWith("autoresearch.research/")
+  );
 }
 
 function safeSlug(value) {

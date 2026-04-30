@@ -1,4 +1,5 @@
 import type { ShellRunResult } from "../runner.js";
+import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
 
 type LooseObject = Record<string, any>;
 
@@ -31,12 +32,17 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     let commandResult = null;
     const timeoutSeconds = deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
     if (!sample) {
-      const command = args.command || (await deps.defaultBenchmarkCommand(workDir));
+      const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
+      const command =
+        args.command ||
+        (separatorCommand ? args._.slice(1).join(" ") : "") ||
+        (await deps.defaultBenchmarkCommand(workDir));
       if (command) {
         commandResult = await deps.runShell(command, workDir, timeoutSeconds, {
           retainMetricNames: [metricName],
         });
         sample = deps.metricParseSource(commandResult);
+        commandResult.separatorCommand = separatorCommand;
       }
     }
     const parsedMetrics = deps.parseMetricLines(sample);
@@ -63,6 +69,24 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     if (Object.keys(parsedMetrics).length > 20) {
       warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
     }
+    const researchIntegrity = buildResearchIntegrity({
+      state,
+      config: state.config || {},
+      parsedMetrics,
+      metricName,
+      sample,
+    });
+    const metricParsing = {
+      ok: issues.length === 0,
+      emitsPrimary,
+      parsedMetricCount: Object.keys(parsedMetrics).length,
+      issues,
+    };
+    const diagnostics = commandDiagnostics({
+      command: commandResult?.command || args.command || "",
+      result: commandResult,
+      separatorCommand: commandResult?.separatorCommand,
+    });
     return {
       ok: issues.length === 0,
       workDir,
@@ -70,8 +94,11 @@ export function createInspectCommands(deps: InspectCommandDeps) {
       checkedCommand: commandResult?.command || args.command || "",
       parsedMetrics,
       emitsPrimary,
+      metricParsing,
+      researchIntegrity,
+      commandDiagnostics: diagnostics,
       issues,
-      warnings,
+      warnings: [...warnings, ...researchIntegrity.warnings],
       timeoutSeconds: commandResult ? timeoutSeconds : null,
       contractCheckHint:
         "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",

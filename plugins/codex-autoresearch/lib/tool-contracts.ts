@@ -149,7 +149,22 @@ const CONTRACTS = {
     whenToUse: "Use before finalizing kept autoresearch work into review branches.",
     contrast: "Use the finalizer command to create review branches.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "ready", "warnings", "nextAction"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "ready",
+      "warnings",
+      "nextAction",
+      "semanticSafety",
+      "finalTreeCoverage",
+    ]),
+  },
+  finalize_current_tree: {
+    purpose: "Write a current-final-tree finalization plan.",
+    whenToUse:
+      "Use when kept-run commits are stale or incomplete but the current branch content is the desired review unit.",
+    contrast: "Use finalize_preview first when commit-backed kept evidence is trustworthy.",
+    safety: "Writes a plan file under the Git private autoresearch-finalize directory.",
+    outputSchema: basicOutputSchema(["ok", "ready", "files", "planOutput", "currentTreeCoverage"]),
   },
   integrations: {
     purpose: "Inspect additive catalogs and model-command integrations.",

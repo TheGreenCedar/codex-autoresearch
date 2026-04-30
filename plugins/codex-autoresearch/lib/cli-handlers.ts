@@ -186,6 +186,13 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         trunk: args.trunk,
       }),
     }),
+    "finalize-current-tree": async (args) => ({
+      result: await deps.finalizeCurrentTree({
+        cwd: args.cwd,
+        trunk: args.trunk,
+        excludeSessionArtifacts: args.excludeSessionArtifacts,
+      }),
+    }),
     serve: async (args) => ({
       keepAlive: true,
       result: await deps.serveDashboard({
@@ -207,6 +214,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
     }),
     run: async (args) => ({
       result: await deps.runExperiment({
+        _: args._,
         cwd: args.cwd,
         command: args.command,
         commandFile: args.commandFile,
@@ -220,6 +228,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
     }),
     next: async (args) => ({
       result: await deps.nextExperiment({
+        _: args._,
         cwd: args.cwd,
         command: args.command,
         commandFile: args.commandFile,
@@ -268,6 +277,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
     }),
     "benchmark-lint": async (args) => ({
       result: await deps.benchmarkLint({
+        _: args._,
         cwd: args.cwd,
         metricName: args.metricName,
         sample: args.sample,

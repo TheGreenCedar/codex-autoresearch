@@ -512,6 +512,223 @@ test("state separates development best from promotion-grade best", async () => {
   });
 });
 
+test("state and doctor surface scaffold health and evidence labels", async () => {
+  await withTempDir("truth-layer-state", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "truth layer",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ commitPaths: ["src/missing.ts"] }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "& powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "autoresearch.sh"), "bash ./autoresearch.sh\n", "utf8");
+
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "perfect dev slice pending repeat",
+      "--metrics",
+      JSON.stringify({ repeatRequired: 1 }),
+    ]);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.scaffoldHealth.ok, false);
+    assert.ok(
+      payload.scaffoldHealth.checks.some((check) => check.code === "self_recursive_wrapper"),
+    );
+    assert.ok(payload.scaffoldHealth.checks.some((check) => check.code === "missing_commit_path"));
+    assert.ok(payload.researchIntegrity.evidenceLabels.includes("dev_best"));
+    assert.ok(payload.researchIntegrity.evidenceLabels.includes("pending_repeat"));
+    assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect/i);
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.scaffoldHealth.ok, false);
+    assert.match(doctorPayload.warnings.join("\n"), /self-recursive|commitPaths/i);
+  });
+});
+
+test("scaffold health catches direct PowerShell wrapper self-recursion", async () => {
+  await withTempDir("powershell-direct-self-recursion", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "powershell recursion",
+      "--metric-name",
+      "score",
+    ]);
+    await writeFile(path.join(dir, "autoresearch.ps1"), "& .\\autoresearch.ps1\n", "utf8");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.scaffoldHealth.ok, false);
+    assert.ok(
+      payload.scaffoldHealth.checks.some((check) => check.code === "self_recursive_wrapper"),
+    );
+  });
+});
+
+test("benchmark-lint separates metric parsing from research integrity", async () => {
+  await withTempDir("benchmark-lint-integrity", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lint integrity",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+
+    const result = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "score",
+      "--sample",
+      "METRIC score=1\nMETRIC hit_at_10=1\n",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricParsing.ok, true);
+    assert.equal(payload.researchIntegrity.ok, false);
+    assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect|holdout|repeat/i);
+  });
+});
+
+test("doctor does not treat routine rollback wording as evidence invalidation", async () => {
+  await withTempDir("doctor-routine-rollback", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "routine rollback",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "kept candidate",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "0.9",
+      "--status",
+      "discard",
+      "--description",
+      "ordinary rejected packet",
+      "--asi",
+      JSON.stringify({ rollback_reason: "reverted scoped experiment changes" }),
+    ]);
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+    assert.equal(payload.ok, true);
+    assert.deepEqual(payload.researchIntegrity.blockers, []);
+    assert.ok(!payload.researchIntegrity.evidenceLabels.includes("invalidated"));
+  });
+});
+
+test("prompt-plan prefers documented repo benchmark hints over generic cargo recipes", async () => {
+  await withTempDir("prompt-plan-doc-hints", async (dir) => {
+    await mkdir(path.join(dir, "scripts"), { recursive: true });
+    await mkdir(path.join(dir, "docs"), { recursive: true });
+    await writeFile(
+      path.join(dir, "Cargo.toml"),
+      [
+        "[package]",
+        'name = "prompt-plan-doc-hints"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        "",
+        "[dev-dependencies]",
+        'criterion = "0.5"',
+        "",
+        "[[bench]]",
+        'name = "generic_bench"',
+        "harness = false",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "scripts", "embedding-harness.mjs"),
+      "console.log('repo-specific embedding harness');\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "docs", "autoresearch-benchmark.md"),
+      [
+        "# Autoresearch benchmark",
+        "",
+        "Use `node scripts/embedding-harness.mjs --holdout fresh` for the measured loop.",
+        "The harness prints `METRIC embedding_score=<number>` from the fresh embedding holdout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Optimize the embedding pipeline runtime using the project benchmark.",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.match(payload.intent.setupDefaults.benchmarkCommand, /embedding-harness\.mjs/);
+    assert.doesNotMatch(payload.intent.setupDefaults.benchmarkCommand, /cargo\s+(test|bench)/);
+    assert.equal(
+      payload.intent.inferredFrom.discoveredBenchmark.path,
+      "docs/autoresearch-benchmark.md",
+    );
+  });
+});
+
 test("run notes append inside the managed ledger block", async () => {
   await withTempDir("managed-ledger", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "ledger", "--metric-name", "seconds"]);

@@ -20,6 +20,26 @@ Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not repor
 
 `crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep` or `discard` needs a finite primary metric.
 
+`benchmark-lint` now reports two layers:
+
+- **metric parsing**: whether `METRIC <primary>=<number>` was parsed
+- **research integrity**: whether the evidence is promotable or merely local/dev evidence
+
+Parsing a metric is not enough. Perfect score-like metrics, dev-only bests, missing holdout/repeat guards, stale cache artifacts, failed repeats, contamination notes, and cache replay warnings should block promotion until the benchmark is broadened or a fresh segment records stronger metadata.
+
+## Scaffold Health
+
+`state`, `doctor`, `guided_setup`, and the dashboard expose `scaffoldHealth`.
+
+Treat these as setup blockers:
+
+- generated wrappers that call themselves
+- wrappers with no real benchmark workload
+- missing or stale `commitPaths` / `revertPaths`
+- Git index locks, including lock age and retry guidance
+
+Fix the broken layer before the first packet or before `log keep`. A missing path should fail during doctor/setup, not during `git add` after trust has already been granted.
+
 ## Stale Packets
 
 Log from `--from-last` only while the packet is fresh against:
@@ -39,6 +59,21 @@ When a `keep` has no source changes, record it as no-change evidence. Do not bor
 `doctor --check-benchmark` compares the current command output against the configured primary metric and can warn when current output is far worse than the historical best.
 
 When that happens, treat the old best as historical evidence. Do not claim it is current runtime proof until a fresh packet confirms it.
+
+## Promotion Evidence
+
+State and dashboard readouts separate local development evidence from promotion-grade evidence.
+
+Common labels:
+
+- `dev_best`: interesting local best, not promotion evidence
+- `pending_repeat`: first-pass win awaiting repeat
+- `promotion_eligible`: run includes explicit promotion metadata
+- `invalidated`: later ASI or status invalidated the evidence
+- `historical`: useful context from an earlier segment
+- `blocked`: evidence cannot support the next claim
+
+If ASI says to stop, broaden validation, rerun on holdout, or invalidate a family, honor that over remaining iteration budget.
 
 ## Git Safety
 

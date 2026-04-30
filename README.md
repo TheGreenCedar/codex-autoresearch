@@ -124,7 +124,7 @@ The dashboard shows:
 * next safe action and why it is safe
 * ledger entries, ASI, and handoff context
 * best kept change and recent failures
-* strategy lanes, runtime drift, and finalization readiness
+* strategy lanes, scaffold health, research integrity, runtime drift, and finalization readiness
 * copyable status reports and agent handoff packets
 
 Use the dashboard to inspect state. Talk to Codex for everything else.
@@ -148,10 +148,11 @@ Finalization should:
 
 1. select kept evidence
 2. exclude session artifacts from review branches unless requested
-3. show dirty-tree and overlap warnings
-4. prepare clean review branches
-5. preserve metric evidence and verification commands
-6. leave cleanup until review branches are verified
+3. block later-discarded, invalidated, or reverted keeps
+4. show dirty-tree, overlap, semantic-safety, and final-tree coverage warnings
+5. prepare clean review branches or a current-final-tree plan
+6. preserve metric evidence and verification commands
+7. leave cleanup until review branches are verified
 
 ## Docs
 

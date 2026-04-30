@@ -4,6 +4,27 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Added
+
+- Added `scaffoldHealth` and `researchIntegrity` readouts across setup planning, guided setup, state, doctor, benchmark linting, dashboard state, and MCP resources so wrapper health and evidence promotion risk are visible before a packet is trusted.
+- Added run evidence labels for development-only bests, pending repeats, promotion-eligible evidence, invalidated evidence, historical context, and blocked states.
+- Added `finalize-current-tree --exclude-session-artifacts` / MCP `finalize_current_tree` to package the current non-session branch diff when commit-level kept evidence is stale or incomplete.
+
+### Changed
+
+- Changed `benchmark-lint` to separate metric parsing from research-integrity checks, including suspicious perfect metrics, missing holdout/repeat guards, and dev-only evidence.
+- Changed `finalize-preview` to include semantic safety blockers for later-discarded keeps, invalidated keeps, reverted keeps, and current final-tree coverage instead of trusting every historical keep entry.
+- Changed prompt planning so documented repo benchmark hints can outrank generic language or Cargo recipes when the docs name the metric-emitting harness.
+
+### Fixed
+
+- Fixed finalization readiness for sessions where a later discard, contamination note, cache replay, failed repeat, or revert makes an earlier kept commit unsafe to promote.
+- Fixed current-tree finalization so generated plans include finalizer fingerprints, exclude session artifacts by default, and preview blocks excluded commits that overlap planned files.
+- Fixed scaffold health detection for direct PowerShell self-recursive wrappers such as `& .\autoresearch.ps1`.
+- Added recovery-oriented docs for stale bests, contaminated evaluators, failed repeats, cache replay, current-tree finalization, command quoting recovery, and scaffold/config health blockers.
+
 ## 1.2.0
 
 ### Added

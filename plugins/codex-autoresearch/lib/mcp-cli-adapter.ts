@@ -334,6 +334,16 @@ function cliArgsForTool(name, args) {
     ]);
   if (name === "finalize_preview")
     return compactArgs(["finalize-preview", cwdFlag(args), option("--trunk", args.trunk)]);
+  if (name === "finalize_current_tree")
+    return compactArgs([
+      "finalize-current-tree",
+      cwdFlag(args),
+      option("--trunk", args.trunk),
+      flag(
+        "--exclude-session-artifacts",
+        args.exclude_session_artifacts ?? args.excludeSessionArtifacts,
+      ),
+    ]);
   if (name === "integrations")
     return compactArgs([
       "integrations",

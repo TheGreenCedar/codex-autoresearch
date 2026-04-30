@@ -211,6 +211,263 @@ test("finalize preview blocks unlogged non-session commits from the final tree",
   assert.deepEqual(payload.excludedCommits[0].files, ["src/guardrails.txt"]);
 });
 
+test("finalize preview blocks kept commits that were later explicitly invalidated", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-discard-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-discard"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "kept metric improvement"], repo);
+  const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "discarded keep",
+        metricName: "score",
+        bestDirection: "higher",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        metric: 1,
+        description: "kept metric improvement",
+        commit: kept.slice(0, 12),
+      }),
+      JSON.stringify({
+        run: 2,
+        status: "discard",
+        metric: 1,
+        description: "invalidated evaluator contamination for kept metric improvement",
+        commit: kept.slice(0, 12),
+        asi: { rollback_reason: "Evaluator contamination invalidated the keep." },
+      }),
+      "",
+    ].join("\n"),
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "log invalidation"], repo);
+
+  const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+  const payload = JSON.parse(preview.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.semanticSafety.ok, false);
+  assert.ok(
+    payload.semanticSafety.blockers.some((blocker) => blocker.code === "later_invalidated_keep"),
+  );
+  assert.match(payload.warnings.join("\n"), /discarded|invalidated/i);
+});
+
+test("finalize preview allows ordinary same-commit discard rollback", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-normal-discard-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-normal-discard"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "kept metric improvement"], repo);
+  const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "normal discard",
+        metricName: "score",
+        bestDirection: "higher",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        metric: 1,
+        description: "kept metric improvement",
+        commit: kept.slice(0, 12),
+      }),
+      JSON.stringify({
+        run: 2,
+        status: "discard",
+        metric: 0.9,
+        description: "discarded dirty experiment",
+        commit: kept.slice(0, 12),
+        asi: { rollback_reason: "reverted scoped experiment changes" },
+      }),
+      "",
+    ].join("\n"),
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "log ordinary discard"], repo);
+
+  const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+  const payload = JSON.parse(preview.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.semanticSafety.ok, true);
+  assert.deepEqual(payload.semanticSafety.blockers, []);
+});
+
+test("finalize preview detects reverted kept commits", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-revert-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-revert"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "kept metric improvement"], repo);
+  const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+  await git(["revert", "--no-edit", kept], repo);
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "reverted keep",
+        metricName: "score",
+        bestDirection: "higher",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        metric: 1,
+        description: "kept metric improvement",
+        commit: kept.slice(0, 12),
+      }),
+      "",
+    ].join("\n"),
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "log reverted keep"], repo);
+
+  const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+  const payload = JSON.parse(preview.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.semanticSafety.ok, false);
+  assert.ok(payload.semanticSafety.blockers.some((blocker) => blocker.code === "reverted_keep"));
+  assert.match(payload.warnings.join("\n"), /reverted/i);
+});
+
+test("finalize preview blocks excluded commits that touch planned files", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-overlap-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-overlap-excluded"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "kept metric improvement"], repo);
+  const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "value.txt"), "unkept\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "unkept overlapping edit"], repo);
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "overlap excluded",
+        metricName: "score",
+        bestDirection: "higher",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        metric: 1,
+        description: "kept metric improvement",
+        commit: kept.slice(0, 12),
+      }),
+      "",
+    ].join("\n"),
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "log autoresearch session"], repo);
+
+  const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+  const payload = JSON.parse(preview.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.finalTreeCoverage.covered, true);
+  assert.equal(payload.finalTreeCoverage.excludedPlannedFileConflictCount, 1);
+  assert.equal(payload.excludedPlannedFileConflicts.length, 1);
+  assert.deepEqual(payload.excludedPlannedFileConflicts[0].files, ["src/value.txt"]);
+  assert.match(payload.warnings.join("\n"), /excluded commits touch planned files/i);
+});
+
+test("finalize-current-tree packages the current non-session diff", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-current-tree-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-current-tree"], repo);
+  await writeFile(path.join(repo, "src", "guardrails.txt"), "supporting safety change\n");
+  await git(["add", "src/guardrails.txt"], repo);
+  await git(["commit", "-m", "add supporting guardrails"], repo);
+
+  await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+  await writeFile(path.join(repo, "autoresearch-dashboard.html"), "<html>session export</html>\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "final tree update"], repo);
+
+  const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.currentTreeCoverage.covered, true);
+  assert.ok(payload.files.includes("src/guardrails.txt"));
+  assert.ok(payload.files.includes("src/value.txt"));
+  assert.ok(!payload.files.includes("autoresearch-dashboard.html"));
+  assert.ok(payload.planOutput);
+  assert.ok(payload.planFingerprint);
+  const plan = JSON.parse(await fsp.readFile(payload.planOutput, "utf8"));
+  assert.equal(plan.mode, "current-final-tree");
+  assert.ok(plan.plan_fingerprint);
+  assert.equal(plan.current_tree_coverage.exclude_session_artifacts, true);
+  assert.deepEqual(plan.groups[0].files.sort(), ["src/guardrails.txt", "src/value.txt"]);
+
+  const finalizeResult = await run(process.execPath, [finalizer, payload.planOutput], repo);
+  assert.match(finalizeResult.stdout, /Created review branches:/);
+});
+
 test("finalizer rejects crafted plan paths before filesystem deletion", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-path-"));
   const repo = path.join(root, "repo");
