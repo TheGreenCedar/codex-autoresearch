@@ -219,7 +219,8 @@ async function candidatesFromModelCommand(
   try {
     parsed = JSON.parse(result.output);
   } catch (error) {
-    throw new Error(`model-command must print a JSON array of candidates: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`model-command must print a JSON array of candidates: ${message}`);
   }
   if (!Array.isArray(parsed))
     throw new Error("model-command must print a JSON array of candidates.");

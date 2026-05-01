@@ -2,7 +2,7 @@ import type { MetricDirection, WeightedMetricDefinition } from "../types";
 import { finiteMetric, improvementPercent } from "./metrics";
 
 export function formatImprovement(value: number | null | undefined): string {
-  if (!Number.isFinite(value)) return "-";
+  if (!finiteMetric(value)) return "-";
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
 }

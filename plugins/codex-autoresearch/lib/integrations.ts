@@ -45,11 +45,12 @@ export async function integrationsCommand(subcommand: string | undefined, args: 
           description: `Loaded ${recipes.length} recipes from ${args.catalog}.`,
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         checks.push({
           id: "recipe-catalog-input",
           title: "Configured recipe catalog",
           status: "blocked",
-          description: error.message,
+          description: message,
         });
       }
     }

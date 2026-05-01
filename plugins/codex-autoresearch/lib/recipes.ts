@@ -332,8 +332,9 @@ async function fetchText(url: string): Promise<string> {
     };
     const request = client
       .get(url, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          fail(new Error(`HTTP ${res.statusCode} while fetching recipe catalog`));
+        const statusCode = res.statusCode ?? 0;
+        if (statusCode < 200 || statusCode >= 300) {
+          fail(new Error(`HTTP ${statusCode} while fetching recipe catalog`));
           res.resume();
           return;
         }

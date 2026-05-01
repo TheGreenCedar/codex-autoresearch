@@ -817,7 +817,8 @@ for (const check of checks) {
     const outcome = await check.run();
     results.push({ ...check, ...outcome });
   } catch (error) {
-    results.push({ ...check, ok: false, message: error.message || String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    results.push({ ...check, ok: false, message });
   }
 }
 

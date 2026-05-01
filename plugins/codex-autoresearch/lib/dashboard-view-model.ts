@@ -453,7 +453,10 @@ export function buildEvidenceChips({
   const unit = state.config.metricUnit ? ` ${state.config.metricUnit}` : "";
   const baseline = finiteMetric(state.baseline);
   const best = finiteMetric(state.best);
-  const delta = percentChange(best, baseline, state.config.bestDirection);
+  const delta =
+    best == null || baseline == null
+      ? null
+      : percentChange(best, baseline, state.config.bestDirection);
   return [
     evidenceChip({
       label: "Mode",
@@ -1758,9 +1761,10 @@ function buildLanes(memory: LooseObject | null, experiments: RunLike[]) {
 }
 
 function buildPlateau(experiments: RunLike[], direction: Direction) {
+  type FiniteExperiment = RunLike & { index: number; metric: number };
   const finite = experiments
     .map((item: RunLike, index: number) => ({ ...item, metric: finiteMetric(item.metric), index }))
-    .filter((item: LooseObject) => item.metric != null);
+    .filter((item): item is FiniteExperiment => item.metric != null);
   if (finite.length < 3) {
     return {
       state: "forming",

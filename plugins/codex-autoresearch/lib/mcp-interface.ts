@@ -33,12 +33,12 @@ export {
 
 export function createMcpInterface(deps: McpDeps) {
   const toolHandlers = createToolHandlers(deps);
-  const callTool = async (name: string, args: LooseObject) => {
+  const callTool = async (name: string, args: LooseObject): Promise<LooseObject> => {
     const normalizedArgs = validateToolArguments(name, args);
     requireUnsafeCommandGate(name, normalizedArgs, deps.boolOption);
     const runtimeArgs = normalizeRuntimeToolArguments(name, normalizedArgs);
     const handler = toolHandlers[name];
-    if (handler) return await handler(runtimeArgs);
+    if (handler) return (await handler(runtimeArgs)) as LooseObject;
     throw new Error(`Unknown tool: ${name}`);
   };
 

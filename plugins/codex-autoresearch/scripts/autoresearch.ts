@@ -257,6 +257,9 @@ async function parseJsonFileOption(
   }
 }
 
+function numberOption(value: unknown, fallback: number): number;
+function numberOption(value: unknown, fallback: null): number | null;
+function numberOption(value: unknown, fallback: number | null): number | null;
 function numberOption(value: unknown, fallback: number | null): number | null {
   if (value == null || value === "") return fallback;
   const parsed = Number(value);
@@ -385,6 +388,18 @@ async function pathExists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCodeOrMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const payload = error as { code?: unknown; message?: unknown };
+    return String(payload.code || payload.message || error);
+  }
+  return String(error);
 }
 
 function readConfig(sessionCwd: string): LooseObject {
@@ -2027,7 +2042,8 @@ function median(values: any) {
 function computeConfidence(runs: any[], direction: any) {
   const values = runs
     .filter(isBaselineEligibleMetricRun)
-    .map((run: any) => finiteMetric(run.metric));
+    .map((run: any) => finiteMetric(run.metric))
+    .filter((value): value is number => value != null);
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestKeptMetric(runs, direction);
@@ -2123,7 +2139,7 @@ async function benchmarkCommandFromArgs(args: LooseObject, workDir: string) {
     command,
     env: env?.values || undefined,
     commandFile: commandFile ? resolveOptionPath(commandFile, workDir) : "",
-    envFile: envFile ? env.path : "",
+    envFile: env?.path || "",
     envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
     separatorCommand,
   };
@@ -2296,7 +2312,7 @@ async function liveGitProcessSummary(workDir: string) {
     if (!outputText) return "no live git process found";
     return outputText.split(/\r?\n/).slice(0, 5).join(", ");
   } catch (error) {
-    return `process check unavailable (${error?.message || String(error)})`;
+    return `process check unavailable (${errorMessage(error)})`;
   }
 }
 
@@ -2404,7 +2420,7 @@ async function scopedFileFingerprints(workDir: string, paths: any[] = []) {
       fingerprints.push({
         path: file,
         missing: true,
-        error: error?.code || error?.message || String(error),
+        error: errorCodeOrMessage(error),
       });
     }
   }
@@ -2420,7 +2436,9 @@ function dirtyPathsFromStatus(statusShort: string) {
       const rawPath = /^.. /.test(line)
         ? line.slice(3).trim()
         : line.replace(/^[ MADRCU?!]{1,2}\s+/, "").trim();
-      const renamedPath = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) : rawPath;
+      const renamedPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").at(-1) || rawPath
+        : rawPath;
       return renamedPath.replace(/^"|"$/g, "").replace(/\\"/g, '"').replace(/\\/g, "/");
     })
     .filter(Boolean)
@@ -2448,7 +2466,7 @@ async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
       fingerprints.push({
         path: file,
         missing: true,
-        error: error?.code || error?.message || String(error),
+        error: errorCodeOrMessage(error),
       });
     }
   }
@@ -2565,7 +2583,7 @@ async function contractFileFingerprint(workDir: string, filePath: string, label:
     return {
       path: display,
       missing: true,
-      error: error?.code || error?.message || String(error),
+      error: errorCodeOrMessage(error),
     };
   }
 }
@@ -3443,6 +3461,7 @@ async function runExperiment(args: LooseObject) {
   const checksPolicy = checksPolicyFromArgs(args, config);
   const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
   if (
+    checksCommand &&
     shouldRunChecks(checksPolicy, {
       benchmarkPassed,
       primaryPresent,
@@ -3622,13 +3641,7 @@ function operationProgress({
   startedAt,
   status = "completed",
   outputTail = "",
-}: {
-  label: string;
-  outputTail?: string;
-  stage: string;
-  startedAt: number;
-  status?: string;
-}): LooseObject {
+}: LooseObject): LooseObject {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   return {
     mode: "synchronous",
@@ -3897,7 +3910,7 @@ function readDashboardBuildAsset(fileName: string) {
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") {
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
       throw new Error(
         `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`,
       );
@@ -3976,7 +3989,7 @@ async function resolveLastRunPath(workDir: string) {
   return path.join(workDir, "autoresearch.last-run.json");
 }
 
-async function writeLastRunPacket(workDir: string, packet: any, filePath: string = null) {
+async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await fsp.mkdir(path.dirname(target), { recursive: true });
   await fsp.writeFile(target, `${JSON.stringify(packet, null, 2)}\n`, "utf8");

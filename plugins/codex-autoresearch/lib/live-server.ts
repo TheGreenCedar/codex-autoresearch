@@ -107,7 +107,7 @@ export async function serveAutoresearch(args: LooseObject) {
   const actionNonce = randomBytes(32).toString("base64url");
   const server = http.createServer(async (req, res) => {
     try {
-      const url = new URL(req.url, "http://127.0.0.1");
+      const url = new URL(req.url || "/", "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/") {
         send(
           res,
@@ -138,7 +138,7 @@ export async function serveAutoresearch(args: LooseObject) {
         return;
       }
       if (req.method === "POST" && url.pathname.startsWith("/actions/")) {
-        const action = url.pathname.split("/").at(-1);
+        const action = url.pathname.split("/").at(-1) || "";
         try {
           if (!actionsEnabled) {
             sendJson(
@@ -169,7 +169,11 @@ export async function serveAutoresearch(args: LooseObject) {
           if (!admission.ok) {
             sendJson(
               res,
-              actionErrorEnvelope(action, admission.error, admission.code),
+              actionErrorEnvelope(
+                action,
+                admission.error || "Dashboard action request was rejected.",
+                admission.code || "action_request_invalid",
+              ),
               admission.status,
             );
             return;
@@ -237,6 +241,9 @@ async function logActionArgs(
   body: LooseObject,
 ): Promise<string[]> {
   const status = LOG_ACTION_STATUS.get(action);
+  if (!status) {
+    throw new DashboardActionError(`Unsupported log action: ${action}`, 400, "log_action_unknown");
+  }
   if (body?.confirm !== action)
     throw new DashboardActionError(
       `Log actions require confirm="${action}".`,
@@ -530,8 +537,9 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<Loo
     return parsed;
   } catch (error) {
     if (error instanceof DashboardActionError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
     throw new DashboardActionError(
-      `Malformed dashboard action JSON: ${error.message}`,
+      `Malformed dashboard action JSON: ${message}`,
       400,
       "body_malformed_json",
     );

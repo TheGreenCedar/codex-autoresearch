@@ -74,7 +74,7 @@ process.stdin.on("data", (chunk: Buffer) => {
       sendMcp({
         jsonrpc: "2.0",
         id: null,
-        error: { code: -32700, message: `Parse error: ${error.message}` },
+        error: { code: -32700, message: `Parse error: ${errorMessage(error)}` },
       });
       continue;
     }
@@ -83,7 +83,7 @@ process.stdin.on("data", (chunk: Buffer) => {
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32000, message: error.message || String(error) },
+          error: { code: -32000, message: errorMessage(error) },
         });
       }
     });
@@ -129,7 +129,7 @@ async function handleMcpMessage(message: McpMessage): Promise<void> {
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
+        error: { code: -32602, message: errorMessage(error) },
       });
     }
     return;
@@ -142,13 +142,14 @@ async function handleMcpMessage(message: McpMessage): Promise<void> {
 
   if (message.method === "prompts/get") {
     try {
-      const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+      const params = message.params || {};
+      const result = getMcpPrompt(params.name, params.arguments || {});
       sendMcp({ jsonrpc: "2.0", id: message.id, result });
     } catch (error) {
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
+        error: { code: -32602, message: errorMessage(error) },
       });
     }
     return;
@@ -197,7 +198,7 @@ async function handleMcpMessage(message: McpMessage): Promise<void> {
 async function callValidatedCliTool(name: string, args: LooseObject) {
   const normalizedArgs = validateToolArguments(name, args || {});
   requireUnsafeCommandGate(name, normalizedArgs, boolOption);
-  return await callCliTool(name, normalizedArgs);
+  return (await callCliTool(name, normalizedArgs)) as LooseObject;
 }
 
 function mcpSuccessEnvelope(tool: string, result: unknown) {
@@ -214,12 +215,16 @@ function mcpSuccessEnvelope(tool: string, result: unknown) {
   };
 }
 
-function mcpErrorEnvelope(tool: string | undefined, error: Error) {
+function mcpErrorEnvelope(tool: string | undefined, error: unknown) {
   return {
     ok: false,
     tool: tool || "unknown",
-    error: error.message || String(error),
+    error: errorMessage(error),
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sendMcp(message: LooseObject): void {

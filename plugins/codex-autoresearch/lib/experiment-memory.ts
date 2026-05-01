@@ -216,12 +216,13 @@ function summarizeFamilies(runs: MemoryRun[], direction: Direction): FamilySumma
         statuses: {},
       });
     }
-    const family = map.get(key);
+    const family = map.get(key)!;
+    const status = run.status || "unknown";
     family.runs += 1;
     family.latestRun = compactFamilyRun(run);
-    family.statuses[run.status] = (family.statuses[run.status] || 0) + 1;
-    if (isKeepStatus(run.status)) family.kept += 1;
-    if (isRejectedStatus(run.status)) family.rejected += 1;
+    family.statuses[status] = (family.statuses[status] || 0) + 1;
+    if (isKeepStatus(status)) family.kept += 1;
+    if (isRejectedStatus(status)) family.rejected += 1;
     const metric = finiteMetric(run.metric);
     const bestMetric = finiteMetric(family.bestRun?.metric);
     const bestKeptMetric = finiteMetric(family.bestKeptRun?.metric);

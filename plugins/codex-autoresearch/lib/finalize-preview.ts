@@ -180,7 +180,8 @@ function findGroupFileOverlaps(groups: RunGroup[]) {
   const overlaps: Array<{ file: string; first: number; second: number }> = [];
   for (const group of groups) {
     for (const file of group.files) {
-      if (seen.has(file)) overlaps.push({ file, first: seen.get(file), second: group.run });
+      const first = seen.get(file);
+      if (first !== undefined) overlaps.push({ file, first, second: group.run });
       else seen.set(file, group.run);
     }
   }

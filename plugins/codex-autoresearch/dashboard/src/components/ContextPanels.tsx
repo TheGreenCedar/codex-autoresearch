@@ -12,14 +12,11 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
   const open = numeric(truth.open ?? gap.open);
   const closed = numeric(truth.closed ?? gap.closed);
   const total = numeric(truth.total ?? gap.total);
+  const hasTotal = total != null && total > 0;
   const score =
     truth.score ??
     truth.percent ??
-    (Number.isFinite(total) && total > 0
-      ? Number.isFinite(open)
-        ? Math.max(0, total - open) / total
-        : closed / total
-      : null);
+    (hasTotal ? (open != null ? Math.max(0, total - open) / total : (closed ?? 0) / total) : null);
   const percent = normalizePercent(score);
   const label =
     truth.label ||
@@ -28,7 +25,7 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
   const detail =
     truth.detail ||
     truth.summary ||
-    (Number.isFinite(total) && total > 0
+    (hasTotal
       ? `${Number.isFinite(open) ? open : 0} open / ${total} total accepted gap${total === 1 ? "" : "s"}.`
       : "No accepted research checklist is embedded in this snapshot.");
   return (

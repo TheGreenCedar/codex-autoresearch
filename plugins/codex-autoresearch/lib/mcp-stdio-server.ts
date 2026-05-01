@@ -15,7 +15,7 @@ type McpMessage = LooseObject & {
 };
 
 interface McpStdioServerOptions {
-  callTool: (name: string, args: LooseObject) => Promise<unknown>;
+  callTool: (name: string, args: LooseObject) => Promise<LooseObject>;
   maxFrameBytes?: number;
   serverVersion: string;
   toolSchemas: LooseObject[];
@@ -77,7 +77,11 @@ export function startMcpStdioServer({
         continue;
       }
       server(frame.message).catch((error) => {
-        sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: error.message } });
+        sendMcp({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32000, message: errorMessage(error) },
+        });
       });
     }
   });
@@ -202,7 +206,7 @@ function createMcpStdioHandler({
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32602, message: error.message || String(error) },
+          error: { code: -32602, message: errorMessage(error) },
         });
       }
       return;
@@ -215,22 +219,24 @@ function createMcpStdioHandler({
 
     if (message.method === "prompts/get") {
       try {
-        const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+        const params = message.params || {};
+        const result = getMcpPrompt(params.name, params.arguments || {});
         sendMcp({ jsonrpc: "2.0", id: message.id, result });
       } catch (error) {
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32602, message: error.message || String(error) },
+          error: { code: -32602, message: errorMessage(error) },
         });
       }
       return;
     }
     if (message.method === "tools/call") {
       try {
-        validateToolArguments(message.params?.name, message.params?.arguments || {});
-        const result = await callTool(message.params.name, message.params.arguments || {});
-        const payload = mcpSuccessEnvelope(message.params.name, result);
+        const params = message.params || {};
+        validateToolArguments(params.name, params.arguments || {});
+        const result = await callTool(params.name, params.arguments || {});
+        const payload = mcpSuccessEnvelope(params.name, result);
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
@@ -284,7 +290,7 @@ function readNextMcpFrame(buffer: Buffer, maxFrameBytes: number): LooseObject {
   try {
     return { status: "message", message: JSON.parse(body), remaining };
   } catch (error) {
-    return { status: "parse-error", error: error.message, remaining };
+    return { status: "parse-error", error: errorMessage(error), remaining };
   }
 }
 
@@ -302,12 +308,16 @@ function mcpSuccessEnvelope(tool: string, result: unknown) {
   };
 }
 
-function mcpErrorEnvelope(tool: string | undefined, error: Error) {
+function mcpErrorEnvelope(tool: string | undefined, error: unknown) {
   return {
     ok: false,
     tool: tool || "unknown",
-    error: error.message || String(error),
+    error: errorMessage(error),
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sendMcp(message: LooseObject): void {

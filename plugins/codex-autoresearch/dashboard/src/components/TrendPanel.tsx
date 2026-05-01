@@ -670,7 +670,7 @@ function MetricDetails({
   readout: DashboardReadout;
   point: ChartDatum | null;
 }) {
-  const breakdown = point?.breakdown;
+  const breakdown = point?.breakdown || undefined;
   return (
     <details className="metric-details-panel" id="metric-details" aria-label="Metric details">
       <summary className="metric-details-summary">

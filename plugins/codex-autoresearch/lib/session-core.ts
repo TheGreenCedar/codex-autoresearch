@@ -162,7 +162,8 @@ function parseJsonlLine(line: string, filePath: string, index: number): LooseObj
   try {
     return JSON.parse(line);
   } catch (error) {
-    throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${message}`);
   }
 }
 
@@ -262,7 +263,10 @@ function median(values: number[]): number {
 }
 
 export function computeConfidence(runs: RunRecord[], direction: Direction | string): number | null {
-  const values = runs.filter(isBaselineEligibleMetricRun).map((run) => finiteMetric(run.metric));
+  const values = runs
+    .filter(isBaselineEligibleMetricRun)
+    .map((run) => finiteMetric(run.metric))
+    .filter((value): value is number => value != null);
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestKeptMetric(runs, direction);

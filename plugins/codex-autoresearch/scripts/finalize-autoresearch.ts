@@ -610,11 +610,12 @@ function renderReviewSummaryHeader({
 function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): string[] {
   const lines: string[] = [];
   for (let i = 0; i < groups.length; i += 1) {
+    const group = groups[i]!;
     const result = results[i];
     const branch = result?.branch || "(not created)";
     const suffix = result?.skipped ? " (skipped empty)" : "";
     lines.push(
-      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${markdownEscape(groups[i].title)} | ${markdownEscape(groups[i].files.join(", ") || "(none)")} |`,
+      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${markdownEscape(group.title || "")} | ${markdownEscape(group.files.join(", ") || "(none)")} |`,
     );
   }
   return lines;
@@ -627,24 +628,25 @@ function renderSuggestedPrBlocks(
 ): string[] {
   const lines = ["", "## Suggested PRs", ""];
   for (let i = 0; i < groups.length; i += 1) {
+    const group = groups[i]!;
     const result = results[i];
     if (!result || result.skipped) continue;
-    const files = groups[i].files || [];
+    const files = group.files || [];
     lines.push(
-      `### ${i + 1}. ${groups[i].title}`,
+      `### ${i + 1}. ${group.title || "Autoresearch change"}`,
       "",
       `Branch: \`${result.branch}\``,
       "",
       "Suggested PR title:",
       "",
       "```text",
-      groups[i].title,
+      group.title || "Autoresearch change",
       "```",
       "",
       "Suggested PR body:",
       "",
       "```markdown",
-      groups[i].body || "Autoresearch kept change. Review metric evidence and branch diff.",
+      group.body || "Autoresearch kept change. Review metric evidence and branch diff.",
       "```",
       "",
       "Review commands:",
@@ -789,7 +791,7 @@ async function createBranchForGroup(
       await git(["branch", "-D", branch], cwd, true);
       return { branch, skipped: true, deleted: true, stat: "" };
     }
-    await git(["commit", "-m", group.title, "-m", group.body || ""], cwd);
+    await git(["commit", "-m", group.title || "Autoresearch change", "-m", group.body || ""], cwd);
     return { branch, skipped: false, deleted: false, stat: await branchStat(branch, cwd) };
   } catch (error) {
     await git(["switch", "--detach", config.base], cwd, true);
@@ -962,14 +964,15 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   console.log(`Groups: ${plan.groups.length}`);
   console.log(`Selected kept commits: ${plan.kept_commits.length}`);
   if (plan.excluded_commit_count > 0) {
+    const excludedCommits = plan.excluded_commits || [];
     console.log(`Excluded commits: ${plan.excluded_commit_count}`);
     console.log("Excluded commits were flagged and omitted from finalization planning.");
-    for (const item of plan.excluded_commits.slice(0, 5)) {
+    for (const item of excludedCommits.slice(0, 5)) {
       const parts = [shortHash(item.commit), item.status];
       if (item.subject) parts.push(item.subject);
       console.log(`  - ${parts.join(" ")}`);
     }
-    if (plan.excluded_commits.length > 5) console.log("  - ...");
+    if (excludedCommits.length > 5) console.log("  - ...");
   }
   if (plan.collapse_overlap_recommended && !args.collapseOverlap) {
     console.log("Hint: rerun with --collapse-overlap to consolidate overlapping kept commits.");
@@ -1173,8 +1176,9 @@ function analyzeGroupOverlap(groups: PlanGroup[]): OverlapAnalysis {
   for (const group of groups) {
     for (const file of group.files || []) {
       if (seen.has(file)) {
+        const firstGroup = seen.get(file)!;
         overlappingFiles.add(file);
-        overlappingGroups.add(seen.get(file));
+        overlappingGroups.add(firstGroup);
         overlappingGroups.add(group.last_commit);
       } else {
         seen.set(file, group.last_commit);
