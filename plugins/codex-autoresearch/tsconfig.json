@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "jsx": "react-jsx",
     "strict": false,
+    "noImplicitAny": true,
     "noEmit": false,
     "rootDir": ".",
     "outDir": "dist",

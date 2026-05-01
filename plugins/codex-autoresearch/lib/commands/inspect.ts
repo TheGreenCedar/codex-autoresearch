@@ -2,6 +2,7 @@ import type { ShellRunResult } from "../runner.js";
 import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
 
 type LooseObject = Record<string, any>;
+type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
 
 export interface InspectCommandDeps {
   currentState: (workDir: string) => LooseObject;
@@ -22,14 +23,14 @@ export interface InspectCommandDeps {
 }
 
 export function createInspectCommands(deps: InspectCommandDeps) {
-  async function benchmarkLint(args: LooseObject) {
+  async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
     const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const state = deps.currentState(workDir);
     const metricName = deps.validateMetricName(
       args.metric_name || args.metricName || state.config.metricName || "metric",
     );
     let sample = args.sample || "";
-    let commandResult = null;
+    let commandResult: InspectShellRunResult | null = null;
     const timeoutSeconds = deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
     if (!sample) {
       const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
@@ -47,8 +48,8 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     }
     const parsedMetrics = deps.parseMetricLines(sample);
     const emitsPrimary = deps.finiteMetric(parsedMetrics[metricName]) != null;
-    const issues = [];
-    const warnings = [];
+    const issues: string[] = [];
+    const warnings: string[] = [];
     if (!sample) {
       issues.push("No sample output, command, or default autoresearch script was available.");
     } else if (!Object.keys(parsedMetrics).length) {
@@ -111,7 +112,7 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     };
   }
 
-  async function benchmarkInspect(args: LooseObject) {
+  async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
     const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const state = deps.currentState(workDir);
     const command = String(args.command || "").trim();
@@ -171,7 +172,7 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     };
   }
 
-  async function checksInspect(args: LooseObject) {
+  async function checksInspect(args: LooseObject): Promise<LooseObject> {
     const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
     const timeoutSeconds = Math.max(
@@ -222,8 +223,8 @@ export function createInspectCommands(deps: InspectCommandDeps) {
   return { benchmarkLint, benchmarkInspect, checksInspect };
 }
 
-function benchmarkInspectWarnings(command) {
-  const warnings = [];
+function benchmarkInspectWarnings(command: string): string[] {
+  const warnings: string[] = [];
   if (!command) return warnings;
   if (/CODESTORY_PIPELINE_LIST_CASES\s*=\s*1/i.test(command)) {
     warnings.push(
@@ -249,8 +250,13 @@ function benchmarkInspectHints(metricName = "") {
   ];
 }
 
-function checksInspectWarnings(command, output, result, failedTests) {
-  const warnings = [];
+function checksInspectWarnings(
+  command: string,
+  output: string,
+  result: ShellRunResult,
+  failedTests: string[],
+): string[] {
+  const warnings: string[] = [];
   if (result.timedOut) {
     warnings.push(
       "The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.",
@@ -283,21 +289,21 @@ function checksInspectWarnings(command, output, result, failedTests) {
   return warnings;
 }
 
-function cargoUnexpectedArgument(output = "") {
+function cargoUnexpectedArgument(output = ""): boolean {
   return (
     /unexpected argument ['"`][^'"`]+['"`] found/i.test(output) &&
     /Usage:\s+cargo(?:\.exe)? test/i.test(output)
   );
 }
 
-function looksLikeMultipleCargoFilters(command = "") {
+function looksLikeMultipleCargoFilters(command = ""): boolean {
   const beforeHarnessArgs = String(command).split(/\s+--\s+/)[0];
   const tokens: string[] = beforeHarnessArgs.match(/"[^"]*"|'[^']*'|\S+/g) || [];
   const testIndex = tokens.findIndex(
     (token, index) => token.replace(/['"]/g, "") === "test" && index > 0,
   );
   if (testIndex < 0) return false;
-  const filters = [];
+  const filters: string[] = [];
   for (let index = testIndex + 1; index < tokens.length; index += 1) {
     const token = tokens[index].replace(/^['"]|['"]$/g, "");
     if (!token || token.startsWith("-")) {
@@ -309,9 +315,9 @@ function looksLikeMultipleCargoFilters(command = "") {
   return filters.length > 1;
 }
 
-function extractFailedTests(output = "") {
-  const tests = [];
-  const seen = new Set();
+function extractFailedTests(output = ""): string[] {
+  const tests: string[] = [];
+  const seen = new Set<string>();
   const patterns = [
     /test\s+([^\s]+)\s+\.\.\.\s+FAILED/g,
     /^\s*([A-Za-z0-9_:.-]+)\s+---\s+FAILED/gm,

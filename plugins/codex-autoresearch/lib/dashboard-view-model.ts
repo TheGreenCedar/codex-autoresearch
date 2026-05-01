@@ -2,6 +2,17 @@ import { STATUS_VALUES, finiteMetric } from "./session-core.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
+type Direction = "lower" | "higher" | string;
+type RunLike = LooseObject & {
+  run?: number;
+  metric?: unknown;
+  status?: string;
+  metrics?: LooseObject;
+  asi?: LooseObject;
+  description?: string;
+  commit?: string;
+};
+type CommandMap = Map<string, string>;
 
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
@@ -30,14 +41,14 @@ export function buildDashboardViewModel(context: DashboardContext) {
     drift = null,
     warnings = [],
   } = normalizeDashboardContext(context);
-  const current = state.current || [];
+  const current = (state.current || []) as RunLike[];
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
   const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
   const kept = current.filter((run) => run.status === "keep");
   const failures = current.filter((run) =>
-    ["discard", "crash", "checks_failed"].includes(run.status),
+    ["discard", "crash", "checks_failed"].includes(String(run.status)),
   );
-  const bestKept = bestRun(kept, state.config.bestDirection);
+  const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
   const latestFailure = failures.at(-1) || null;
   const trustContext = buildTrustState({
     state,
@@ -98,7 +109,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     trustBlockers,
     experimentMemory,
   });
-  const portfolio = buildPortfolio(experimentMemory, state.config.bestDirection);
+  const portfolio = buildPortfolio(experimentMemory, String(state.config.bestDirection || "lower"));
   const missionControl = buildMissionControl({
     current,
     setupPlan,
@@ -255,9 +266,14 @@ export function buildTrustState({
   drift = null,
   warnings = [],
 }: LooseObject) {
-  const taggedReasons = [];
+  const taggedReasons: Array<{ source: string; text: string; decisionRelevant: boolean }> = [];
   const mode = normalizeMode(settings.deliveryMode);
-  const addReasons = (source, values, decisionRelevant = false, classifyDecisionReason = true) => {
+  const addReasons = (
+    source: string,
+    values: unknown,
+    decisionRelevant = false,
+    classifyDecisionReason = true,
+  ) => {
     for (const value of Array.isArray(values) ? values : []) {
       const text = warningMessage(value);
       if (text) {
@@ -303,7 +319,7 @@ export function buildTrustState({
   addReasons("setup", setupPlan?.warnings, true);
   addReasons(
     "scaffold-health",
-    (state.scaffoldHealth?.checks || []).map((check) => check.message || check.code),
+    (state.scaffoldHealth?.checks || []).map((check: LooseObject) => check.message || check.code),
     true,
   );
   addReasons("research-integrity", state.researchIntegrity?.warnings, true);
@@ -342,7 +358,7 @@ export function buildTrustState({
   };
 }
 
-function summarizeRuntimeDrift(drift) {
+function summarizeRuntimeDrift(drift: LooseObject | null | undefined) {
   if (!drift) return null;
   return {
     ok: drift.ok === true,
@@ -526,9 +542,9 @@ export function buildFinalizationChecklist({
   finalizePreview = null,
 }: LooseObject) {
   const warnings = Array.isArray(finalizePreview?.warnings)
-    ? finalizePreview.warnings.map(warningMessage).filter(Boolean)
+    ? finalizePreview.warnings.map((warning: unknown) => warningMessage(warning)).filter(Boolean)
     : [];
-  const dirtyWarning = warnings.find((warning) => /dirty|clean/i.test(warning));
+  const dirtyWarning = warnings.find((warning: string) => /dirty|clean/i.test(warning));
   return [
     checklistItem({
       label: "Kept evidence",
@@ -591,7 +607,7 @@ export function buildTrustBlockers({
   ];
   return unique(raw)
     .slice(0, 6)
-    .map((message) => ({
+    .map((message: string) => ({
       message,
       severity: /dirty|stale|drift|missing|limit|benchmark|commitPaths/i.test(message)
         ? "warning"
@@ -601,7 +617,7 @@ export function buildTrustBlockers({
     }));
 }
 
-function blockerActionFor(message) {
+function blockerActionFor(message: string): string {
   if (/stale/i.test(message)) return "Replace the stale packet.";
   if (/limit/i.test(message)) return "Extend the limit or start a new segment.";
   if (/benchmark|metric/i.test(message)) return "Lint or repair the benchmark.";
@@ -610,7 +626,7 @@ function blockerActionFor(message) {
   return "Review before continuing.";
 }
 
-function blockerCommandFor(message, commandMap) {
+function blockerCommandFor(message: string, commandMap: CommandMap): string {
   if (/stale/i.test(message)) return commandMap.get("next run") || "";
   if (/limit/i.test(message))
     return commandMap.get("new segment") || commandMap.get("extend limit") || "";
@@ -689,7 +705,7 @@ export function buildHandoffPacket({
     latestRun: current.at(-1)?.run || null,
     nextAction: action?.detail || "",
     shouldFixFirst: trustBlockers.length > 0,
-    blockers: trustBlockers.map((item) => item.message),
+    blockers: trustBlockers.map((item: LooseObject) => item.message),
     lane: experimentMemory?.diversityGuidance?.id || experimentMemory?.summary?.suggestedLane || "",
     plateau: experimentMemory?.plateau?.detected === true,
   };
@@ -698,7 +714,9 @@ export function buildHandoffPacket({
 function staleSessionSummary({ guidedSetup = null, state, warnings = [] }: LooseObject) {
   const stage = guidedSetup?.stage || "";
   const limitReached = Boolean(guidedSetup?.state?.limit?.limitReached);
-  const staleWarning = warnings.find((warning) => /stale|drift/i.test(warning.message || ""));
+  const staleWarning = warnings.find((warning: LooseObject) =>
+    /stale|drift/i.test(warning.message || ""),
+  );
   return {
     stale:
       stage === "stale-last-run" ||
@@ -717,11 +735,11 @@ function staleSessionSummary({ guidedSetup = null, state, warnings = [] }: Loose
   };
 }
 
-function currentHasRuns(state) {
+function currentHasRuns(state: LooseObject): boolean {
   return Array.isArray(state?.current) && state.current.length > 0;
 }
 
-function normalizeMode(value) {
+function normalizeMode(value: unknown): string {
   const text = cleanText(value);
   if (!text) return UNKNOWN;
   if (/live/i.test(text)) return "live-server";
@@ -729,23 +747,23 @@ function normalizeMode(value) {
   return text;
 }
 
-function isTrustDecisionReason(value) {
+function isTrustDecisionReason(value: unknown): boolean {
   return /dirty|corrupt|stale|drift|missing|invalid|parse|failed|error|refusing|changed/i.test(
     String(value || ""),
   );
 }
 
-function cleanText(value) {
+function cleanText(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function labelText(value) {
+function labelText(value: unknown): string {
   return String(value || UNKNOWN)
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function promotionGradeValue(source, latestMetrics) {
+function promotionGradeValue(source: LooseObject, latestMetrics: LooseObject): boolean | null {
   for (const value of [
     source.promotionGrade,
     source.promotion_grade,
@@ -758,7 +776,7 @@ function promotionGradeValue(source, latestMetrics) {
   return null;
 }
 
-function countValue(...values) {
+function countValue(...values: unknown[]): number | null {
   for (const value of values) {
     const count = Number(value);
     if (Number.isFinite(count) && count >= 0) return Math.floor(count);
@@ -766,7 +784,7 @@ function countValue(...values) {
   return null;
 }
 
-function boolOrNull(value) {
+function boolOrNull(value: unknown): boolean | null {
   if (value === true || value === false) return value;
   if (typeof value === "number") {
     if (value === 1) return true;
@@ -779,8 +797,9 @@ function boolOrNull(value) {
   return null;
 }
 
-function stringList(value) {
-  if (Array.isArray(value)) return value.map((item) => warningMessage(item)).filter(Boolean);
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value))
+    return value.map((item: unknown) => warningMessage(item)).filter(Boolean);
   const text = cleanText(value);
   return text ? [text] : [];
 }
@@ -795,7 +814,7 @@ function perfectMetricSuspicion({
   adversarialCount,
   externalRepoCount,
   promotionGrade,
-}: LooseObject) {
+}: LooseObject): string[] {
   const latest = current.at(-1) || null;
   const perfectMetricNames = perfectQualityMetricNames({ state, latest });
   if (!isPerfectMetricState({ state, qualityGap }) && !perfectMetricNames.length) return [];
@@ -820,9 +839,15 @@ function perfectMetricSuspicion({
   return reasons;
 }
 
-function perfectQualityMetricNames({ state, latest }) {
+function perfectQualityMetricNames({
+  state,
+  latest,
+}: {
+  state: LooseObject;
+  latest: RunLike | null;
+}): string[] {
   const names = new Set<string>();
-  const addIfPerfect = (name, value) => {
+  const addIfPerfect = (name: unknown, value: unknown) => {
     if (!/mrr|hit|accuracy|quality|score/i.test(String(name || ""))) return;
     if (/promotion|query|holdout|adversarial|external/i.test(String(name || ""))) return;
     if (finiteMetric(value) === 1) names.add(String(name));
@@ -836,7 +861,13 @@ function perfectQualityMetricNames({ state, latest }) {
   return [...names].sort((a, b) => a.localeCompare(b));
 }
 
-function isPerfectMetricState({ state, qualityGap }) {
+function isPerfectMetricState({
+  state,
+  qualityGap,
+}: {
+  state: LooseObject;
+  qualityGap: LooseObject | null;
+}): boolean {
   const best = finiteMetric(state?.best);
   const metricName = String(state?.config?.metricName || "").toLowerCase();
   if (qualityGap && Number(qualityGap.open) === 0 && Number(qualityGap.total) > 0) return true;
@@ -850,7 +881,17 @@ function isPerfectMetricState({ state, qualityGap }) {
   return false;
 }
 
-function evidenceChip({ label, value, tone = "neutral", detail = "" }) {
+function evidenceChip({
+  label,
+  value,
+  tone = "neutral",
+  detail = "",
+}: {
+  label: string;
+  value: unknown;
+  tone?: string;
+  detail?: string;
+}) {
   return {
     label,
     value: value == null || value === "" ? NO_DATA : String(value),
@@ -859,7 +900,15 @@ function evidenceChip({ label, value, tone = "neutral", detail = "" }) {
   };
 }
 
-function checklistItem({ label, state = UNKNOWN, detail = "" }) {
+function checklistItem({
+  label,
+  state = UNKNOWN,
+  detail = "",
+}: {
+  label: string;
+  state?: string;
+  detail?: string;
+}) {
   return {
     label,
     state: state || UNKNOWN,
@@ -867,18 +916,18 @@ function checklistItem({ label, state = UNKNOWN, detail = "" }) {
   };
 }
 
-function formatChipMetric(value, unit) {
+function formatChipMetric(value: unknown, unit: string): string {
   const metric = finiteMetric(value);
   return metric == null ? NO_DATA : formatSummaryMetric(metric, unit || "");
 }
 
-function truthBreadthLabel(truth) {
+function truthBreadthLabel(truth: LooseObject): string {
   const counts = [
     truth.queryCount,
     truth.holdoutCount,
     truth.adversarialCount,
     truth.externalRepoCount,
-  ].filter((value) => Number.isFinite(value));
+  ].filter((value: unknown) => Number.isFinite(value));
   if (!counts.length) return NO_DATA;
   return `${counts.reduce((sum, value) => sum + value, 0)} checks`;
 }
@@ -898,7 +947,7 @@ function shouldPrioritizeFinalization({
   );
 }
 
-function actionSuggestsFinalization(value) {
+function actionSuggestsFinalization(value: unknown): boolean {
   const action = cleanText(value);
   return (
     /^(stop|finali[sz]e|review|package|handoff|done)\b/i.test(action) ||
@@ -906,7 +955,7 @@ function actionSuggestsFinalization(value) {
   );
 }
 
-function iterationLimitReached(guidedSetup) {
+function iterationLimitReached(guidedSetup: LooseObject | null): boolean {
   const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
   if (limit.limitReached === true) return true;
   const remaining = Number(limit.remainingIterations);
@@ -1200,7 +1249,7 @@ export function buildMissionControl({
             ? "gaps"
             : actionRail?.[0]?.kind || "next";
   const logCommandsByStatus = Object.fromEntries(
-    allowedStatuses.map((status) => [
+    allowedStatuses.map((status: string) => [
       status,
       logCommandForStatus(guidedSetup?.commands?.logLast, status),
     ]),
@@ -1296,6 +1345,15 @@ function missionStep({
   command = "",
   commandLabel = "Copy",
   mutates = false,
+}: {
+  id: string;
+  title: string;
+  state: string;
+  detail: string;
+  safeAction?: string;
+  command?: string;
+  commandLabel?: string;
+  mutates?: boolean;
 }) {
   return {
     id,
@@ -1309,7 +1367,7 @@ function missionStep({
   };
 }
 
-function logCommandForStatus(command, status) {
+function logCommandForStatus(command: unknown, status: string): string {
   if (!command || !status) return "";
   return String(command).replace(/--status\s+(?:"[^"]+"|'[^']+'|\S+)/, `--status ${status}`);
 }
@@ -1326,6 +1384,18 @@ function actionItem({
   tone = "neutral",
   source = "",
   explanation = null,
+}: {
+  kind?: string;
+  priority: string;
+  title: string;
+  detail: string;
+  utilityCopy: string;
+  safeAction?: string;
+  command?: string;
+  commandLabel?: string;
+  tone?: string;
+  source?: string;
+  explanation?: LooseObject | null;
 }) {
   return {
     kind,
@@ -1343,7 +1413,19 @@ function actionItem({
   };
 }
 
-function buildActionExplanation({ kind, title, detail, utilityCopy, source }) {
+function buildActionExplanation({
+  kind,
+  title,
+  detail,
+  utilityCopy,
+  source,
+}: {
+  kind: string;
+  title: string;
+  detail: string;
+  utilityCopy: string;
+  source: string;
+}) {
   return {
     why: detail || title || "This is the highest-priority action in the current loop state.",
     evidence:
@@ -1354,7 +1436,7 @@ function buildActionExplanation({ kind, title, detail, utilityCopy, source }) {
   };
 }
 
-function defaultAvoidance(kind) {
+function defaultAvoidance(kind: string): string {
   if (kind === "setup") return "Avoids a baseline built on incomplete session metadata.";
   if (kind === "stale-packet") return "Avoids logging an old metric against newer run history.";
   if (kind === "log-decision")
@@ -1375,7 +1457,7 @@ function defaultAvoidance(kind) {
   return "Avoids acting without a clear operator reason.";
 }
 
-function defaultProof(kind) {
+function defaultProof(kind: string): string {
   if (kind === "setup")
     return "The session has setup files, a configured metric, and a doctorable command.";
   if (kind === "stale-packet")
@@ -1396,8 +1478,8 @@ function defaultProof(kind) {
   return "The next run produces evidence that updates the dashboard state.";
 }
 
-function commandLookup(commands) {
-  const map = new Map();
+function commandLookup(commands: unknown): CommandMap {
+  const map: CommandMap = new Map();
   for (const item of Array.isArray(commands) ? commands : []) {
     const label = String(item?.label || "").toLowerCase();
     if (label) map.set(label, item.command || "");
@@ -1405,9 +1487,11 @@ function commandLookup(commands) {
   return map;
 }
 
-function warningMessage(warning) {
-  if (warning && typeof warning === "object")
-    return String(warning.message || warning.code || "Warning");
+function warningMessage(warning: unknown): string {
+  if (warning && typeof warning === "object") {
+    const payload = warning as LooseObject;
+    return String(payload.message || payload.code || "Warning");
+  }
   return String(warning || "");
 }
 
@@ -1428,7 +1512,7 @@ export function buildAiSummary({
   const context = summaryMetricContext({ state, current });
   const metricName = state.config.metricName || "metric";
   const blockers = [
-    ...(Array.isArray(warnings) ? warnings.map(warningMessage) : []),
+    ...(Array.isArray(warnings) ? warnings.map((warning: unknown) => warningMessage(warning)) : []),
     ...(Array.isArray(finalizePreview?.warnings) ? finalizePreview.warnings : []),
   ].filter(Boolean);
 
@@ -1538,24 +1622,24 @@ function buildSummaryPlan({
   return plan;
 }
 
-function percentChange(best, baseline, direction) {
+function percentChange(best: number, baseline: number, direction: Direction): number | null {
   if (!Number.isFinite(best) || !Number.isFinite(baseline)) return null;
   if (baseline === 0) return null;
   const raw = ((best - baseline) / Math.abs(baseline)) * 100;
   return direction === "higher" ? raw : -raw;
 }
 
-function round(value) {
+function round(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function formatSummaryMetric(value, unit) {
+function formatSummaryMetric(value: number, unit: string): string {
   return `${round(value)}${unit}`;
 }
 
-function unique(items) {
-  const seen = new Set();
-  return items.filter((item) => {
+function unique<T>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item: T) => {
     const key = String(item || "");
     if (!key || seen.has(key)) return false;
     seen.add(key);
@@ -1563,12 +1647,12 @@ function unique(items) {
   });
 }
 
-function recordValue(value) {
+function recordValue(value: unknown): LooseObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
 }
 
-function buildPortfolio(memory, direction) {
+function buildPortfolio(memory: LooseObject | null, direction: Direction) {
   if (Array.isArray(memory?.families) || Array.isArray(memory?.lanePortfolio)) {
     return {
       summary: {
@@ -1598,17 +1682,19 @@ function buildPortfolio(memory, direction) {
   };
 }
 
-function memoryExperiments(memory) {
+function memoryExperiments(memory: LooseObject | null): RunLike[] {
   const kept = Array.isArray(memory?.kept) ? memory.kept : [];
   const rejected = Array.isArray(memory?.rejected) ? memory.rejected : [];
-  return [
-    ...kept.map((item) => ({ ...item, lane: "promote" })),
-    ...rejected.map((item) => ({ ...item, lane: "avoid" })),
-  ].sort((a, b) => Number(a.run || 0) - Number(b.run || 0));
+  return (
+    [
+      ...kept.map((item: LooseObject) => ({ ...item, lane: "promote" })),
+      ...rejected.map((item: LooseObject) => ({ ...item, lane: "avoid" })),
+    ] as RunLike[]
+  ).sort((a, b) => Number(a.run || 0) - Number(b.run || 0));
 }
 
-function buildFamilies(experiments, direction) {
-  const byKey = new Map();
+function buildFamilies(experiments: RunLike[], direction: Direction) {
+  const byKey = new Map<string, LooseObject>();
   for (const item of experiments) {
     const source = item.hypothesis || item.description || `Run ${item.run}`;
     const key = familyKey(source);
@@ -1644,7 +1730,7 @@ function buildFamilies(experiments, direction) {
     .slice(0, 6);
 }
 
-function buildLanes(memory, experiments) {
+function buildLanes(memory: LooseObject | null, experiments: RunLike[]) {
   const kept = experiments.filter((item) => item.status === "keep");
   const rejected = experiments.filter((item) => item.status !== "keep");
   const nextActions = Array.isArray(memory?.nextActions) ? memory.nextActions : [];
@@ -1671,10 +1757,10 @@ function buildLanes(memory, experiments) {
   ];
 }
 
-function buildPlateau(experiments, direction) {
+function buildPlateau(experiments: RunLike[], direction: Direction) {
   const finite = experiments
-    .map((item, index) => ({ ...item, metric: finiteMetric(item.metric), index }))
-    .filter((item) => item.metric != null);
+    .map((item: RunLike, index: number) => ({ ...item, metric: finiteMetric(item.metric), index }))
+    .filter((item: LooseObject) => item.metric != null);
   if (finite.length < 3) {
     return {
       state: "forming",
@@ -1711,17 +1797,17 @@ function buildPlateau(experiments, direction) {
   };
 }
 
-function familyKey(value) {
+function familyKey(value: unknown): string {
   return tokens(value).slice(0, 3).join("-") || "experiment";
 }
 
-function familyName(value) {
+function familyName(value: unknown): string {
   const picked = tokens(value).slice(0, 3);
   if (!picked.length) return "Experiment";
   return picked.map((token) => token.slice(0, 1).toUpperCase() + token.slice(1)).join(" ");
 }
 
-function tokens(value) {
+function tokens(value: unknown): string[] {
   const stop = new Set([
     "the",
     "and",
@@ -1740,15 +1826,15 @@ function tokens(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(/\s+/)
-    .filter((token) => token.length > 2 && !stop.has(token));
+    .filter((token: string) => token.length > 2 && !stop.has(token));
 }
 
-function isBetter(next, current, direction) {
+function isBetter(next: number, current: number, direction: Direction): boolean {
   return direction === "higher" ? next > current : next < current;
 }
 
-function bestRun(runs, direction) {
-  let best = null;
+function bestRun(runs: RunLike[], direction: Direction): (RunLike & { metric: number }) | null {
+  let best: (RunLike & { metric: number }) | null = null;
   for (const run of runs) {
     const metric = finiteMetric(run.metric);
     if (metric == null) continue;
@@ -1759,7 +1845,7 @@ function bestRun(runs, direction) {
   return best;
 }
 
-function compactRun(run) {
+function compactRun(run: RunLike) {
   return {
     run: run.run,
     metric: run.metric,

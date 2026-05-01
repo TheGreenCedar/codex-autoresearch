@@ -1,4 +1,5 @@
 type LooseObject = Record<string, any>;
+type McpResourceList = { resources: LooseObject[] };
 
 export const MCP_PROTOCOL_METHODS = [
   "resources/list",
@@ -84,7 +85,7 @@ const PROMPT_DEFINITIONS = [
   },
 ];
 
-export function listMcpResources() {
+export function listMcpResources(): McpResourceList {
   return { resources: [] };
 }
 

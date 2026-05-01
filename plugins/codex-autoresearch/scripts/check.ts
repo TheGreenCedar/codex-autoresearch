@@ -12,7 +12,9 @@ const node = process.execPath;
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
 
-const syntaxChecks = [
+type CommandSpec = [label: string, command: string, args: string[]];
+
+const syntaxChecks: CommandSpec[] = [
   ["syntax:autoresearch", node, ["--check", "scripts/autoresearch.mjs"]],
   ["syntax:mcp", node, ["--check", "scripts/autoresearch-mcp.mjs"]],
   ["syntax:finalize", node, ["--check", "scripts/finalize-autoresearch.mjs"]],
@@ -20,7 +22,7 @@ const syntaxChecks = [
   ["syntax:check", node, ["--check", "scripts/check.mjs"]],
 ];
 
-const productChecks = [
+const productChecks: CommandSpec[] = [
   ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
   ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
   ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
@@ -41,7 +43,7 @@ const productChecks = [
   ],
 ];
 
-const dashboardBuildChecks = [
+const dashboardBuildChecks: CommandSpec[] = [
   [
     "build:dashboard",
     node,
@@ -97,7 +99,7 @@ const ok =
 
 process.exit(ok ? 0 : 1);
 
-async function runPhase(name, commands) {
+async function runPhase(name: string, commands: CommandSpec[]): Promise<boolean> {
   console.log(`\n== ${name} ==`);
   const results = await Promise.all(commands.map(runCommand));
   for (const result of results) {
@@ -114,7 +116,7 @@ async function runPhase(name, commands) {
   return results.every((result) => result.code === 0);
 }
 
-async function runDashboardBuildWithParity() {
+async function runDashboardBuildWithParity(): Promise<boolean> {
   const before = await dashboardAssetHashes();
   const buildOk = await runPhase("dashboard", dashboardBuildChecks);
   if (!buildOk) return false;
@@ -134,8 +136,8 @@ async function runDashboardBuildWithParity() {
   return true;
 }
 
-async function dashboardAssetHashes() {
-  const hashes = {};
+async function dashboardAssetHashes(): Promise<Record<string, string>> {
+  const hashes: Record<string, string> = {};
   for (const file of dashboardAssets) {
     const bytes = await fsp.readFile(path.join(ROOT, file));
     hashes[file] = createHash("sha256").update(bytes).digest("hex");
@@ -617,7 +619,7 @@ async function runSourceCheckoutLauncherCheck() {
   return true;
 }
 
-function runCommand([label, command, args]): Promise<CommandResult> {
+function runCommand([label, command, args]: CommandSpec): Promise<CommandResult> {
   return new Promise((resolve) => {
     const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
     const child = spawn(command, args, {
@@ -643,7 +645,7 @@ function runCommand([label, command, args]): Promise<CommandResult> {
   });
 }
 
-function indent(text) {
+function indent(text: string): string {
   return text
     .split(/\r?\n/)
     .map((line) => `  ${line}`)

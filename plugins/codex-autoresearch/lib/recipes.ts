@@ -8,8 +8,24 @@ import { resolvePackageRoot } from "./runtime-paths.js";
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
 const RECIPE_CATALOG_TIMEOUT_MS = 10_000;
+type LooseObject = Record<string, any>;
+type Recipe = {
+  id: string;
+  title: string;
+  metricName: string;
+  metricUnit: string;
+  direction: "lower" | "higher";
+  benchmarkCommand: string;
+  benchmarkPrintsMetric?: boolean;
+  checksCommand: string;
+  scope: string[];
+  caveats: string[];
+  tags: string[];
+  source?: string;
+};
+type RecipeDefaults = ReturnType<typeof recipeDefaultsFromRecipe>;
 
-const BUILT_IN_RECIPES = [
+const BUILT_IN_RECIPES: Recipe[] = [
   {
     id: "node-test-runtime",
     title: "Node test runtime",
@@ -156,25 +172,25 @@ const BUILT_IN_RECIPES = [
   },
 ];
 
-function quoteCommandArg(value) {
+function quoteCommandArg(value: unknown): string {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
-export function listBuiltInRecipes() {
+export function listBuiltInRecipes(): Recipe[] {
   return BUILT_IN_RECIPES.map((recipe) => ({ ...recipe, source: "built-in" }));
 }
 
-export function getBuiltInRecipe(id) {
+export function getBuiltInRecipe(id: string): Recipe | null {
   return listBuiltInRecipes().find((recipe) => recipe.id === id) || null;
 }
 
-export function recipeDefaultsForSetup(id) {
+export function recipeDefaultsForSetup(id: string): RecipeDefaults {
   const recipe = getBuiltInRecipe(id);
   if (!recipe) throw new Error(`Unknown recipe: ${id}`);
   return recipeDefaultsFromRecipe(recipe);
 }
 
-export function recipeDefaultsFromRecipe(recipe) {
+export function recipeDefaultsFromRecipe(recipe: Recipe) {
   return {
     recipe,
     name: recipe.title,
@@ -189,13 +205,16 @@ export function recipeDefaultsFromRecipe(recipe) {
   };
 }
 
-export function applyRecipeDefaults(args, recipeId) {
+export function applyRecipeDefaults(args: LooseObject, recipeId?: string | null): LooseObject {
   if (!recipeId) return args;
   const defaults = recipeDefaultsForSetup(recipeId);
   return applyRecipeObjectDefaults(args, defaults);
 }
 
-export function applyRecipeObjectDefaults(args, defaults) {
+export function applyRecipeObjectDefaults(
+  args: LooseObject,
+  defaults: RecipeDefaults,
+): LooseObject {
   return {
     ...args,
     recipeId: args.recipeId ?? args.recipe_id ?? args.recipe ?? defaults.recipe.id,
@@ -219,22 +238,29 @@ export function applyRecipeObjectDefaults(args, defaults) {
   };
 }
 
-export async function findRecipe(id, catalog = null) {
+export async function findRecipe(
+  id: string,
+  catalog: string | null = null,
+): Promise<Recipe | null> {
   const builtIn = getBuiltInRecipe(id);
   if (builtIn) return builtIn;
   const catalogRecipes = catalog ? await loadRecipeCatalog(catalog) : [];
   return catalogRecipes.find((recipe) => recipe.id === id) || null;
 }
 
-export async function applyResolvedRecipeDefaults(args, recipeId, catalog = null) {
+export async function applyResolvedRecipeDefaults(
+  args: LooseObject,
+  recipeId?: string | null,
+  catalog: string | null = null,
+): Promise<LooseObject> {
   if (!recipeId) return args;
   const recipe = await findRecipe(recipeId, catalog);
   if (!recipe) throw new Error(`Unknown recipe: ${recipeId}`);
   return applyRecipeObjectDefaults(args, recipeDefaultsFromRecipe(recipe));
 }
 
-export async function recommendRecipe(workDir) {
-  const exists = (file) => fs.existsSync(path.join(workDir, file));
+export async function recommendRecipe(workDir: string): Promise<Recipe | null> {
+  const exists = (file: string) => fs.existsSync(path.join(workDir, file));
   if (exists("package.json")) {
     const pkg = JSON.parse(await fsp.readFile(path.join(workDir, "package.json"), "utf8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -248,7 +274,7 @@ export async function recommendRecipe(workDir) {
   return getBuiltInRecipe("custom");
 }
 
-export async function loadRecipeCatalog(catalog: string) {
+export async function loadRecipeCatalog(catalog: string): Promise<Recipe[]> {
   if (!catalog) return [];
   const text = (
     /^https?:\/\//i.test(catalog)
@@ -270,7 +296,7 @@ async function readBoundedCatalogFile(filePath: string) {
   return await fsp.readFile(filePath, "utf8");
 }
 
-function validateExternalRecipe(recipe: Record<string, unknown>) {
+function validateExternalRecipe(recipe: Record<string, unknown>): Recipe {
   for (const field of ["id", "title", "metricName", "direction", "benchmarkCommand"]) {
     if (!recipe[field]) throw new Error(`Recipe is missing required field: ${field}`);
   }
@@ -290,16 +316,16 @@ function validateExternalRecipe(recipe: Record<string, unknown>) {
   };
 }
 
-async function fetchText(url) {
+async function fetchText(url: string): Promise<string> {
   const client = url.startsWith("https:") ? https : http;
-  return await new Promise((resolve, reject) => {
+  return await new Promise<string>((resolve, reject) => {
     let settled = false;
-    const fail = (error) => {
+    const fail = (error: Error) => {
       if (settled) return;
       settled = true;
       reject(error);
     };
-    const succeed = (value) => {
+    const succeed = (value: string) => {
       if (settled) return;
       settled = true;
       resolve(value);

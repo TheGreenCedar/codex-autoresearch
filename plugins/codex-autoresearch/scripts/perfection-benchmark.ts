@@ -7,11 +7,14 @@ import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
 
-async function readText(file) {
+type LooseObject = Record<string, any>;
+type CheckResult = { ok: boolean; message: string };
+
+async function readText(file: string): Promise<string> {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
-async function readOptionalText(file) {
+async function readOptionalText(file: string): Promise<string> {
   try {
     return await readText(file);
   } catch {
@@ -19,7 +22,7 @@ async function readOptionalText(file) {
   }
 }
 
-async function readDashboardSurface() {
+async function readDashboardSurface(): Promise<string> {
   const files = [
     "assets/template.html",
     ...(await listDashboardSourceFiles()),
@@ -30,7 +33,7 @@ async function readDashboardSurface() {
   return parts.join("\n");
 }
 
-async function listDashboardSourceFiles(dir = "dashboard/src") {
+async function listDashboardSourceFiles(dir = "dashboard/src"): Promise<string[]> {
   const absoluteDir = path.join(pluginRoot, dir);
   const entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
   const files = await Promise.all(
@@ -44,15 +47,15 @@ async function listDashboardSourceFiles(dir = "dashboard/src") {
   return files.flat().sort();
 }
 
-async function readRootText(file) {
+async function readRootText(file: string): Promise<string> {
   return await fsp.readFile(path.join(repoRoot, file), "utf8");
 }
 
-async function readJson(file) {
+async function readJson(file: string): Promise<LooseObject> {
   return JSON.parse(await readText(file));
 }
 
-async function fileExists(file) {
+async function fileExists(file: string): Promise<boolean> {
   try {
     await fsp.access(path.join(pluginRoot, file));
     return true;
@@ -61,7 +64,7 @@ async function fileExists(file) {
   }
 }
 
-async function markdownFilesUnder(dir) {
+async function markdownFilesUnder(dir: string): Promise<string[]> {
   const absolute = path.join(pluginRoot, dir);
   try {
     const entries = await fsp.readdir(absolute, { withFileTypes: true });
@@ -73,10 +76,10 @@ async function markdownFilesUnder(dir) {
   }
 }
 
-async function skillFiles() {
+async function skillFiles(): Promise<string[]> {
   const skillsRoot = path.join(pluginRoot, "skills");
-  const found = [];
-  async function walk(dir) {
+  const found: string[] = [];
+  async function walk(dir: string): Promise<void> {
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const next = path.join(dir, entry.name);
@@ -89,19 +92,19 @@ async function skillFiles() {
   return found.sort();
 }
 
-function includesAll(text, values) {
+function includesAll(text: string, values: string[]): boolean {
   return values.every((value) => text.includes(value));
 }
 
-function hasRegex(text, pattern) {
+function hasRegex(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
 }
 
-function fail(message) {
+function fail(message: string): CheckResult {
   return { ok: false, message };
 }
 
-function pass(message = "") {
+function pass(message = ""): CheckResult {
   return { ok: true, message };
 }
 
@@ -430,7 +433,7 @@ const checks = [
     description: "Marketplace prompts point to the plugin, not subskills or slash commands.",
     run: async () => {
       const manifest = await readJson(".codex-plugin/plugin.json");
-      const prompts = manifest.interface?.defaultPrompt || [];
+      const prompts = (manifest.interface?.defaultPrompt || []) as string[];
       const promptText = prompts.join("\n");
       return prompts.length <= 3 &&
         prompts.every((prompt) => prompt.length < 128) &&

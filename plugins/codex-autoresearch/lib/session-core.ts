@@ -8,8 +8,29 @@ export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed
 export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
 export const RESEARCH_DIR = "autoresearch.research";
 type LooseObject = Record<string, any>;
+type Direction = "lower" | "higher";
+type RunRecord = LooseObject & {
+  run?: number;
+  metric?: unknown;
+  status?: string;
+  segment?: number;
+  metrics?: LooseObject;
+  asi?: LooseObject;
+};
+type StateConfig = LooseObject & {
+  name: string | null;
+  metricName: string;
+  metricUnit: string;
+  bestDirection: Direction;
+};
+type SessionState = LooseObject & {
+  config: StateConfig;
+  segment: number;
+  results: RunRecord[];
+  current: RunRecord[];
+};
 
-export function listOption(value) {
+export function listOption(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (value == null || value === "") return [];
   return String(value)
@@ -18,7 +39,7 @@ export function listOption(value) {
     .filter(Boolean);
 }
 
-export function safeSlug(value, fallback = "research") {
+export function safeSlug(value: unknown, fallback = "research"): string {
   const slug = String(value || fallback)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -28,13 +49,13 @@ export function safeSlug(value, fallback = "research") {
   return slug || fallback;
 }
 
-export function shellQuote(value) {
+export function shellQuote(value: unknown): string {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
 const METRIC_VALUE_PATTERN = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 
-export function finiteMetric(value) {
+export function finiteMetric(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -43,19 +64,19 @@ export function finiteMetric(value) {
   return Number.isFinite(metric) ? metric : null;
 }
 
-export function hasFiniteMetric(run) {
+export function hasFiniteMetric(run: RunRecord | null | undefined): boolean {
   return finiteMetric(run?.metric) != null;
 }
 
-export function isFailureStatus(status) {
-  return FAILURE_STATUSES.has(status);
+export function isFailureStatus(status: unknown): boolean {
+  return FAILURE_STATUSES.has(String(status));
 }
 
-export function isBaselineEligibleMetricRun(run) {
+export function isBaselineEligibleMetricRun(run: RunRecord | null | undefined): boolean {
   return hasFiniteMetric(run) && !isFailureStatus(run?.status);
 }
 
-export async function pathExists(filePath) {
+export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fsp.access(filePath);
     return true;
@@ -64,13 +85,17 @@ export async function pathExists(filePath) {
   }
 }
 
-export function readConfig(sessionCwd): LooseObject {
+export function readConfig(sessionCwd: string): LooseObject {
   const configPath = path.join(sessionCwd, "autoresearch.config.json");
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
-export function resolveWorkDir(cwdArg) {
+export function resolveWorkDir(cwdArg?: string): {
+  sessionCwd: string;
+  workDir: string;
+  config: LooseObject;
+} {
   const sessionCwd = path.resolve(
     cwdArg || process.env.CODEX_AUTORESEARCH_WORKDIR || process.cwd(),
   );
@@ -82,21 +107,21 @@ export function resolveWorkDir(cwdArg) {
   return { sessionCwd, workDir, config };
 }
 
-export function jsonlPath(workDir) {
+export function jsonlPath(workDir: string): string {
   return path.join(workDir, "autoresearch.jsonl");
 }
 
-export function appendJsonl(workDir, entry) {
+export function appendJsonl(workDir: string, entry: LooseObject): void {
   fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
 }
 
-export function readJsonl(workDir) {
+export function readJsonl(workDir: string): LooseObject[] {
   const filePath = jsonlPath(workDir);
   if (!fs.existsSync(filePath)) return [];
   return parseJsonlLines(fs.readFileSync(filePath, "utf8"), filePath);
 }
 
-export async function* streamJsonl(workDir) {
+export async function* streamJsonl(workDir: string): AsyncGenerator<LooseObject> {
   const filePath = jsonlPath(workDir);
   if (!fs.existsSync(filePath)) return;
   const stream = fs.createReadStream(filePath, { encoding: "utf8" });
@@ -114,7 +139,7 @@ export async function* streamJsonl(workDir) {
   }
 }
 
-export async function readJsonlTail(workDir, maxEntries = 50) {
+export async function readJsonlTail(workDir: string, maxEntries = 50): Promise<LooseObject[]> {
   const limit = Math.max(0, Math.floor(Number(maxEntries) || 0));
   if (limit === 0) return [];
   const tail = [];
@@ -125,7 +150,7 @@ export async function readJsonlTail(workDir, maxEntries = 50) {
   return tail;
 }
 
-function parseJsonlLines(text, filePath) {
+function parseJsonlLines(text: string, filePath: string): LooseObject[] {
   return String(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -133,7 +158,7 @@ function parseJsonlLines(text, filePath) {
     .map((line, index) => parseJsonlLine(line, filePath, index + 1));
 }
 
-function parseJsonlLine(line, filePath, index) {
+function parseJsonlLine(line: string, filePath: string, index: number): LooseObject {
   try {
     return JSON.parse(line);
   } catch (error) {
@@ -141,7 +166,7 @@ function parseJsonlLine(line, filePath, index) {
   }
 }
 
-export function bestMetric(runs, direction) {
+export function bestMetric(runs: RunRecord[], direction: Direction | string): number | null {
   let best = null;
   for (const run of runs) {
     const metric = finiteMetric(run.metric);
@@ -151,14 +176,14 @@ export function bestMetric(runs, direction) {
   return best;
 }
 
-export function bestKeptMetric(runs, direction) {
+export function bestKeptMetric(runs: RunRecord[], direction: Direction | string): number | null {
   return bestMetric(
     runs.filter((run) => run.status === "keep"),
     direction,
   );
 }
 
-function bestMetricRun(runs, direction) {
+function bestMetricRun(runs: RunRecord[], direction: Direction | string): RunRecord | null {
   let bestRun = null;
   let best = null;
   for (const run of runs) {
@@ -172,7 +197,7 @@ function bestMetricRun(runs, direction) {
   return bestRun;
 }
 
-function boolOrNull(value) {
+function boolOrNull(value: unknown): boolean | null {
   if (value === true || value === false) return value;
   if (typeof value === "number") {
     if (value === 1) return true;
@@ -185,7 +210,7 @@ function boolOrNull(value) {
   return null;
 }
 
-export function promotionGradeValue(run) {
+export function promotionGradeValue(run: RunRecord | null | undefined): boolean | null {
   const metrics = run?.metrics || {};
   const asi = run?.asi || {};
   for (const value of [
@@ -208,11 +233,11 @@ export function promotionGradeValue(run) {
   return null;
 }
 
-export function isPromotionGradeRun(run) {
+export function isPromotionGradeRun(run: RunRecord | null | undefined): boolean {
   return promotionGradeValue(run) === true;
 }
 
-function evidenceTrack(runs, direction) {
+function evidenceTrack(runs: RunRecord[], direction: Direction | string) {
   const kept = runs.filter((run) => run.status === "keep");
   const bestRun = bestMetricRun(kept, direction);
   return {
@@ -225,18 +250,18 @@ function evidenceTrack(runs, direction) {
   };
 }
 
-export function isBetter(value, current, direction) {
+export function isBetter(value: number, current: number, direction: Direction | string): boolean {
   return direction === "higher" ? value > current : value < current;
 }
 
-function median(values) {
+function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-export function computeConfidence(runs, direction) {
+export function computeConfidence(runs: RunRecord[], direction: Direction | string): number | null {
   const values = runs.filter(isBaselineEligibleMetricRun).map((run) => finiteMetric(run.metric));
   if (values.length < 3) return null;
   const baseline = values[0];
@@ -248,16 +273,16 @@ export function computeConfidence(runs, direction) {
   return Math.abs(best - baseline) / mad;
 }
 
-export function currentState(workDir) {
+export function currentState(workDir: string): SessionState {
   const entries = readJsonl(workDir);
-  let config = {
+  let config: StateConfig = {
     name: null,
     metricName: "metric",
     metricUnit: "",
     bestDirection: "lower",
   };
   let segment = 0;
-  const results = [];
+  const results: RunRecord[] = [];
   for (const entry of entries) {
     if (entry.type === "config") {
       if (results.length > 0) segment += 1;
@@ -270,7 +295,7 @@ export function currentState(workDir) {
       continue;
     }
     if (entry.run != null) {
-      const run = { ...entry, segment: entry.segment ?? segment };
+      const run: RunRecord = { ...entry, segment: entry.segment ?? segment };
       if (Object.hasOwn(entry, "metric")) run.metric = finiteMetric(entry.metric);
       results.push(run);
     }
@@ -302,13 +327,13 @@ export function lastRunConfigSnapshot(config: LooseObject = {}) {
   };
 }
 
-export function statusHash(value) {
+export function statusHash(value: unknown): string {
   return createHash("sha256")
     .update(String(value || ""), "utf8")
     .digest("hex");
 }
 
-export function normalizeScopedFileFingerprints(fingerprints) {
+export function normalizeScopedFileFingerprints(fingerprints: unknown): Record<string, string> {
   if (!fingerprints || typeof fingerprints !== "object" || Array.isArray(fingerprints)) {
     return {};
   }
@@ -320,7 +345,7 @@ export function normalizeScopedFileFingerprints(fingerprints) {
   );
 }
 
-export function buildLastRunFreshnessSnapshot(workDir, context: LooseObject = {}) {
+export function buildLastRunFreshnessSnapshot(workDir: string, context: LooseObject = {}) {
   const state = context.state || currentState(workDir);
   const snapshot: LooseObject = {
     segment: state.segment,
@@ -342,7 +367,11 @@ export function buildLastRunFreshnessSnapshot(workDir, context: LooseObject = {}
   return snapshot;
 }
 
-export function lastRunPacketFreshness(workDir, packet, context: LooseObject = {}) {
+export function lastRunPacketFreshness(
+  workDir: string,
+  packet: LooseObject,
+  context: LooseObject = {},
+) {
   const expected = packet?.history;
   if (!expected || typeof expected !== "object") {
     return {
@@ -398,21 +427,25 @@ export function lastRunPacketFreshness(workDir, packet, context: LooseObject = {
   };
 }
 
-export function assertFreshLastRunPacket(workDir, packet, context: LooseObject = {}) {
+export function assertFreshLastRunPacket(
+  workDir: string,
+  packet: LooseObject,
+  context: LooseObject = {},
+) {
   const freshness = lastRunPacketFreshness(workDir, packet, context);
   if (!freshness.fresh) throw new Error(freshness.reason);
   return freshness;
 }
 
-function addSnapshotString(snapshot, key, value) {
+function addSnapshotString(snapshot: LooseObject, key: string, value: unknown): void {
   if (value != null && value !== "") snapshot[key] = String(value);
 }
 
-function addSnapshotPath(snapshot, key, value) {
+function addSnapshotPath(snapshot: LooseObject, key: string, value: unknown): void {
   if (value != null && value !== "") snapshot[key] = path.resolve(String(value));
 }
 
-function firstFreshnessContextMismatch(expected, actual) {
+function firstFreshnessContextMismatch(expected: LooseObject, actual: LooseObject) {
   for (const key of ["command", "cwd", "workingDir", "gitHead", "dirtyStatusHash"]) {
     if (!Object.hasOwn(expected, key)) continue;
     if (expected[key] !== actual[key]) {
@@ -440,7 +473,7 @@ function firstFreshnessContextMismatch(expected, actual) {
   return null;
 }
 
-export function iterationLimitInfo(state, runtimeConfig) {
+export function iterationLimitInfo(state: SessionState, runtimeConfig: LooseObject) {
   const maxIterations = Number(runtimeConfig.maxIterations);
   if (!Number.isFinite(maxIterations) || maxIterations <= 0) {
     return {
@@ -458,7 +491,7 @@ export function iterationLimitInfo(state, runtimeConfig) {
   };
 }
 
-export function parseQualityGaps(text) {
+export function parseQualityGaps(text: string) {
   let open = 0;
   let closed = 0;
   for (const line of text.split(/\r?\n/)) {
@@ -470,10 +503,10 @@ export function parseQualityGaps(text) {
   return { open, closed, total: open + closed };
 }
 
-export function researchSlugFromArgs(args) {
+export function researchSlugFromArgs(args: LooseObject): string {
   return safeSlug(args.research_slug ?? args.researchSlug ?? args.slug ?? args.name ?? "research");
 }
 
-export function researchDirPath(workDir, slug) {
+export function researchDirPath(workDir: string, slug: string): string {
   return path.join(workDir, RESEARCH_DIR, slug);
 }

@@ -1,6 +1,28 @@
 import { finiteMetric } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
+type Direction = "lower" | "higher" | string;
+type FamilyKey = { key: string; label: string };
+type MemoryRun = LooseObject & {
+  run: number;
+  metric?: unknown;
+  status?: string;
+  description?: string;
+  asi?: LooseObject;
+  commit?: string;
+  family: FamilyKey;
+};
+type FamilySummary = LooseObject & {
+  key: string;
+  label: string;
+  runs: number;
+  kept: number;
+  rejected: number;
+  latestRun: LooseObject | null;
+  bestRun: LooseObject | null;
+  bestKeptRun: LooseObject | null;
+  exhausted?: boolean;
+};
 
 const FAILURE_STATUSES = new Set(["discard", "crash", "checks_failed"]);
 const FAMILY_IGNORE_KEYS = new Set([
@@ -15,23 +37,23 @@ const FAMILY_IGNORE_KEYS = new Set([
   "r",
 ]);
 
-function getAsi(run) {
+function getAsi(run: LooseObject): LooseObject {
   return run.asi || {};
 }
 
-function isKeepStatus(status) {
+function isKeepStatus(status: unknown): boolean {
   return status === "keep";
 }
 
-function isRejectedStatus(status) {
-  return FAILURE_STATUSES.has(status);
+function isRejectedStatus(status: unknown): boolean {
+  return FAILURE_STATUSES.has(String(status));
 }
 
-function nextActionHintFromAsi(asi) {
+function nextActionHintFromAsi(asi: LooseObject): string {
   return asi.next_action_hint || asi.nextAction || asi.next_action || "";
 }
 
-function compactMemoryRun(run, asi = getAsi(run)) {
+function compactMemoryRun(run: MemoryRun, asi = getAsi(run)) {
   return {
     run: run.run,
     metric: finiteMetric(run.metric),
@@ -44,7 +66,7 @@ function compactMemoryRun(run, asi = getAsi(run)) {
   };
 }
 
-function isMissingAsiMemory(run, asi = getAsi(run)) {
+function isMissingAsiMemory(run: MemoryRun, asi = getAsi(run)): boolean {
   return !asi.evidence && !asi.rollback_reason && (isKeepStatus(run.status) || !asi.hypothesis);
 }
 
@@ -53,11 +75,14 @@ export function buildExperimentMemory({
   direction = "lower",
   settings = {},
 }: LooseObject = {}) {
-  const kept = [];
-  const rejected = [];
-  const nextActions = [];
-  const missingAsiRuns = [];
-  const enriched = runs.map((run) => ({ ...run, family: familyForRun(run) }));
+  const kept: LooseObject[] = [];
+  const rejected: LooseObject[] = [];
+  const nextActions: LooseObject[] = [];
+  const missingAsiRuns: number[] = [];
+  const enriched: MemoryRun[] = runs.map((run: LooseObject) => ({
+    ...run,
+    family: familyForRun(run),
+  })) as MemoryRun[];
 
   for (const run of enriched) {
     const asi = getAsi(run);
@@ -146,15 +171,25 @@ export function detectRepeatedHypothesis({ proposed = "", memory = {} }: LooseOb
   return null;
 }
 
-function matchesPreviousHypothesis({ key, previous, proposedFamily, previousFamily }) {
+function matchesPreviousHypothesis({
+  key,
+  previous,
+  proposedFamily,
+  previousFamily,
+}: {
+  key: string;
+  previous: string;
+  proposedFamily: string;
+  previousFamily: string;
+}): boolean {
   return hypothesisTextMatches(previous, key) || familyKeyMatches(proposedFamily, previousFamily);
 }
 
-function hypothesisTextMatches(previous, key) {
+function hypothesisTextMatches(previous: string, key: string): boolean {
   return previous === key || previous.includes(key) || key.includes(previous);
 }
 
-function familyKeyMatches(proposedFamily, previousFamily) {
+function familyKeyMatches(proposedFamily: string, previousFamily: string): boolean {
   return Boolean(
     proposedFamily &&
     previousFamily &&
@@ -164,8 +199,8 @@ function familyKeyMatches(proposedFamily, previousFamily) {
   );
 }
 
-function summarizeFamilies(runs, direction) {
-  const map = new Map();
+function summarizeFamilies(runs: MemoryRun[], direction: Direction): FamilySummary[] {
+  const map = new Map<string, FamilySummary>();
   for (const run of runs) {
     const key = run.family.key;
     if (!map.has(key)) {
@@ -216,7 +251,15 @@ function summarizeFamilies(runs, direction) {
   return limited;
 }
 
-function detectPlateau({ runs, families, direction }) {
+function detectPlateau({
+  runs,
+  families,
+  direction,
+}: {
+  runs: MemoryRun[];
+  families: FamilySummary[];
+  direction: Direction;
+}): LooseObject {
   const finiteRuns = runs.filter(hasNumericMetricForPlateau);
   const keptFinite = finiteRuns.filter((run) => isKeepStatus(run.status));
   const best = bestRun(keptFinite, direction);
@@ -251,11 +294,11 @@ function detectPlateau({ runs, families, direction }) {
   };
 }
 
-function hasNumericMetricForPlateau(run) {
+function hasNumericMetricForPlateau(run: MemoryRun): boolean {
   return Number.isFinite(Number(run.metric));
 }
 
-function noveltySummary(runs) {
+function noveltySummary(runs: MemoryRun[]) {
   const recent = runs.slice(-Math.min(6, runs.length));
   const familyCounts = countRunsByFamily(recent);
   const topCount = Math.max(0, ...familyCounts.values());
@@ -267,15 +310,15 @@ function noveltySummary(runs) {
   };
 }
 
-function countRunsByFamily(runs) {
-  const familyCounts = new Map();
+function countRunsByFamily(runs: MemoryRun[]): Map<string, number> {
+  const familyCounts = new Map<string, number>();
   for (const run of runs) {
     familyCounts.set(run.family.key, (familyCounts.get(run.family.key) || 0) + 1);
   }
   return familyCounts;
 }
 
-function mostRepeatedFamilyKey(familyCounts) {
+function mostRepeatedFamilyKey(familyCounts: Map<string, number>): string {
   return [...familyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
 }
 
@@ -287,7 +330,15 @@ function buildLanePortfolio({
   latestNextAction,
   missingAsi,
   settings = {},
-}: LooseObject) {
+}: {
+  runs: MemoryRun[];
+  direction: Direction;
+  families: FamilySummary[];
+  plateau: LooseObject;
+  latestNextAction: string;
+  missingAsi: number;
+  settings?: LooseObject;
+}) {
   const recentFailures = runs.slice(-5).filter((run) => isRejectedStatus(run.status)).length;
   const kept = runs.filter((run) => isKeepStatus(run.status));
   const rejected = runs.filter((run) => isRejectedStatus(run.status));
@@ -298,7 +349,7 @@ function buildLanePortfolio({
   const latestRun = runs.at(-1);
   const latestKept = kept.at(-1);
   const latestRejected = rejected.at(-1);
-  const lane = (item, evidence) => ({
+  const lane = (item: LooseObject, evidence: string): LooseObject => ({
     ...item,
     evidence,
     reason: `${item.reason} Evidence: ${evidence}.`,
@@ -458,13 +509,16 @@ function buildLanePortfolio({
   ].filter(Boolean);
 }
 
-function repeatedFamilyEvidence(families) {
+function repeatedFamilyEvidence(families: FamilySummary[]): string {
   const repeated = families.find((family) => family.runs >= 3);
   return repeated ? `family ${repeated.label} has ${repeated.runs} run(s)` : "";
 }
 
-function bestIncumbentFamily(families, direction) {
-  let best = null;
+function bestIncumbentFamily(
+  families: FamilySummary[],
+  direction: Direction,
+): FamilySummary | null {
+  let best: FamilySummary | null = null;
   for (const family of families) {
     if (!family.kept || !family.bestKeptRun) continue;
     const metric = finiteMetric(family.bestKeptRun.metric);
@@ -479,7 +533,7 @@ function bestIncumbentFamily(families, direction) {
   return best;
 }
 
-function familyForRun(run) {
+function familyForRun(run: LooseObject): FamilyKey {
   const asi = getAsi(run);
   const explicit = asi.family || asi.family_key || asi.strategy || asi.lane;
   const settings = asi.settings || asi.params || asi.parameters || asi.config;
@@ -493,7 +547,7 @@ function familyForRun(run) {
   };
 }
 
-function settingsSignature(value) {
+function settingsSignature(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   const entries = Object.entries(value)
     .filter(([key]) => !FAMILY_IGNORE_KEYS.has(String(key).toLowerCase()))
@@ -506,14 +560,14 @@ function settingsSignature(value) {
     .join("|");
 }
 
-function familyLabel(value) {
+function familyLabel(value: unknown): string {
   const text = String(value || "Unlabeled family")
     .replace(/\s+/g, " ")
     .trim();
   return text.length > 44 ? `${text.slice(0, 41)}...` : text;
 }
 
-function canonicalFamilyKey(value) {
+function canonicalFamilyKey(value: unknown): string {
   return (
     String(value || "")
       .toLowerCase()
@@ -530,7 +584,7 @@ function canonicalFamilyKey(value) {
   );
 }
 
-function compactFamilyRun(run) {
+function compactFamilyRun(run: MemoryRun) {
   return {
     run: run.run,
     metric: finiteMetric(run.metric),
@@ -540,8 +594,8 @@ function compactFamilyRun(run) {
   };
 }
 
-function bestRun(runs, direction) {
-  let best = null;
+function bestRun(runs: MemoryRun[], direction: Direction): MemoryRun | null {
+  let best: MemoryRun | null = null;
   for (const run of runs) {
     const metric = finiteMetric(run.metric);
     if (metric == null) continue;
@@ -551,11 +605,11 @@ function bestRun(runs, direction) {
   return best;
 }
 
-function isBetter(value, current, direction) {
+function isBetter(value: number, current: number, direction: Direction): boolean {
   return direction === "higher" ? value > current : value < current;
 }
 
-function normalizeHypothesis(value) {
+function normalizeHypothesis(value: unknown): string {
   return String(value || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")

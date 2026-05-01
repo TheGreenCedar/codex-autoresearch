@@ -7,6 +7,78 @@ import path from "node:path";
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
+type CliArgs = LooseObject & { _: string[] };
+type JsonError = Error & { code?: string };
+type RunEntry = LooseObject & {
+  commit?: string;
+  description?: string;
+  metric?: unknown;
+  run?: number;
+  status?: string;
+};
+type CommitInfo = {
+  hash: string;
+  parents: string[];
+  subject: string;
+};
+type PlanSourceGroup = LooseObject & {
+  files?: string[];
+  last_commit: string;
+  parent_commit?: string;
+  slug?: string;
+  title?: string;
+};
+type CollectedSourceGroup = PlanSourceGroup & {
+  files: string[];
+  parent_commit: string;
+};
+type PlanGroup = LooseObject & {
+  body?: string;
+  files?: string[];
+  last_commit: string;
+  parent_commit?: string;
+  slug?: string;
+  source_groups?: PlanSourceGroup[];
+  title?: string;
+};
+type CollectedGroup = PlanGroup & {
+  files: string[];
+  parent_commit: string;
+  source_groups: CollectedSourceGroup[];
+};
+type ExcludedCommit = {
+  commit: string;
+  status?: string;
+  subject?: string;
+};
+type FinalizePlan = LooseObject & {
+  base: string;
+  excluded_commits?: ExcludedCommit[];
+  final_tree: string;
+  goal: string;
+  groups: PlanGroup[];
+  plan_fingerprint?: string;
+  source_branch?: string;
+  trunk: string;
+};
+type BranchResult = {
+  branch: string;
+  deleted?: boolean;
+  skipped?: boolean;
+  stat: string;
+};
+type OverlapAnalysis = {
+  files: string[];
+  groups: string[];
+};
+type ReviewSummaryContext = {
+  config: FinalizePlan;
+  error?: unknown;
+  groups: CollectedGroup[];
+  results: BranchResult[];
+  sourceBranch: string;
+  status: string;
+};
 
 function usage() {
   return `Finalize an autoresearch branch into independent review branches.
@@ -49,8 +121,8 @@ const RESEARCH_DIR = "autoresearch.research";
 const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b) => a.localeCompare(b));
 const REPORT_DIRNAME = "autoresearch-finalize";
 
-function parseCliArgs(argv): LooseObject {
-  const out: LooseObject = { _: [] };
+function parseCliArgs(argv: string[]): CliArgs {
+  const out: CliArgs = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--") {
@@ -63,7 +135,7 @@ function parseCliArgs(argv): LooseObject {
     }
     const equalsAt = arg.indexOf("=");
     const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
-    const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const key = rawKey.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
     if (equalsAt > 2) {
       out[key] = arg.slice(equalsAt + 1);
       continue;
@@ -79,7 +151,12 @@ function parseCliArgs(argv): LooseObject {
   return out;
 }
 
-async function run(command, args, cwd, allowFailure = false): Promise<LocalProcessResult> {
+async function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  allowFailure = false,
+): Promise<LocalProcessResult> {
   const result = await new Promise<LocalProcessResult>((resolve) => {
     const child = spawn(command, args, {
       cwd,
@@ -88,13 +165,13 @@ async function run(command, args, cwd, allowFailure = false): Promise<LocalProce
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("error", (error) =>
+    child.on("error", (error: Error) =>
       resolve({ code: -1, stdout, stderr: String(error.message || error) }),
     );
     child.on("close", (code) => resolve({ code, stdout, stderr }));
@@ -105,18 +182,18 @@ async function run(command, args, cwd, allowFailure = false): Promise<LocalProce
   return result;
 }
 
-async function git(args, cwd, allowFailure = false) {
+async function git(args: string[], cwd: string, allowFailure = false): Promise<LocalProcessResult> {
   return await run("git", args, cwd, allowFailure);
 }
 
-function cleanLines(text) {
+function cleanLines(text: string): string[] {
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 }
 
-function isSessionFile(file) {
+function isSessionFile(file: string): boolean {
   const normalized = file.replace(/\\/g, "/");
   return (
     SESSION_FILES.has(normalized) ||
@@ -125,7 +202,7 @@ function isSessionFile(file) {
   );
 }
 
-function validateRepoRelativePath(file, cwd) {
+function validateRepoRelativePath(file: unknown, cwd: string): string {
   const normalized = String(file || "")
     .trim()
     .replace(/\\/g, "/");
@@ -157,40 +234,40 @@ function validateRepoRelativePath(file, cwd) {
   return parts.join("/");
 }
 
-async function currentBranch(cwd) {
+async function currentBranch(cwd: string): Promise<string> {
   return (await git(["branch", "--show-current"], cwd)).stdout.trim();
 }
 
-async function gitCommonDir(cwd) {
+async function gitCommonDir(cwd: string): Promise<string> {
   const commonDir = (await git(["rev-parse", "--git-common-dir"], cwd)).stdout.trim();
   return path.isAbsolute(commonDir) ? commonDir : path.resolve(cwd, commonDir);
 }
 
-async function fullHash(ref, cwd) {
+async function fullHash(ref: string, cwd: string): Promise<string> {
   return (await git(["rev-parse", ref], cwd)).stdout.trim();
 }
 
-async function branchExists(branch, cwd) {
+async function branchExists(branch: string, cwd: string): Promise<boolean> {
   const result = await git(["rev-parse", "--verify", branch], cwd, true);
   return result.code === 0;
 }
 
-async function isDirty(cwd) {
+async function isDirty(cwd: string): Promise<boolean> {
   const result = await git(["status", "--porcelain"], cwd);
   return result.stdout.trim().length > 0;
 }
 
-async function changedFiles(fromRef, toRef, cwd) {
+async function changedFiles(fromRef: string, toRef: string, cwd: string): Promise<string[]> {
   const result = await git(["diff", "--name-only", fromRef, toRef], cwd);
   return normalizePlanFiles(cleanLines(result.stdout), cwd);
 }
 
-async function pathExistsAt(ref, file, cwd) {
+async function pathExistsAt(ref: string, file: string, cwd: string): Promise<boolean> {
   const result = await git(["cat-file", "-e", `${ref}:${file}`], cwd, true);
   return result.code === 0;
 }
 
-async function applyFileFromCommit(ref, file, cwd) {
+async function applyFileFromCommit(ref: string, file: unknown, cwd: string): Promise<void> {
   const safeFile = validateRepoRelativePath(file, cwd);
   if (await pathExistsAt(ref, safeFile, cwd)) {
     await git(["checkout", ref, "--", safeFile], cwd);
@@ -200,7 +277,7 @@ async function applyFileFromCommit(ref, file, cwd) {
   await git(["rm", "-r", "--ignore-unmatch", "--", safeFile], cwd, true);
 }
 
-function sourceStepsForGroup(group) {
+function sourceStepsForGroup(group: CollectedGroup): CollectedSourceGroup[] {
   if (Array.isArray(group.source_groups) && group.source_groups.length) return group.source_groups;
   return [
     {
@@ -211,7 +288,7 @@ function sourceStepsForGroup(group) {
   ];
 }
 
-async function applyGroupSources(group, cwd) {
+async function applyGroupSources(group: CollectedGroup, cwd: string): Promise<void> {
   for (const source of sourceStepsForGroup(group)) {
     for (const file of source.files || []) {
       await applyFileFromCommit(source.last_commit, file, cwd);
@@ -219,9 +296,9 @@ async function applyGroupSources(group, cwd) {
   }
 }
 
-async function collectGroups(config, cwd) {
-  const seen = new Set();
-  const groups = [];
+async function collectGroups(config: FinalizePlan, cwd: string): Promise<CollectedGroup[]> {
+  const seen = new Set<string>();
+  const groups: CollectedGroup[] = [];
   for (let i = 0; i < config.groups.length; i += 1) {
     const group = config.groups[i];
     const last = await fullHash(group.last_commit, cwd);
@@ -263,8 +340,12 @@ async function collectGroups(config, cwd) {
   return groups;
 }
 
-async function collectSourceGroups(sources, config, cwd) {
-  const collected = [];
+async function collectSourceGroups(
+  sources: PlanSourceGroup[],
+  config: FinalizePlan,
+  cwd: string,
+): Promise<CollectedSourceGroup[]> {
+  const collected: CollectedSourceGroup[] = [];
   for (const source of sources) {
     const last = await fullHash(source.last_commit, cwd);
     const parent = source.parent_commit
@@ -279,7 +360,11 @@ async function collectSourceGroups(sources, config, cwd) {
   return collected;
 }
 
-async function assertNoExcludedFileConflicts(config, groups, cwd) {
+async function assertNoExcludedFileConflicts(
+  config: FinalizePlan,
+  groups: CollectedGroup[],
+  cwd: string,
+): Promise<void> {
   const plannedFiles = new Set(groups.flatMap((group) => group.files || []));
   if (
     !plannedFiles.size ||
@@ -287,7 +372,7 @@ async function assertNoExcludedFileConflicts(config, groups, cwd) {
     !config.excluded_commits.length
   )
     return;
-  const conflicts = [];
+  const conflicts: Array<{ commit: string; files: string[]; subject: string }> = [];
   for (const item of config.excluded_commits) {
     if (!item?.commit) continue;
     const commit = await fullHash(item.commit, cwd);
@@ -311,7 +396,7 @@ async function assertNoExcludedFileConflicts(config, groups, cwd) {
   );
 }
 
-function normalizedExcludedCommits(plan) {
+function normalizedExcludedCommits(plan: FinalizePlan): ExcludedCommit[] {
   return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : []).map((item) => ({
     commit: String(item?.commit || ""),
     status: String(item?.status || ""),
@@ -319,7 +404,7 @@ function normalizedExcludedCommits(plan) {
   }));
 }
 
-function assertGeneratedPlanMetadata(config) {
+function assertGeneratedPlanMetadata(config: FinalizePlan): void {
   const hasExcludedCount = Object.hasOwn(config, "excluded_commit_count");
   const looksGenerated = Boolean(
     config.source_branch ||
@@ -350,7 +435,7 @@ function assertGeneratedPlanMetadata(config) {
   }
 }
 
-function safeSlug(value) {
+function safeSlug(value: unknown): string {
   return (
     String(value || "autoresearch")
       .toLowerCase()
@@ -360,17 +445,17 @@ function safeSlug(value) {
   );
 }
 
-function shortHash(hash) {
+function shortHash(hash: string): string {
   return String(hash || "").slice(0, 12);
 }
 
-function markdownEscape(text) {
+function markdownEscape(text: string): string {
   return String(text || "")
     .replace(/\|/g, "\\|")
     .replace(/\r?\n/g, "<br>");
 }
 
-function runEvidenceForCommit(entries, hash) {
+function runEvidenceForCommit(entries: RunEntry[], hash: string): RunEntry | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const run = entries[index];
     const commit = String(run.commit || "");
@@ -379,19 +464,21 @@ function runEvidenceForCommit(entries, hash) {
   return null;
 }
 
-function commitMatchesHash(commit, hash) {
+function commitMatchesHash(commit: unknown, hash: string): boolean {
   if (!commit) return false;
-  return hash.startsWith(commit) || commit.startsWith(hash.slice(0, 12));
+  const text = String(commit);
+  return hash.startsWith(text) || text.startsWith(hash.slice(0, 12));
 }
 
-async function readAutoresearchJsonl(cwd) {
+async function readAutoresearchJsonl(cwd: string): Promise<RunEntry[]> {
   const file = path.join(cwd, "autoresearch.jsonl");
   let text;
   try {
     text = await fsp.readFile(file, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw new Error(`Could not read autoresearch.jsonl: ${error.message || error}`);
+    const readError = error as JsonError;
+    if (readError?.code === "ENOENT") return [];
+    throw new Error(`Could not read autoresearch.jsonl: ${readError.message || readError}`);
   }
   return text
     .split(/\r?\n/)
@@ -401,13 +488,14 @@ async function readAutoresearchJsonl(cwd) {
       try {
         return { ...JSON.parse(trimmed), __line: index + 1 };
       } catch (error) {
-        throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${error.message}`);
+        const parseError = error as Error;
+        throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`);
       }
     })
-    .filter(Boolean);
+    .filter((entry): entry is RunEntry => Boolean(entry));
 }
 
-async function commitHistory(base, cwd) {
+async function commitHistory(base: string, cwd: string): Promise<CommitInfo[]> {
   const result = await git(["log", "--reverse", "--format=%H%x1f%P%x1f%s", `${base}..HEAD`], cwd);
   return cleanLines(result.stdout)
     .map((line) => {
@@ -421,15 +509,15 @@ async function commitHistory(base, cwd) {
     .filter((item) => item.hash);
 }
 
-async function commitParent(hash, base, cwd) {
+async function commitParent(hash: string, base: string, cwd: string): Promise<string> {
   const result = await git(["rev-list", "--parents", "-n", "1", hash], cwd);
   const parts = cleanLines(result.stdout.replace(/\s+/g, "\n"));
   const parent = parts[1] || base;
   return parent || base;
 }
 
-function parseCommitStatus(entries, hash) {
-  const matching = [];
+function parseCommitStatus(entries: RunEntry[], hash: string): RunEntry | null {
+  const matching: RunEntry[] = [];
   for (const entry of entries) {
     const commit = String(entry.commit || "");
     if (commitMatchesHash(commit, hash)) matching.push(entry);
@@ -437,17 +525,17 @@ function parseCommitStatus(entries, hash) {
   return matching.at(-1) || null;
 }
 
-function describeCommitStatus(entry) {
+function describeCommitStatus(entry: RunEntry | null): string {
   if (!entry) return "unlogged";
   if (entry.status === "keep") return "kept";
   return String(entry.status || "unlogged");
 }
 
-function quotePathspecs(files) {
+function quotePathspecs(files: string[]): string {
   return files.map((file) => posixQuote(file)).join(" ");
 }
 
-function normalizePlanFiles(files, cwd) {
+function normalizePlanFiles(files: unknown[], cwd: string): string[] {
   return [
     ...new Set(
       (Array.isArray(files) ? files : [])
@@ -457,7 +545,7 @@ function normalizePlanFiles(files, cwd) {
   ].sort((a, b) => a.localeCompare(b));
 }
 
-function draftBodyForCommit(run) {
+function draftBodyForCommit(run: RunEntry | null): string {
   if (!run)
     return "Drafted from git history. Review metric evidence, ASI, and branch diff before opening a PR.";
   const lines = [
@@ -470,12 +558,12 @@ function draftBodyForCommit(run) {
   return lines.join("\n\n");
 }
 
-function branchName(config, group, index) {
+function branchName(config: FinalizePlan, group: PlanGroup, index: number): string {
   const number = String(index + 1).padStart(2, "0");
   return `autoresearch-review/${safeSlug(config.goal)}/${number}-${safeSlug(group.slug || group.title || "change")}`;
 }
 
-async function branchStat(branch, cwd) {
+async function branchStat(branch: string, cwd: string): Promise<string> {
   const result = await git(
     ["show", "--stat", "--oneline", "--decorate=short", "--no-renames", branch],
     cwd,
@@ -484,14 +572,24 @@ async function branchStat(branch, cwd) {
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-async function reviewSummaryPath(config, cwd) {
+async function reviewSummaryPath(config: FinalizePlan, cwd: string): Promise<string> {
   const dir = path.join(await gitCommonDir(cwd), REPORT_DIRNAME);
   await fsp.mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(dir, `${stamp}-${safeSlug(config.goal)}.md`);
 }
 
-function renderReviewSummaryHeader({ config, sourceBranch, status, generatedAt }) {
+function renderReviewSummaryHeader({
+  config,
+  sourceBranch,
+  status,
+  generatedAt,
+}: {
+  config: FinalizePlan;
+  generatedAt: string;
+  sourceBranch: string;
+  status: string;
+}): string[] {
   return [
     `# Autoresearch Finalize Review Summary`,
     "",
@@ -509,8 +607,8 @@ function renderReviewSummaryHeader({ config, sourceBranch, status, generatedAt }
   ];
 }
 
-function renderBranchRows(groups, results) {
-  const lines = [];
+function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): string[] {
+  const lines: string[] = [];
   for (let i = 0; i < groups.length; i += 1) {
     const result = results[i];
     const branch = result?.branch || "(not created)";
@@ -522,7 +620,11 @@ function renderBranchRows(groups, results) {
   return lines;
 }
 
-function renderSuggestedPrBlocks(config, groups, results) {
+function renderSuggestedPrBlocks(
+  config: FinalizePlan,
+  groups: CollectedGroup[],
+  results: BranchResult[],
+): string[] {
   const lines = ["", "## Suggested PRs", ""];
   for (let i = 0; i < groups.length; i += 1) {
     const result = results[i];
@@ -560,7 +662,8 @@ function renderSuggestedPrBlocks(config, groups, results) {
   return lines;
 }
 
-function renderVerificationText(status, error) {
+function renderVerificationText(status: string, error: unknown): string[] {
+  const failure = error as Error | null | undefined;
   return [
     "",
     "## Verification",
@@ -568,14 +671,14 @@ function renderVerificationText(status, error) {
     status === "verified"
       ? "- Union verification passed: grouped files match the final tree, excluding autoresearch session artifacts."
       : status === "failed"
-        ? `- Verification or branch creation failed: ${markdownEscape(error?.message || error || "unknown error")}`
+        ? `- Verification or branch creation failed: ${markdownEscape(failure?.message || String(error || "unknown error"))}`
         : "- Verification is pending.",
     "- Session artifact verification is preserved: review branches must not contain `autoresearch.*` files or `autoresearch.research/` scratchpads.",
   ];
 }
 
-function renderRunwayText(groups, results) {
-  const fileSet = new Set();
+function renderRunwayText(groups: CollectedGroup[], results: BranchResult[]): string[] {
+  const fileSet = new Set<string>();
   for (const group of groups) {
     for (const file of group.files || []) fileSet.add(file);
   }
@@ -600,7 +703,7 @@ function renderRunwayText(groups, results) {
   ];
 }
 
-function renderCleanupNotes(sourceBranch) {
+function renderCleanupNotes(sourceBranch: string): string[] {
   const psPaths = CLEANUP_SESSION_PATHS;
   return [
     "",
@@ -626,7 +729,7 @@ function renderCleanupNotes(sourceBranch) {
   ];
 }
 
-async function writeReviewSummary(file, context) {
+async function writeReviewSummary(file: string, context: ReviewSummaryContext): Promise<void> {
   const { config, groups, results, sourceBranch, status, error } = context;
   const generatedAt = new Date().toISOString();
   const lines = [
@@ -641,7 +744,7 @@ async function writeReviewSummary(file, context) {
   await fsp.writeFile(file, `${lines.join("\n")}\n`, "utf8");
 }
 
-function phaseError(phase, error, hint) {
+function phaseError(phase: string, error: unknown, hint: string): FinalizePhaseError {
   const original = error instanceof Error ? error : new Error(String(error));
   const message = [
     `Finalize failed during ${phase}.`,
@@ -649,7 +752,7 @@ function phaseError(phase, error, hint) {
     "",
     original.message || String(original),
   ]
-    .filter((line) => line !== "")
+    .filter((line: string) => line !== "")
     .join("\n");
   const wrapped = new Error(message) as FinalizePhaseError;
   wrapped.cause = original;
@@ -657,7 +760,7 @@ function phaseError(phase, error, hint) {
   return wrapped;
 }
 
-async function withPhase(phase, hint, fn) {
+async function withPhase<T>(phase: string, hint: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
@@ -666,7 +769,12 @@ async function withPhase(phase, hint, fn) {
   }
 }
 
-async function createBranchForGroup(config, group, index, cwd) {
+async function createBranchForGroup(
+  config: FinalizePlan,
+  group: CollectedGroup,
+  index: number,
+  cwd: string,
+): Promise<BranchResult> {
   const branch = branchName(config, group, index);
   if (!group.files.length) return { branch, skipped: true, deleted: true, stat: "" };
   if (await branchExists(branch, cwd)) throw new Error(`Branch already exists: ${branch}`);
@@ -690,12 +798,18 @@ async function createBranchForGroup(config, group, index, cwd) {
   }
 }
 
-async function verifyUnion(config, groups, sourceBranch, createdBranches, cwd) {
+async function verifyUnion(
+  config: FinalizePlan,
+  groups: CollectedGroup[],
+  sourceBranch: string,
+  createdBranches: string[],
+  cwd: string,
+): Promise<void> {
   const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/verify-tmp`;
   if (await branchExists(verifyBranch, cwd)) {
     await git(["branch", "-D", verifyBranch], cwd, true);
   }
-  let nonSession = [];
+  let nonSession: string[] = [];
   try {
     await git(["switch", "--detach", config.base], cwd);
     await git(["switch", "-c", verifyBranch], cwd);
@@ -717,7 +831,7 @@ async function verifyUnion(config, groups, sourceBranch, createdBranches, cwd) {
   }
 }
 
-async function verifyNoSessionArtifacts(createdBranches, cwd) {
+async function verifyNoSessionArtifacts(createdBranches: string[], cwd: string): Promise<void> {
   for (const branch of createdBranches) {
     const result = await git(["diff-tree", "--no-commit-id", "--name-only", "-r", branch], cwd);
     const sessionFiles = cleanLines(result.stdout).filter(isSessionFile);
@@ -727,7 +841,7 @@ async function verifyNoSessionArtifacts(createdBranches, cwd) {
   }
 }
 
-async function draftGroupsPlan(args, cwd) {
+async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan> {
   const trunk = args.trunk || "main";
   const sourceBranch = await currentBranch(cwd);
   if (!sourceBranch)
@@ -738,9 +852,9 @@ async function draftGroupsPlan(args, cwd) {
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
   const keptRuns = entries.filter((entry) => entry.status === "keep");
-  const groups = [];
-  const excludedCommits = [];
-  const selectedCommits = new Set();
+  const groups: PlanGroup[] = [];
+  const excludedCommits: ExcludedCommit[] = [];
+  const selectedCommits = new Set<string>();
   for (const item of history) {
     const selectedRun = runEvidenceForCommit(entries, item.hash);
     if (!selectedRun) {
@@ -788,11 +902,14 @@ async function draftGroupsPlan(args, cwd) {
   };
 }
 
-async function collapseOverlappingDraftGroups(plan, cwd) {
+async function collapseOverlappingDraftGroups(
+  plan: FinalizePlan,
+  cwd: string,
+): Promise<FinalizePlan> {
   if (plan.groups.length <= 1) return plan;
   const overlapping = new Set(plan.overlap_files || []);
   if (overlapping.size === 0) return plan;
-  const lastGroup = plan.groups.at(-1);
+  const lastGroup = plan.groups.at(-1)!;
   const overlapList = [...overlapping].sort().slice(0, 12);
   const sourceGroups = await collectSourceGroups(
     plan.groups.map((group) => ({
@@ -830,7 +947,7 @@ async function collapseOverlappingDraftGroups(plan, cwd) {
   };
 }
 
-async function writeDraftPlan(args, cwd) {
+async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan> {
   let plan = await draftGroupsPlan(args, cwd);
   if (args.collapseOverlap) {
     plan = await collapseOverlappingDraftGroups(plan, cwd);
@@ -888,7 +1005,7 @@ async function main() {
     parsed.trunk = parsed.trunk || "main";
     parsed.base = await fullHash(parsed.base, cwd);
     parsed.final_tree = await fullHash(parsed.final_tree, cwd);
-    return parsed;
+    return parsed as FinalizePlan;
   });
 
   const sourceBranch = await withPhase(
@@ -934,8 +1051,8 @@ async function main() {
     },
   );
 
-  const created = [];
-  const results = [];
+  const created: string[] = [];
+  const results: BranchResult[] = [];
   let summaryPath = "";
   try {
     await withPhase(
@@ -1019,7 +1136,7 @@ async function main() {
   console.log("  POSIX: see the generated review summary for quoted cleanup guidance.");
 }
 
-function planFingerprint(plan) {
+function planFingerprint(plan: FinalizePlan): string {
   const stable = {
     source_branch: plan.source_branch || "",
     base: plan.base || "",
@@ -1046,13 +1163,13 @@ function planFingerprint(plan) {
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
-function analyzeGroupOverlap(groups) {
+function analyzeGroupOverlap(groups: PlanGroup[]): OverlapAnalysis {
   if (!Array.isArray(groups) || groups.length <= 1) {
     return { files: [], groups: [] };
   }
-  const seen = new Map();
-  const overlappingFiles = new Set();
-  const overlappingGroups = new Set();
+  const seen = new Map<string, string>();
+  const overlappingFiles = new Set<string>();
+  const overlappingGroups = new Set<string>();
   for (const group of groups) {
     for (const file of group.files || []) {
       if (seen.has(file)) {
@@ -1070,8 +1187,14 @@ function analyzeGroupOverlap(groups) {
   };
 }
 
-function buildPlanWarnings({ excludedCommits, overlapAnalysis }) {
-  const warnings = [];
+function buildPlanWarnings({
+  excludedCommits,
+  overlapAnalysis,
+}: {
+  excludedCommits: ExcludedCommit[];
+  overlapAnalysis: OverlapAnalysis;
+}): string[] {
+  const warnings: string[] = [];
   if (excludedCommits.length > 0) {
     const sample = excludedCommits
       .slice(0, 3)
@@ -1091,15 +1214,15 @@ function buildPlanWarnings({ excludedCommits, overlapAnalysis }) {
   return warnings;
 }
 
-function powershellQuote(value) {
+function powershellQuote(value: unknown): string {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function posixQuote(value) {
+function posixQuote(value: unknown): string {
   return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   const failure = error as FinalizePhaseError;
   console.error(failure.stack || failure.message || String(failure));
   process.exitCode = 1;

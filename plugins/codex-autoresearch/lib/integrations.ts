@@ -29,7 +29,7 @@ const BUILT_IN_INTEGRATIONS = [
   },
 ];
 
-export async function integrationsCommand(subcommand, args: LooseObject = {}) {
+export async function integrationsCommand(subcommand: string | undefined, args: LooseObject = {}) {
   if (subcommand === "list" || !subcommand) {
     return { ok: true, integrations: BUILT_IN_INTEGRATIONS };
   }
