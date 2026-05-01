@@ -85,11 +85,12 @@ Codex Autoresearch helps Codex:
 
 1. identify the target repo or child package
 2. check for an existing session
-3. verify the benchmark contract
-4. run a measured packet
-5. log the result as `keep`, `discard`, `crash`, or `checks_failed`
-6. preserve ASI and metrics in durable files
-7. continue safely or preview finalization into reviewable branches
+3. return a shared next-step contract with stage, reason, command or MCP tool, safety, and missing essentials
+4. verify the benchmark contract
+5. run a measured packet with command identity, output tails, metrics, artifacts, checks, and a freshness fingerprint
+6. log the result as `keep`, `discard`, `crash`, or `checks_failed`
+7. preserve ASI, packet fingerprints, promotion labels, and metrics in durable files
+8. continue safely or preview finalization into reviewable branches
 
 A packet is one measured experiment cycle: make a scoped change, run the benchmark, inspect the metric, and log the decision.
 
@@ -121,7 +122,7 @@ The dashboard shows:
 
 * baseline, latest, best, confidence, and weighted metric formulas
 * Codex brief and session memory
-* next safe action and why it is safe
+* next safe action, evidence label, proof gaps, and why the action is safe
 * ledger entries, ASI, and handoff context
 * best kept change and recent failures
 * strategy lanes, scaffold health, research integrity, runtime drift, and finalization readiness

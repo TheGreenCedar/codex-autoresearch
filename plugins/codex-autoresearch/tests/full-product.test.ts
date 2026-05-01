@@ -501,6 +501,16 @@ test("MCP exposes resource templates and prompts/get for session truth handoffs"
         (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
       ),
     );
+    assert.ok(
+      resourceTemplates.result.resourceTemplates.some(
+        (resource) => resource.uriTemplate === "autoresearch://packet-evidence{?working_dir}",
+      ),
+    );
+    assert.ok(
+      resourceTemplates.result.resourceTemplates.some(
+        (resource) => resource.uriTemplate === "autoresearch://finalization-plan{?working_dir}",
+      ),
+    );
 
     const stateUri = `autoresearch://state?working_dir=${encodeURIComponent(dir)}`;
     const state = await callMcpRequest("resources/read", { uri: stateUri });
@@ -511,6 +521,12 @@ test("MCP exposes resource templates and prompts/get for session truth handoffs"
       arguments: { working_dir: dir },
     });
     assert.match(prompt.result.messages[0].content.text, /start_dashboard=true/);
+
+    const finalizePrompt = await callMcpRequest("prompts/get", {
+      name: "finalize-kept-work",
+      arguments: { working_dir: dir },
+    });
+    assert.match(finalizePrompt.result.messages[0].content.text, /finalization readiness/);
   });
 });
 

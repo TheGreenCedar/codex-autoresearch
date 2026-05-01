@@ -134,6 +134,19 @@ export function buildDashboardViewModel(context: DashboardContext) {
     kept,
     finalizePreview,
   });
+  const evidenceReadout = buildEvidenceReadout({
+    researchIntegrity,
+    researchTruth,
+    trustState: trustContext.trustState,
+    current,
+  });
+  const proofGaps = buildProofGaps({
+    setupPlan,
+    guidedSetup,
+    researchIntegrity,
+    trustWarnings: trustContext.decisionWarnings,
+    action: actionRail[0],
+  });
   const aiSummary = buildAiSummary({
     state,
     current,
@@ -162,6 +175,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
     trustState: trustContext.trustState,
     researchTruth,
     evidenceChips,
+    evidenceReadout,
+    proofGaps,
     finalizationChecklist,
     missionControl,
     aiSummary,
@@ -537,6 +552,89 @@ export function buildEvidenceChips({
         "No rejected or failed run in this segment.",
     }),
   ];
+}
+
+function buildEvidenceReadout({
+  researchIntegrity = null,
+  researchTruth = null,
+  trustState = null,
+  current = [],
+}: LooseObject) {
+  const labels = Array.isArray(researchIntegrity?.evidenceLabels)
+    ? researchIntegrity.evidenceLabels
+    : [];
+  const label =
+    labels.find((item: string) => item === "promotion_eligible") ||
+    labels.find((item: string) => item === "pending_repeat") ||
+    labels.find((item: string) => item === "invalidated") ||
+    labels.find((item: string) => item === "historical") ||
+    labels.find((item: string) => item === "dev_best") ||
+    labels[0] ||
+    (current.length ? "exploratory" : "blocked");
+  const normalized = label === "dev_best" ? "exploratory" : label;
+  const reasons = unique([
+    ...(researchIntegrity?.notPromotableBecause || []),
+    ...(researchIntegrity?.warnings || []),
+    ...(researchIntegrity?.blockers || []),
+    ...(researchTruth?.suspiciousReasons || []),
+    ...(trustState?.decisionWarnings || []),
+  ]);
+  return {
+    label: normalized,
+    title: labelText(normalized),
+    promotable: normalized === "promotion_eligible",
+    reasons,
+  };
+}
+
+function buildProofGaps({
+  setupPlan = null,
+  guidedSetup = null,
+  researchIntegrity = null,
+  trustWarnings = [],
+  action = null,
+}: LooseObject) {
+  const gaps = [];
+  for (const missing of setupPlan?.missing || setupPlan?.missingEssentials || []) {
+    gaps.push({
+      label: "Missing setup",
+      detail: String(missing),
+      nextAction:
+        setupPlan?.nextStep?.nextAction?.title ||
+        setupPlan?.nextStep?.nextAction?.reason ||
+        "Run setup-plan, doctor, then serve the dashboard.",
+    });
+  }
+  for (const reason of researchIntegrity?.notPromotableBecause || []) {
+    gaps.push({
+      label: "Promotion proof",
+      detail: String(reason),
+      nextAction: action?.title || action?.detail || "",
+    });
+  }
+  for (const warning of trustWarnings || []) {
+    gaps.push({
+      label: "Trust blocker",
+      detail: String(warning),
+      nextAction:
+        guidedSetup?.nextStep?.nextAction?.title ||
+        guidedSetup?.nextStep?.nextAction?.reason ||
+        action?.title ||
+        action?.detail ||
+        "",
+    });
+  }
+  if (!gaps.length && guidedSetup?.stage === "needs-baseline") {
+    gaps.push({
+      label: "Baseline",
+      detail: "No baseline packet has been logged yet.",
+      nextAction:
+        guidedSetup?.nextStep?.nextAction?.title ||
+        guidedSetup?.nextStep?.nextAction?.reason ||
+        "Run the baseline packet, then log it with ASI.",
+    });
+  }
+  return gaps.slice(0, 6);
 }
 
 export function buildFinalizationChecklist({

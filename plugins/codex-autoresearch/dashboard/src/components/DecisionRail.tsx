@@ -142,12 +142,31 @@ function evidenceChipsFor(
 ) {
   const modeled = Array.isArray(viewModel.evidenceChips) ? viewModel.evidenceChips : [];
   const actionModeled = Array.isArray(action.evidenceChips) ? action.evidenceChips : [];
-  const chips = [...modeled, ...actionModeled]
-    .map((item) => ({
-      label: item.label || item.title || item.kind || "Evidence",
-      value: item.value || item.detail || item.text || item.message || "",
-      tone: item.tone || item.state || "neutral",
-    }))
+  const evidenceReadout = recordFrom(viewModel.evidenceReadout);
+  const proofGap = Array.isArray(viewModel.proofGaps) ? recordFrom(viewModel.proofGaps[0]) : {};
+  const chips = [
+    evidenceReadout.label && {
+      label: "Evidence label",
+      value: String(evidenceReadout.title || evidenceReadout.label),
+      tone: evidenceReadout.promotable ? "good" : "warn",
+    },
+    proofGap.detail && {
+      label: proofGap.label || "Proof gap",
+      value: [proofGap.detail, proofGap.nextAction].filter(Boolean).join(" -> "),
+      tone: "warn",
+    },
+    ...modeled,
+    ...actionModeled,
+  ]
+    .filter(Boolean)
+    .map((item) => {
+      const chip = item as Record<string, unknown>;
+      return {
+        label: String(chip.label || chip.title || chip.kind || "Evidence"),
+        value: String(chip.value || chip.detail || chip.text || chip.message || ""),
+        tone: String(chip.tone || chip.state || "neutral"),
+      };
+    })
     .filter((item) => item.value);
   if (chips.length) return chips.slice(0, 4);
   const explanation = action.explanation || {};

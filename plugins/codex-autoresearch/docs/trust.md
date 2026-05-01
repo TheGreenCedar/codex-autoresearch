@@ -54,6 +54,8 @@ If anything changed, rerun `next` before logging.
 
 When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result.
 
+Fresh packets also carry a packet evidence bundle: packet id, command identity, timeout, exit status, bounded stdout/stderr tails, parsed metrics, artifacts, checks result, and a freshness fingerprint. Use that bundle to review what actually ran; do not infer promotion readiness from "a metric was parsed."
+
 ## Benchmark Drift
 
 `doctor --check-benchmark` compares the current command output against the configured primary metric and can warn when current output is far worse than the historical best.
@@ -66,8 +68,11 @@ State and dashboard readouts separate local development evidence from promotion-
 
 Common labels:
 
+- `exploratory`: valid local evidence that still needs repeat, breadth, holdout, or a promotion gate
 - `dev_best`: interesting local best, not promotion evidence
 - `pending_repeat`: first-pass win awaiting repeat
+- `repeated`: repeat evidence exists but promotion may still need breadth or holdout context
+- `holdout`: holdout evidence exists for the current gate
 - `promotion_eligible`: run includes explicit promotion metadata
 - `invalidated`: later ASI or status invalidated the evidence
 - `historical`: useful context from an earlier segment

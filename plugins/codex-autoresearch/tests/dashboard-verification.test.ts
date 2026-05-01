@@ -810,6 +810,12 @@ test("dashboard view model emits trust, evidence, research truth, and finalizati
   assert.equal(viewModel.trustState.sourceCwd, "C:/repo");
   assert.equal(viewModel.researchTruth.queryCount, null);
   assert.equal(viewModel.researchTruth.promotionGrade, null);
+  assert.equal(viewModel.evidenceReadout.label, "blocked");
+  assert.match(viewModel.proofGaps.map((gap) => gap.detail).join("\n"), /Benchmark command/);
+  assert.match(
+    viewModel.proofGaps.map((gap) => gap.nextAction).join("\n"),
+    /setup|doctor|dashboard/i,
+  );
   assert.deepEqual(viewModel.researchTruth.suspiciousReasons, []);
   const delta = viewModel.evidenceChips.find((chip) => chip.label === "Delta");
   assert.equal(delta.value, "unknown");
@@ -1468,6 +1474,18 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
       { label: "Metric", value: "4.2s beats baseline", tone: "good" },
       { label: "ASI", value: "Evidence recorded", tone: "neutral" },
     ],
+    evidenceReadout: {
+      label: "exploratory",
+      title: "Exploratory",
+      promotable: false,
+    },
+    proofGaps: [
+      {
+        label: "Promotion proof",
+        detail: "Repeat is missing.",
+        nextAction: "Repeat the best packet before promotion.",
+      },
+    ],
     finalizationChecklist: {
       ready: false,
       title: "Review packet gated",
@@ -1513,6 +1531,8 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.equal(getById("research-truth-title").textContent, "Truth pass complete");
   assert.equal(getById("research-truth-bar").getAttribute("aria-valuenow"), "100");
   assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
+  assert.match(getById("decision-evidence-chips").textContent, /Exploratory/);
+  assert.match(getById("decision-evidence-chips").textContent, /Repeat is missing/);
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
   assert.match(getById("finalization-checklist-title").textContent, /Review packet gated/);
   assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
