@@ -390,18 +390,24 @@ function AsiTextField({
   );
 }
 
-function parseAsi(text: string, status: string, structuredAsi: RunAsi, rawDirty = false) {
+function parseAsi(
+  text: string,
+  status: string,
+  structuredAsi: RunAsi,
+  rawDirty = false,
+): { ok: true; value: Record<string, unknown> } | { error: string; ok: false } {
   let value: Record<string, unknown>;
   try {
     value = JSON.parse(text || "{}") as Record<string, unknown>;
   } catch (error) {
-    return { ok: false, error: `ASI must be valid JSON: ${error.message}` };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `ASI must be valid JSON: ${message}` };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "ASI must be a JSON object." };
   }
   value = rawDirty ? cleanAsi(value) : { ...value, ...cleanAsi(structuredAsi) };
-  const has = (key) => String(value[key] || "").trim().length > 0;
+  const has = (key: string) => String(value[key] || "").trim().length > 0;
   if (status === "keep" && (!has("hypothesis") || !has("evidence"))) {
     return { ok: false, error: "Keep decisions require ASI hypothesis and evidence." };
   }

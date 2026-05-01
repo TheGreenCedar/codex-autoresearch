@@ -20,6 +20,12 @@ const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const CLI_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
 const callCliTool = createCliToolCaller({ cliScript: CLI_SCRIPT, pluginRoot: PLUGIN_ROOT });
+type LooseObject = Record<string, any>;
+type McpMessage = LooseObject & {
+  id?: string | number | null;
+  method?: string;
+  params?: LooseObject;
+};
 
 let buffer = Buffer.alloc(0);
 
@@ -61,14 +67,14 @@ process.stdin.on("data", (chunk: Buffer) => {
     const body = buffer.subarray(bodyStart, bodyStart + length).toString("utf8");
     buffer = buffer.subarray(bodyStart + length);
 
-    let message;
+    let message: McpMessage;
     try {
       message = JSON.parse(body);
     } catch (error) {
       sendMcp({
         jsonrpc: "2.0",
         id: null,
-        error: { code: -32700, message: `Parse error: ${error.message}` },
+        error: { code: -32700, message: `Parse error: ${errorMessage(error)}` },
       });
       continue;
     }
@@ -77,14 +83,14 @@ process.stdin.on("data", (chunk: Buffer) => {
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32000, message: error.message || String(error) },
+          error: { code: -32000, message: errorMessage(error) },
         });
       }
     });
   }
 });
 
-async function handleMcpMessage(message) {
+async function handleMcpMessage(message: McpMessage): Promise<void> {
   if (message.method === "initialize") {
     sendMcp({
       jsonrpc: "2.0",
@@ -123,7 +129,7 @@ async function handleMcpMessage(message) {
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
+        error: { code: -32602, message: errorMessage(error) },
       });
     }
     return;
@@ -136,13 +142,14 @@ async function handleMcpMessage(message) {
 
   if (message.method === "prompts/get") {
     try {
-      const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+      const params = message.params || {};
+      const result = getMcpPrompt(params.name, params.arguments || {});
       sendMcp({ jsonrpc: "2.0", id: message.id, result });
     } catch (error) {
       sendMcp({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
+        error: { code: -32602, message: errorMessage(error) },
       });
     }
     return;
@@ -188,15 +195,17 @@ async function handleMcpMessage(message) {
   }
 }
 
-async function callValidatedCliTool(name, args) {
+async function callValidatedCliTool(name: string, args: LooseObject) {
   const normalizedArgs = validateToolArguments(name, args || {});
   requireUnsafeCommandGate(name, normalizedArgs, boolOption);
-  return await callCliTool(name, normalizedArgs);
+  return (await callCliTool(name, normalizedArgs)) as LooseObject;
 }
 
-function mcpSuccessEnvelope(tool, result) {
-  const body =
-    result && typeof result === "object" && !Array.isArray(result) ? result : { value: result };
+function mcpSuccessEnvelope(tool: string, result: unknown) {
+  const body: LooseObject =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? (result as LooseObject)
+      : { value: result };
   return {
     ...body,
     ok: body.ok !== false,
@@ -206,15 +215,19 @@ function mcpSuccessEnvelope(tool, result) {
   };
 }
 
-function mcpErrorEnvelope(tool, error) {
+function mcpErrorEnvelope(tool: string | undefined, error: unknown) {
   return {
     ok: false,
     tool: tool || "unknown",
-    error: error.message || String(error),
+    error: errorMessage(error),
   };
 }
 
-function sendMcp(message) {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sendMcp(message: LooseObject): void {
   const body = JSON.stringify(message);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
 }

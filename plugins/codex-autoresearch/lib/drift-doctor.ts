@@ -4,9 +4,21 @@ import { runProcess, tailText } from "./runner.js";
 import { PLUGIN_VERSION } from "./plugin-version.js";
 
 type LooseObject = Record<string, any>;
+type Warning = string;
+type VersionSurfaces = Record<string, string>;
+type RoutingResult = {
+  ok: boolean;
+  available: boolean;
+  warning?: Warning;
+  pluginName?: string;
+  path?: string;
+  version?: string;
+  confidence?: string;
+};
+type CodexRunResult = { code: number | null; stdout: string; stderr: string };
 
-export async function inspectVersionSurfaces({ pluginRoot }) {
-  const surfaces = {
+export async function inspectVersionSurfaces({ pluginRoot }: { pluginRoot: string }) {
+  const surfaces: VersionSurfaces = {
     packageJson: await readJsonVersion(path.join(pluginRoot, "package.json")),
     manifest: await readJsonVersion(path.join(pluginRoot, ".codex-plugin", "plugin.json")),
     cliServer: await readRegexVersionCandidate(
@@ -35,7 +47,7 @@ export async function inspectVersionSurfaces({ pluginRoot }) {
   const missing = Object.entries(surfaces)
     .filter(([, value]) => !value)
     .map(([key]) => key);
-  const warnings = [];
+  const warnings: Warning[] = [];
   if (missing.length) {
     warnings.push(
       typedWarning(
@@ -119,7 +131,12 @@ export async function buildDriftReport({
   inspectInstalled = inspectInstalledRouting,
 }: LooseObject = {}) {
   const local = await inspectVersionSurfaces({ pluginRoot });
-  const report = {
+  const report: {
+    ok: boolean;
+    local: Awaited<ReturnType<typeof inspectVersionSurfaces>>;
+    installed: RoutingResult | null;
+    warnings: Warning[];
+  } = {
     ok: local.ok,
     local,
     installed: null,
@@ -150,7 +167,11 @@ export async function buildDriftReport({
   return report;
 }
 
-function parseCodexRoutingJson(output) {
+function parseCodexRoutingJson(output: string): {
+  found: boolean;
+  version?: string;
+  path?: string;
+} {
   const trimmed = String(output || "").trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return { found: false };
   try {
@@ -165,17 +186,18 @@ function parseCodexRoutingJson(output) {
   }
 }
 
-function findStringField(value, field) {
+function findStringField(value: unknown, field: string): string {
   if (!value || typeof value !== "object") return "";
-  if (typeof value[field] === "string") return value[field];
-  for (const child of Object.values(value)) {
+  const payload = value as LooseObject;
+  if (typeof payload[field] === "string") return payload[field];
+  for (const child of Object.values(payload)) {
     const found = findStringField(child, field);
     if (found) return found;
   }
   return "";
 }
 
-function findPathLikeString(value) {
+function findPathLikeString(value: unknown): string {
   if (typeof value === "string" && /codex-autoresearch/i.test(value)) return value;
   if (!value || typeof value !== "object") return "";
   for (const child of Object.values(value)) {
@@ -185,7 +207,7 @@ function findPathLikeString(value) {
   return "";
 }
 
-async function readJsonVersion(filePath) {
+async function readJsonVersion(filePath: string): Promise<string> {
   try {
     const parsed = JSON.parse(await fsp.readFile(filePath, "utf8"));
     return parsed.version || "";
@@ -194,7 +216,11 @@ async function readJsonVersion(filePath) {
   }
 }
 
-async function readRegexVersion(filePath, regex, fallbackVersion = "") {
+async function readRegexVersion(
+  filePath: string,
+  regex: RegExp,
+  fallbackVersion = "",
+): Promise<string> {
   try {
     const text = await fsp.readFile(filePath, "utf8");
     const match = text.match(regex);
@@ -205,7 +231,11 @@ async function readRegexVersion(filePath, regex, fallbackVersion = "") {
   }
 }
 
-async function readRegexVersionCandidate(filePaths, regex, fallbackVersion = "") {
+async function readRegexVersionCandidate(
+  filePaths: string[],
+  regex: RegExp,
+  fallbackVersion = "",
+): Promise<string> {
   for (const filePath of filePaths) {
     const version = await readRegexVersion(filePath, regex, fallbackVersion);
     if (version) return version;
@@ -213,7 +243,7 @@ async function readRegexVersionCandidate(filePaths, regex, fallbackVersion = "")
   return "";
 }
 
-async function runCodex(args, timeoutMs) {
+async function runCodex(args: string[], timeoutMs: number): Promise<CodexRunResult> {
   const timeoutSeconds = Math.max(1, Number(timeoutMs) / 1000);
   const command = process.platform === "win32" ? "cmd.exe" : "codex";
   const commandArgs =
@@ -231,6 +261,6 @@ async function runCodex(args, timeoutMs) {
   };
 }
 
-function typedWarning(code, message) {
+function typedWarning(code: string, message: string): Warning {
   return `[${code}] ${message}`;
 }

@@ -282,9 +282,21 @@ const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
   "gap_candidates",
 ]);
 
-export function applyToolContracts(toolSchemas) {
+type ToolName = keyof typeof CONTRACTS;
+type ToolSchema = {
+  name: string;
+  description?: string;
+  annotations?: Record<string, unknown>;
+  [key: string]: any;
+};
+
+function contractFor(name: string) {
+  return CONTRACTS[name as ToolName] || null;
+}
+
+export function applyToolContracts(toolSchemas: ToolSchema[]): ToolSchema[] {
   return toolSchemas.map((tool) => {
-    const contract = CONTRACTS[tool.name];
+    const contract = contractFor(tool.name);
     if (!contract) return tool;
     return {
       ...tool,
@@ -299,15 +311,15 @@ export function applyToolContracts(toolSchemas) {
   });
 }
 
-export function validateToolContracts(toolSchemas) {
-  const issues = [];
+export function validateToolContracts(toolSchemas: ToolSchema[]) {
+  const issues: string[] = [];
   for (const tool of toolSchemas) {
-    const contract = CONTRACTS[tool.name];
+    const contract = contractFor(tool.name);
     if (!contract) {
       issues.push(`${tool.name}: missing contract`);
       continue;
     }
-    for (const field of ["purpose", "whenToUse", "contrast", "safety", "outputSchema"]) {
+    for (const field of ["purpose", "whenToUse", "contrast", "safety", "outputSchema"] as const) {
       if (!contract[field]) issues.push(`${tool.name}: missing ${field}`);
     }
     if (String(tool.description || "").length > 280) {
@@ -317,15 +329,15 @@ export function validateToolContracts(toolSchemas) {
   return { ok: issues.length === 0, issues };
 }
 
-export function toolGuidanceFor(name) {
-  return CONTRACTS[name] || null;
+export function toolGuidanceFor(name: string) {
+  return contractFor(name);
 }
 
-export function outputContractFor(name) {
-  return CONTRACTS[name]?.outputSchema || null;
+export function outputContractFor(name: string) {
+  return contractFor(name)?.outputSchema || null;
 }
 
-function toolHintAnnotations(name) {
+function toolHintAnnotations(name: string) {
   const readOnly = READ_ONLY_TOOLS.has(name);
   const policy = actionPolicyForTool(name);
   const openWorld = policy === "process_start" || CONDITIONALLY_OPEN_WORLD_TOOLS.has(name);
@@ -338,7 +350,7 @@ function toolHintAnnotations(name) {
   };
 }
 
-function humanizeToolName(name) {
+function humanizeToolName(name: string) {
   return String(name)
     .split("_")
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))

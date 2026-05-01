@@ -213,7 +213,7 @@ async function verifyLiveDashboardUrl(url: string) {
         error: `GET /health returned ${response.status}`,
       };
     }
-    const payload = (await response.json().catch(() => null)) as LooseObject | null;
+    const payload = (await response.json().catch((): null => null)) as LooseObject | null;
     return {
       ok: payload?.ok === true,
       url: healthUrl,

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { runProcess } from "./runner.js";
 import {
@@ -8,6 +9,17 @@ import {
 } from "./tool-registry.js";
 
 type LooseObject = Record<string, any>;
+type CliInvocation = {
+  command: string;
+  args: string[];
+  cwd: string;
+  mutates?: boolean;
+  actionPolicy?: string;
+  unsafeFields?: string[];
+  timeoutSeconds: number;
+};
+type CliRunResult = { code: number | null; stdout: string; stderr: string; timedOut: boolean };
+type LiveDashboardProcess = { child: ChildProcess; payload: LooseObject };
 
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 15 * 60;
 const MCP_CLI_OUTPUT_CAPTURE_BYTES = 900 * 1024;
@@ -17,9 +29,9 @@ export function createCliToolCaller({
   pluginRoot,
   toolTimeoutSeconds = DEFAULT_TOOL_TIMEOUT_SECONDS,
 }: LooseObject) {
-  const liveDashboardProcesses = new Map();
+  const liveDashboardProcesses = new Map<string, LiveDashboardProcess>();
 
-  const runCliInvocation = async (invocation) => {
+  const runCliInvocation = async (invocation: CliInvocation): Promise<CliRunResult> => {
     const result = await runProcess(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       timeoutSeconds: invocation.timeoutSeconds,
@@ -35,7 +47,11 @@ export function createCliToolCaller({
     };
   };
 
-  const waitForServePayload = async (child, stdoutFn, stderrFn) => {
+  const waitForServePayload = async (
+    child: ChildProcess,
+    stdoutFn: () => string,
+    stderrFn: () => string,
+  ): Promise<LooseObject> => {
     const started = Date.now();
     while (Date.now() - started < 5000) {
       const stdout = stdoutFn().trim();
@@ -57,7 +73,7 @@ export function createCliToolCaller({
     throw new Error(`autoresearch live dashboard did not start\n${stderrFn() || stdoutFn()}`);
   };
 
-  const startLiveDashboard = async (args) => {
+  const startLiveDashboard = async (args: LooseObject): Promise<LooseObject> => {
     const workDir = path.resolve(args.working_dir ?? args.workingDir ?? args.cwd);
     const port = args.port == null || args.port === "" ? null : Number(args.port);
     const key = `${workDir}:${port ?? "auto"}`;
@@ -95,7 +111,7 @@ export function createCliToolCaller({
     return payload;
   };
 
-  return async function callCliTool(name, args) {
+  return async function callCliTool(name: string, args: LooseObject): Promise<LooseObject> {
     if (name === "serve_dashboard") return await startLiveDashboard(args);
     if (name === "guided_setup" && boolOption(args.start_dashboard ?? args.startDashboard, false)) {
       const guideArgs = { ...args, start_dashboard: false, startDashboard: false };
@@ -158,7 +174,11 @@ export function createCliToolCaller({
   };
 }
 
-export function buildCliInvocationForTool(name, args, options: LooseObject = {}) {
+export function buildCliInvocationForTool(
+  name: string,
+  args: LooseObject,
+  options: LooseObject = {},
+): CliInvocation {
   const cliArgs = cliArgsForTool(name, args);
   const cliScript = options.cliScript || null;
   const actionPolicy = actionPolicyForTool(name, args);
@@ -173,7 +193,7 @@ export function buildCliInvocationForTool(name, args, options: LooseObject = {})
   };
 }
 
-function cliArgsForTool(name, args) {
+function cliArgsForTool(name: string, args: LooseObject): string[] {
   if (name === "setup_plan") return setupGuideArgs("setup-plan", args);
   if (name === "guided_setup") return setupGuideArgs("guide", args);
   if (name === "prompt_plan")
@@ -424,7 +444,7 @@ function cliArgsForTool(name, args) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
-function setupGuideArgs(command, args) {
+function setupGuideArgs(command: string, args: LooseObject): string[] {
   return compactArgs([
     command,
     cwdFlag(args),
@@ -434,7 +454,7 @@ function setupGuideArgs(command, args) {
   ]);
 }
 
-function setupPlanningOptions(args) {
+function setupPlanningOptions(args: LooseObject): string[][] {
   return [
     option("--name", args.name),
     option("--goal", args.goal),
@@ -453,36 +473,36 @@ function setupPlanningOptions(args) {
   ];
 }
 
-function cwdFlag(args) {
+function cwdFlag(args: LooseObject): string[] {
   return option("--cwd", args.working_dir ?? args.workingDir ?? args.cwd);
 }
 
-function option(name, value) {
+function option(name: string, value: unknown): string[] {
   if (value == null || value === "") return [];
   return [name, String(value)];
 }
 
-function listOption(name, value) {
+function listOption(name: string, value: unknown): string[] {
   if (value == null || value === "") return [];
   if (Array.isArray(value)) return option(name, value.join(","));
   return option(name, value);
 }
 
-function jsonOption(value) {
+function jsonOption(value: unknown): string | null {
   if (value == null || value === "") return null;
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function flag(name, value) {
+function flag(name: string, value: unknown): string[] {
   return boolOption(value, false) ? [name] : [];
 }
 
-export function boolOption(value, fallback = false) {
+export function boolOption(value: unknown, fallback = false): boolean {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
-function compactArgs(items) {
-  return items.flat().filter((item) => item != null && item !== "");
+function compactArgs(items: unknown[]): string[] {
+  return items.flat().filter((item): item is string => typeof item === "string" && item !== "");
 }

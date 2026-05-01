@@ -16,7 +16,7 @@ type ToolSchema = {
   description: string;
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
-  annotations?: Record<string, JsonValue | undefined>;
+  annotations?: Record<string, unknown>;
 };
 
 const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
@@ -525,10 +525,10 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-export const mcpToolSchemas = toolSchemas.map((tool) =>
+export const mcpToolSchemas = (toolSchemas as ToolSchema[]).map((tool) =>
   toMcpToolSchema(tool, { includeContracts: true }),
 );
-export const mcpToolSchemasWithContracts = toolSchemas.map((tool) =>
+export const mcpToolSchemasWithContracts = (toolSchemas as ToolSchema[]).map((tool) =>
   toMcpToolSchema(tool, { includeContracts: true }),
 );
 
@@ -604,7 +604,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   working_dir: "cwd",
 };
 
-export function validateToolArguments(name: string, args, options: ToolArgs = {}) {
+export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {
   const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
@@ -665,7 +665,11 @@ export function normalizeCliCommandArguments(command: string, args: ToolArgs = {
   return normalizeRuntimeToolArguments(toolName, args);
 }
 
-export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
+export function requireUnsafeCommandGate(
+  toolName: string,
+  args: ToolArgs = {},
+  boolOption = defaultBoolOption,
+) {
   const normalized: ToolArgs = normalizeToolArguments(toolName, args);
   const setupCatalogCanMaterializeCommands =
     (toolName === "setup_plan" || toolName === "guided_setup") && Boolean(normalized.catalog);

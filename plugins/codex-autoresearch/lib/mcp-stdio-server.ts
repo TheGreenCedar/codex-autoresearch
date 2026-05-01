@@ -8,9 +8,14 @@ import {
 } from "./mcp-protocol.js";
 
 type LooseObject = Record<string, any>;
+type McpMessage = LooseObject & {
+  id?: string | number | null;
+  method?: string;
+  params?: LooseObject;
+};
 
 interface McpStdioServerOptions {
-  callTool: (name: string, args: LooseObject) => Promise<unknown>;
+  callTool: (name: string, args: LooseObject) => Promise<LooseObject>;
   maxFrameBytes?: number;
   serverVersion: string;
   toolSchemas: LooseObject[];
@@ -39,7 +44,7 @@ export function startMcpStdioServer({
     toolSchemas,
     validateToolArguments,
   });
-  let buffer = Buffer.alloc(0);
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   process.stdin.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
     if (buffer.length > maxFrameBytes + 1024 && buffer.indexOf("\r\n\r\n") < 0) {
@@ -72,7 +77,11 @@ export function startMcpStdioServer({
         continue;
       }
       server(frame.message).catch((error) => {
-        sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: error.message } });
+        sendMcp({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32000, message: errorMessage(error) },
+        });
       });
     }
   });
@@ -83,8 +92,8 @@ export async function runMcpSmoke({
   pluginRoot,
   timeoutMs = DEFAULT_MCP_SMOKE_TIMEOUT_MS,
 }: McpSmokeOptions) {
-  const messages = [];
-  let buffer = Buffer.alloc(0);
+  const messages: McpMessage[] = [];
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let stderr = "";
   const child = spawn(process.execPath, [mcpScriptPath], {
     cwd: pluginRoot,
@@ -118,7 +127,7 @@ export async function runMcpSmoke({
   child.kill();
 
   const tools = toolsList?.result?.tools || [];
-  const toolNames = tools.map((tool) => tool.name).filter(Boolean);
+  const toolNames = tools.map((tool: LooseObject) => tool.name).filter(Boolean);
   const requiredTools = [
     "setup_plan",
     "setup_session",
@@ -160,7 +169,7 @@ function createMcpStdioHandler({
   toolSchemas,
   validateToolArguments,
 }: McpStdioServerOptions) {
-  return async function handleMcpMessage(message) {
+  return async function handleMcpMessage(message: McpMessage): Promise<void> {
     if (message.method === "initialize") {
       sendMcp({
         jsonrpc: "2.0",
@@ -197,7 +206,7 @@ function createMcpStdioHandler({
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32602, message: error.message || String(error) },
+          error: { code: -32602, message: errorMessage(error) },
         });
       }
       return;
@@ -210,22 +219,24 @@ function createMcpStdioHandler({
 
     if (message.method === "prompts/get") {
       try {
-        const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
+        const params = message.params || {};
+        const result = getMcpPrompt(params.name, params.arguments || {});
         sendMcp({ jsonrpc: "2.0", id: message.id, result });
       } catch (error) {
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32602, message: error.message || String(error) },
+          error: { code: -32602, message: errorMessage(error) },
         });
       }
       return;
     }
     if (message.method === "tools/call") {
       try {
-        validateToolArguments(message.params?.name, message.params?.arguments || {});
-        const result = await callTool(message.params.name, message.params.arguments || {});
-        const payload = mcpSuccessEnvelope(message.params.name, result);
+        const params = message.params || {};
+        validateToolArguments(params.name, params.arguments || {});
+        const result = await callTool(params.name, params.arguments || {});
+        const payload = mcpSuccessEnvelope(params.name, result);
         sendMcp({
           jsonrpc: "2.0",
           id: message.id,
@@ -279,13 +290,15 @@ function readNextMcpFrame(buffer: Buffer, maxFrameBytes: number): LooseObject {
   try {
     return { status: "message", message: JSON.parse(body), remaining };
   } catch (error) {
-    return { status: "parse-error", error: error.message, remaining };
+    return { status: "parse-error", error: errorMessage(error), remaining };
   }
 }
 
-function mcpSuccessEnvelope(tool, result) {
-  const body =
-    result && typeof result === "object" && !Array.isArray(result) ? result : { value: result };
+function mcpSuccessEnvelope(tool: string, result: unknown) {
+  const body: LooseObject =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? (result as LooseObject)
+      : { value: result };
   return {
     ...body,
     ok: body.ok !== false,
@@ -295,25 +308,29 @@ function mcpSuccessEnvelope(tool, result) {
   };
 }
 
-function mcpErrorEnvelope(tool, error) {
+function mcpErrorEnvelope(tool: string | undefined, error: unknown) {
   return {
     ok: false,
     tool: tool || "unknown",
-    error: error.message || String(error),
+    error: errorMessage(error),
   };
 }
 
-function sendMcp(message) {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sendMcp(message: LooseObject): void {
   const body = JSON.stringify(message);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
 }
 
-function mcpFrame(message) {
+function mcpFrame(message: LooseObject): string {
   const body = JSON.stringify(message);
   return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
 }
 
-function collectMcpFrames(buffer, messages) {
+function collectMcpFrames(buffer: Buffer, messages: McpMessage[]): Buffer {
   let remaining = buffer;
   for (;;) {
     const frame = readNextMcpFrame(remaining, Number.POSITIVE_INFINITY);
@@ -327,11 +344,15 @@ function collectMcpFrames(buffer, messages) {
   }
 }
 
-function waitForMcpResponse(messages, id, timeoutMs): Promise<any> {
+function waitForMcpResponse(
+  messages: McpMessage[],
+  id: string | number,
+  timeoutMs: number,
+): Promise<McpMessage | null> {
   const started = Date.now();
-  return new Promise<any>((resolve) => {
+  return new Promise<McpMessage | null>((resolve) => {
     const check = () => {
-      const message = messages.find((item) => item.id === id);
+      const message = messages.find((item: McpMessage) => item.id === id);
       if (message || Date.now() - started >= timeoutMs) {
         resolve(message || null);
         return;

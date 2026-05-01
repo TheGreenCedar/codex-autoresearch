@@ -13,6 +13,14 @@ import {
 } from "./mcp-protocol.js";
 import { toolNames } from "./tool-registry.js";
 
+type LooseObject = Record<string, any>;
+type ToolHandler = (args: LooseObject) => unknown | Promise<unknown>;
+type ToolHandlers = Record<string, ToolHandler>;
+type McpDeps = LooseObject & {
+  boolOption: (value: unknown, fallback?: boolean) => boolean;
+  parseJsonOption: (value: unknown, fallback: unknown) => unknown;
+};
+
 export {
   mcpToolSchemas,
   mcpToolSchemasWithContracts,
@@ -23,30 +31,30 @@ export {
   validateToolArguments,
 } from "./mcp-tool-schemas.js";
 
-export function createMcpInterface(deps) {
+export function createMcpInterface(deps: McpDeps) {
   const toolHandlers = createToolHandlers(deps);
-  const callTool = async (name, args) => {
+  const callTool = async (name: string, args: LooseObject): Promise<LooseObject> => {
     const normalizedArgs = validateToolArguments(name, args);
     requireUnsafeCommandGate(name, normalizedArgs, deps.boolOption);
     const runtimeArgs = normalizeRuntimeToolArguments(name, normalizedArgs);
     const handler = toolHandlers[name];
-    if (handler) return await handler(runtimeArgs);
+    if (handler) return (await handler(runtimeArgs)) as LooseObject;
     throw new Error(`Unknown tool: ${name}`);
   };
 
   return {
     callTool,
-    getPrompt: (name, args) => getMcpPrompt(name, args),
+    getPrompt: (name: string, args: LooseObject) => getMcpPrompt(name, args),
     listPrompts: listMcpPrompts,
     listResourceTemplates: listMcpResourceTemplates,
     listResources: listMcpResources,
-    readResource: (uri) => readMcpResource(uri, callTool),
+    readResource: (uri: string) => readMcpResource(uri, callTool),
     toolSchemas: mcpToolSchemas,
     validateToolArguments,
   };
 }
 
-function createToolHandlers(deps) {
+function createToolHandlers(deps: McpDeps): ToolHandlers {
   return ensureToolHandlerCoverage({
     setup_plan: (args) => deps.setupPlan(args),
     guided_setup: async (args) => {
@@ -92,7 +100,12 @@ function createToolHandlers(deps) {
   });
 }
 
-async function attachGuidedDashboard(guide, args, deps, startDashboard) {
+async function attachGuidedDashboard(
+  guide: LooseObject,
+  args: LooseObject,
+  deps: McpDeps,
+  startDashboard: boolean,
+): Promise<LooseObject> {
   if (!startDashboard) {
     return {
       ...guide,
@@ -139,7 +152,7 @@ async function attachGuidedDashboard(guide, args, deps, startDashboard) {
   }
 }
 
-function ensureToolHandlerCoverage(handlers) {
+function ensureToolHandlerCoverage(handlers: ToolHandlers): ToolHandlers {
   const missing = toolNames.filter((name) => !handlers[name]);
   if (missing.length) throw new Error(`MCP tool handlers missing: ${missing.join(", ")}`);
   return handlers;

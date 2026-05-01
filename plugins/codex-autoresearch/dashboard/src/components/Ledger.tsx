@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { LEDGER_ROW_HEIGHT, STATUS_LABELS } from "../constants";
 import { asiPreview, breakdownForRun, formatDelta, formatMetricValue } from "../model";
-import type { DashboardReadout, SessionRun, SessionSegment } from "../types";
+import type { DashboardReadout, RunStatus, SessionRun, SessionSegment } from "../types";
 
 interface LedgerProps {
   session: SessionSegment;
@@ -101,7 +101,7 @@ function LedgerRow({
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status }: { status: RunStatus }) {
   return (
     <span className={`status-pill ${status}`}>{STATUS_LABELS[status] || status || "Run"}</span>
   );

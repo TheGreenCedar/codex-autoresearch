@@ -5,9 +5,42 @@ import path from "node:path";
 import { resolvePackageRoot } from "./runtime-paths.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+type LooseObject = Record<string, any>;
 type GitResult = { code: number | null; ok?: boolean; stderr: string; stdout: string };
+type KeptRun = LooseObject & {
+  run: number;
+  commit?: string;
+  description?: string;
+  metric?: unknown;
+  asi?: LooseObject;
+};
+type RunGroup = LooseObject & {
+  title: string;
+  run: number;
+  commit: string;
+  shortCommit: string;
+  files: string[];
+  metric?: unknown;
+  asi: LooseObject;
+  slug: string;
+};
+type CommitSummary = {
+  commit: string;
+  shortCommit: string;
+  subject: string;
+  files: string[];
+};
+type FinalTreePlan = LooseObject & {
+  warnings: string[];
+  base: string;
+  baseOk: boolean | undefined;
+  excludedCommits: CommitSummary[];
+  missingFinalTreeFiles: string[];
+  excludedPlannedFileConflicts: CommitSummary[];
+  finalTreeCoverage: LooseObject;
+};
 
-export async function finalizePreview(args) {
+export async function finalizePreview(args: LooseObject) {
   const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
@@ -111,9 +144,9 @@ export async function finalizePreview(args) {
   );
 }
 
-async function buildKeptRunGroups(workDir, keptRuns) {
-  const groups = [];
-  const warnings = [];
+async function buildKeptRunGroups(workDir: string, keptRuns: KeptRun[]) {
+  const groups: RunGroup[] = [];
+  const warnings: string[] = [];
   let missingCommitCount = 0;
   for (const run of keptRuns) {
     const commit = String(run.commit || "");
@@ -142,20 +175,25 @@ async function buildKeptRunGroups(workDir, keptRuns) {
   return { groups, missingCommitCount, warnings };
 }
 
-function findGroupFileOverlaps(groups) {
-  const seen = new Map();
-  const overlaps = [];
+function findGroupFileOverlaps(groups: RunGroup[]) {
+  const seen = new Map<string, number>();
+  const overlaps: Array<{ file: string; first: number; second: number }> = [];
   for (const group of groups) {
     for (const file of group.files) {
-      if (seen.has(file)) overlaps.push({ file, first: seen.get(file), second: group.run });
+      const first = seen.get(file);
+      if (first !== undefined) overlaps.push({ file, first, second: group.run });
       else seen.set(file, group.run);
     }
   }
   return overlaps;
 }
 
-async function buildFinalTreePlan(workDir, trunk, groups) {
-  const warnings = [];
+async function buildFinalTreePlan(
+  workDir: string,
+  trunk: string,
+  groups: RunGroup[],
+): Promise<FinalTreePlan> {
+  const warnings: string[] = [];
   let base = "";
   const baseResult = await gitOk(["merge-base", trunk, "HEAD"], workDir);
   if (baseResult.ok) base = baseResult.stdout.trim();
@@ -194,7 +232,7 @@ async function buildFinalTreePlan(workDir, trunk, groups) {
   };
 }
 
-function plannedFilesForGroups(groups) {
+function plannedFilesForGroups(groups: RunGroup[]): string[] {
   const planned = new Set<string>();
   for (const group of groups) {
     for (const file of group.files || []) planned.add(file);
@@ -202,7 +240,7 @@ function plannedFilesForGroups(groups) {
   return [...planned].sort((a, b) => a.localeCompare(b));
 }
 
-function appendFinalTreeWarnings(warnings, finalTreePlan) {
+function appendFinalTreeWarnings(warnings: string[], finalTreePlan: FinalTreePlan): void {
   const { excludedCommits, missingFinalTreeFiles, excludedPlannedFileConflicts } = finalTreePlan;
   if (excludedCommits.length) {
     const sample = excludedCommits
@@ -229,7 +267,20 @@ function appendFinalTreeWarnings(warnings, finalTreePlan) {
   }
 }
 
-function appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps }) {
+function appendSourceBranchWarnings(
+  warnings: string[],
+  {
+    dirty,
+    branch,
+    trunk,
+    overlaps,
+  }: {
+    dirty: string;
+    branch: string;
+    trunk: string;
+    overlaps: Array<{ file: string; first: number; second: number }>;
+  },
+): void {
   if (dirty)
     warnings.push("Working tree is dirty; finalization branch creation will refuse to run.");
   if (!branch)
@@ -251,7 +302,7 @@ function isFinalizePreviewReady({
   finalTreeCoverage,
   excludedPlannedFileConflicts,
   semanticSafety,
-}) {
+}: LooseObject): boolean {
   return (
     groups.length > 0 &&
     !dirty &&
@@ -273,7 +324,7 @@ function finalizePreviewNextAction({
   groups,
   keptRuns,
   missingCommitCount,
-}) {
+}: LooseObject): string {
   if (ready) return "Review the preview, then run the suggested finalizer plan command.";
   if (!semanticSafety.ok) {
     return "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence.";
@@ -293,7 +344,7 @@ function finalizePreviewNextAction({
   return "Resolve preview warnings before creating review branches.";
 }
 
-export async function finalizeCurrentTree(args) {
+export async function finalizeCurrentTree(args: LooseObject) {
   const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
@@ -316,7 +367,7 @@ export async function finalizeCurrentTree(args) {
   }
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const baseResult = await gitOk(["merge-base", trunk, "HEAD"], workDir);
-  const warnings = [];
+  const warnings: string[] = [];
   if (!baseResult.ok) warnings.push(`Could not find merge-base with ${trunk}.`);
   const base = baseResult.ok ? baseResult.stdout.trim() : "";
   const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
@@ -334,7 +385,7 @@ export async function finalizeCurrentTree(args) {
 
   const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
   const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
-  const plan = {
+  const plan: LooseObject = {
     mode: "current-final-tree",
     source_branch: branch,
     planned_at: new Date().toISOString(),
@@ -342,11 +393,11 @@ export async function finalizeCurrentTree(args) {
     trunk,
     final_tree: finalTree,
     goal: safeSlug(branch || "autoresearch"),
-    kept_commits: [],
+    kept_commits: [] as string[],
     kept_run_count: 0,
-    excluded_commits: [],
+    excluded_commits: [] as CommitSummary[],
     excluded_commit_count: 0,
-    overlap_files: [],
+    overlap_files: [] as string[],
     current_tree_coverage: {
       covered: ready,
       file_count: files.length,
@@ -396,7 +447,7 @@ export async function finalizeCurrentTree(args) {
   );
 }
 
-async function defaultPlanOutput(workDir, branch) {
+async function defaultPlanOutput(workDir: string, branch: string): Promise<string> {
   const gitPath = await gitOk(
     ["rev-parse", "--git-path", `autoresearch-finalize/${safeSlug(branch)}.groups.json`],
     workDir,
@@ -405,7 +456,7 @@ async function defaultPlanOutput(workDir, branch) {
   return path.join(workDir, ".git", "autoresearch-finalize", `${safeSlug(branch)}.groups.json`);
 }
 
-async function defaultCurrentTreePlanOutput(workDir, branch) {
+async function defaultCurrentTreePlanOutput(workDir: string, branch: string): Promise<string> {
   const gitPath = await gitOk(
     [
       "rev-parse",
@@ -423,7 +474,7 @@ async function defaultCurrentTreePlanOutput(workDir, branch) {
   );
 }
 
-function withProgress(result, startedAt, status) {
+function withProgress(result: LooseObject, startedAt: number, status: string): LooseObject {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   return {
     ...result,
@@ -449,7 +500,7 @@ function withProgress(result, startedAt, status) {
   };
 }
 
-async function readKeptRuns(cwd) {
+async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
   try {
     const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
     return text
@@ -457,13 +508,13 @@ async function readKeptRuns(cwd) {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line))
-      .filter((entry) => entry.status === "keep");
+      .filter((entry: LooseObject) => entry.status === "keep") as KeptRun[];
   } catch {
     return [];
   }
 }
 
-async function readLedgerRuns(cwd) {
+async function readLedgerRuns(cwd: string): Promise<KeptRun[]> {
   try {
     const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
     return text
@@ -471,13 +522,13 @@ async function readLedgerRuns(cwd) {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line))
-      .filter((entry) => entry.run != null);
+      .filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   } catch {
     return [];
   }
 }
 
-async function changedFilesForCommit(hash, cwd) {
+async function changedFilesForCommit(hash: string, cwd: string): Promise<string[]> {
   const result = await git(["show", "--name-only", "--format=", hash], cwd);
   return result.stdout
     .split(/\r?\n/)
@@ -486,7 +537,12 @@ async function changedFilesForCommit(hash, cwd) {
     .filter((file) => !isSessionFile(file));
 }
 
-async function changedFilesBetween(left, right, cwd, filterSession = true) {
+async function changedFilesBetween(
+  left: string,
+  right: string,
+  cwd: string,
+  filterSession = true,
+): Promise<string[]> {
   const result = await git(["diff", "--name-only", `${left}..${right}`], cwd);
   return result.stdout
     .split(/\r?\n/)
@@ -496,8 +552,18 @@ async function changedFilesBetween(left, right, cwd, filterSession = true) {
     .sort((a, b) => a.localeCompare(b));
 }
 
-async function buildSemanticSafety({ workDir, groups, ledgerRuns, base }) {
-  const blockers = [];
+async function buildSemanticSafety({
+  workDir,
+  groups,
+  ledgerRuns,
+  base,
+}: {
+  workDir: string;
+  groups: RunGroup[];
+  ledgerRuns: KeptRun[];
+  base: string;
+}) {
+  const blockers: Array<{ code: string; run: number; commit: string; message: string }> = [];
   for (const group of groups) {
     const later = ledgerRuns.filter(
       (run) =>
@@ -538,7 +604,7 @@ async function buildSemanticSafety({ workDir, groups, ledgerRuns, base }) {
   };
 }
 
-async function keptCommitWasReverted(workDir, group) {
+async function keptCommitWasReverted(workDir: string, group: RunGroup): Promise<boolean> {
   const files = Array.isArray(group.files) ? group.files.filter(Boolean) : [];
   if (!files.length) return false;
   const log = await gitOk(
@@ -555,13 +621,13 @@ async function keptCommitWasReverted(workDir, group) {
     });
 }
 
-function commitRefsMayMatch(left, right) {
+function commitRefsMayMatch(left: unknown, right: unknown): boolean {
   const a = String(left || "");
   const b = String(right || "");
   return Boolean(a && b && (a.startsWith(b) || b.startsWith(a)));
 }
 
-function explicitEvidenceInvalidationText(run) {
+function explicitEvidenceInvalidationText(run: LooseObject): string {
   const text = `${run.description || ""} ${run.title || ""} ${JSON.stringify(run.asi || {})}`;
   return /invalidat|contaminat|taint|cache replay|failed repeat|(?:source|query|holdout|evaluator|benchmark|cache|data)\s+leak(?:age)?/i.test(
     text,
@@ -570,10 +636,14 @@ function explicitEvidenceInvalidationText(run) {
     : "";
 }
 
-async function unkeptCommitsSinceBase(base, groups, cwd) {
+async function unkeptCommitsSinceBase(
+  base: string,
+  groups: RunGroup[],
+  cwd: string,
+): Promise<CommitSummary[]> {
   const kept = new Set(groups.map((group) => group.commit));
   const result = await git(["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`], cwd);
-  const commits = [];
+  const commits: CommitSummary[] = [];
   for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
     const [hash, subject = ""] = line.split("\x1f");
     if (!hash || kept.has(hash)) continue;
@@ -589,7 +659,10 @@ async function unkeptCommitsSinceBase(base, groups, cwd) {
   return commits;
 }
 
-function findExcludedPlannedFileConflicts(excludedCommits, plannedFiles) {
+function findExcludedPlannedFileConflicts(
+  excludedCommits: CommitSummary[],
+  plannedFiles: string[],
+): CommitSummary[] {
   const planned = new Set(plannedFiles);
   if (!planned.size) return [];
   return excludedCommits
@@ -600,7 +673,7 @@ function findExcludedPlannedFileConflicts(excludedCommits, plannedFiles) {
     .filter((commit) => commit.files.length > 0);
 }
 
-function normalizedExcludedCommits(plan) {
+function normalizedExcludedCommits(plan: LooseObject) {
   return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : []).map((item) => ({
     commit: String(item?.commit || ""),
     status: String(item?.status || ""),
@@ -608,7 +681,7 @@ function normalizedExcludedCommits(plan) {
   }));
 }
 
-function planFingerprint(plan) {
+function planFingerprint(plan: LooseObject): string {
   const stable = {
     source_branch: plan.source_branch || "",
     base: plan.base || "",
@@ -620,12 +693,12 @@ function planFingerprint(plan) {
     excluded_commits: normalizedExcludedCommits(plan),
     excluded_commit_count: plan.excluded_commit_count || 0,
     overlap_files: plan.overlap_files || [],
-    groups: (plan.groups || []).map((group) => ({
+    groups: (plan.groups || []).map((group: LooseObject) => ({
       title: group.title || "",
       last_commit: group.last_commit || "",
       slug: group.slug || "",
       files: group.files || [],
-      source_groups: (group.source_groups || []).map((source) => ({
+      source_groups: (group.source_groups || []).map((source: LooseObject) => ({
         last_commit: source.last_commit || "",
         parent_commit: source.parent_commit || "",
         files: source.files || [],
@@ -635,7 +708,7 @@ function planFingerprint(plan) {
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
-function isSessionFile(file) {
+function isSessionFile(file: string): boolean {
   const normalized = file.replace(/\\/g, "/");
   return (
     normalized.startsWith("autoresearch.") ||
@@ -644,7 +717,7 @@ function isSessionFile(file) {
   );
 }
 
-function safeSlug(value) {
+function safeSlug(value: unknown): string {
   return (
     String(value || "autoresearch")
       .toLowerCase()
@@ -654,20 +727,20 @@ function safeSlug(value) {
   );
 }
 
-function shellQuote(value) {
+function shellQuote(value: unknown): string {
   const text = String(value);
   if (/^--[A-Za-z0-9-]+$/.test(text) || text === "plan") return text;
   return `"${text.replace(/"/g, '\\"')}"`;
 }
 
-async function git(args, cwd) {
+async function git(args: string[], cwd: string): Promise<GitResult> {
   const result = await gitOk(args, cwd);
   if (!result.ok)
     throw new Error(`git ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
   return result;
 }
 
-async function gitOk(args, cwd) {
+async function gitOk(args: string[], cwd: string): Promise<GitResult> {
   const result = await new Promise<GitResult>((resolve) => {
     const child = spawn("git", args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
