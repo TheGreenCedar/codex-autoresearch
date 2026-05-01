@@ -4,6 +4,15 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.1
+
+### Fixed
+
+- Fixed recipe-backed setup planning so recommended recipes can supply their default benchmark command before missing setup fields are reported.
+- Fixed packet artifact evidence so relative artifact paths are checked against the target working directory instead of the plugin process directory.
+
+Bumped public package and plugin manifest version surfaces to `1.3.1`.
+
 ## 1.3.0
 
 ### Added
@@ -11,12 +20,18 @@ This project uses a root-only changelog because the root README is the public do
 - Added `scaffoldHealth` and `researchIntegrity` readouts across setup planning, guided setup, state, doctor, benchmark linting, dashboard state, and MCP resources so wrapper health and evidence promotion risk are visible before a packet is trusted.
 - Added run evidence labels for development-only bests, pending repeats, promotion-eligible evidence, invalidated evidence, historical context, and blocked states.
 - Added `finalize-current-tree --exclude-session-artifacts` / MCP `finalize_current_tree` to package the current non-session branch diff when commit-level kept evidence is stale or incomplete.
+- Added the shared first-valid-loop next-step contract across setup planning, guided setup, prompt planning, onboarding, and next-action recommendations.
+- Added packet evidence bundles with packet id, command identity, timeout, exit status, output tails, metrics, artifacts, checks, and freshness fingerprints.
+- Added read-only MCP resource templates for packet summary, packet evidence, packet artifacts, and finalization plans, plus a `finalize-kept-work` MCP prompt.
+- Added Go and .NET runtime recipes while keeping placeholder/custom recipes as explicit failing setup commands until real metric commands are supplied.
 
 ### Changed
 
 - Changed `benchmark-lint` to separate metric parsing from research-integrity checks, including suspicious perfect metrics, missing holdout/repeat guards, and dev-only evidence.
 - Changed `finalize-preview` to include semantic safety blockers for later-invalidated keeps, contaminated keeps, reverted keeps, and current final-tree coverage instead of trusting every historical keep entry.
 - Changed prompt planning so documented repo benchmark hints can outrank generic language or Cargo recipes when the docs name the metric-emitting harness.
+- Changed logged decisions to persist metric eligibility, packet fingerprints, and promotion-state labels without requiring fake metrics for crashes or failed checks.
+- Changed dashboard readouts to surface evidence labels and proof gaps beside the next safe action while keeping static exports read-only.
 
 ### Fixed
 

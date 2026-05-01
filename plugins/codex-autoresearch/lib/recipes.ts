@@ -65,6 +65,18 @@ const BUILT_IN_RECIPES: Recipe[] = [
     tags: ["runtime", "rust", "test"],
   },
   {
+    id: "go-test-runtime",
+    title: "Go test runtime",
+    metricName: "seconds",
+    metricUnit: "s",
+    direction: "lower",
+    benchmarkCommand: "go test ./...",
+    checksCommand: "go test ./...",
+    scope: ["go.mod", "go.sum", "pkg", "internal"],
+    caveats: ["Requires Go and a module-aware test suite."],
+    tags: ["runtime", "go", "test"],
+  },
+  {
     id: "pytest-runtime",
     title: "Pytest runtime",
     metricName: "seconds",
@@ -75,6 +87,18 @@ const BUILT_IN_RECIPES: Recipe[] = [
     scope: ["pyproject.toml", "pytest.ini", "tests"],
     caveats: ["Requires pytest in the active Python environment."],
     tags: ["runtime", "python", "test"],
+  },
+  {
+    id: "dotnet-test-runtime",
+    title: ".NET test runtime",
+    metricName: "seconds",
+    metricUnit: "s",
+    direction: "lower",
+    benchmarkCommand: "dotnet test --nologo",
+    checksCommand: "dotnet test --nologo",
+    scope: ["src", "tests"],
+    caveats: ["Requires the .NET SDK and test projects discoverable from the working directory."],
+    tags: ["runtime", "dotnet", "test"],
   },
   {
     id: "lighthouse-score",
@@ -261,6 +285,9 @@ export async function applyResolvedRecipeDefaults(
 
 export async function recommendRecipe(workDir: string): Promise<Recipe | null> {
   const exists = (file: string) => fs.existsSync(path.join(workDir, file));
+  const rootFiles = () => fs.readdirSync(workDir, { withFileTypes: true });
+  const hasRootFile = (predicate: (name: string) => boolean) =>
+    rootFiles().some((entry) => entry.isFile() && predicate(entry.name));
   if (exists("package.json")) {
     const pkg = JSON.parse(await fsp.readFile(path.join(workDir, "package.json"), "utf8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -270,7 +297,10 @@ export async function recommendRecipe(workDir: string): Promise<Recipe | null> {
       return getBuiltInRecipe("typescript-compile-time");
   }
   if (exists("Cargo.toml")) return getBuiltInRecipe("cargo-test-runtime");
+  if (exists("go.mod")) return getBuiltInRecipe("go-test-runtime");
   if (exists("pyproject.toml") || exists("pytest.ini")) return getBuiltInRecipe("pytest-runtime");
+  if (hasRootFile((name) => name.endsWith(".sln") || name.endsWith(".csproj")))
+    return getBuiltInRecipe("dotnet-test-runtime");
   return getBuiltInRecipe("custom");
 }
 

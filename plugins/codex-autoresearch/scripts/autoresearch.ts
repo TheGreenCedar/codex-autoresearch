@@ -48,6 +48,7 @@ import {
   readJsonl,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
+  promotionGradeValue,
 } from "../lib/session-core.js";
 import {
   buildResearchIntegrity,
@@ -545,19 +546,19 @@ async function setupPlan(args: any) {
   }
   const state = currentState(workDir);
   const hasDefaultBenchmarkCommand = await defaultBenchmarkCommandExists(workDir);
-  const hasBenchmarkInput = Boolean(args.benchmark_command || args.benchmarkCommand);
-  const missing = [];
-  if (!args.name && !state.config.name && !recommended) missing.push("name");
-  if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended)
-    missing.push("metric_name");
-  if (state.current.length === 0 && !hasBenchmarkInput && !hasDefaultBenchmarkCommand) {
-    missing.push("benchmark_command");
-  }
   const planArgs = await withRecipeDefaults({
     ...args,
     recipe: recommended?.id,
     name: args.name || recommended?.title || "Autoresearch session",
   });
+  const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
+  const missing = [];
+  if (!args.name && !state.config.name && !recommended) missing.push("name");
+  if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended)
+    missing.push("metric_name");
+  if (state.current.length === 0 && !benchmarkCommand && !hasDefaultBenchmarkCommand) {
+    missing.push("benchmark_command");
+  }
   const shellKind = shellKindFromArgs(planArgs);
   const setupMaxIterations = positiveIntegerOption(
     planArgs.max_iterations ?? planArgs.maxIterations,
@@ -568,7 +569,6 @@ async function setupPlan(args: any) {
     planArgs.commit_paths ?? planArgs.commitPaths,
     "commitPaths",
   );
-  const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
   const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
   const metricName = validateMetricName(planArgs.metric_name || planArgs.metricName || "seconds");
   const benchmarkPrintsMetric = explicitBenchmarkPrintsMetric(planArgs);
@@ -687,6 +687,18 @@ async function setupPlan(args: any) {
     nextCommand: command,
     guideCommand,
     baselineCommand,
+    missingEssentials: missing,
+    nextStep: sharedNextStep({
+      stage: "setup-repair",
+      title: "Create session setup",
+      reason: missing.length
+        ? `Setup still needs: ${missing.join(", ")}.`
+        : "Create or refresh the Autoresearch session files before the first packet.",
+      command,
+      mcpTool: "setup_session",
+      safety: "state_mutation",
+      missingEssentials: missing,
+    }),
     firstRunChecklist: checklist,
     guidedFlow: checklist,
     notes: [
@@ -697,6 +709,94 @@ async function setupPlan(args: any) {
       ...scopeWarnings.map((warning: any) => `Scope warning: ${warning}`),
     ],
   };
+}
+
+function sharedNextStep({
+  stage,
+  title,
+  reason,
+  command = "",
+  mcpTool = "",
+  safety = "read",
+  missingEssentials = [],
+  staleState = null,
+}: LooseObject) {
+  return {
+    stage,
+    nextAction: {
+      title,
+      reason,
+      command,
+      mcpTool,
+      safety,
+    },
+    missingEssentials: listOption(missingEssentials),
+    ...(staleState ? { staleState } : {}),
+  };
+}
+
+function guidedNextStep({
+  stage,
+  nextAction,
+  setup,
+  commands,
+  lastRunFreshness = null,
+}: LooseObject) {
+  const replacementAction = commands?.replaceLast || "";
+  if (stage === "needs-setup" || stage === "needs-benchmark-command") {
+    return sharedNextStep({
+      stage: "setup-repair",
+      title: "Repair setup",
+      reason: nextAction,
+      command: commands?.setup || setup?.nextCommand || "",
+      mcpTool: "setup_session",
+      safety: "state_mutation",
+      missingEssentials: setup?.missing || setup?.missingEssentials || [],
+    });
+  }
+  if (stage === "stale-last-run") {
+    return sharedNextStep({
+      stage: "log-decision",
+      title: "Replace stale packet",
+      reason: nextAction || "The saved packet no longer matches current state.",
+      command: replacementAction,
+      mcpTool: "next_experiment",
+      safety: "process_start",
+      staleState: {
+        stale: true,
+        reason: lastRunFreshness?.reason || nextAction || "",
+        replacementAction,
+      },
+    });
+  }
+  if (stage === "needs-log-decision") {
+    return sharedNextStep({
+      stage: "log-decision",
+      title: "Log packet decision",
+      reason: nextAction,
+      command: commands?.logLast || "",
+      mcpTool: "log_experiment",
+      safety: "git_mutation",
+    });
+  }
+  if (stage === "limit-reached") {
+    return sharedNextStep({
+      stage: "segment-reset",
+      title: "Start or extend segment",
+      reason: nextAction,
+      command: commands?.newSegmentDryRun || "",
+      mcpTool: "new_segment",
+      safety: "state_mutation",
+    });
+  }
+  return sharedNextStep({
+    stage: "baseline-packet",
+    title: stage === "ready" ? "Run next packet" : "Run baseline packet",
+    reason: nextAction || "Run one measured packet, then log the decision with ASI.",
+    command: commands?.baseline || "",
+    mcpTool: "next_experiment",
+    safety: "process_start",
+  });
 }
 
 async function promptPlan(args: LooseObject): Promise<LooseObject> {
@@ -752,6 +852,18 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
       dashboard: dashboardCommand,
       firstPacket: setup.baselineCommand,
     },
+    missingEssentials: intent.missing || setup.missing || [],
+    nextStep:
+      setup.nextStep ||
+      sharedNextStep({
+        stage: "setup-repair",
+        title: "Create session setup",
+        reason: intent.nextAction,
+        command: setup.nextCommand,
+        mcpTool: "setup_session",
+        safety: "state_mutation",
+        missingEssentials: intent.missing || setup.missing || [],
+      }),
     nextAction: intent.nextAction,
   };
 }
@@ -1350,7 +1462,7 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     : setup.guidedFlow.find((step: any) => step.step === "log")?.command;
   let stage = "ready";
   let nextAction = "Run the next measured packet.";
-  if (setup.missing.length && state.runs === 0) {
+  if ((setup.missing.length || !state.config.name) && state.runs === 0) {
     stage = "needs-setup";
     nextAction = "Create or complete the session setup before running a baseline.";
   } else if (lastRun && lastRunFreshness?.fresh === false) {
@@ -1370,10 +1482,30 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     nextAction =
       "Add autoresearch.ps1 or autoresearch.sh, or run setup with a benchmark command before using next.";
   }
+  const commands = {
+    setup: setup.nextCommand,
+    benchmarkLint: setup.benchmarkLintCommand,
+    doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command,
+    checkpoint:
+      setup.firstRunChecklist.find((step: any) => step.step === "checkpoint")?.command || "",
+    baseline: baselineCommand,
+    logLast: logCommand,
+    replaceLast: replaceLastRunCommand,
+    dashboard: dashboardCommand,
+    newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
+  };
   return {
     ok: doctor.issues.length === 0,
     workDir,
     stage,
+    missingEssentials: setup.missingEssentials || setup.missing || [],
+    nextStep: guidedNextStep({
+      stage,
+      nextAction,
+      setup,
+      commands,
+      lastRunFreshness,
+    }),
     setup,
     state,
     scaffoldHealth: state.scaffoldHealth,
@@ -1397,22 +1529,13 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
             lastRun.decision?.diversityGuidance || state.memory?.diversityGuidance || null,
           lanePortfolio: lastRun.decision?.lanePortfolio || state.memory?.lanePortfolio || [],
           metric: lastRun.decision?.metric ?? null,
+          packetEvidence: lastRun.packetEvidence || null,
           path: lastRun.lastRunPath || "",
           fingerprint: lastRunFingerprint,
           freshness: lastRunFreshness,
         }
       : null,
-    commands: {
-      setup: setup.nextCommand,
-      benchmarkLint: setup.benchmarkLintCommand,
-      doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command,
-      checkpoint:
-        setup.firstRunChecklist.find((step: any) => step.step === "checkpoint")?.command || "",
-      baseline: baselineCommand,
-      logLast: logCommand,
-      replaceLast: replaceLastRunCommand,
-      dashboard: dashboardCommand,
-    },
+    commands,
     firstRunChecklist: setup.firstRunChecklist,
     scopeWarnings: setup.scopeWarnings,
     settings: dashboardSettings(config),
@@ -1463,6 +1586,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     ),
   ]);
   const commands = continuationCommands(workDir);
+  const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
   return {
     ok: true,
@@ -1484,7 +1608,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "autoresearch.last-run.json when present",
     ],
     state,
-    guidedSetup: guide,
+    guidedSetup: guidePacket,
     doctor: {
       ok: doctor.ok,
       issues: doctor.issues || [],
@@ -1502,12 +1626,17 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
           : "Installed-runtime drift was checked during onboarding.",
     },
     nextAction:
-      nextPacket.action || nextPacket.nextBestAction || nextPacket.nextAction || guide.nextAction,
+      nextPacket.action ||
+      nextPacket.nextBestAction ||
+      nextPacket.nextAction ||
+      guidePacket.nextAction,
     hazards: compactHazards({
       doctor,
-      guide,
+      guide: guidePacket,
       state,
     }),
+    missingEssentials: guidePacket.missingEssentials || guidePacket.setup?.missing || [],
+    nextStep: guidePacket.nextStep || nextPacket.nextStep || null,
     commands: {
       ...commands,
       guide: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`,
@@ -1547,8 +1676,51 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
       primary: action.command || action.primaryCommand?.command || "",
       ...compact.commands,
     },
+    nextStep:
+      viewModel.guidedSetup?.nextStep || recommendedActionNextStep(action, viewModel, compact),
     compactState: boolOption(args.compact, false) ? compact : undefined,
   };
+}
+
+function recommendedActionNextStep(
+  action: LooseObject,
+  viewModel: LooseObject,
+  compact: LooseObject,
+) {
+  const kind = String(action.kind || action.safeAction || "");
+  const stage = kind.includes("finalize")
+    ? "finalization-preview"
+    : kind.includes("segment")
+      ? "segment-reset"
+      : kind.includes("log")
+        ? "log-decision"
+        : kind.includes("serve") || kind.includes("dashboard")
+          ? "dashboard-serve"
+          : kind.includes("doctor")
+            ? "doctor"
+            : (viewModel.trustBlockers || compact.blockers || []).length
+              ? "blocker"
+              : "baseline-packet";
+  return sharedNextStep({
+    stage,
+    title: action.title || "Run next safe action",
+    reason: action.detail || viewModel.readout?.nextAction || compact.nextAction,
+    command: action.command || action.primaryCommand?.command || "",
+    mcpTool:
+      stage === "log-decision"
+        ? "log_experiment"
+        : stage === "finalization-preview"
+          ? "finalize_preview"
+          : stage === "segment-reset"
+            ? "new_segment"
+            : stage === "doctor"
+              ? "doctor_session"
+              : stage === "blocker"
+                ? ""
+                : "next_experiment",
+    safety:
+      stage === "log-decision" ? "git_mutation" : stage === "blocker" ? "read" : "process_start",
+  });
 }
 
 function compactHazards({ doctor, guide, state }: LooseObject) {
@@ -3427,15 +3599,14 @@ async function runExperiment(args: LooseObject) {
   }
   const commandInput = await benchmarkCommandFromArgs(args, workDir);
   const { command } = commandInput;
-  const benchmark = await runShell(
-    command,
-    workDir,
-    numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-    {
-      env: commandInput.env,
-      retainMetricNames: [state.config.metricName],
-    },
+  const timeoutSeconds = numberOption(
+    args.timeout_seconds ?? args.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
   );
+  const benchmark = await runShell(command, workDir, timeoutSeconds, {
+    env: commandInput.env,
+    retainMetricNames: [state.config.metricName],
+  });
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
   const parseSource = metricParseSource(benchmark);
   const parsedMetricResult = parseMetricLines(parseSource, {
@@ -3510,6 +3681,7 @@ async function runExperiment(args: LooseObject) {
     ok: passed,
     workDir,
     command,
+    timeoutSeconds,
     commandFile: commandInput.commandFile,
     envFile: commandInput.envFile,
     envKeys: commandInput.envKeys,
@@ -3785,12 +3957,22 @@ async function logExperiment(args: any) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
+    metricEligible: !FAILURE_STATUSES.has(status) && finiteMetric(metric) != null,
     status,
     description,
     timestamp: Date.now(),
     segment: stateBefore.segment,
     confidence: null,
   };
+  if (lastPacket?.packetEvidence?.freshnessFingerprint) {
+    experiment.packetFingerprint = lastPacket.packetEvidence.freshnessFingerprint;
+  }
+  experiment.promotion = promotionStateForLoggedDecision({
+    status,
+    metric,
+    metrics,
+    packetPromotion: lastPacket?.decision?.promotion,
+  });
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
   if (artifacts && Object.keys(artifacts).length > 0) experiment.artifacts = artifacts;
   const benchmarkContract =
@@ -4777,6 +4959,135 @@ async function promoteGate(args: any) {
   };
 }
 
+function promotionStateForPacket(run: LooseObject, state: LooseObject) {
+  const promotionGrade = promotionGradeValue({
+    metric: run.parsedPrimary,
+    metrics: run.parsedMetrics || {},
+  });
+  if (!run.ok) {
+    return {
+      label: "blocked",
+      reasons: [run.metricError || `Benchmark exit ${run.exitCode ?? "none"}`],
+    };
+  }
+  if (promotionGrade === true) {
+    return {
+      label: "promotion_eligible",
+      reasons: ["Packet carries explicit promotion-grade metadata."],
+    };
+  }
+  const best = state.development?.best;
+  const primary = finiteMetric(run.parsedPrimary);
+  const reasons = [
+    "New packet evidence is exploratory until repeat, holdout, breadth, or promotion-gate metadata is recorded.",
+  ];
+  if (primary != null && best != null && primary === best) {
+    reasons.push("Packet matches the current development best but is not promotion-grade.");
+  }
+  return { label: "exploratory", reasons };
+}
+
+function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
+  const packetSource = {
+    history,
+    command: run.command,
+    metrics: run.parsedMetrics || {},
+    exitStatus: run.exitCode ?? null,
+    artifacts: run.artifacts || {},
+  };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(packetSource), "utf8")
+    .digest("hex");
+  return {
+    packetId: `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`,
+    cwd: run.workDir,
+    commandIdentity: {
+      command: run.command || "",
+      commandFile: run.commandFile || "",
+      envFile: run.envFile || "",
+      envKeys: run.envKeys || [],
+      commandHash: run.command
+        ? createHash("sha256").update(run.command, "utf8").digest("hex")
+        : "",
+    },
+    timeoutSeconds: run.timeoutSeconds ?? null,
+    exitStatus: run.exitCode ?? null,
+    timedOut: Boolean(run.timedOut),
+    stdoutTail: run.tailOutput || run.progress?.latestOutputTail || "",
+    stderrTail: "",
+    metrics: run.parsedMetrics || {},
+    primaryMetric: run.parsedPrimary ?? null,
+    artifacts: artifactList(run.artifacts, run.workDir),
+    checks: run.checks
+      ? {
+          command: run.checks.command || "",
+          exitStatus: run.checks.exitCode ?? null,
+          timedOut: Boolean(run.checks.timedOut),
+          passed: run.checks.passed ?? null,
+        }
+      : null,
+    freshnessFingerprint: fingerprint,
+  };
+}
+
+function artifactList(artifacts: LooseObject = {}, workDir = "") {
+  return Object.entries(artifacts || {}).map(([name, artifactPath]) => ({
+    name,
+    path: String(artifactPath || ""),
+    exists: artifactExists(String(artifactPath || ""), workDir),
+  }));
+}
+
+function artifactExists(artifactPath: string, workDir: string) {
+  if (!artifactPath) return false;
+  const resolved = path.isAbsolute(artifactPath)
+    ? artifactPath
+    : path.resolve(workDir || process.cwd(), artifactPath);
+  return fs.existsSync(resolved);
+}
+
+function promotionStateForLoggedDecision({
+  status,
+  metric,
+  metrics = {},
+  packetPromotion = null,
+}: LooseObject) {
+  if (status === "keep") {
+    if (packetPromotion?.label) return packetPromotion;
+    if (promotionGradeValue({ metrics }) === true) {
+      return {
+        label: "promotion_eligible",
+        reasons: ["Logged keep carries explicit promotion-grade metadata."],
+      };
+    }
+    return finiteMetric(metric) == null
+      ? {
+          label: "blocked",
+          reasons: ["Kept decisions require a finite metric before promotion can be assessed."],
+        }
+      : {
+          label: "exploratory",
+          reasons: [
+            "Logged keep is exploratory until repeat, holdout, breadth, or promotion-gate metadata is recorded.",
+          ],
+        };
+  }
+  if (status === "discard") {
+    return {
+      label: "invalidated",
+      reasons: ["Logged as discard; metric evidence is retained but not promotable."],
+    };
+  }
+  return {
+    label: "blocked",
+    reasons: [
+      status === "checks_failed"
+        ? "Correctness checks failed; packet evidence is blocked from promotion."
+        : "Crash evidence is retained without sentinel metrics and is blocked from promotion.",
+    ],
+  };
+}
+
 async function nextExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const doctor = await doctorSession({
@@ -4824,6 +5135,7 @@ async function nextExperiment(args: any) {
     lanePortfolio: memory.lanePortfolio,
     plateau: memory.plateau,
     novelty: memory.novelty,
+    promotion: promotionStateForPacket(run, stateBeforeLog),
     needsDecision: run.logHint.needsDecision,
     asiTemplate: run.ok
       ? {
@@ -4842,24 +5154,27 @@ async function nextExperiment(args: any) {
         },
   };
   const lastRunFile = await resolveLastRunPath(run.workDir);
+  const history = {
+    segment: stateBeforeLog.segment,
+    config: lastRunConfigSnapshot(stateBeforeLog.config),
+    command: run.command,
+    workDir: run.workDir,
+    currentRuns: stateBeforeLog.current.length,
+    totalRuns: stateBeforeLog.results.length,
+    nextRun: stateBeforeLog.results.length + 1,
+    benchmarkContract: run.benchmarkContract || null,
+    git: await lastRunGitSnapshot(run.workDir, config).catch((error: any) => ({
+      inside: null as boolean | null,
+      error: error.message || String(error),
+    })),
+  };
+  const packetEvidence = packetEvidenceForRun(run, history);
   const packet = {
     ok: doctor.ok && run.ok,
     workDir: run.workDir,
     lastRunPath: lastRunFile,
-    history: {
-      segment: stateBeforeLog.segment,
-      config: lastRunConfigSnapshot(stateBeforeLog.config),
-      command: run.command,
-      workDir: run.workDir,
-      currentRuns: stateBeforeLog.current.length,
-      totalRuns: stateBeforeLog.results.length,
-      nextRun: stateBeforeLog.results.length + 1,
-      benchmarkContract: run.benchmarkContract || null,
-      git: await lastRunGitSnapshot(run.workDir, config).catch((error: any) => ({
-        inside: null as boolean | null,
-        error: error.message || String(error),
-      })),
-    },
+    packetEvidence,
+    history,
     doctor,
     run,
     decision,
@@ -4887,6 +5202,7 @@ function compactNextExperimentPacket(packet: LooseObject) {
     ok: packet.ok,
     workDir: packet.workDir,
     lastRunPath: packet.lastRunPath,
+    packetEvidence: packet.packetEvidence,
     history: {
       segment: packet.history?.segment,
       currentRuns: packet.history?.currentRuns,
@@ -4923,6 +5239,7 @@ function compactNextExperimentPacket(packet: LooseObject) {
       allowedStatuses: decision.allowedStatuses || [],
       suggestedStatus: suggested,
       statusGuidance: decision.statusGuidance || "",
+      promotion: decision.promotion || null,
       asiTemplate: decision.asiTemplate || {},
       diversityGuidance: decision.diversityGuidance || null,
       plateau: decision.plateau || null,

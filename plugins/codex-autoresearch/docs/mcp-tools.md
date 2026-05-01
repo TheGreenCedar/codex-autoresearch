@@ -6,19 +6,19 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the 
 
 | Tool | Use |
 | --- | --- |
-| `setup_plan` | Return a read-only setup readiness plan with missing fields, recipe suggestion, and next commands. |
-| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, and dashboard readout guidance; pass `start_dashboard: true` to also start and verify the live local dashboard. |
-| `prompt_plan` | Convert a natural-language request into inferred metric defaults, experiment lanes, missing essentials, and setup commands. |
+| `setup_plan` | Return a read-only setup readiness plan with missing fields, recipe suggestion, and the shared `nextStep` contract. |
+| `guided_setup` | Return a guided first-run or resume packet with setup, doctor, baseline, log, dashboard readout guidance, last-run evidence, and `nextStep`; pass `start_dashboard: true` to also start and verify the live local dashboard. |
+| `prompt_plan` | Convert a natural-language request into inferred metric defaults, experiment lanes, missing essentials, setup commands, and `nextStep`. |
 | `onboarding_packet` | Return a compact human-and-agent onboarding packet with state, hazards, templates, and commands. |
-| `recommend_next` | Return the single safest next action with evidence and commands. |
+| `recommend_next` | Return the single safest next action with evidence, commands, and `nextStep`. |
 | `list_recipes` | List or recommend built-in and optional catalog recipes. |
 | `setup_session` | Create session files and append the initial config header. |
 | `setup_research_session` | Create a deep-research scratchpad and initialize a `quality_gap` session. |
 | `configure_session` | Update autonomy mode, checks policy, keep policy, dashboard refresh, commit paths, or iteration limit. |
 | `init_experiment` | Append an autoresearch config header to `autoresearch.jsonl`. |
 | `run_experiment` | Run a benchmark command, parse `METRIC` lines, and optionally run checks. |
-| `next_experiment` | Run preflight and benchmark as one decision packet, with log options, ASI template, and continuation data. |
-| `log_experiment` | Append a decision, keep/commit or discard/revert scoped changes, and return continuation state. |
+| `next_experiment` | Run preflight and benchmark as one decision packet, with packet evidence, log options, ASI template, and continuation data. |
+| `log_experiment` | Append a decision with metric eligibility, packet fingerprint, promotion state, ASI, keep/commit or discard/revert scoped changes, and continuation state. |
 | `read_state` | Summarize baseline, best, run counts, confidence, limits, settings, and commands. |
 | `measure_quality_gap` | Count open and closed checklist items in `autoresearch.research/<slug>/quality-gaps.md`. |
 | `gap_candidates` | Extract or apply validated gap candidates from synthesis and optional model output. |
@@ -80,6 +80,24 @@ The public `tools/list` response includes `name`, `description`, `inputSchema`, 
 
 Tool calls return structured content for programmatic clients and the same payload as text JSON for older clients. Keep those two surfaces aligned when adding a tool.
 
+Setup and resume guidance share a single next-action shape:
+
+```json
+{
+  "stage": "baseline-packet",
+  "nextAction": {
+    "title": "Run baseline packet",
+    "reason": "Setup is ready and no baseline has been logged.",
+    "command": "node scripts/autoresearch.mjs next --cwd <project> --compact",
+    "mcpTool": "next_experiment",
+    "safety": "process_start"
+  },
+  "missingEssentials": []
+}
+```
+
+Last-run packets expose `packetEvidence` separately from promotion readiness. A packet can parse metrics but still be only `exploratory`, `pending_repeat`, `blocked`, or `invalidated` until repeat, holdout, breadth, or explicit promotion-gate metadata makes it stronger.
+
 ## MCP Resources And Prompts
 
 The server also exposes read-only MCP resource templates so clients can inspect session truth without turning state reads into tool calls. Discover them through `resources/templates/list`, then read the resolved URI:
@@ -90,6 +108,10 @@ The server also exposes read-only MCP resource templates so clients can inspect 
 | `autoresearch://last-run{?working_dir}` | Last-run decision packet summary, allowed statuses, freshness, and ASI template. |
 | `autoresearch://quality-gaps{?working_dir,research_slug}` | Active or requested quality-gap checklist counts. Add `research_slug=<slug>` when needed. |
 | `autoresearch://dashboard-summary{?working_dir}` | Dashboard-style stage, next action, dashboard command, warnings, scaffold health, research integrity, and memory summary without exporting HTML or starting a server. |
+| `autoresearch://packet-summary{?working_dir}` | Pending last-run packet stage, suggested status, freshness, and packet evidence pointer. |
+| `autoresearch://packet-evidence{?working_dir}` | Packet id, command identity, timeout, exit status, bounded output tails, parsed metrics, artifacts, checks, and freshness fingerprint. |
+| `autoresearch://packet-artifacts{?working_dir}` | Artifact list from the pending packet evidence bundle. |
+| `autoresearch://finalization-plan{?working_dir}` | Finalization preview with dirty tree, semantic blockers, coverage, excluded work, and review readiness. |
 
 Prompt templates point agents at the right resources and tools without embedding stale state:
 
@@ -98,6 +120,7 @@ Prompt templates point agents at the right resources and tools without embedding
 | `continue-loop` | Resume a loop from durable state and last-run evidence. |
 | `review-last-packet` | Review the latest packet before choosing keep, discard, crash, or checks_failed. |
 | `first-valid-loop` | Drive the first valid loop path through `guided_setup` with `start_dashboard=true`, setup/checks/doctor, baseline, log, and continuation. |
+| `finalize-kept-work` | Read finalization readiness before creating review branches or a current-final-tree plan. |
 
 Operational metadata such as CLI command name, mutation status, and command-bearing argument fields lives in the shared tool registry. When adding a tool, update the schema, contract, registry, dispatch handler, CLI fallback, docs, and parity tests together.
 

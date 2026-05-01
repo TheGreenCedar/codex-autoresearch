@@ -36,6 +36,30 @@ const RESOURCE_DEFINITIONS = [
       "Read-only dashboard-style operator summary without exporting or starting a server.",
     mimeType: "application/json",
   },
+  {
+    uri: "autoresearch://packet-summary",
+    name: "Autoresearch packet summary",
+    description: "Read-only summary of the pending last-run packet.",
+    mimeType: "application/json",
+  },
+  {
+    uri: "autoresearch://packet-evidence",
+    name: "Autoresearch packet evidence",
+    description: "Read-only packet evidence bundle including metrics, output tails, and artifacts.",
+    mimeType: "application/json",
+  },
+  {
+    uri: "autoresearch://packet-artifacts",
+    name: "Autoresearch packet artifacts",
+    description: "Read-only artifact list from the pending last-run packet.",
+    mimeType: "application/json",
+  },
+  {
+    uri: "autoresearch://finalization-plan",
+    name: "Autoresearch finalization plan",
+    description: "Read-only finalization readiness and review-plan summary.",
+    mimeType: "application/json",
+  },
 ];
 
 const RESOURCE_TEMPLATES = [
@@ -65,6 +89,30 @@ const RESOURCE_TEMPLATES = [
       "Read-only dashboard-style operator summary without exporting or starting a server.",
     mimeType: "application/json",
   },
+  {
+    uriTemplate: "autoresearch://packet-summary{?working_dir}",
+    name: "Autoresearch packet summary",
+    description: "Read-only summary of the pending last-run packet.",
+    mimeType: "application/json",
+  },
+  {
+    uriTemplate: "autoresearch://packet-evidence{?working_dir}",
+    name: "Autoresearch packet evidence",
+    description: "Read-only packet evidence bundle including metrics, output tails, and artifacts.",
+    mimeType: "application/json",
+  },
+  {
+    uriTemplate: "autoresearch://packet-artifacts{?working_dir}",
+    name: "Autoresearch packet artifacts",
+    description: "Read-only artifact list from the pending last-run packet.",
+    mimeType: "application/json",
+  },
+  {
+    uriTemplate: "autoresearch://finalization-plan{?working_dir}",
+    name: "Autoresearch finalization plan",
+    description: "Read-only finalization readiness and review-plan summary.",
+    mimeType: "application/json",
+  },
 ];
 
 const PROMPT_DEFINITIONS = [
@@ -81,6 +129,11 @@ const PROMPT_DEFINITIONS = [
   {
     name: "first-valid-loop",
     description: "Run the first valid loop path with guided setup and an explicit live dashboard.",
+    arguments: [{ name: "working_dir", description: "Target project directory.", required: true }],
+  },
+  {
+    name: "finalize-kept-work",
+    description: "Review finalization readiness before packaging kept Autoresearch evidence.",
     arguments: [{ name: "working_dir", description: "Target project directory.", required: true }],
   },
 ];
@@ -137,6 +190,7 @@ export async function readMcpResource(
       workDir: request.workingDir,
       stage: guide.stage,
       nextAction: guide.nextAction,
+      nextStep: guide.nextStep || null,
       dashboardCommand: guide.commands?.dashboard || "",
       runs: state.runs,
       best: state.best,
@@ -144,7 +198,42 @@ export async function readMcpResource(
       memory: state.memory || null,
       scaffoldHealth: state.scaffoldHealth || guide.scaffoldHealth || null,
       researchIntegrity: state.researchIntegrity || guide.researchIntegrity || null,
+      packetEvidence: guide.lastRun?.packetEvidence || null,
     });
+  }
+
+  if (request.kind === "packet-summary" || request.kind === "packet-evidence") {
+    const guide = await callTool("guided_setup", { working_dir: request.workingDir });
+    const packetEvidence = guide.lastRun?.packetEvidence || null;
+    return resourceResponse(uri, {
+      ok: Boolean(packetEvidence),
+      workDir: guide.workDir || request.workingDir,
+      stage: guide.stage,
+      nextAction: guide.nextAction,
+      packet: guide.lastRun
+        ? {
+            metric: guide.lastRun.metric ?? null,
+            allowedStatuses: guide.lastRun.allowedStatuses || [],
+            safeSuggestedStatus: guide.lastRun.safeSuggestedStatus || "",
+            freshness: guide.lastRun.freshness || null,
+          }
+        : null,
+      packetEvidence,
+    });
+  }
+
+  if (request.kind === "packet-artifacts") {
+    const guide = await callTool("guided_setup", { working_dir: request.workingDir });
+    const packetEvidence = guide.lastRun?.packetEvidence || null;
+    return resourceResponse(uri, {
+      ok: Boolean(packetEvidence),
+      workDir: guide.workDir || request.workingDir,
+      artifacts: packetEvidence?.artifacts || [],
+    });
+  }
+
+  if (request.kind === "finalization-plan") {
+    return resourceResponse(uri, await callTool("finalize_preview", baseArgs));
   }
 
   throw new Error(`Unknown autoresearch resource: ${request.kind}`);
@@ -159,7 +248,17 @@ export function getMcpPrompt(name: string, args: LooseObject = {}) {
   const lastRunUri = resourceUri("last-run", workingDir);
   const dashboardUri = resourceUri("dashboard-summary", workingDir);
   const qualityGapsUri = resourceUri("quality-gaps", workingDir);
-  const text = promptText(name, { workingDir, stateUri, lastRunUri, dashboardUri, qualityGapsUri });
+  const packetUri = resourceUri("packet-evidence", workingDir);
+  const finalizationUri = resourceUri("finalization-plan", workingDir);
+  const richText = promptText(name, {
+    workingDir,
+    stateUri,
+    lastRunUri,
+    dashboardUri,
+    qualityGapsUri,
+    packetUri,
+    finalizationUri,
+  });
   return {
     description: definition.description,
     messages: [
@@ -167,7 +266,7 @@ export function getMcpPrompt(name: string, args: LooseObject = {}) {
         role: "user",
         content: {
           type: "text",
-          text,
+          text: richText,
         },
       },
     ],
@@ -189,9 +288,18 @@ function promptText(name: string, context: LooseObject) {
     return [
       "Review the latest Autoresearch packet before making a log decision.",
       `Target: ${context.workingDir}`,
-      `Read ${context.lastRunUri} and ${context.dashboardUri}.`,
+      `Read ${context.lastRunUri}, ${context.packetUri}, and ${context.dashboardUri}.`,
       "Decide only among keep, discard, crash, or checks_failed, and preserve ASI evidence.",
       "If the packet is stale, replace it with guided_setup guidance instead of logging it.",
+    ].join("\n");
+  }
+  if (name === "finalize-kept-work") {
+    return [
+      "Review Codex Autoresearch finalization readiness before creating review branches.",
+      `Target: ${context.workingDir}`,
+      `Read ${context.stateUri}, ${context.dashboardUri}, and ${context.finalizationUri}.`,
+      "Use finalize_preview first. Do not create branches from stale, invalidated, contaminated, or uncovered evidence.",
+      "If kept commits are stale but the current tree is the review unit, use finalize_current_tree with session artifacts excluded.",
     ].join("\n");
   }
   return [

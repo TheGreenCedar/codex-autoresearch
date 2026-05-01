@@ -50,6 +50,12 @@
   <text x="846" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">#100</text>
   <rect x="940" y="486" width="104" height="42" rx="6" fill="#ffffff" stroke="#d7ded9"/>
   <text x="966" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">Keep</text>
+  <rect x="144" y="582" width="118" height="48" rx="6" fill="#ffffff" stroke="#ef6c4a"/>
+  <text x="158" y="604" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="800">EVIDENCE</text>
+  <text x="158" y="622" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">Exploratory</text>
+  <rect x="276" y="582" width="276" height="48" rx="6" fill="#ffffff" stroke="#ef6c4a"/>
+  <text x="290" y="604" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="800">PROMOTION PROOF</text>
+  <text x="290" y="622" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">Repeat or holdout still required</text>
   <rect x="820" y="544" width="224" height="34" rx="6" fill="#ffffff" stroke="#d7ded9"/>
   <text x="842" y="566" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Actions stay in CLI or MCP</text>
 </svg>

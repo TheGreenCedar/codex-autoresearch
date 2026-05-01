@@ -390,6 +390,7 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
     const payload = JSON.parse(packet.stdout);
     assert.equal(payload.run.parsedPrimary, 7);
     assert.equal(payload.run.artifacts.manifest, "out/manifest.json");
+    assert.equal(payload.packetEvidence.artifacts[0].exists, true);
     assert.deepEqual(payload.run.envKeys, ["SCORE"]);
 
     const logged = await runCli([
@@ -940,12 +941,21 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     assert.equal(packet.decision.metric, 3);
     assert.equal(packet.decision.metrics.cache_hits, 8);
     assert.equal(packet.decision.safeSuggestedStatus, "keep");
+    assert.equal(packet.decision.promotion.label, "exploratory");
     assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
+    assert.match(packet.packetEvidence.packetId, /^packet-/);
+    assert.equal(packet.packetEvidence.commandIdentity.command, command);
+    assert.equal(packet.packetEvidence.exitStatus, 0);
+    assert.equal(packet.packetEvidence.metrics.seconds, 3);
+    assert.match(packet.packetEvidence.stdoutTail, /METRIC seconds=3/);
+    assert.match(packet.packetEvidence.freshnessFingerprint, /^[a-f0-9]{64}$/);
 
     const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
     assert.equal(lastRun.decision.metric, 3);
+    assert.equal(lastRun.decision.promotion.label, "exploratory");
+    assert.equal(lastRun.packetEvidence.metrics.cache_hits, 8);
     assert.equal(lastRun.history.nextRun, 1);
     assert.equal(lastRun.history.config.metricName, "seconds");
 
@@ -963,6 +973,9 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.experiment.metric, 3);
     assert.equal(payload.experiment.metrics.cache_hits, 8);
+    assert.equal(payload.experiment.metricEligible, true);
+    assert.equal(payload.experiment.promotion.label, "invalidated");
+    assert.match(payload.experiment.packetFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(payload.lastRunCleared, true);
     await assert.rejects(access(packet.lastRunPath));
 
@@ -1500,7 +1513,10 @@ test("metricless failure logs do not become baseline or best", async () => {
       "Benchmark crashed before metric",
     ]);
     assert.equal(crash.code, 0, crash.stderr);
-    assert.equal(JSON.parse(crash.stdout).experiment.metric, null);
+    const crashPayload = JSON.parse(crash.stdout);
+    assert.equal(crashPayload.experiment.metric, null);
+    assert.equal(crashPayload.experiment.metricEligible, false);
+    assert.equal(crashPayload.experiment.promotion.label, "blocked");
 
     const checksFailed = await runCli([
       "log",
@@ -1512,7 +1528,10 @@ test("metricless failure logs do not become baseline or best", async () => {
       "Checks failed before metric",
     ]);
     assert.equal(checksFailed.code, 0, checksFailed.stderr);
-    assert.equal(JSON.parse(checksFailed.stdout).experiment.metric, null);
+    const checksFailedPayload = JSON.parse(checksFailed.stdout);
+    assert.equal(checksFailedPayload.experiment.metric, null);
+    assert.equal(checksFailedPayload.experiment.metricEligible, false);
+    assert.equal(checksFailedPayload.experiment.promotion.label, "blocked");
 
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
@@ -1616,6 +1635,9 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
     assert.equal(logged.code, 0, logged.stderr);
     const payload = JSON.parse(logged.stdout);
     assert.equal(payload.experiment.metric, null);
+    assert.equal(payload.experiment.metricEligible, false);
+    assert.equal(payload.experiment.promotion.label, "blocked");
+    assert.match(payload.experiment.packetFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(payload.lastRunCleared, true);
     await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
   });
@@ -2468,10 +2490,44 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.match(payload.nextCommand, /--max-iterations "7"/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
+    assert.equal(payload.missingEssentials.length, 0);
+    assert.equal(payload.nextStep.stage, "setup-repair");
+    assert.equal(payload.nextStep.nextAction.title, "Create session setup");
+    assert.equal(payload.nextStep.nextAction.safety, "state_mutation");
+    assert.match(payload.nextStep.nextAction.command, / setup /);
+    assert.equal(payload.nextStep.nextAction.mcpTool, "setup_session");
     assert.deepEqual(
       payload.firstRunChecklist.map((step) => step.step),
       ["setup", "benchmark-lint", "doctor", "checkpoint", "baseline", "log"],
     );
+
+    await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
+    const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
+    assert.equal(guide.code, 0, guide.stderr);
+    const guidePayload = JSON.parse(guide.stdout);
+    assert.equal(guidePayload.nextStep.stage, "baseline-packet");
+    assert.equal(guidePayload.nextStep.nextAction.title, "Run baseline packet");
+    assert.equal(guidePayload.nextStep.nextAction.safety, "process_start");
+    assert.match(guidePayload.nextStep.nextAction.command, / next /);
+  });
+});
+
+test("setup-plan treats recommended recipe benchmark as configured", async () => {
+  await withTempDir("setup-plan-recipe-defaults", async (dir) => {
+    await writeFile(
+      path.join(dir, "package.json"),
+      '{"scripts":{"test":"node -e \\"process.exit(0)\\""}}\n',
+      "utf8",
+    );
+
+    const result = await runCli(["setup-plan", "--cwd", dir]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.recommendedRecipe.id, "node-test-runtime");
+    assert.deepEqual(payload.missing, []);
+    assert.deepEqual(payload.missingEssentials, []);
+    assert.doesNotMatch(payload.nextStep.nextAction.reason, /benchmark_command/);
+    assert.match(payload.nextCommand, /--recipe "node-test-runtime"/);
   });
 });
 
@@ -3125,6 +3181,17 @@ test("mcp guided_setup can explicitly start a verified live dashboard", async ()
 test("mcp resources and prompts expose read-only session truth", async () => {
   await withTempDir("mcp-resources-prompts", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "mcp resources", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5'); console.log('ARTIFACT manifest=out/manifest.json')"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
     const researchDir = path.join(dir, "autoresearch.research", "resource-study");
     await mkdir(researchDir, { recursive: true });
     await writeFile(
@@ -3137,10 +3204,15 @@ test("mcp resources and prompts expose read-only session truth", async () => {
     assert.equal(resources.result.resources.length, 0);
 
     const resourceTemplates = await callMcpRequest("resources/templates/list");
-    assert.equal(resourceTemplates.result.resourceTemplates.length, 4);
+    assert.ok(resourceTemplates.result.resourceTemplates.length >= 7);
     assert.ok(
       resourceTemplates.result.resourceTemplates.some(
         (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
+      ),
+    );
+    assert.ok(
+      resourceTemplates.result.resourceTemplates.some(
+        (resource) => resource.uriTemplate === "autoresearch://packet-evidence{?working_dir}",
       ),
     );
 
@@ -3163,12 +3235,31 @@ test("mcp resources and prompts expose read-only session truth", async () => {
     assert.equal(dashboardPayload.workDir, dir);
     assert.match(dashboardPayload.dashboardCommand, /serve --cwd/);
 
+    const packetUri = `autoresearch://packet-evidence?working_dir=${encodeURIComponent(dir)}`;
+    const packet = await callMcpRequest("resources/read", { uri: packetUri });
+    const packetPayload = JSON.parse(packet.result.contents[0].text);
+    assert.equal(packetPayload.packetEvidence.metrics.seconds, 5);
+    assert.equal(packetPayload.packetEvidence.artifacts[0].name, "manifest");
+    assert.match(packetPayload.packetEvidence.freshnessFingerprint, /^[a-f0-9]{64}$/);
+
+    const artifactsUri = `autoresearch://packet-artifacts?working_dir=${encodeURIComponent(dir)}`;
+    const artifacts = await callMcpRequest("resources/read", { uri: artifactsUri });
+    const artifactsPayload = JSON.parse(artifacts.result.contents[0].text);
+    assert.equal(artifactsPayload.artifacts[0].name, "manifest");
+
+    const finalizeUri = `autoresearch://finalization-plan?working_dir=${encodeURIComponent(dir)}`;
+    const finalize = await callMcpRequest("resources/read", { uri: finalizeUri });
+    const finalizePayload = JSON.parse(finalize.result.contents[0].text);
+    assert.equal(finalizePayload.workDir, dir);
+    assert.ok(Object.hasOwn(finalizePayload, "ready"));
+
     const missing = await callMcpRequest("resources/read", { uri: "autoresearch://state" });
     assert.equal(missing.error.code, -32602);
     assert.match(missing.error.message, /working_dir/);
 
     const prompts = await callMcpRequest("prompts/list");
     assert.ok(prompts.result.prompts.some((prompt) => prompt.name === "first-valid-loop"));
+    assert.ok(prompts.result.prompts.some((prompt) => prompt.name === "finalize-kept-work"));
 
     const prompt = await callMcpRequest("prompts/get", {
       name: "first-valid-loop",
