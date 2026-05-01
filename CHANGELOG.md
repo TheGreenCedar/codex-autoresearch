@@ -4,6 +4,15 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.1
+
+### Fixed
+
+- Fixed recipe-backed setup planning so recommended recipes can supply their default benchmark command before missing setup fields are reported.
+- Fixed packet artifact evidence so relative artifact paths are checked against the target working directory instead of the plugin process directory.
+
+Bumped public package and plugin manifest version surfaces to `1.3.1`.
+
 ## 1.3.0
 
 ### Added
