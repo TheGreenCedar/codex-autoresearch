@@ -1833,10 +1833,15 @@ p {
   }
 
   .toolbar-status strong,
+  .toolbar-session > strong,
   .generated-cell strong {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
+  }
+
+  .toolbar-session > strong {
+    line-height: 1.15;
   }
 
   .toolbar-actions {
@@ -1908,7 +1913,7 @@ p {
   }
 
   .chart-frame {
-    min-height: 300px;
+    min-height: 360px;
     overflow: hidden;
   }
 
@@ -1930,16 +1935,43 @@ p {
   }
 
   .ledger-row {
-    grid-template-columns: 52px 1fr;
-    align-content: center;
+    position: static;
+    grid-template-columns: 1fr;
+    align-content: start;
+    gap: 8px;
+    min-height: 0;
+    margin-bottom: 10px;
+    border: 1px solid var(--soft-line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 12px;
+    align-items: start;
   }
 
   .ledger-header {
-    grid-template-columns: 52px 1fr;
+    display: none;
+  }
+
+  #ledger-body {
+    display: grid;
+    gap: 0;
+    height: auto !important;
+    padding-top: 10px;
   }
 
   .metric-cell,
   .run-desc {
-    grid-column: 1 / -1;
+    grid-column: auto;
+  }
+
+  .readout-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .readout-facts strong,
+  .decision-item em {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 }

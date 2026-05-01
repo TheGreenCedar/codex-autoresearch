@@ -58,6 +58,32 @@ const DASHBOARD_ACTIONS = new Map([
     },
   ],
 ]);
+const DASHBOARD_CLI_ACTIONS = new Map<
+  string,
+  (workDir: string, body: LooseObject) => Promise<string[]> | string[]
+>([
+  ["doctor", (workDir) => ["doctor", "--cwd", workDir]],
+  ["doctor-explain", (workDir) => ["doctor", "--cwd", workDir, "--explain"]],
+  ["onboarding-packet", (workDir) => ["onboarding-packet", "--cwd", workDir, "--compact"]],
+  ["recommend-next", (workDir) => ["recommend-next", "--cwd", workDir, "--compact"]],
+  ["benchmark-lint", (workDir) => ["benchmark-lint", "--cwd", workDir]],
+  ["new-segment-dry-run", (workDir) => ["new-segment", "--cwd", workDir, "--dry-run"]],
+  ["setup-plan", (workDir) => ["setup-plan", "--cwd", workDir]],
+  ["guide", (workDir) => ["guide", "--cwd", workDir]],
+  ["recipes", () => ["recipes", "list"]],
+  [
+    "gap-candidates",
+    async (workDir, body) => [
+      "gap-candidates",
+      "--cwd",
+      workDir,
+      "--research-slug",
+      body.researchSlug || body.slug || (await firstResearchSlug(workDir)) || "research",
+    ],
+  ],
+  ["finalize-preview", (workDir) => ["finalize-preview", "--cwd", workDir]],
+  ["export", (workDir) => ["export", "--cwd", workDir]],
+]);
 
 export async function serveAutoresearch(args: LooseObject) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
@@ -187,25 +213,8 @@ export async function serveAutoresearch(args: LooseObject) {
 }
 
 async function actionArgs(action, workDir, body) {
-  if (action === "doctor") return ["doctor", "--cwd", workDir];
-  if (action === "doctor-explain") return ["doctor", "--cwd", workDir, "--explain"];
-  if (action === "onboarding-packet") return ["onboarding-packet", "--cwd", workDir, "--compact"];
-  if (action === "recommend-next") return ["recommend-next", "--cwd", workDir, "--compact"];
-  if (action === "benchmark-lint") return ["benchmark-lint", "--cwd", workDir];
-  if (action === "new-segment-dry-run") return ["new-segment", "--cwd", workDir, "--dry-run"];
-  if (action === "setup-plan") return ["setup-plan", "--cwd", workDir];
-  if (action === "guide") return ["guide", "--cwd", workDir];
-  if (action === "recipes") return ["recipes", "list"];
-  if (action === "gap-candidates")
-    return [
-      "gap-candidates",
-      "--cwd",
-      workDir,
-      "--research-slug",
-      body.researchSlug || body.slug || (await firstResearchSlug(workDir)) || "research",
-    ];
-  if (action === "finalize-preview") return ["finalize-preview", "--cwd", workDir];
-  if (action === "export") return ["export", "--cwd", workDir];
+  const factory = DASHBOARD_CLI_ACTIONS.get(action);
+  if (factory) return await factory(workDir, body);
   if (LOG_ACTION_STATUS.has(action)) return logActionArgs(action, workDir, body);
   return [];
 }

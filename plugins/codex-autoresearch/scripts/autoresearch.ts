@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -13,16 +12,13 @@ import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { finalizePreview as buildFinalizePreview } from "../lib/finalize-preview.js";
+import {
+  finalizeCurrentTree as buildFinalizeCurrentTree,
+  finalizePreview as buildFinalizePreview,
+} from "../lib/finalize-preview.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import { createMcpInterface } from "../lib/mcp-interface.js";
-import {
-  getMcpPrompt,
-  listMcpPrompts,
-  listMcpResourceTemplates,
-  listMcpResources,
-  readMcpResource,
-} from "../lib/mcp-protocol.js";
+import { runMcpSmoke, startMcpStdioServer } from "../lib/mcp-stdio-server.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -53,6 +49,11 @@ import {
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
 } from "../lib/session-core.js";
+import {
+  buildResearchIntegrity,
+  buildScaffoldHealth,
+  commandDiagnostics,
+} from "../lib/truth-signals.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
@@ -93,7 +94,6 @@ const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
-const MAX_MCP_FRAME_BYTES = 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
@@ -156,6 +156,7 @@ Usage:
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
+  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
   node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
@@ -578,6 +579,8 @@ async function setupPlan(args) {
   const guideCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`;
   const scopeWarnings = scopeWarningsFromArgs(planArgs);
   const integrityPreflight = await benchmarkIntegrityPreflight(workDir, config, state);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
   const preSetupCheckpoint =
     commitPaths.length > 0
       ? {
@@ -623,6 +626,8 @@ async function setupPlan(args) {
     benchmarkMode,
     benchmarkLintCommand,
     scopeWarnings,
+    scaffoldHealth,
+    researchIntegrity,
     integrityPreflight,
     nextCommand: command,
     guideCommand,
@@ -875,6 +880,7 @@ async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
       constraints: benchmarkConstraintsFromScript(script.path, metrics),
     });
   }
+  candidates.push(...(await discoverDocumentationBenchmarkHints(workDir, prompt)));
   candidates.push(...(await discoverPackageBenchmarkScripts(workDir, prompt)));
   candidates.push(...(await discoverCargoBenchmarkHints(workDir, prompt)));
   candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
@@ -887,6 +893,70 @@ async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
       ? "points"
       : inferMetricUnit(best.metricName),
   };
+}
+
+async function discoverDocumentationBenchmarkHints(workDir: string, prompt: string) {
+  const docsRoot = path.join(workDir, "docs");
+  if (!(await pathExists(docsRoot))) return [];
+  const files: string[] = [];
+  await collectDocumentationHintFiles(workDir, docsRoot, files, 0);
+  const candidates = [];
+  for (const relative of files) {
+    const text = await fsp.readFile(path.join(workDir, relative), "utf8").catch(() => "");
+    const metrics = metricNamesFromScript(text);
+    const command = commandFromDocumentationHint(text);
+    if (!metrics.length || !command) continue;
+    candidates.push({
+      path: relative,
+      command,
+      metricName: choosePrimaryMetricName(metrics),
+      metrics,
+      score: benchmarkPromptScore(prompt, relative, text, metrics) + 6,
+      constraints: benchmarkConstraintsFromScript(relative, metrics),
+    });
+  }
+  return candidates;
+}
+
+async function collectDocumentationHintFiles(
+  workDir: string,
+  dir: string,
+  files: string[],
+  depth: number,
+) {
+  if (depth > 2 || files.length >= 100) return;
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectDocumentationHintFiles(workDir, absolute, files, depth + 1);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
+    if (!/\.(?:md|mdx|txt)$/i.test(relative)) continue;
+    if (
+      !/autoresearch|benchmark|bench|perf|score|quality|eval|evaluator|holdout|promotion|research/i.test(
+        relative,
+      )
+    ) {
+      continue;
+    }
+    files.push(relative);
+  }
+}
+
+function commandFromDocumentationHint(text: string) {
+  const commandMatches = [
+    ...String(text).matchAll(
+      /`([^`\r\n]*(?:node|python|cargo|npm|pnpm|yarn|bash|powershell|pwsh)[^`\r\n]*)`/gi,
+    ),
+  ];
+  const preferred = commandMatches.find((match) =>
+    /METRIC|holdout|benchmark|autoresearch|score|eval|harness/i.test(
+      `${match[1]}\n${text.slice(Math.max(0, match.index || 0), (match.index || 0) + 800)}`,
+    ),
+  );
+  return String((preferred || commandMatches[0])?.[1] || "").trim();
 }
 
 async function discoverBenchmarkFiles(workDir: string) {
@@ -1246,6 +1316,8 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     stage,
     setup,
     state,
+    scaffoldHealth: state.scaffoldHealth,
+    researchIntegrity: state.researchIntegrity,
     doctor: {
       ok: doctor.ok,
       issues: doctor.issues,
@@ -1976,8 +2048,10 @@ async function benchmarkCommandFromArgs(args: LooseObject, workDir) {
   if (args.command && commandFile) {
     throw new Error("Use either --command or --command-file, not both.");
   }
+  const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
   const command =
     args.command ||
+    (separatorCommand ? args._.slice(1).join(" ") : "") ||
     (commandFile
       ? await readCommandFile(commandFile, workDir)
       : await defaultBenchmarkCommand(workDir));
@@ -1989,6 +2063,7 @@ async function benchmarkCommandFromArgs(args: LooseObject, workDir) {
     commandFile: commandFile ? resolveOptionPath(commandFile, workDir) : "",
     envFile: envFile ? env.path : "",
     envKeys: env ? Object.keys(env.values).sort((a, b) => a.localeCompare(b)) : [],
+    separatorCommand,
   };
 }
 
@@ -2809,6 +2884,7 @@ async function setupSession(args: LooseObject) {
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
   const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
 
   return {
     ok: true,
@@ -2817,6 +2893,7 @@ async function setupSession(args: LooseObject) {
     shell: shellKind,
     files,
     checkpoint,
+    scaffoldHealth,
     benchmarkMode,
     benchmarkLintCommand,
     scopeWarnings: scopeWarningsFromArgs(args),
@@ -2924,6 +3001,7 @@ async function setupResearchSession(args) {
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
   const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
   return {
     ok: true,
     workDir,
@@ -2933,6 +3011,7 @@ async function setupResearchSession(args) {
     shell: shellKind,
     files,
     checkpoint,
+    scaffoldHealth,
     benchmarkMode: {
       explicitCommand: true,
       printsMetric: true,
@@ -3028,6 +3107,9 @@ function dashboardSettings(config, extra: LooseObject = {}) {
 async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
+  const enrichedState = { ...state, scaffoldHealth, researchIntegrity };
   const warnings = context.suppressEnvironmentWarnings
     ? []
     : await operatorWarningsForWorkDir(workDir);
@@ -3048,7 +3130,7 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
   return buildDashboardViewModel({
-    state,
+    state: enrichedState,
     settings,
     commands: dashboardCommands(workDir, qualityGap),
     setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({
@@ -3328,6 +3410,13 @@ async function runExperiment(args: LooseObject) {
     commandFile: commandInput.commandFile,
     envFile: commandInput.envFile,
     envKeys: commandInput.envKeys,
+    commandDiagnostics: commandDiagnostics({
+      command,
+      commandFile: commandInput.commandFile,
+      envFile: commandInput.envFile,
+      separatorCommand: commandInput.separatorCommand,
+      result: benchmark,
+    }),
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut,
     durationSeconds: benchmark.durationSeconds,
@@ -3946,6 +4035,8 @@ async function deleteLastRunPacket(workDir) {
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
   const memory = buildExperimentMemory({
     runs: state.current,
@@ -3974,6 +4065,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     development: state.development,
     promotion: state.promotion,
     confidence: state.confidence,
+    scaffoldHealth,
+    researchIntegrity,
+    runtimeProvenance: runtimeProvenance(),
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -4014,6 +4108,24 @@ function compactPublicState(state: LooseObject) {
     best: state.best,
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
+    evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
+    scaffoldHealth: state.scaffoldHealth
+      ? {
+          ok: state.scaffoldHealth.ok,
+          status: state.scaffoldHealth.status,
+          blockers: (state.scaffoldHealth.checks || [])
+            .filter((check) => check.severity === "blocker")
+            .map((check) => check.message || check.code),
+        }
+      : null,
+    researchIntegrity: state.researchIntegrity
+      ? {
+          ok: state.researchIntegrity.ok,
+          currentLabel: state.researchIntegrity.currentLabel,
+          evidenceLabels: state.researchIntegrity.evidenceLabels || [],
+          notPromotableBecause: state.researchIntegrity.notPromotableBecause || [],
+        }
+      : null,
     limitReached: Boolean(limit.limitReached),
     remainingIterations: limit.remainingIterations ?? null,
     nextAction: continuation.nextAction || "Run doctor, then next.",
@@ -4075,6 +4187,10 @@ function dashboardCommands(workDir, qualityGap = null) {
       command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}`,
     },
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
+    {
+      label: "Finalize current tree",
+      command: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
+    },
     { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
     { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
     { label: "New segment", command: `node ${script} new-segment --cwd ${cwd} --dry-run` },
@@ -4083,6 +4199,18 @@ function dashboardCommands(workDir, qualityGap = null) {
       command: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
     },
   ];
+}
+
+function runtimeProvenance(drift: LooseObject | null = null) {
+  return {
+    pluginVersion: PLUGIN_VERSION,
+    sourceRoot: PLUGIN_ROOT,
+    repoRoot: REPO_ROOT,
+    mcpEntrypoint: MCP_SCRIPT_PATH,
+    installedCachePath:
+      drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
+    driftConfidence: drift ? (drift.ok === false ? "drift-detected" : "checked") : "source-only",
+  };
 }
 
 function loopContinuation(
@@ -4217,6 +4345,7 @@ function continuationCommands(workDir) {
     checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
     newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
     promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
+    finalizeCurrentTree: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
   };
 }
 
@@ -4260,6 +4389,18 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     warningDetails.push(detail);
     if (detail.code === "benchmark_contract_changed") issues.push(detail.message);
     else warnings.push(detail.message);
+  }
+  for (const check of state.scaffoldHealth?.checks || []) {
+    if (!check?.message) continue;
+    warningDetails.push(check);
+    warnings.push(check.message);
+    if (check.severity === "blocker") issues.push(check.message);
+  }
+  for (const warning of state.researchIntegrity?.warnings || []) {
+    warnings.push(warning);
+  }
+  for (const blocker of state.researchIntegrity?.blockers || []) {
+    issues.push(blocker);
   }
   const drift = await buildDriftReport({
     pluginRoot: PLUGIN_ROOT,
@@ -4349,6 +4490,9 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     },
     benchmark,
     drift,
+    runtimeProvenance: runtimeProvenance(drift),
+    scaffoldHealth: state.scaffoldHealth,
+    researchIntegrity: state.researchIntegrity,
     issues,
     warnings,
     warningDetails,
@@ -4679,6 +4823,7 @@ const mcpInterface = createMcpInterface({
   doctorHooks,
   doctorSession,
   exportDashboard,
+  finalizeCurrentTree: buildFinalizeCurrentTree,
   finalizePreview: buildFinalizePreview,
   gapCandidates: buildGapCandidates,
   guidedSetup,
@@ -4705,301 +4850,19 @@ const mcpInterface = createMcpInterface({
 const { callTool, toolSchemas, validateToolArguments } = mcpInterface;
 
 function startMcpServer() {
-  let buffer = Buffer.alloc(0);
-  process.stdin.on("data", (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    if (buffer.length > MAX_MCP_FRAME_BYTES + 1024 && buffer.indexOf("\r\n\r\n") < 0) {
-      buffer = Buffer.alloc(0);
-      sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Request too large." } });
-      return;
-    }
-    for (;;) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) return;
-      const header = buffer.subarray(0, headerEnd).toString("utf8");
-      const match = header.match(/Content-Length:\s*(\d+)/i);
-      if (!match) {
-        buffer = buffer.subarray(headerEnd + 4);
-        continue;
-      }
-      const length = Number(match[1]);
-      const bodyStart = headerEnd + 4;
-      if (!Number.isFinite(length) || length < 0 || length > MAX_MCP_FRAME_BYTES) {
-        sendMcp({
-          jsonrpc: "2.0",
-          id: null,
-          error: {
-            code: -32000,
-            message: `Request too large. Max frame size is ${MAX_MCP_FRAME_BYTES} bytes.`,
-          },
-        });
-        buffer =
-          buffer.length >= bodyStart + Math.max(0, length)
-            ? buffer.subarray(bodyStart + Math.max(0, length))
-            : Buffer.alloc(0);
-        continue;
-      }
-      if (buffer.length < bodyStart + length) return;
-      const body = buffer.subarray(bodyStart, bodyStart + length).toString("utf8");
-      buffer = buffer.subarray(bodyStart + length);
-      let message;
-      try {
-        message = JSON.parse(body);
-      } catch (error) {
-        sendMcp({
-          jsonrpc: "2.0",
-          id: null,
-          error: { code: -32700, message: `Parse error: ${error.message}` },
-        });
-        continue;
-      }
-      handleMcpMessage(message).catch((error) => {
-        sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32000, message: error.message } });
-      });
-    }
-  });
-}
-
-async function handleMcpMessage(message) {
-  if (message.method === "initialize") {
-    sendMcp({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: "2024-11-05",
-        capabilities: { tools: {}, resources: {}, prompts: {} },
-        serverInfo: { name: "codex-autoresearch", version: PLUGIN_VERSION },
-      },
-    });
-    return;
-  }
-  if (message.method === "notifications/initialized") return;
-  if (message.method === "tools/list") {
-    sendMcp({ jsonrpc: "2.0", id: message.id, result: { tools: toolSchemas } });
-    return;
-  }
-
-  if (message.method === "resources/list") {
-    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResources() });
-    return;
-  }
-
-  if (message.method === "resources/templates/list") {
-    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpResourceTemplates() });
-    return;
-  }
-
-  if (message.method === "resources/read") {
-    try {
-      const result = await readMcpResource(message.params?.uri, callTool);
-      sendMcp({ jsonrpc: "2.0", id: message.id, result });
-    } catch (error) {
-      sendMcp({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
-      });
-    }
-    return;
-  }
-
-  if (message.method === "prompts/list") {
-    sendMcp({ jsonrpc: "2.0", id: message.id, result: listMcpPrompts() });
-    return;
-  }
-
-  if (message.method === "prompts/get") {
-    try {
-      const result = getMcpPrompt(message.params?.name, message.params?.arguments || {});
-      sendMcp({ jsonrpc: "2.0", id: message.id, result });
-    } catch (error) {
-      sendMcp({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32602, message: error.message || String(error) },
-      });
-    }
-    return;
-  }
-  if (message.method === "tools/call") {
-    try {
-      validateToolArguments(message.params?.name, message.params?.arguments || {});
-      const result = await callTool(message.params.name, message.params.arguments || {});
-      const payload = mcpSuccessEnvelope(message.params.name, result);
-      sendMcp({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          structuredContent: payload,
-          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-        },
-      });
-    } catch (error) {
-      const payload = mcpErrorEnvelope(message.params?.name, error);
-      sendMcp({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          isError: true,
-          structuredContent: payload,
-          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-        },
-      });
-    }
-    return;
-  }
-  if (message.id != null) {
-    sendMcp({
-      jsonrpc: "2.0",
-      id: message.id,
-      error: { code: -32601, message: `Unknown method: ${message.method}` },
-    });
-  }
-}
-
-function mcpSuccessEnvelope(tool, result) {
-  const body =
-    result && typeof result === "object" && !Array.isArray(result) ? result : { value: result };
-  return {
-    ...body,
-    ok: body.ok !== false,
-    tool,
-    workDir: body.workDir || body.working_dir,
-    result: body,
-  };
-}
-
-function mcpErrorEnvelope(tool, error) {
-  return {
-    ok: false,
-    tool: tool || "unknown",
-    error: error.message || String(error),
-  };
-}
-
-function sendMcp(message) {
-  const body = JSON.stringify(message);
-  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-}
-
-function mcpFrame(message) {
-  const body = JSON.stringify(message);
-  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
-}
-
-function collectMcpFrames(buffer, messages) {
-  let remaining = buffer;
-  for (;;) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd < 0) return remaining;
-    const header = remaining.subarray(0, headerEnd).toString("utf8");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      remaining = remaining.subarray(headerEnd + 4);
-      continue;
-    }
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    if (!Number.isFinite(length) || length < 0) {
-      remaining = remaining.subarray(bodyStart);
-      continue;
-    }
-    if (remaining.length < bodyStart + length) return remaining;
-    const body = remaining.subarray(bodyStart, bodyStart + length).toString("utf8");
-    remaining = remaining.subarray(bodyStart + length);
-    try {
-      messages.push(JSON.parse(body));
-    } catch (error) {
-      messages.push({ jsonrpc: "2.0", error: { code: -32700, message: error.message } });
-    }
-  }
-}
-
-function waitForMcpResponse(messages, id, timeoutMs): Promise<any> {
-  const started = Date.now();
-  return new Promise<any>((resolve) => {
-    const check = () => {
-      const message = messages.find((item) => item.id === id);
-      if (message || Date.now() - started >= timeoutMs) {
-        resolve(message || null);
-        return;
-      }
-      setTimeout(check, 25);
-    };
-    check();
+  startMcpStdioServer({
+    callTool,
+    serverVersion: PLUGIN_VERSION,
+    toolSchemas,
+    validateToolArguments,
   });
 }
 
 async function mcpSmoke() {
-  const messages = [];
-  let buffer = Buffer.alloc(0);
-  let stderr = "";
-  const child = spawn(process.execPath, [MCP_SCRIPT_PATH], {
-    cwd: PLUGIN_ROOT,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (chunk) => {
-    buffer = collectMcpFrames(Buffer.concat([buffer, chunk]), messages);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  child.stdin.write(
-    mcpFrame({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "codex-autoresearch-smoke", version: "0" },
-      },
-    }),
-  );
-  child.stdin.write(mcpFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }));
-  child.stdin.write(mcpFrame({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
-
-  const initialize = await waitForMcpResponse(messages, 1, 1500);
-  const toolsList = await waitForMcpResponse(messages, 2, 1500);
-  child.kill();
-
-  const tools = toolsList?.result?.tools || [];
-  const toolNames = tools.map((tool) => tool.name).filter(Boolean);
-  const requiredTools = [
-    "setup_plan",
-    "setup_session",
-    "next_experiment",
-    "prompt_plan",
-    "onboarding_packet",
-    "recommend_next",
-    "read_state",
-    "benchmark_inspect",
-    "benchmark_lint",
-    "checks_inspect",
-    "new_segment",
-    "promote_gate",
-    "doctor_session",
-    "serve_dashboard",
-    "clear_session",
-  ];
-  const missingRequiredTools = requiredTools.filter((tool) => !toolNames.includes(tool));
-  return {
-    ok: Boolean(
-      initialize?.result?.serverInfo?.name === "codex-autoresearch" &&
-      tools.length > 0 &&
-      missingRequiredTools.length === 0,
-    ),
+  return await runMcpSmoke({
+    mcpScriptPath: MCP_SCRIPT_PATH,
     pluginRoot: PLUGIN_ROOT,
-    command: `${process.execPath} ${MCP_SCRIPT_PATH}`,
-    initialize: initialize?.result || initialize?.error || null,
-    toolCount: tools.length,
-    toolNames,
-    missingRequiredTools,
-    stderr: stderr.trim(),
-    note: "This validates the plugin stdio server directly. If this is ok but Codex does not show MCP tools, the failure is in Codex tool surfacing or session registration, not this server process.",
-  };
+  });
 }
 
 async function main() {
@@ -5032,6 +4895,7 @@ async function main() {
     doctorHooks,
     doctorSession,
     exportDashboard,
+    finalizeCurrentTree: buildFinalizeCurrentTree,
     finalizePreview: buildFinalizePreview,
     gapCandidates: buildGapCandidates,
     guidedSetup,
@@ -5054,7 +4918,7 @@ async function main() {
     recipeCommand,
     resolveWorkDir,
     runExperiment,
-    serveAutoresearch,
+    serveDashboard,
     setupPlan,
     setupResearchSession,
     setupSession,

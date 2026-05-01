@@ -21,6 +21,32 @@ type ToolSchema = {
 
 const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
 
+const LOOP_INTENT_PROPERTIES = {
+  name: { type: "string" },
+  goal: { type: "string" },
+  metric_name: { type: "string" },
+  metric_unit: { type: "string" },
+  direction: { type: "string", enum: ["lower", "higher"] },
+  benchmark_command: { type: "string" },
+  benchmark_prints_metric: { type: "boolean" },
+  checks_command: { type: "string" },
+  files_in_scope: { type: "array", items: { type: "string" } },
+  off_limits: { type: "array", items: { type: "string" } },
+  constraints: { type: "array", items: { type: "string" } },
+  secondary_metrics: { type: "array", items: { type: "string" } },
+  commit_paths: { type: "array", items: { type: "string" } },
+  max_iterations: { type: "integer" },
+} satisfies Record<string, JsonSchema>;
+
+const SETUP_SOURCE_PROPERTIES = {
+  recipe_id: { type: "string" },
+  catalog: { type: "string" },
+} satisfies Record<string, JsonSchema>;
+
+const UNSAFE_COMMAND_PROPERTY = {
+  allow_unsafe_command: { type: "boolean" },
+} satisfies Record<string, JsonSchema>;
+
 export const toolSchemas = applyToolContracts([
   {
     name: "setup_plan",
@@ -30,23 +56,9 @@ export const toolSchemas = applyToolContracts([
       type: "object",
       properties: {
         working_dir: { type: "string" },
-        recipe_id: { type: "string" },
-        catalog: { type: "string" },
-        name: { type: "string" },
-        goal: { type: "string" },
-        metric_name: { type: "string" },
-        metric_unit: { type: "string" },
-        direction: { type: "string", enum: ["lower", "higher"] },
-        benchmark_command: { type: "string" },
-        benchmark_prints_metric: { type: "boolean" },
-        checks_command: { type: "string" },
-        files_in_scope: { type: "array", items: { type: "string" } },
-        off_limits: { type: "array", items: { type: "string" } },
-        constraints: { type: "array", items: { type: "string" } },
-        secondary_metrics: { type: "array", items: { type: "string" } },
-        commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "integer" },
-        allow_unsafe_command: { type: "boolean" },
+        ...SETUP_SOURCE_PROPERTIES,
+        ...LOOP_INTENT_PROPERTIES,
+        ...UNSAFE_COMMAND_PROPERTY,
       },
       required: ["working_dir"],
     },
@@ -59,26 +71,12 @@ export const toolSchemas = applyToolContracts([
       type: "object",
       properties: {
         working_dir: { type: "string" },
-        recipe_id: { type: "string" },
-        catalog: { type: "string" },
-        name: { type: "string" },
-        goal: { type: "string" },
-        metric_name: { type: "string" },
-        metric_unit: { type: "string" },
-        direction: { type: "string", enum: ["lower", "higher"] },
-        benchmark_command: { type: "string" },
-        benchmark_prints_metric: { type: "boolean" },
-        checks_command: { type: "string" },
-        files_in_scope: { type: "array", items: { type: "string" } },
-        off_limits: { type: "array", items: { type: "string" } },
-        constraints: { type: "array", items: { type: "string" } },
-        secondary_metrics: { type: "array", items: { type: "string" } },
-        commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "integer" },
+        ...SETUP_SOURCE_PROPERTIES,
+        ...LOOP_INTENT_PROPERTIES,
         start_dashboard: { type: "boolean" },
         port: { type: "number" },
         dashboard_refresh_seconds: { type: "number" },
-        allow_unsafe_command: { type: "boolean" },
+        ...UNSAFE_COMMAND_PROPERTY,
       },
       required: ["working_dir"],
     },
@@ -92,21 +90,8 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         prompt: { type: "string" },
-        name: { type: "string" },
-        goal: { type: "string" },
-        metric_name: { type: "string" },
-        metric_unit: { type: "string" },
-        direction: { type: "string", enum: ["lower", "higher"] },
-        benchmark_command: { type: "string" },
-        benchmark_prints_metric: { type: "boolean" },
-        checks_command: { type: "string" },
-        files_in_scope: { type: "array", items: { type: "string" } },
-        off_limits: { type: "array", items: { type: "string" } },
-        constraints: { type: "array", items: { type: "string" } },
-        secondary_metrics: { type: "array", items: { type: "string" } },
-        commit_paths: { type: "array", items: { type: "string" } },
-        max_iterations: { type: "integer" },
-        allow_unsafe_command: { type: "boolean" },
+        ...LOOP_INTENT_PROPERTIES,
+        ...UNSAFE_COMMAND_PROPERTY,
       },
       required: ["working_dir", "prompt"],
     },
@@ -370,6 +355,20 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "finalize_current_tree",
+    description:
+      "Write a current-final-tree finalization plan that covers the current non-session branch diff.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        trunk: { type: "string" },
+        exclude_session_artifacts: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "integrations",
     description:
       "List, doctor, or load external integration surfaces such as recipe catalogs and model commands.",
@@ -546,6 +545,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   "quality-gap": "measure_quality_gap",
   "gap-candidates": "gap_candidates",
   "finalize-preview": "finalize_preview",
+  "finalize-current-tree": "finalize_current_tree",
   integrations: "integrations",
   init: "init_experiment",
   run: "run_experiment",
@@ -580,6 +580,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   dashboard_refresh_seconds: "dashboardRefreshSeconds",
   dry_run: "dryRun",
   env_file: "envFile",
+  exclude_session_artifacts: "excludeSessionArtifacts",
   files_in_scope: "filesInScope",
   from_last: "fromLast",
   gate_name: "gateName",
@@ -608,7 +609,7 @@ export function validateToolArguments(name: string, args, options: ToolArgs = {}
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
   for (const required of schema.required || []) {
-    if (normalized[required] == null || normalized[required] === "")
+    if (missingArgumentValue(normalized[required]))
       throw new Error(`Missing required argument: ${required}`);
   }
   const rejectUnknown = options.rejectUnknown !== false;
@@ -619,20 +620,7 @@ export function validateToolArguments(name: string, args, options: ToolArgs = {}
       continue;
     }
     if (value == null) continue;
-    if (property.type === "array" && !Array.isArray(value))
-      throw new Error(`Argument ${key} must be an array.`);
-    if (property.type === "object" && !isObjectArgument(value))
-      throw new Error(`Argument ${key} must be an object.`);
-    if (property.type === "number" && typeof value !== "number")
-      throw new Error(`Argument ${key} must be a number.`);
-    if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value)))
-      throw new Error(`Argument ${key} must be an integer.`);
-    if (property.type === "boolean" && typeof value !== "boolean")
-      throw new Error(`Argument ${key} must be a boolean.`);
-    if (property.type === "string" && typeof value !== "string")
-      throw new Error(`Argument ${key} must be a string.`);
-    if (property.enum && !property.enum.includes(value))
-      throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
+    assertSchemaArgument(key, value, property);
   }
   inferMcpResearchSlug(name, normalized);
   return normalized;
@@ -705,6 +693,27 @@ function inferMcpResearchSlug(name: string, normalized: ToolArgs) {
     normalized,
     String(normalized.working_dir || ""),
   ).slug;
+}
+
+function missingArgumentValue(value: unknown) {
+  return value == null || value === "";
+}
+
+function assertSchemaArgument(key: string, value: unknown, property: Record<string, any>) {
+  if (property.type === "array" && !Array.isArray(value))
+    throw new Error(`Argument ${key} must be an array.`);
+  if (property.type === "object" && !isObjectArgument(value))
+    throw new Error(`Argument ${key} must be an object.`);
+  if (property.type === "number" && typeof value !== "number")
+    throw new Error(`Argument ${key} must be a number.`);
+  if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value)))
+    throw new Error(`Argument ${key} must be an integer.`);
+  if (property.type === "boolean" && typeof value !== "boolean")
+    throw new Error(`Argument ${key} must be a boolean.`);
+  if (property.type === "string" && typeof value !== "string")
+    throw new Error(`Argument ${key} must be a string.`);
+  if (property.enum && !property.enum.includes(value))
+    throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
 }
 
 function isObjectArgument(value: unknown) {

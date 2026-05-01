@@ -32,10 +32,7 @@ export function useDashboardSession({
   initialEntries,
   initialMeta,
 }: UseDashboardSessionArgs): DashboardSessionState {
-  const [entries, setEntries] = useState<DashboardEntry[]>(() => {
-    const sourceEntries = Array.isArray(initialEntries) ? initialEntries : [];
-    return sourceEntries.length ? sourceEntries : DEMO_ENTRIES;
-  });
+  const [entries, setEntries] = useState<DashboardEntry[]>(() => initialEntriesFor(initialEntries));
   const [meta, setMeta] = useState<DashboardMeta>(() => initialMeta || DEMO_META);
   const [viewModel, setViewModel] = useState<DashboardViewModel>(
     () => initialMeta?.viewModel || {},
@@ -56,13 +53,7 @@ export function useDashboardSession({
     }
   }, [activeSegment, manualSegment, normalized.latestSegment, normalized.segments]);
 
-  const session = useMemo(() => {
-    const active =
-      normalized.segments.find((segment) => segment.segment === activeSegment) ||
-      normalized.segments.find((segment) => segment.segment === normalized.latestSegment) ||
-      normalized.segments[0];
-    return active || { segment: 0, config: defaultConfig(), runs: [] };
-  }, [activeSegment, normalized]);
+  const session = useMemo(() => sessionFor(normalized, activeSegment), [activeSegment, normalized]);
 
   return {
     activeSegment,
@@ -76,4 +67,17 @@ export function useDashboardSession({
     setViewModel,
     viewModel,
   };
+}
+
+function initialEntriesFor(initialEntries?: DashboardEntry[]) {
+  const sourceEntries = Array.isArray(initialEntries) ? initialEntries : [];
+  return sourceEntries.length ? sourceEntries : DEMO_ENTRIES;
+}
+
+function sessionFor(normalized: NormalizedEntries, activeSegment: number): SessionSegment {
+  const active =
+    normalized.segments.find((segment) => segment.segment === activeSegment) ||
+    normalized.segments.find((segment) => segment.segment === normalized.latestSegment) ||
+    normalized.segments[0];
+  return active || { segment: 0, config: defaultConfig(), runs: [] };
 }

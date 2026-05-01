@@ -6,6 +6,7 @@ import type {
   DashboardMode,
   DashboardViewModel,
   MissionControlModel,
+  MissionStep,
   RunAsi,
 } from "../types";
 
@@ -13,6 +14,13 @@ type RunLiveAction = (
   action: string,
   bodyOverride?: Record<string, unknown> | null,
 ) => Promise<{ ok?: boolean; receipt?: ActionReceipt | null } | undefined>;
+type StructuredAsi = ReturnType<typeof structuredAsiFrom>;
+type LogDecisionSetters = {
+  setAsi: (value: string) => void;
+  setError: (value: string) => void;
+  setRawDirty: (value: boolean) => void;
+  setStructuredAsi: (value: StructuredAsi) => void;
+};
 
 export function MissionPanel({
   viewModel,
@@ -53,39 +61,14 @@ export function MissionPanel({
             active && (step.id === active.id || step.title === active.title),
           );
           return (
-            <div
-              className={`mission-step ${step.state || "idle"} ${isActive ? "active-step" : "inactive-step"}`}
+            <MissionStepCard
               key={step.id || step.title}
-              aria-current={isActive ? "step" : undefined}
-            >
-              <span>{step.state || "idle"}</span>
-              <strong>{step.title}</strong>
-              <p>{step.detail}</p>
-              {canRunLive && step.safeAction && (
-                <button
-                  className="tool-button mission-run"
-                  type="button"
-                  data-mission-action={step.safeAction}
-                  aria-describedby={`${step.id || step.safeAction}-disabled-reason`}
-                  disabled={Boolean(actionsById[step.safeAction]?.pending)}
-                  onClick={() => runLiveAction(step.safeAction)}
-                >
-                  {actionsById[step.safeAction]?.pending
-                    ? "Running..."
-                    : actionLabel(step.safeAction)}
-                </button>
-              )}
-              {canRunLive && step.safeAction ? (
-                <small
-                  className="disabled-reason"
-                  id={`${step.id || step.safeAction}-disabled-reason`}
-                >
-                  {actionsById[step.safeAction]?.pending
-                    ? `${actionLabel(step.safeAction)} is already running.`
-                    : "Guarded local action; no finalizer mutation."}
-                </small>
-              ) : null}
-            </div>
+              step={step}
+              active={isActive}
+              canRunLive={canRunLive}
+              actionState={step.safeAction ? actionsById[step.safeAction] : undefined}
+              runLiveAction={runLiveAction}
+            />
           );
         })}
       </div>
@@ -97,6 +80,53 @@ export function MissionPanel({
         lastReceipt={lastReceipt}
       />
     </section>
+  );
+}
+
+function MissionStepCard({
+  step,
+  active,
+  canRunLive,
+  actionState,
+  runLiveAction,
+}: {
+  step: MissionStep;
+  active: boolean;
+  canRunLive: boolean;
+  actionState?: ActionState;
+  runLiveAction: RunLiveAction;
+}) {
+  const action = step.safeAction || "";
+  const disabledReasonId = `${step.id || action}-disabled-reason`;
+  const pending = Boolean(actionState?.pending);
+  return (
+    <div
+      className={`mission-step ${step.state || "idle"} ${active ? "active-step" : "inactive-step"}`}
+      aria-current={active ? "step" : undefined}
+    >
+      <span>{step.state || "idle"}</span>
+      <strong>{step.title}</strong>
+      <p>{step.detail}</p>
+      {canRunLive && action && (
+        <button
+          className="tool-button mission-run"
+          type="button"
+          data-mission-action={action}
+          aria-describedby={disabledReasonId}
+          disabled={pending}
+          onClick={() => runLiveAction(action)}
+        >
+          {pending ? "Running..." : actionLabel(action)}
+        </button>
+      )}
+      {canRunLive && action ? (
+        <small className="disabled-reason" id={disabledReasonId}>
+          {pending
+            ? `${actionLabel(action)} is already running.`
+            : "Guarded local action; no finalizer mutation."}
+        </small>
+      ) : null}
+    </div>
   );
 }
 
@@ -116,14 +146,11 @@ function LogDecision({
   const logDecision = mission.logDecision || {};
   const available = Boolean(logDecision.available);
   const statuses = useMemo(
-    () =>
-      Array.isArray(logDecision.allowedStatuses) && logDecision.allowedStatuses.length
-        ? logDecision.allowedStatuses
-        : ["keep", "discard"],
+    () => defaultStatusesFor(logDecision.allowedStatuses),
     [logDecision.allowedStatuses],
   );
-  const [status, setStatus] = useState(logDecision.suggestedStatus || statuses[0] || "keep");
-  const [description, setDescription] = useState(logDecision.defaultDescription || "");
+  const [status, setStatus] = useState(() => logDecisionStatusFor(logDecision, statuses));
+  const [description, setDescription] = useState(() => logDecision.defaultDescription || "");
   const [structuredAsi, setStructuredAsi] = useState(() =>
     structuredAsiFrom(logDecision.asiTemplate),
   );
@@ -139,12 +166,22 @@ function LogDecision({
     [logDecision.command, logDecision.suggestedStatus, packetFingerprint],
   );
   useEffect(() => {
-    setStatus(logDecision.suggestedStatus || statuses[0] || "keep");
-    setDescription(logDecision.defaultDescription || "");
-    setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
-    setAsi(stringifyAsi(logDecision.asiTemplate));
-    setRawDirty(false);
-    setError("");
+    resetLogDecisionForm(
+      {
+        asiTemplate: logDecision.asiTemplate,
+        defaultDescription: logDecision.defaultDescription,
+        suggestedStatus: logDecision.suggestedStatus,
+      },
+      statuses,
+      {
+        setDescription,
+        setStatus,
+        setAsi,
+        setError,
+        setRawDirty,
+        setStructuredAsi,
+      },
+    );
   }, [
     formKey,
     logDecision.asiTemplate,
@@ -155,10 +192,12 @@ function LogDecision({
   useEffect(() => {
     if (lastReceipt?.ok && String(lastReceipt.action || "").startsWith("log-")) {
       setDescription("");
-      setStructuredAsi(structuredAsiFrom(logDecision.asiTemplate));
-      setAsi(stringifyAsi(logDecision.asiTemplate));
-      setRawDirty(false);
-      setError("");
+      resetAsiFields(logDecision.asiTemplate, {
+        setAsi,
+        setError,
+        setRawDirty,
+        setStructuredAsi,
+      });
     }
   }, [lastReceipt?.receiptId, lastReceipt?.ok, lastReceipt?.action, logDecision.asiTemplate]);
   const liveAvailable = mode.liveActions && available;
@@ -177,12 +216,10 @@ function LogDecision({
       return;
     }
     setError("");
-    const result = await runLiveAction(action, {
-      confirm: action,
-      lastRunFingerprint: packetFingerprint,
-      description,
-      asi: parsed.value,
-    });
+    const result = await runLiveAction(
+      action,
+      buildLogDecisionBody(action, packetFingerprint, description, parsed.value),
+    );
     if (!result?.ok && result?.receipt?.stderrSummary) setError(result.receipt.stderrSummary);
   };
   return (
@@ -215,45 +252,35 @@ function LogDecision({
       </div>
       <fieldset className="asi-structured" id="log-asi-field" hidden={hidden}>
         <legend>ASI</legend>
-        <label className="log-field" htmlFor="asi-hypothesis">
-          <span>Hypothesis</span>
-          <input
-            id="asi-hypothesis"
-            type="text"
-            value={structuredAsi.hypothesis}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("hypothesis", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-evidence">
-          <span>Evidence</span>
-          <textarea
-            id="asi-evidence"
-            value={structuredAsi.evidence}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("evidence", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-rollback-reason">
-          <span>Rollback reason</span>
-          <input
-            id="asi-rollback-reason"
-            type="text"
-            value={structuredAsi.rollback_reason}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("rollback_reason", event.target.value)}
-          />
-        </label>
-        <label className="log-field" htmlFor="asi-next-action-hint">
-          <span>Next action hint</span>
-          <input
-            id="asi-next-action-hint"
-            type="text"
-            value={structuredAsi.next_action_hint}
-            disabled={!liveAvailable || pending}
-            onChange={(event) => updateStructuredAsi("next_action_hint", event.target.value)}
-          />
-        </label>
+        <AsiTextField
+          id="asi-hypothesis"
+          label="Hypothesis"
+          value={structuredAsi.hypothesis}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("hypothesis", value)}
+        />
+        <AsiTextField
+          id="asi-evidence"
+          label="Evidence"
+          value={structuredAsi.evidence}
+          disabled={!liveAvailable || pending}
+          multiline
+          onChange={(value) => updateStructuredAsi("evidence", value)}
+        />
+        <AsiTextField
+          id="asi-rollback-reason"
+          label="Rollback reason"
+          value={structuredAsi.rollback_reason}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("rollback_reason", value)}
+        />
+        <AsiTextField
+          id="asi-next-action-hint"
+          label="Next action hint"
+          value={structuredAsi.next_action_hint}
+          disabled={!liveAvailable || pending}
+          onChange={(value) => updateStructuredAsi("next_action_hint", value)}
+        />
         <details className="raw-asi-panel">
           <summary>Raw JSON</summary>
           <label htmlFor="log-decision-asi">ASI JSON</label>
@@ -291,6 +318,78 @@ function LogDecision({
   );
 }
 
+function defaultStatusesFor(allowedStatuses: unknown): string[] {
+  return Array.isArray(allowedStatuses) && allowedStatuses.length
+    ? (allowedStatuses as string[])
+    : ["keep", "discard"];
+}
+
+function logDecisionStatusFor(logDecision: MissionControlModel["logDecision"], statuses: string[]) {
+  return logDecision?.suggestedStatus || statuses[0] || "keep";
+}
+
+function resetLogDecisionForm(
+  logDecision: {
+    asiTemplate?: RunAsi;
+    defaultDescription?: string;
+    suggestedStatus?: string;
+  },
+  statuses: string[],
+  setters: LogDecisionSetters & {
+    setDescription: (value: string) => void;
+    setStatus: (value: string) => void;
+  },
+) {
+  setters.setStatus(logDecisionStatusFor(logDecision, statuses));
+  setters.setDescription(logDecision?.defaultDescription || "");
+  resetAsiFields(logDecision?.asiTemplate, setters);
+}
+
+function resetAsiFields(asiTemplate: RunAsi | undefined, setters: LogDecisionSetters) {
+  setters.setStructuredAsi(structuredAsiFrom(asiTemplate));
+  setters.setAsi(stringifyAsi(asiTemplate));
+  setters.setRawDirty(false);
+  setters.setError("");
+}
+
+function AsiTextField({
+  id,
+  label,
+  value,
+  disabled,
+  multiline = false,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  disabled: boolean;
+  multiline?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="log-field" htmlFor={id}>
+      <span>{label}</span>
+      {multiline ? (
+        <textarea
+          id={id}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <input
+          id={id}
+          type="text"
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+    </label>
+  );
+}
+
 function parseAsi(text: string, status: string, structuredAsi: RunAsi, rawDirty = false) {
   let value: Record<string, unknown>;
   try {
@@ -313,6 +412,20 @@ function parseAsi(text: string, status: string, structuredAsi: RunAsi, rawDirty 
     };
   }
   return { ok: true, value };
+}
+
+function buildLogDecisionBody(
+  action: string,
+  lastRunFingerprint: string,
+  description: string,
+  asi: Record<string, unknown>,
+) {
+  return {
+    confirm: action,
+    lastRunFingerprint,
+    description,
+    asi,
+  };
 }
 
 function structuredAsiFrom(template: RunAsi = {}) {

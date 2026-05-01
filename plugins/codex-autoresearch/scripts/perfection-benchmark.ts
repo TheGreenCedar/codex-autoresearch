@@ -108,17 +108,21 @@ function pass(message = "") {
 const checks = [
   {
     id: "version-sync",
-    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs, scripts/autoresearch-mcp.mjs, scripts/autoresearch.ts, scripts/autoresearch-mcp.ts",
+    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs, scripts/autoresearch-mcp.mjs, scripts/autoresearch.ts, scripts/autoresearch-mcp.ts, lib/mcp-stdio-server.ts",
     description: "All public version surfaces expose the same plugin version.",
     run: async () => {
       const pkg = await readJson("package.json");
       const manifest = await readJson(".codex-plugin/plugin.json");
       const cli = await readText("scripts/autoresearch.ts");
+      const cliServer = await readText("lib/mcp-stdio-server.ts");
       const mcp = await readText("scripts/autoresearch-mcp.ts");
       const cliVersionBound =
         cli.includes('from "../lib/plugin-version.js"') &&
         /pluginVersion:\s*PLUGIN_VERSION/.test(cli) &&
-        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*PLUGIN_VERSION/.test(cli);
+        /serverVersion:\s*PLUGIN_VERSION/.test(cli) &&
+        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*serverVersion/.test(
+          cliServer,
+        );
       const mcpVersionBound =
         mcp.includes('from "../lib/plugin-version.js"') &&
         /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*PLUGIN_VERSION/.test(mcp);

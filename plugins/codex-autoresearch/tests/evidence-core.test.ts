@@ -16,10 +16,7 @@ import {
   statusHash,
 } from "../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
-
-const quoteForShell = (value) => {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-};
+import { quoteForShell } from "./helpers/process.js";
 
 const withTempDir = async (name, fn) => {
   const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-e1-${name}-`));

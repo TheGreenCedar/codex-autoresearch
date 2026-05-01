@@ -16,31 +16,13 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     .filter((item) => finiteMetric(item.value));
   const crashRuns = session.runs.filter((run) => run.status === "crash");
   if (!measured.length) {
-    return {
-      points: [],
-      linePath: "",
-      baselineY: null,
-      bestY: null,
-      baselineValue: readout.baseline,
-      bestValue: readout.best,
-      domain: null,
-      winZone: null,
-      winZoneBounds: null,
-      note: "No finite plotted metrics yet.",
-      summary: "No finite plotted metrics yet.",
-    };
+    return emptyChart(readout);
   }
   const chartRuns = session.runs.filter(
     (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
   );
   const values = measured.map((item) => item.value as number);
-  const min = Math.min(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
-  const max = Math.max(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
-  const rawSpan = max - min;
-  const zeroSpanPadding = Math.max(Math.abs(max) * 0.01, 1);
-  const domainPadding = rawSpan === 0 ? zeroSpanPadding : rawSpan * 0.12;
-  const domain: [number, number] = [round(min - domainPadding), round(max + domainPadding)];
-  const domainSpan = domain[1] - domain[0] || 1;
+  const { domain, domainSpan } = metricDomain(values, readout);
   const xFor = (index: number) =>
     chartRuns.length === 1 ? 500 : 52 + (index * 880) / (chartRuns.length - 1);
   const yFor = (value: number) => 276 - ((value - domain[0]) / domainSpan) * 220;
@@ -65,9 +47,7 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
   const baselineY = finiteMetric(readout.baseline) ? round(yFor(readout.baseline)) : null;
   const bestY = finiteMetric(readout.best) ? round(yFor(readout.best)) : null;
   const improvesLower = definition.bestDirection !== "higher";
-  const winY = bestY == null ? null : improvesLower ? 38 : bestY;
-  const winHeight =
-    bestY == null ? 0 : improvesLower ? Math.max(bestY - 38, 0) : Math.max(276 - bestY, 0);
+  const winZone = chartWinZone(bestY, improvesLower, domain, readout.best);
   const latestPoint = points.at(-1);
   const summaryParts = [
     `${chartRuns.length} plotted runs out of ${session.runs.length} logged runs`,
@@ -87,18 +67,53 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     baselineValue: readout.baseline,
     bestValue: readout.best,
     domain,
-    winZone:
-      bestY == null
-        ? null
-        : { x: 38, y: round(winY as number), width: 922, height: round(winHeight) },
-    winZoneBounds:
-      bestY == null
-        ? null
-        : improvesLower
-          ? { y1: domain[0], y2: readout.best as number }
-          : { y1: readout.best as number, y2: domain[1] },
+    winZone: winZone.zone,
+    winZoneBounds: winZone.bounds,
     note: `${latest ? `latest plotted #${latest.run}` : "latest plotted -"}${bestRun ? ` / Best ${formatMetricValue(readout.best, definition)}` : ""}${crashRuns.length ? ` / ${crashRuns.length} crash held` : ""}`,
     summary: summaryParts.join(". "),
+  };
+}
+
+function emptyChart(readout: DashboardReadout): ChartModel {
+  return {
+    points: [],
+    linePath: "",
+    baselineY: null,
+    bestY: null,
+    baselineValue: readout.baseline,
+    bestValue: readout.best,
+    domain: null,
+    winZone: null,
+    winZoneBounds: null,
+    note: "No finite plotted metrics yet.",
+    summary: "No finite plotted metrics yet.",
+  };
+}
+
+function metricDomain(values: number[], readout: DashboardReadout) {
+  const min = Math.min(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
+  const max = Math.max(...values, readout.baseline ?? values[0], readout.best ?? values[0]);
+  const rawSpan = max - min;
+  const zeroSpanPadding = Math.max(Math.abs(max) * 0.01, 1);
+  const domainPadding = rawSpan === 0 ? zeroSpanPadding : rawSpan * 0.12;
+  const domain: [number, number] = [round(min - domainPadding), round(max + domainPadding)];
+  return { domain, domainSpan: domain[1] - domain[0] || 1 };
+}
+
+function chartWinZone(
+  bestY: number | null,
+  improvesLower: boolean,
+  domain: [number, number],
+  best: number | null,
+) {
+  if (bestY == null) return { zone: null, bounds: null };
+  const y = improvesLower ? 38 : bestY;
+  const height = improvesLower ? Math.max(bestY - 38, 0) : Math.max(276 - bestY, 0);
+  return {
+    zone: { x: 38, y: round(y), width: 922, height: round(height) },
+    bounds: improvesLower
+      ? { y1: domain[0], y2: best as number }
+      : { y1: best as number, y2: domain[1] },
   };
 }
 

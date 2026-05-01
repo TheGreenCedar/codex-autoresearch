@@ -1,132 +1,45 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import {
+  createCliRunner,
+  quoteForShell,
+  runGit,
+  withTempDir as withNamedTempDir,
+} from "./helpers/process.js";
+import {
+  callMcpRequest as callMcpRequestWithServer,
+  mcpFrame,
+  waitForMcpResponseById,
+} from "./helpers/mcp.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const mcpServer = path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs");
-
-const quoteForShell = (value) => {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-};
-
-const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
-
-const runProcess = (command, args, cwd) => {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
-  });
-};
-
-const runCli = (args, options = {}) => {
-  return runProcess(process.execPath, [cli, ...args], options.cwd || pluginRoot);
-};
-
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-};
+const runCli = createCliRunner(cli, pluginRoot);
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
 const git = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
-  assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-  return result.stdout.trim();
+  return await runGit(cwd, args);
 };
-
-function mcpFrame(message) {
-  const body = JSON.stringify(message);
-  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
-}
-
-function parseMcpFrames(stdout) {
-  const frames = [];
-  let remaining = Buffer.from(stdout, "utf8");
-  for (;;) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd < 0) return frames;
-    const header = remaining.subarray(0, headerEnd).toString("utf8");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) return frames;
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    if (remaining.length < bodyStart + length) return frames;
-    frames.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
-    remaining = remaining.subarray(bodyStart + length);
-  }
-}
-
-async function waitForMcpResponseById(stdoutFn, stderrFn, id) {
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    const found = parseMcpFrames(stdoutFn()).find((message) => message.id === id);
-    if (found) return found;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`No MCP response for ${id}\nstdout=${stdoutFn()}\nstderr=${stderrFn()}`);
-}
 
 async function callMcpTool(name, args) {
   return await callMcpRequest("tools/call", { name, arguments: args });
 }
 
 async function callMcpRequest(method, params = {}) {
-  const child = spawn(process.execPath, [mcpServer], {
+  return await callMcpRequestWithServer({
+    args: [mcpServer],
     cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
+    initialize: true,
+    method,
+    params,
   });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-  const send = (message) => {
-    child.stdin.write(mcpFrame(message));
-  };
-
-  try {
-    send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {} },
-    });
-    send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
-    send({ jsonrpc: "2.0", id: 2, method, params });
-    return await waitForMcpResponseById(
-      () => stdout,
-      () => stderr,
-      2,
-    );
-  } finally {
-    child.kill();
-  }
 }
 
 async function renderExportedDashboard(html) {
@@ -596,6 +509,223 @@ test("state separates development best from promotion-grade best", async () => {
     assert.equal(payload.development.best, 0.9);
     assert.equal(payload.promotion.best, 0.8);
     assert.equal(payload.promotion.kept, 1);
+  });
+});
+
+test("state and doctor surface scaffold health and evidence labels", async () => {
+  await withTempDir("truth-layer-state", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "truth layer",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ commitPaths: ["src/missing.ts"] }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "& powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "autoresearch.sh"), "bash ./autoresearch.sh\n", "utf8");
+
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "perfect dev slice pending repeat",
+      "--metrics",
+      JSON.stringify({ repeatRequired: 1 }),
+    ]);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.scaffoldHealth.ok, false);
+    assert.ok(
+      payload.scaffoldHealth.checks.some((check) => check.code === "self_recursive_wrapper"),
+    );
+    assert.ok(payload.scaffoldHealth.checks.some((check) => check.code === "missing_commit_path"));
+    assert.ok(payload.researchIntegrity.evidenceLabels.includes("dev_best"));
+    assert.ok(payload.researchIntegrity.evidenceLabels.includes("pending_repeat"));
+    assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect/i);
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.scaffoldHealth.ok, false);
+    assert.match(doctorPayload.warnings.join("\n"), /self-recursive|commitPaths/i);
+  });
+});
+
+test("scaffold health catches direct PowerShell wrapper self-recursion", async () => {
+  await withTempDir("powershell-direct-self-recursion", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "powershell recursion",
+      "--metric-name",
+      "score",
+    ]);
+    await writeFile(path.join(dir, "autoresearch.ps1"), "& .\\autoresearch.ps1\n", "utf8");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.scaffoldHealth.ok, false);
+    assert.ok(
+      payload.scaffoldHealth.checks.some((check) => check.code === "self_recursive_wrapper"),
+    );
+  });
+});
+
+test("benchmark-lint separates metric parsing from research integrity", async () => {
+  await withTempDir("benchmark-lint-integrity", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lint integrity",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+
+    const result = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "score",
+      "--sample",
+      "METRIC score=1\nMETRIC hit_at_10=1\n",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricParsing.ok, true);
+    assert.equal(payload.researchIntegrity.ok, false);
+    assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect|holdout|repeat/i);
+  });
+});
+
+test("doctor does not treat routine rollback wording as evidence invalidation", async () => {
+  await withTempDir("doctor-routine-rollback", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "routine rollback",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "kept candidate",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "0.9",
+      "--status",
+      "discard",
+      "--description",
+      "ordinary rejected packet",
+      "--asi",
+      JSON.stringify({ rollback_reason: "reverted scoped experiment changes" }),
+    ]);
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+    assert.equal(payload.ok, true);
+    assert.deepEqual(payload.researchIntegrity.blockers, []);
+    assert.ok(!payload.researchIntegrity.evidenceLabels.includes("invalidated"));
+  });
+});
+
+test("prompt-plan prefers documented repo benchmark hints over generic cargo recipes", async () => {
+  await withTempDir("prompt-plan-doc-hints", async (dir) => {
+    await mkdir(path.join(dir, "scripts"), { recursive: true });
+    await mkdir(path.join(dir, "docs"), { recursive: true });
+    await writeFile(
+      path.join(dir, "Cargo.toml"),
+      [
+        "[package]",
+        'name = "prompt-plan-doc-hints"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        "",
+        "[dev-dependencies]",
+        'criterion = "0.5"',
+        "",
+        "[[bench]]",
+        'name = "generic_bench"',
+        "harness = false",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "scripts", "embedding-harness.mjs"),
+      "console.log('repo-specific embedding harness');\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "docs", "autoresearch-benchmark.md"),
+      [
+        "# Autoresearch benchmark",
+        "",
+        "Use `node scripts/embedding-harness.mjs --holdout fresh` for the measured loop.",
+        "The harness prints `METRIC embedding_score=<number>` from the fresh embedding holdout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Optimize the embedding pipeline runtime using the project benchmark.",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.match(payload.intent.setupDefaults.benchmarkCommand, /embedding-harness\.mjs/);
+    assert.doesNotMatch(payload.intent.setupDefaults.benchmarkCommand, /cargo\s+(test|bench)/);
+    assert.equal(
+      payload.intent.inferredFrom.discoveredBenchmark.path,
+      "docs/autoresearch-benchmark.md",
+    );
   });
 });
 
@@ -2910,31 +3040,7 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
   });
 
   const send = (message) => {
-    const body = JSON.stringify(message);
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-  };
-  const responseWithId = async (id) => {
-    const started = Date.now();
-    while (Date.now() - started < 5000) {
-      const parsed = [];
-      let remaining = Buffer.from(stdout, "utf8");
-      for (;;) {
-        const headerEnd = remaining.indexOf("\r\n\r\n");
-        if (headerEnd < 0) break;
-        const header = remaining.subarray(0, headerEnd).toString("utf8");
-        const match = header.match(/Content-Length:\s*(\d+)/i);
-        if (!match) break;
-        const length = Number(match[1]);
-        const bodyStart = headerEnd + 4;
-        if (remaining.length < bodyStart + length) break;
-        parsed.push(JSON.parse(remaining.subarray(bodyStart, bodyStart + length).toString("utf8")));
-        remaining = remaining.subarray(bodyStart + length);
-      }
-      const found = parsed.find((message) => message.id === id);
-      if (found) return found;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error(`No MCP response for ${id}\nstdout=${stdout}\nstderr=${stderr}`);
+    child.stdin.write(mcpFrame(message));
   };
 
   send({
@@ -2951,8 +3057,16 @@ test("mcp server dispatches tool calls through the CLI wrapper", async () => {
     params: { name: "setup_plan", arguments: { working_dir: pluginRoot } },
   });
 
-  const init = await responseWithId(1);
-  const tool = await responseWithId(2);
+  const init = await waitForMcpResponseById(
+    () => stdout,
+    () => stderr,
+    1,
+  );
+  const tool = await waitForMcpResponseById(
+    () => stdout,
+    () => stderr,
+    2,
+  );
   child.kill();
 
   assert.equal(init.result.serverInfo.name, "codex-autoresearch");

@@ -174,76 +174,14 @@ export function buildCliInvocationForTool(name, args, options: LooseObject = {})
 }
 
 function cliArgsForTool(name, args) {
-  if (name === "setup_plan")
-    return compactArgs([
-      "setup-plan",
-      cwdFlag(args),
-      option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe),
-      option("--catalog", args.catalog),
-      option("--name", args.name),
-      option("--goal", args.goal),
-      option("--metric-name", args.metric_name ?? args.metricName),
-      option("--metric-unit", args.metric_unit ?? args.metricUnit),
-      option("--direction", args.direction),
-      option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
-      option(
-        "--benchmark-prints-metric",
-        args.benchmark_prints_metric ?? args.benchmarkPrintsMetric,
-      ),
-      option("--checks-command", args.checks_command ?? args.checksCommand),
-      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
-      listOption("--off-limits", args.off_limits ?? args.offLimits),
-      listOption("--constraints", args.constraints),
-      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
-      listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
-      option("--max-iterations", args.max_iterations ?? args.maxIterations),
-    ]);
-  if (name === "guided_setup")
-    return compactArgs([
-      "guide",
-      cwdFlag(args),
-      option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe),
-      option("--catalog", args.catalog),
-      option("--name", args.name),
-      option("--goal", args.goal),
-      option("--metric-name", args.metric_name ?? args.metricName),
-      option("--metric-unit", args.metric_unit ?? args.metricUnit),
-      option("--direction", args.direction),
-      option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
-      option(
-        "--benchmark-prints-metric",
-        args.benchmark_prints_metric ?? args.benchmarkPrintsMetric,
-      ),
-      option("--checks-command", args.checks_command ?? args.checksCommand),
-      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
-      listOption("--off-limits", args.off_limits ?? args.offLimits),
-      listOption("--constraints", args.constraints),
-      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
-      listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
-      option("--max-iterations", args.max_iterations ?? args.maxIterations),
-    ]);
+  if (name === "setup_plan") return setupGuideArgs("setup-plan", args);
+  if (name === "guided_setup") return setupGuideArgs("guide", args);
   if (name === "prompt_plan")
     return compactArgs([
       "prompt-plan",
       cwdFlag(args),
       option("--prompt", args.prompt),
-      option("--name", args.name),
-      option("--goal", args.goal),
-      option("--metric-name", args.metric_name ?? args.metricName),
-      option("--metric-unit", args.metric_unit ?? args.metricUnit),
-      option("--direction", args.direction),
-      option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
-      option(
-        "--benchmark-prints-metric",
-        args.benchmark_prints_metric ?? args.benchmarkPrintsMetric,
-      ),
-      option("--checks-command", args.checks_command ?? args.checksCommand),
-      listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
-      listOption("--off-limits", args.off_limits ?? args.offLimits),
-      listOption("--constraints", args.constraints),
-      listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
-      listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
-      option("--max-iterations", args.max_iterations ?? args.maxIterations),
+      ...setupPlanningOptions(args),
     ]);
   if (name === "onboarding_packet")
     return compactArgs(["onboarding-packet", cwdFlag(args), flag("--compact", args.compact)]);
@@ -396,6 +334,16 @@ function cliArgsForTool(name, args) {
     ]);
   if (name === "finalize_preview")
     return compactArgs(["finalize-preview", cwdFlag(args), option("--trunk", args.trunk)]);
+  if (name === "finalize_current_tree")
+    return compactArgs([
+      "finalize-current-tree",
+      cwdFlag(args),
+      option("--trunk", args.trunk),
+      flag(
+        "--exclude-session-artifacts",
+        args.exclude_session_artifacts ?? args.excludeSessionArtifacts,
+      ),
+    ]);
   if (name === "integrations")
     return compactArgs([
       "integrations",
@@ -474,6 +422,35 @@ function cliArgsForTool(name, args) {
       flag("--yes", args.confirm ?? args.yes),
     ]);
   throw new Error(`Unknown tool: ${name}`);
+}
+
+function setupGuideArgs(command, args) {
+  return compactArgs([
+    command,
+    cwdFlag(args),
+    option("--recipe", args.recipe_id ?? args.recipeId ?? args.recipe),
+    option("--catalog", args.catalog),
+    ...setupPlanningOptions(args),
+  ]);
+}
+
+function setupPlanningOptions(args) {
+  return [
+    option("--name", args.name),
+    option("--goal", args.goal),
+    option("--metric-name", args.metric_name ?? args.metricName),
+    option("--metric-unit", args.metric_unit ?? args.metricUnit),
+    option("--direction", args.direction),
+    option("--benchmark-command", args.benchmark_command ?? args.benchmarkCommand),
+    option("--benchmark-prints-metric", args.benchmark_prints_metric ?? args.benchmarkPrintsMetric),
+    option("--checks-command", args.checks_command ?? args.checksCommand),
+    listOption("--files-in-scope", args.files_in_scope ?? args.filesInScope),
+    listOption("--off-limits", args.off_limits ?? args.offLimits),
+    listOption("--constraints", args.constraints),
+    listOption("--secondary-metrics", args.secondary_metrics ?? args.secondaryMetrics),
+    listOption("--commit-paths", args.commit_paths ?? args.commitPaths),
+    option("--max-iterations", args.max_iterations ?? args.maxIterations),
+  ];
 }
 
 function cwdFlag(args) {

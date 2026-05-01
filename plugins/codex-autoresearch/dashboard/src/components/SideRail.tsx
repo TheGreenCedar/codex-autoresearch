@@ -1,26 +1,23 @@
-export function SideRail({ live, showcase }) {
+const NAV_ITEMS = [
+  ["#trend-panel", "1", "Metric"],
+  ["#decision-rail", "2", "Move"],
+  ["#codex-brief", "3", "Brief"],
+  ["#ledger", "4", "Ledger"],
+] as const;
+
+export function SideRail({ live, showcase }: { live: boolean; showcase: boolean }) {
   const status = showcase ? "Live" : live ? "Live" : "Static";
   const detail = showcase ? "Runboard" : live ? "Readout" : "Snapshot";
   return (
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>
       <nav className="side-nav">
-        <a href="#trend-panel">
-          <span className="nav-icon">1</span>
-          <span>Metric</span>
-        </a>
-        <a href="#decision-rail">
-          <span className="nav-icon">2</span>
-          <span>Move</span>
-        </a>
-        <a href="#codex-brief">
-          <span className="nav-icon">3</span>
-          <span>Brief</span>
-        </a>
-        <a href="#ledger">
-          <span className="nav-icon">4</span>
-          <span>Ledger</span>
-        </a>
+        {NAV_ITEMS.map(([href, index, label]) => (
+          <a href={href} key={href}>
+            <span className="nav-icon">{index}</span>
+            <span>{label}</span>
+          </a>
+        ))}
       </nav>
       <div className="side-status">
         <span>
