@@ -15,6 +15,24 @@ export async function buildScaffoldHealth({
   workDir: string;
   config?: LooseObject;
 }) {
+  const checks = [
+    ...(await wrapperHealthChecks(workDir)),
+    ...configuredPathHealthChecks(workDir, config),
+  ];
+  const gitLock = await gitIndexLockHealth(workDir);
+  if (gitLock) checks.push(gitLock);
+  const dirtyFiles = await classifyDirtyFiles(workDir, config).catch(() => null);
+  const blockers = checks.filter((check) => check.severity === "blocker");
+  return {
+    ok: blockers.length === 0,
+    status: blockers.length ? "blocked" : checks.length ? "warning" : "ok",
+    checks,
+    dirtyFiles,
+    recoveryGuidance: recoveryGuidance(checks),
+  };
+}
+
+async function wrapperHealthChecks(workDir: string) {
   const checks: LooseObject[] = [];
   for (const fileName of ["autoresearch.ps1", "autoresearch.sh"]) {
     const filePath = path.join(workDir, fileName);
@@ -31,7 +49,7 @@ export async function buildScaffoldHealth({
           "Replace the wrapper body with the real benchmark command or rerun setup with --benchmark-command.",
       });
     }
-    if (wrapperHasNoWorkload(fileName, text)) {
+    if (wrapperHasNoWorkload(text)) {
       checks.push({
         code: "missing_benchmark_workload",
         severity: "warning",
@@ -42,7 +60,11 @@ export async function buildScaffoldHealth({
       });
     }
   }
+  return checks;
+}
 
+function configuredPathHealthChecks(workDir: string, config: LooseObject) {
+  const checks: LooseObject[] = [];
   for (const [field, code] of [
     ["commitPaths", "missing_commit_path"],
     ["revertPaths", "missing_revert_path"],
@@ -60,18 +82,7 @@ export async function buildScaffoldHealth({
       });
     }
   }
-
-  const gitLock = await gitIndexLockHealth(workDir);
-  if (gitLock) checks.push(gitLock);
-  const dirtyFiles = await classifyDirtyFiles(workDir, config).catch(() => null);
-  const blockers = checks.filter((check) => check.severity === "blocker");
-  return {
-    ok: blockers.length === 0,
-    status: blockers.length ? "blocked" : checks.length ? "warning" : "ok",
-    checks,
-    dirtyFiles,
-    recoveryGuidance: recoveryGuidance(checks),
-  };
+  return checks;
 }
 
 export function buildResearchIntegrity({
@@ -87,9 +98,6 @@ export function buildResearchIntegrity({
   metricName?: string;
   sample?: string;
 } = {}) {
-  const warnings: string[] = [];
-  const blockers: string[] = [];
-  const evidenceLabels = new Set<string>();
   const current = Array.isArray(state.current) ? state.current : [];
   const results = Array.isArray(state.results) ? state.results : current;
   const latest = current.at(-1) || null;
@@ -97,8 +105,71 @@ export function buildResearchIntegrity({
   const promotionBest = state.promotion?.bestRun || null;
   const metrics = parsedMetrics || latest?.metrics || {};
   const primaryMetricName = metricName || state.config?.metricName || config.metricName || "metric";
+  const labels = buildResearchEvidenceLabels({
+    current,
+    latest,
+    results,
+    segment: state.segment,
+    bestDevelopment,
+    promotionBest,
+  });
+  const perfectSignals = buildPerfectMetricSignals({
+    metrics,
+    primaryMetricName,
+    bestDevelopment,
+  });
+  const promotionGrade = bestDevelopment ? promotionGradeValue(bestDevelopment) : null;
+  const hasIntegrityGuard = hasConfiguredIntegrityGuard(config);
+  const { warnings, blockers } = buildResearchIntegrityMessages({
+    current,
+    latest,
+    results,
+    parsedMetrics,
+    bestDevelopment,
+    perfectSignals,
+    promotionGrade,
+    hasIntegrityGuard,
+  });
+  const notPromotableBecause = buildPromotabilityReasons(warnings, blockers);
 
-  if (results.some((run) => run.segment !== state.segment)) evidenceLabels.add("historical");
+  return {
+    ok: blockers.length === 0 && warnings.length === 0,
+    evidenceLabels: labels,
+    currentLabel: labels[0] || "blocked",
+    metricParsing: parsedMetrics
+      ? {
+          checked: true,
+          metricName: primaryMetricName,
+          parsedMetricCount: Object.keys(parsedMetrics).length,
+        }
+      : { checked: false },
+    promotion: buildPromotionSummary(labels, state),
+    suspiciousPerfectMetrics: perfectSignals,
+    notPromotableBecause,
+    blockers,
+    warnings: uniqueStrings(warnings),
+    hasIntegrityGuard,
+    sampleHash: sample ? simpleHash(sample) : "",
+  };
+}
+
+function buildResearchEvidenceLabels({
+  current,
+  latest,
+  results,
+  segment,
+  bestDevelopment,
+  promotionBest,
+}: {
+  current: LooseObject[];
+  latest: LooseObject | null;
+  results: LooseObject[];
+  segment: unknown;
+  bestDevelopment: LooseObject | null;
+  promotionBest: LooseObject | null;
+}) {
+  const evidenceLabels = new Set<string>();
+  if (results.some((run) => run.segment !== segment)) evidenceLabels.add("historical");
   if (!current.length) evidenceLabels.add("blocked");
   if (latest && FAILURE_STATUSES.has(latest.status)) {
     evidenceLabels.add(invalidationText(latest) ? "invalidated" : "blocked");
@@ -112,7 +183,18 @@ export function buildResearchIntegrity({
   if (results.some((run) => run.status === "discard" && invalidationText(run))) {
     evidenceLabels.add("invalidated");
   }
+  return [...evidenceLabels];
+}
 
+function buildPerfectMetricSignals({
+  metrics,
+  primaryMetricName,
+  bestDevelopment,
+}: {
+  metrics: LooseObject;
+  primaryMetricName: string;
+  bestDevelopment: LooseObject | null;
+}) {
   const perfect = suspiciousPerfectMetrics(metrics, primaryMetricName);
   const bestPerfect = bestDevelopment
     ? suspiciousPerfectMetrics(
@@ -120,9 +202,30 @@ export function buildResearchIntegrity({
         primaryMetricName,
       )
     : [];
-  const perfectSignals = uniqueStrings([...perfect, ...bestPerfect]);
-  const promotionGrade = bestDevelopment ? promotionGradeValue(bestDevelopment) : null;
-  const hasIntegrityGuard = hasConfiguredIntegrityGuard(config);
+  return uniqueStrings([...perfect, ...bestPerfect]);
+}
+
+function buildResearchIntegrityMessages({
+  current,
+  latest,
+  results,
+  parsedMetrics,
+  bestDevelopment,
+  perfectSignals,
+  promotionGrade,
+  hasIntegrityGuard,
+}: {
+  current: LooseObject[];
+  latest: LooseObject | null;
+  results: LooseObject[];
+  parsedMetrics: LooseObject | null;
+  bestDevelopment: LooseObject | null;
+  perfectSignals: string[];
+  promotionGrade: unknown;
+  hasIntegrityGuard: boolean;
+}) {
+  const warnings: string[] = [];
+  const blockers: string[] = [];
   if (perfectSignals.length && promotionGrade !== true) {
     warnings.push(
       `Perfect metric signal (${perfectSignals.join(", ")}) is dev-only until repeat, freshness, breadth, and holdout/promotion metadata are present.`,
@@ -147,36 +250,23 @@ export function buildResearchIntegrity({
   if (invalidated.length) {
     blockers.push("A later ledger entry explicitly invalidated or contaminated previous evidence.");
   }
+  return { warnings, blockers };
+}
 
-  const notPromotableBecause = uniqueStrings([
+function buildPromotabilityReasons(warnings: string[], blockers: string[]) {
+  return uniqueStrings([
     ...warnings.filter((warning) =>
       /not promotable|dev-only|pending repeat|perfect|integrity/i.test(warning),
     ),
     ...blockers,
   ]);
-  const labels = [...evidenceLabels];
+}
+
+function buildPromotionSummary(labels: string[], state: LooseObject) {
   return {
-    ok: blockers.length === 0 && warnings.length === 0,
-    evidenceLabels: labels,
-    currentLabel: labels[0] || "blocked",
-    metricParsing: parsedMetrics
-      ? {
-          checked: true,
-          metricName: primaryMetricName,
-          parsedMetricCount: Object.keys(parsedMetrics).length,
-        }
-      : { checked: false },
-    promotion: {
-      eligible: labels.includes("promotion_eligible"),
-      best: state.promotion?.best ?? null,
-      kept: state.promotion?.kept ?? 0,
-    },
-    suspiciousPerfectMetrics: perfectSignals,
-    notPromotableBecause,
-    blockers,
-    warnings: uniqueStrings(warnings),
-    hasIntegrityGuard,
-    sampleHash: sample ? simpleHash(sample) : "",
+    eligible: labels.includes("promotion_eligible"),
+    best: state.promotion?.best ?? null,
+    kept: state.promotion?.kept ?? 0,
   };
 }
 
@@ -235,12 +325,11 @@ function wrapperCallsItself(fileName: string, text: string) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-function wrapperHasNoWorkload(fileName: string, text: string) {
-  if (!text.trim()) return true;
-  if (/Missing .*--benchmark-command|Replace this placeholder|No benchmark command/i.test(text)) {
-    return true;
-  }
-  return false;
+function wrapperHasNoWorkload(text: string) {
+  return (
+    !text.trim() ||
+    /Missing .*--benchmark-command|Replace this placeholder|No benchmark command/i.test(text)
+  );
 }
 
 async function gitIndexLockHealth(workDir: string) {
@@ -420,7 +509,7 @@ function slashPath(value: string) {
 
 function relativePathLooksSafe(value: string) {
   const text = String(value || "");
-  return text && !path.isAbsolute(text) && !text.split(/[\\/]+/).includes("..");
+  return Boolean(text && !path.isAbsolute(text) && !text.split(/[\\/]+/).includes(".."));
 }
 
 function toSnake(value: string) {

@@ -316,27 +316,13 @@ function mcpFrame(message) {
 function collectMcpFrames(buffer, messages) {
   let remaining = buffer;
   for (;;) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd < 0) return remaining;
-    const header = remaining.subarray(0, headerEnd).toString("utf8");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      remaining = remaining.subarray(headerEnd + 4);
-      continue;
-    }
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    if (!Number.isFinite(length) || length < 0) {
-      remaining = remaining.subarray(bodyStart);
-      continue;
-    }
-    if (remaining.length < bodyStart + length) return remaining;
-    const body = remaining.subarray(bodyStart, bodyStart + length).toString("utf8");
-    remaining = remaining.subarray(bodyStart + length);
-    try {
-      messages.push(JSON.parse(body));
-    } catch (error) {
-      messages.push({ jsonrpc: "2.0", error: { code: -32700, message: error.message } });
+    const frame = readNextMcpFrame(remaining, Number.POSITIVE_INFINITY);
+    if (frame.status === "incomplete") return remaining;
+    remaining = frame.remaining;
+    if (frame.status === "message") {
+      messages.push(frame.message);
+    } else if (frame.status === "parse-error") {
+      messages.push({ jsonrpc: "2.0", error: { code: -32700, message: frame.error } });
     }
   }
 }

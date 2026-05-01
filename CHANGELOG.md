@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 1.3.0
 
 ### Added
 
@@ -15,7 +15,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - Changed `benchmark-lint` to separate metric parsing from research-integrity checks, including suspicious perfect metrics, missing holdout/repeat guards, and dev-only evidence.
-- Changed `finalize-preview` to include semantic safety blockers for later-discarded keeps, invalidated keeps, reverted keeps, and current final-tree coverage instead of trusting every historical keep entry.
+- Changed `finalize-preview` to include semantic safety blockers for later-invalidated keeps, contaminated keeps, reverted keeps, and current final-tree coverage instead of trusting every historical keep entry.
 - Changed prompt planning so documented repo benchmark hints can outrank generic language or Cargo recipes when the docs name the metric-emitting harness.
 
 ### Fixed
@@ -24,6 +24,8 @@ This project uses a root-only changelog because the root README is the public do
 - Fixed current-tree finalization so generated plans include finalizer fingerprints, exclude session artifacts by default, and preview blocks excluded commits that overlap planned files.
 - Fixed scaffold health detection for direct PowerShell self-recursive wrappers such as `& .\autoresearch.ps1`.
 - Added recovery-oriented docs for stale bests, contaminated evaluators, failed repeats, cache replay, current-tree finalization, command quoting recovery, and scaffold/config health blockers.
+
+Bumped public package and plugin manifest version surfaces to `1.3.0`.
 
 ## 1.2.0
 

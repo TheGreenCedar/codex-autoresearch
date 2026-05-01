@@ -31,6 +31,87 @@ export async function finalizePreview(args) {
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
   const ledgerRuns = await readLedgerRuns(workDir);
   const keptRuns = await readKeptRuns(workDir);
+  const { groups, missingCommitCount, warnings } = await buildKeptRunGroups(workDir, keptRuns);
+  const overlaps = findGroupFileOverlaps(groups);
+  const finalTreePlan = await buildFinalTreePlan(workDir, trunk, groups);
+  warnings.push(...finalTreePlan.warnings);
+  const semanticSafety = await buildSemanticSafety({
+    workDir,
+    groups,
+    ledgerRuns,
+    base: finalTreePlan.base,
+  });
+  appendFinalTreeWarnings(warnings, finalTreePlan);
+  warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
+  appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps });
+
+  const ready = isFinalizePreviewReady({
+    groups,
+    dirty,
+    branch,
+    trunk,
+    baseOk: finalTreePlan.baseOk,
+    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+    semanticSafety,
+  });
+  const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
+  const planArgv = [
+    process.execPath,
+    path.join(PLUGIN_ROOT, "scripts", "finalize-autoresearch.mjs"),
+    "plan",
+    "--output",
+    planOutput,
+    "--goal",
+    safeSlug(branch || "autoresearch"),
+    "--trunk",
+    trunk,
+  ];
+  const nextAction = finalizePreviewNextAction({
+    ready,
+    semanticSafety,
+    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+    excludedCommits: finalTreePlan.excludedCommits,
+    groups,
+    keptRuns,
+    missingCommitCount,
+  });
+  return withProgress(
+    {
+      ok: true,
+      workDir,
+      trunk,
+      branch,
+      base: finalTreePlan.base,
+      ready,
+      groups,
+      missingCommitCount,
+      excludedCommits: finalTreePlan.excludedCommits,
+      excludedHistoryCommits: finalTreePlan.excludedCommits,
+      excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+      finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+      semanticSafety,
+      overlaps,
+      warnings,
+      suggestedCommand: planArgv.map(shellQuote).join(" "),
+      suggestedCommands: {
+        finalizerPlan: {
+          argv: planArgv,
+          cwd: workDir,
+          display: planArgv.map(shellQuote).join(" "),
+          purpose: "Write a review-branch plan without dirtying the source branch.",
+          mutates: false,
+        },
+      },
+      nextAction,
+    },
+    startedAt,
+    ready ? "completed" : "blocked",
+  );
+}
+
+async function buildKeptRunGroups(workDir, keptRuns) {
   const groups = [];
   const warnings = [];
   let missingCommitCount = 0;
@@ -58,7 +139,10 @@ export async function finalizePreview(args) {
       slug: safeSlug(run.description || `run-${run.run}`),
     });
   }
+  return { groups, missingCommitCount, warnings };
+}
 
+function findGroupFileOverlaps(groups) {
   const seen = new Map();
   const overlaps = [];
   for (const group of groups) {
@@ -67,28 +151,59 @@ export async function finalizePreview(args) {
       else seen.set(file, group.run);
     }
   }
+  return overlaps;
+}
 
+async function buildFinalTreePlan(workDir, trunk, groups) {
+  const warnings = [];
   let base = "";
   const baseResult = await gitOk(["merge-base", trunk, "HEAD"], workDir);
   if (baseResult.ok) base = baseResult.stdout.trim();
   else warnings.push(`Could not find merge-base with ${trunk}.`);
+
   const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
   const finalChangedFiles = base ? await changedFilesBetween(base, "HEAD", workDir) : [];
   const excludedCommits = base ? await unkeptCommitsSinceBase(base, groups, workDir) : [];
-  const plannedFiles = [...new Set(groups.flatMap((group) => group.files || []))].sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const plannedFiles = plannedFilesForGroups(groups);
   const missingFinalTreeFiles = finalChangedFiles.filter((file) => !plannedFiles.includes(file));
   const excludedPlannedFileConflicts = findExcludedPlannedFileConflicts(
     excludedCommits,
     plannedFiles,
   );
-  const semanticSafety = await buildSemanticSafety({
-    workDir,
-    groups,
-    ledgerRuns,
+  return {
+    warnings,
     base,
-  });
+    baseOk: baseResult.ok,
+    finalTree,
+    finalChangedFiles,
+    excludedCommits,
+    plannedFiles,
+    missingFinalTreeFiles,
+    excludedPlannedFileConflicts,
+    finalTreeCoverage: {
+      mode: "final-tree",
+      finalTree,
+      keptCommitCount: groups.length,
+      excludedCommitCount: excludedCommits.length,
+      excludedPlannedFileConflictCount: excludedPlannedFileConflicts.length,
+      finalChangedFiles,
+      plannedFiles,
+      missingFiles: missingFinalTreeFiles,
+      covered: missingFinalTreeFiles.length === 0,
+    },
+  };
+}
+
+function plannedFilesForGroups(groups) {
+  const planned = new Set<string>();
+  for (const group of groups) {
+    for (const file of group.files || []) planned.add(file);
+  }
+  return [...planned].sort((a, b) => a.localeCompare(b));
+}
+
+function appendFinalTreeWarnings(warnings, finalTreePlan) {
+  const { excludedCommits, missingFinalTreeFiles, excludedPlannedFileConflicts } = finalTreePlan;
   if (excludedCommits.length) {
     const sample = excludedCommits
       .slice(0, 3)
@@ -112,7 +227,9 @@ export async function finalizePreview(args) {
       `Excluded commits touch planned files and cannot be safely omitted: ${sample}${excludedPlannedFileConflicts.length > 3 ? "; ..." : ""}.`,
     );
   }
-  warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
+}
+
+function appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps }) {
   if (dirty)
     warnings.push("Working tree is dirty; finalization branch creation will refuse to run.");
   if (!branch)
@@ -123,84 +240,57 @@ export async function finalizePreview(args) {
     );
   if (overlaps.length)
     warnings.push("Some kept runs touch the same files; finalization may need collapsed groups.");
+}
 
-  const finalTreeCoverage = {
-    mode: "final-tree",
-    finalTree,
-    keptCommitCount: groups.length,
-    excludedCommitCount: excludedCommits.length,
-    excludedPlannedFileConflictCount: excludedPlannedFileConflicts.length,
-    finalChangedFiles,
-    plannedFiles,
-    missingFiles: missingFinalTreeFiles,
-    covered: missingFinalTreeFiles.length === 0,
-  };
-  const ready =
+function isFinalizePreviewReady({
+  groups,
+  dirty,
+  branch,
+  trunk,
+  baseOk,
+  finalTreeCoverage,
+  excludedPlannedFileConflicts,
+  semanticSafety,
+}) {
+  return (
     groups.length > 0 &&
     !dirty &&
     branch &&
     branch !== trunk &&
-    baseResult.ok &&
+    baseOk &&
     finalTreeCoverage.covered &&
     excludedPlannedFileConflicts.length === 0 &&
-    semanticSafety.ok;
-  const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
-  const planArgv = [
-    process.execPath,
-    path.join(PLUGIN_ROOT, "scripts", "finalize-autoresearch.mjs"),
-    "plan",
-    "--output",
-    planOutput,
-    "--goal",
-    safeSlug(branch || "autoresearch"),
-    "--trunk",
-    trunk,
-  ];
-  const nextAction = ready
-    ? "Review the preview, then run the suggested finalizer plan command."
-    : !semanticSafety.ok
-      ? "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence."
-      : excludedPlannedFileConflicts.length
-        ? "Rework the kept plan, collapse overlapping history, or use finalize-current-tree so omitted commits cannot affect planned files."
-        : !finalTreeCoverage.covered
-          ? "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff."
-          : excludedCommits.length
-            ? "Review excluded history; it does not change final tree coverage, but may still need explanation in the handoff."
-            : groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length
-              ? "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment."
-              : "Resolve preview warnings before creating review branches.";
-  return withProgress(
-    {
-      ok: true,
-      workDir,
-      trunk,
-      branch,
-      base,
-      ready,
-      groups,
-      missingCommitCount,
-      excludedCommits,
-      excludedHistoryCommits: excludedCommits,
-      excludedPlannedFileConflicts,
-      finalTreeCoverage,
-      semanticSafety,
-      overlaps,
-      warnings,
-      suggestedCommand: planArgv.map(shellQuote).join(" "),
-      suggestedCommands: {
-        finalizerPlan: {
-          argv: planArgv,
-          cwd: workDir,
-          display: planArgv.map(shellQuote).join(" "),
-          purpose: "Write a review-branch plan without dirtying the source branch.",
-          mutates: false,
-        },
-      },
-      nextAction,
-    },
-    startedAt,
-    ready ? "completed" : "blocked",
+    semanticSafety.ok
   );
+}
+
+function finalizePreviewNextAction({
+  ready,
+  semanticSafety,
+  excludedPlannedFileConflicts,
+  finalTreeCoverage,
+  excludedCommits,
+  groups,
+  keptRuns,
+  missingCommitCount,
+}) {
+  if (ready) return "Review the preview, then run the suggested finalizer plan command.";
+  if (!semanticSafety.ok) {
+    return "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence.";
+  }
+  if (excludedPlannedFileConflicts.length) {
+    return "Rework the kept plan, collapse overlapping history, or use finalize-current-tree so omitted commits cannot affect planned files.";
+  }
+  if (!finalTreeCoverage.covered) {
+    return "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff.";
+  }
+  if (excludedCommits.length) {
+    return "Review excluded history; it does not change final tree coverage, but may still need explanation in the handoff.";
+  }
+  if (groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length) {
+    return "Review branches need commit-backed keep logs. Log a keep with --commit, configure commitPaths, or rerun keep after committing the experiment.";
+  }
+  return "Resolve preview warnings before creating review branches.";
 }
 
 export async function finalizeCurrentTree(args) {
