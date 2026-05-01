@@ -355,6 +355,20 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "finalize_current_tree",
+    description:
+      "Write a current-final-tree finalization plan that covers the current non-session branch diff.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        trunk: { type: "string" },
+        exclude_session_artifacts: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "integrations",
     description:
       "List, doctor, or load external integration surfaces such as recipe catalogs and model commands.",
@@ -531,6 +545,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   "quality-gap": "measure_quality_gap",
   "gap-candidates": "gap_candidates",
   "finalize-preview": "finalize_preview",
+  "finalize-current-tree": "finalize_current_tree",
   integrations: "integrations",
   init: "init_experiment",
   run: "run_experiment",
@@ -565,6 +580,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   dashboard_refresh_seconds: "dashboardRefreshSeconds",
   dry_run: "dryRun",
   env_file: "envFile",
+  exclude_session_artifacts: "excludeSessionArtifacts",
   files_in_scope: "filesInScope",
   from_last: "fromLast",
   gate_name: "gateName",

@@ -78,6 +78,7 @@ function createToolHandlers(deps) {
     measure_quality_gap: (args) => deps.measureQualityGap(args),
     gap_candidates: (args) => deps.gapCandidates(args),
     finalize_preview: (args) => deps.finalizePreview(args),
+    finalize_current_tree: (args) => deps.finalizeCurrentTree(args),
     integrations: (args) => deps.integrationsCommand(args.subcommand || "list", args),
     benchmark_inspect: (args) => deps.benchmarkInspect(args),
     checks_inspect: (args) => deps.checksInspect(args),

@@ -31,6 +31,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
     warnings = [],
   } = normalizeDashboardContext(context);
   const current = state.current || [];
+  const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
+  const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
   const kept = current.filter((run) => run.status === "keep");
   const failures = current.filter((run) =>
     ["discard", "crash", "checks_failed"].includes(run.status),
@@ -113,6 +115,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     bestKept,
     latestFailure,
     researchTruth,
+    researchIntegrity,
     trustState: trustContext.trustState,
   });
   const finalizationChecklist = buildFinalizationChecklist({
@@ -137,6 +140,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
   return {
     setup: setupPlan,
     guidedSetup,
+    scaffoldHealth,
+    researchIntegrity,
     lastRun: guidedSetup?.lastRun || null,
     qualityGap,
     finalizePreview,
@@ -173,6 +178,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
       development: state.development || null,
       promotion: state.promotion || null,
       confidence: state.confidence,
+      evidenceLabels: researchIntegrity?.evidenceLabels || [],
       statusCounts: Object.fromEntries(
         [...STATUS_VALUES].map((status) => [
           status,
@@ -295,6 +301,13 @@ export function buildTrustState({
   }
   addReasons("setup", currentHasRuns(state) ? [] : setupPlan?.missing, true);
   addReasons("setup", setupPlan?.warnings, true);
+  addReasons(
+    "scaffold-health",
+    (state.scaffoldHealth?.checks || []).map((check) => check.message || check.code),
+    true,
+  );
+  addReasons("research-integrity", state.researchIntegrity?.warnings, true);
+  addReasons("research-integrity", state.researchIntegrity?.blockers, true);
   addReasons("guided-setup", guidedSetup?.warnings, true);
   addReasons("drift", drift?.warnings, true);
   addReasons("operator", warnings, true);
@@ -417,6 +430,7 @@ export function buildEvidenceChips({
   bestKept = null,
   latestFailure = null,
   researchTruth,
+  researchIntegrity = null,
   trustState,
 }: LooseObject) {
   const latest = current.at(-1) || null;
@@ -481,6 +495,18 @@ export function buildEvidenceChips({
       detail:
         researchTruth.suspiciousReasons[0] ||
         "Research breadth metadata is available when the benchmark reports it.",
+    }),
+    evidenceChip({
+      label: "Promotion",
+      value: researchIntegrity?.evidenceLabels?.includes("promotion_eligible")
+        ? "Eligible"
+        : researchIntegrity?.currentLabel
+          ? labelText(researchIntegrity.currentLabel)
+          : UNKNOWN,
+      tone: researchIntegrity?.ok === false ? "warn" : "neutral",
+      detail:
+        researchIntegrity?.notPromotableBecause?.[0] ||
+        "Promotion-grade evidence appears when repeat, holdout, and promotion metadata support the run.",
     }),
     evidenceChip({
       label: "Recent failure",
@@ -711,6 +737,12 @@ function isTrustDecisionReason(value) {
 
 function cleanText(value) {
   return String(value ?? "").trim();
+}
+
+function labelText(value) {
+  return String(value || UNKNOWN)
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function promotionGradeValue(source, latestMetrics) {

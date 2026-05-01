@@ -37,6 +37,11 @@ const TOOL_REGISTRY = [
   { name: "measure_quality_gap", cliCommand: "quality-gap", actionPolicy: "read" },
   { name: "gap_candidates", cliCommand: "gap-candidates", actionPolicy: "preview" },
   { name: "finalize_preview", cliCommand: "finalize-preview", actionPolicy: "read" },
+  {
+    name: "finalize_current_tree",
+    cliCommand: "finalize-current-tree",
+    actionPolicy: "artifact_write",
+  },
   { name: "integrations", cliCommand: "integrations", actionPolicy: "read" },
   { name: "benchmark_inspect", cliCommand: "benchmark-inspect", actionPolicy: "read" },
   { name: "checks_inspect", cliCommand: "checks-inspect", actionPolicy: "read" },

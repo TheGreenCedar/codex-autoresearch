@@ -14,6 +14,13 @@ type RunLiveAction = (
   action: string,
   bodyOverride?: Record<string, unknown> | null,
 ) => Promise<{ ok?: boolean; receipt?: ActionReceipt | null } | undefined>;
+type StructuredAsi = ReturnType<typeof structuredAsiFrom>;
+type LogDecisionSetters = {
+  setAsi: (value: string) => void;
+  setError: (value: string) => void;
+  setRawDirty: (value: boolean) => void;
+  setStructuredAsi: (value: StructuredAsi) => void;
+};
 
 export function MissionPanel({
   viewModel,
@@ -167,11 +174,11 @@ function LogDecision({
       },
       statuses,
       {
-        setAsi,
         setDescription,
+        setStatus,
+        setAsi,
         setError,
         setRawDirty,
-        setStatus,
         setStructuredAsi,
       },
     );
@@ -209,12 +216,10 @@ function LogDecision({
       return;
     }
     setError("");
-    const result = await runLiveAction(action, {
-      confirm: action,
-      lastRunFingerprint: packetFingerprint,
-      description,
-      asi: parsed.value,
-    });
+    const result = await runLiveAction(
+      action,
+      buildLogDecisionBody(action, packetFingerprint, description, parsed.value),
+    );
     if (!result?.ok && result?.receipt?.stderrSummary) setError(result.receipt.stderrSummary);
   };
   return (
@@ -330,32 +335,17 @@ function resetLogDecisionForm(
     suggestedStatus?: string;
   },
   statuses: string[],
-  setters: {
-    setAsi: (value: string) => void;
+  setters: LogDecisionSetters & {
     setDescription: (value: string) => void;
-    setError: (value: string) => void;
-    setRawDirty: (value: boolean) => void;
     setStatus: (value: string) => void;
-    setStructuredAsi: (value: ReturnType<typeof structuredAsiFrom>) => void;
   },
 ) {
   setters.setStatus(logDecisionStatusFor(logDecision, statuses));
   setters.setDescription(logDecision?.defaultDescription || "");
-  setters.setStructuredAsi(structuredAsiFrom(logDecision?.asiTemplate));
-  setters.setAsi(stringifyAsi(logDecision?.asiTemplate));
-  setters.setRawDirty(false);
-  setters.setError("");
+  resetAsiFields(logDecision?.asiTemplate, setters);
 }
 
-function resetAsiFields(
-  asiTemplate: RunAsi | undefined,
-  setters: {
-    setAsi: (value: string) => void;
-    setError: (value: string) => void;
-    setRawDirty: (value: boolean) => void;
-    setStructuredAsi: (value: ReturnType<typeof structuredAsiFrom>) => void;
-  },
-) {
+function resetAsiFields(asiTemplate: RunAsi | undefined, setters: LogDecisionSetters) {
   setters.setStructuredAsi(structuredAsiFrom(asiTemplate));
   setters.setAsi(stringifyAsi(asiTemplate));
   setters.setRawDirty(false);
@@ -422,6 +412,20 @@ function parseAsi(text: string, status: string, structuredAsi: RunAsi, rawDirty 
     };
   }
   return { ok: true, value };
+}
+
+function buildLogDecisionBody(
+  action: string,
+  lastRunFingerprint: string,
+  description: string,
+  asi: Record<string, unknown>,
+) {
+  return {
+    confirm: action,
+    lastRunFingerprint,
+    description,
+    asi,
+  };
 }
 
 function structuredAsiFrom(template: RunAsi = {}) {

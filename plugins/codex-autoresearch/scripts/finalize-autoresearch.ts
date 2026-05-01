@@ -370,11 +370,11 @@ function markdownEscape(text) {
     .replace(/\r?\n/g, "<br>");
 }
 
-function runEvidenceForCommit(keptRuns, hash) {
-  for (let index = keptRuns.length - 1; index >= 0; index -= 1) {
-    const run = keptRuns[index];
+function runEvidenceForCommit(entries, hash) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const run = entries[index];
     const commit = String(run.commit || "");
-    if (commitMatchesHash(commit, hash)) return run;
+    if (commitMatchesHash(commit, hash)) return run.status === "keep" ? run : null;
   }
   return null;
 }
@@ -742,7 +742,7 @@ async function draftGroupsPlan(args, cwd) {
   const excludedCommits = [];
   const selectedCommits = new Set();
   for (const item of history) {
-    const selectedRun = runEvidenceForCommit(keptRuns, item.hash);
+    const selectedRun = runEvidenceForCommit(entries, item.hash);
     if (!selectedRun) {
       const sourceEntry = parseCommitStatus(entries, item.hash);
       excludedCommits.push({

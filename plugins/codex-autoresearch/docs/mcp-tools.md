@@ -23,8 +23,9 @@ The `codex-autoresearch` skill is the user-facing entrypoint. MCP tools are the 
 | `measure_quality_gap` | Count open and closed checklist items in `autoresearch.research/<slug>/quality-gaps.md`. |
 | `gap_candidates` | Extract or apply validated gap candidates from synthesis and optional model output. |
 | `finalize_preview` | Return finalization readiness without creating branches. |
+| `finalize_current_tree` | Write a current-final-tree plan covering the current non-session branch diff when kept-run commits are stale or incomplete. |
 | `integrations` | List, doctor, or sync external recipe/catalog integration surfaces. |
-| `benchmark_lint` | Validate sample benchmark output or a command for `METRIC` parsing without starting a loop. |
+| `benchmark_lint` | Validate sample benchmark output or a command for `METRIC` parsing and research-integrity warnings without starting a loop. |
 | `new_segment` | Start a fresh run segment while preserving old ledger history; confirmed use appends a config entry. |
 | `export_dashboard` | Write a self-contained fallback HTML snapshot. |
 | `serve_dashboard` | Start a local live dashboard and return the operator URL. |
@@ -62,13 +63,14 @@ flowchart TD
   GC -->|Round done| End
 
   End --> FP["finalize_preview"]
+  FP -->|Commit evidence stale| FCT["finalize_current_tree"]
 ```
 
 - **Starting out**: Use `prompt_plan` for broad requests ("improve speed"). Use `setup_plan` for read-only readiness. Use `setup_session` only when files should be created.
 - **Resuming**: Use `onboarding_packet` or `guided_setup` to catch up on state before editing files.
 - **The Loop**: `next_experiment` packages preflight, benchmark, log options, and ASI. `log_experiment` commits or reverts.
 - **Research**: `measure_quality_gap` counts the checklist. `gap_candidates` proposes or applies new items.
-- **Finish**: `finalize_preview` reports readiness. Branch creation stays in the finalizer CLI.
+- **Finish**: `finalize_preview` reports readiness and semantic blockers. Use `finalize_current_tree` only when current branch contents are the intended review unit.
 
 ## Argument Safety
 
@@ -87,7 +89,7 @@ The server also exposes read-only MCP resource templates so clients can inspect 
 | `autoresearch://state{?working_dir}` | Compact session state, run counts, best metric, warnings, memory, and continuation context. |
 | `autoresearch://last-run{?working_dir}` | Last-run decision packet summary, allowed statuses, freshness, and ASI template. |
 | `autoresearch://quality-gaps{?working_dir,research_slug}` | Active or requested quality-gap checklist counts. Add `research_slug=<slug>` when needed. |
-| `autoresearch://dashboard-summary{?working_dir}` | Dashboard-style stage, next action, dashboard command, warnings, and memory summary without exporting HTML or starting a server. |
+| `autoresearch://dashboard-summary{?working_dir}` | Dashboard-style stage, next action, dashboard command, warnings, scaffold health, research integrity, and memory summary without exporting HTML or starting a server. |
 
 Prompt templates point agents at the right resources and tools without embedding stale state:
 
@@ -134,7 +136,10 @@ node scripts/autoresearch.mjs export --cwd <project>
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark
 node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
+node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts
 ```
+
+`finalize-current-tree` excludes session artifacts by default; the flag is shown for explicit command transcripts.
 
 Verify MCP startup with:
 

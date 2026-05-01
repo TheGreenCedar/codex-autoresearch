@@ -141,6 +141,8 @@ export async function readMcpResource(
       best: state.best,
       warnings: [...(state.warnings || []), ...(guide.doctor?.warnings || [])],
       memory: state.memory || null,
+      scaffoldHealth: state.scaffoldHealth || guide.scaffoldHealth || null,
+      researchIntegrity: state.researchIntegrity || guide.researchIntegrity || null,
     });
   }
 

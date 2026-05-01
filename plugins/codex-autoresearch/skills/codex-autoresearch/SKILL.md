@@ -113,6 +113,9 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next_experiment` before logging.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
+- Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
+- Read `researchIntegrity` before claiming a best. `dev_best`, `pending_repeat`, `invalidated`, `historical`, and `blocked` labels explain why a metric can be interesting without being promotable.
+- Treat perfect quality-like metrics as suspicious until repeat, freshness, breadth, holdout, and promotion metadata are present.
 - If doctor reports benchmark drift, treat the old best as historical evidence, not current runtime proof.
 - If the session is maxed, stale, or intentionally changing phase, use `new_segment` or `new-segment --cwd <project> --dry-run` first; confirmed segment creation appends to `autoresearch.jsonl`.
 - If the benchmark contract is being promoted, use `promote_gate` or `promote-gate --cwd <project> --reason "<why>" --dry-run` so the new segment records the gate, sample size, and measurement reason.
@@ -169,11 +172,13 @@ Use finalization when noisy loop history has useful kept commits.
 1. Run MCP `finalize_preview` or `scripts/autoresearch.mjs finalize-preview --cwd <project>`.
 2. Keep only `status: "keep"` evidence.
 3. Treat previews and plans as read-only.
-4. Review dirty tree, stale plan, overlap, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
+4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
 5. Ask before creating branches unless the user already approved finalization.
 6. Run the finalizer from the autoresearch source branch.
 7. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
 8. Report created review branches, files, metric improvement, verification, and remaining risk.
+
+Use `finalize_current_tree` or `scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain why current-tree packaging is being used.
 
 Runway order: preview, approve, create review branches, verify, merge into trunk, cleanup.
 

@@ -37,6 +37,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 type ValueMode = "value" | "percent";
 type AxisMode = "iteration" | "timestamp";
+type MetricDetailCard = { label: string; value: string; id: string };
 
 interface TrendPanelProps {
   session: SessionSegment;
@@ -615,24 +616,7 @@ function ExperimentModal({
               <dd>{point.evidence}</dd>
             </div>
           )}
-          {breakdown && readout.metricDefinition.mode === "weighted_cost" && (
-            <>
-              <div>
-                <dt>Time</dt>
-                <dd>
-                  {formatMetric(breakdown.timeValue, "s")} / score{" "}
-                  {formatWeightedScoreValue(breakdown.timeScore, readout)}
-                </dd>
-              </div>
-              <div>
-                <dt>Memory</dt>
-                <dd>
-                  {formatMemoryValue(breakdown.memoryValue)} / score{" "}
-                  {formatWeightedScoreValue(breakdown.memoryScore, readout)}
-                </dd>
-              </div>
-            </>
-          )}
+          <WeightedExperimentMetrics readout={readout} breakdown={breakdown} />
           {point.rollbackReason && (
             <div>
               <dt>Rollback reason</dt>
@@ -648,6 +632,34 @@ function ExperimentModal({
         </dl>
       </section>
     </div>
+  );
+}
+
+function WeightedExperimentMetrics({
+  readout,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  breakdown: RunMetricBreakdown | null;
+}) {
+  if (!breakdown || readout.metricDefinition.mode !== "weighted_cost") return null;
+  return (
+    <>
+      <div>
+        <dt>Time</dt>
+        <dd>
+          {formatMetric(breakdown.timeValue, "s")} / score{" "}
+          {formatWeightedScoreValue(breakdown.timeScore, readout)}
+        </dd>
+      </div>
+      <div>
+        <dt>Memory</dt>
+        <dd>
+          {formatMemoryValue(breakdown.memoryValue)} / score{" "}
+          {formatWeightedScoreValue(breakdown.memoryScore, readout)}
+        </dd>
+      </div>
+    </>
   );
 }
 
@@ -697,47 +709,64 @@ function MetricDetailsGrid({
   readout: DashboardReadout;
   breakdown?: RunMetricBreakdown;
 }) {
+  const baselineCards = buildBaselineMetricCards(readout);
+  const metricCards = [
+    ...baselineCards,
+    {
+      label: readout.metricDefinition.valueLabel,
+      value: formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition),
+      id: "metric-detail-score",
+    },
+    {
+      label: readout.metricDefinition.percentLabel,
+      value: formatMetricDetailPercent(readout, breakdown),
+      id: "metric-detail-percent",
+    },
+  ];
   return (
     <div className="metric-details-grid">
-      {readout.metricDefinition.mode === "weighted_cost" ? (
-        <>
-          <div className="metric-detail-card">
-            <span>Baseline time</span>
-            <strong id="metric-detail-baseline-time">
-              {formatMetric(readout.metricDefinition.baselineTime, "s")}
-            </strong>
-          </div>
-          <div className="metric-detail-card">
-            <span>Baseline memory</span>
-            <strong id="metric-detail-baseline-memory">
-              {formatMemoryValue(readout.metricDefinition.baselineMemory)}
-            </strong>
-          </div>
-        </>
-      ) : (
-        <div className="metric-detail-card">
-          <span>Baseline {readout.metricDefinition.valueLabel.toLowerCase()}</span>
-          <strong id="metric-detail-baseline-value">
-            {formatMetricValue(readout.baseline, readout.metricDefinition)}
-          </strong>
+      {metricCards.map((card) => (
+        <div className="metric-detail-card" key={card.id}>
+          <span>{card.label}</span>
+          <strong id={card.id}>{card.value}</strong>
         </div>
-      )}
-      <div className="metric-detail-card">
-        <span>{readout.metricDefinition.valueLabel}</span>
-        <strong id="metric-detail-score">
-          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-        </strong>
-      </div>
-      <div className="metric-detail-card">
-        <span>{readout.metricDefinition.percentLabel}</span>
-        <strong id="metric-detail-percent">
-          {readout.metricDefinition.mode === "weighted_cost"
-            ? formatPercentOfBaseline(breakdown?.chartPercentValue ?? null)
-            : formatImprovement(breakdown?.improvement ?? null)}
-        </strong>
-      </div>
+      ))}
     </div>
   );
+}
+
+function buildBaselineMetricCards(readout: DashboardReadout): MetricDetailCard[] {
+  if (readout.metricDefinition.mode === "weighted_cost") {
+    return [
+      {
+        label: "Baseline time",
+        value: formatMetric(readout.metricDefinition.baselineTime, "s"),
+        id: "metric-detail-baseline-time",
+      },
+      {
+        label: "Baseline memory",
+        value: formatMemoryValue(readout.metricDefinition.baselineMemory),
+        id: "metric-detail-baseline-memory",
+      },
+    ];
+  }
+  return [
+    {
+      label: `Baseline ${readout.metricDefinition.valueLabel.toLowerCase()}`,
+      value: formatMetricValue(readout.baseline, readout.metricDefinition),
+      id: "metric-detail-baseline-value",
+    },
+  ];
+}
+
+function formatMetricDetailPercent(
+  readout: DashboardReadout,
+  breakdown?: RunMetricBreakdown,
+): string {
+  if (readout.metricDefinition.mode === "weighted_cost") {
+    return formatPercentOfBaseline(breakdown?.chartPercentValue ?? null);
+  }
+  return formatImprovement(breakdown?.improvement ?? null);
 }
 
 function MetricBreakdownList({
@@ -760,29 +789,28 @@ function WeightedMetricBreakdownList({
   readout: DashboardReadout;
   breakdown?: RunMetricBreakdown;
 }) {
+  const timeScore = formatWeightedScoreValue(breakdown?.timeScore ?? null, readout);
+  const memoryScore = formatWeightedScoreValue(breakdown?.memoryScore ?? null, readout);
   return (
     <dl className="metric-detail-list">
       <div>
         <dt>Time component</dt>
         <dd id="metric-detail-time">
           {formatMetric(breakdown?.timeValue ?? null, "s")} /{" "}
-          {formatMetric(readout.metricDefinition.baselineTime, "s")} ={" "}
-          {formatWeightedScoreValue(breakdown?.timeScore ?? null, readout)}
+          {formatMetric(readout.metricDefinition.baselineTime, "s")} = {timeScore}
         </dd>
       </div>
       <div>
         <dt>Memory component</dt>
         <dd id="metric-detail-memory">
           {formatMemoryValue(breakdown?.memoryValue ?? null)} /{" "}
-          {formatMemoryValue(readout.metricDefinition.baselineMemory)} ={" "}
-          {formatWeightedScoreValue(breakdown?.memoryScore ?? null, readout)}
+          {formatMemoryValue(readout.metricDefinition.baselineMemory)} = {memoryScore}
         </dd>
       </div>
       <div>
         <dt>Weighted score</dt>
         <dd id="metric-detail-equation">
-          (0.7 * {formatWeightedScoreValue(breakdown?.timeScore ?? null, readout)}) + (0.3 *{" "}
-          {formatWeightedScoreValue(breakdown?.memoryScore ?? null, readout)}) ={" "}
+          (0.7 * {timeScore}) + (0.3 * {memoryScore}) ={" "}
           {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
         </dd>
       </div>
