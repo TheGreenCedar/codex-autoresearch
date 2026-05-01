@@ -34,19 +34,10 @@ jobs:
           cache-dependency-path: plugins/codex-autoresearch/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Build node
-        run: npm run build:node
-
-      - name: Build dashboard
-        run: npm run build:dashboard
+        run: npm ci --prefer-offline --no-audit
 
       - name: Run full check gate
         run: npm run check
 
       - name: Run MCP smoke test
         run: node scripts/autoresearch.mjs mcp-smoke
-
-      - name: Run tests
-        run: npm test
