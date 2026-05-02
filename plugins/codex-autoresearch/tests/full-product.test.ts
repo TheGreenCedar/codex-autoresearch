@@ -7,10 +7,12 @@ import {
   currentState,
   iterationLimitInfo,
   parseQualityGaps,
+  shellQuote as sessionShellQuote,
 } from "../lib/session-core.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
-import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
+import { parseMetricLines, runProcess, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { serveAutoresearch } from "../lib/live-server.js";
 import {
   createCliRunner,
   createInteractiveCliRunner,
@@ -71,6 +73,20 @@ test("session core handles finite metrics, segments, limits, and quality gaps", 
       total: 3,
     });
   });
+});
+
+test("displayed command quoting preserves backslashes before quotes", async () => {
+  const trickyArg = String.raw`C:\tmp"name`;
+  const expectedDisplay = String.raw`"C:\\tmp\"name"`;
+
+  assert.equal(sessionShellQuote(trickyArg), expectedDisplay);
+
+  const result = await runProcess(process.execPath, ["-e", "", trickyArg], {
+    cwd: pluginRoot,
+    timeoutSeconds: 10,
+  });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.ok(result.commandDisplay.includes(expectedDisplay), result.commandDisplay);
 });
 
 test("runner parses metrics, truncates tails, and reports timeouts", async () => {
@@ -949,6 +965,59 @@ test("live server rejects dashboard actions because CLI owns mutations", async (
       assert.equal(body.ok, false);
       assert.equal(body.code, "actions_disabled");
     });
+  });
+});
+
+test("live server action receipts redact stack traces", async () => {
+  await withTempDir("live-stack-redaction", async (dir) => {
+    const stackScript = path.join(dir, "stack-action.mjs");
+    await writeFile(
+      stackScript,
+      [
+        "console.error('Error: hidden failure');",
+        "console.error('    at leak (file:///C:/secret/live-server.ts:1:2)');",
+        "console.error('    at run (node:internal/modules/run_main:1:2)');",
+        "process.exit(1);",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const served = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      scriptPath: stackScript,
+      actionsEnabled: true,
+      dashboardHtml: async () => "<html></html>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      const action = await fetch(`${served.url}actions/doctor`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-autoresearch-action-nonce": served.actionNonce,
+          Origin: new URL(served.url).origin,
+        },
+        body: JSON.stringify({}),
+      });
+      assert.equal(action.status, 200);
+      const body = await action.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.receipt.status, "failed");
+      assert.match(body.receipt.stderrSummary, /Error: hidden failure/);
+      assert.match(body.receipt.stderrSummary, /2 stack trace lines omitted/);
+      assert.equal("stdout" in body, false);
+      assert.equal("stderr" in body, false);
+      const serialized = JSON.stringify(body);
+      assert.doesNotMatch(serialized, /at leak/);
+      assert.doesNotMatch(serialized, /node:internal/);
+      assert.doesNotMatch(serialized, /file:\/\/\/C:\/secret/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        served.server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });
 

@@ -440,7 +440,7 @@ function processResult({
 
 function shellDisplayPart(value: string): string {
   const text = String(value);
-  return /^[A-Za-z0-9_./:=@-]+$/.test(text) ? text : `"${text.replace(/"/g, '\\"')}"`;
+  return /^[A-Za-z0-9_./:=@-]+$/.test(text) ? text : `"${text.replace(/[\\"]/g, "\\$&")}"`;
 }
 
 function metricLineName(line: string): string {
