@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## 1.3.2
+## 1.3.3
 
 ### Fixed
 
@@ -17,7 +17,7 @@ This project uses a root-only changelog because the root README is the public do
 - Removed the MCP server declaration and launcher surface. Codex Autoresearch now runs as a CLI/skill-only plugin to avoid Codex startup hangs from automatic MCP registration.
 - Updated package checks, CI/release smoke tests, docs, and skill guidance to use `node scripts/autoresearch.mjs --help` and normal CLI commands instead of `mcp-smoke`.
 
-Bumped public package and plugin manifest version surfaces to `1.3.2`.
+Bumped public package and plugin manifest version surfaces to `1.3.3`.
 
 ## 1.3.0
 
