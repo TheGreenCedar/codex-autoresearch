@@ -1,4 +1,4 @@
-import { normalizeCliCommandArguments } from "./mcp-tool-schemas.js";
+import { normalizeCliCommandArguments } from "./tool-schemas.js";
 
 type LooseObject = Record<string, any>;
 type CliHandler = (args: LooseObject) => Promise<LooseObject>;

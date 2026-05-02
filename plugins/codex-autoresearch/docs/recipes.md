@@ -16,8 +16,6 @@ node scripts/autoresearch.mjs recipes recommend --cwd <project>
 
 This inspects the project and returns a suggested recipe plus setup/doctor commands.
 
-MCP users can call `list_recipes` with `recommend: true`.
-
 Built-in ecosystem adapters include Node/npm, Vitest, Cargo, Go, pytest, .NET, TypeScript compile time, bundle size, memory usage, Lighthouse, quality-gap, command latency, and custom metric loops. Recipes carry the primary metric, direction, benchmark/check command, caveats, tags, and scoped commit paths.
 
 Placeholder recipes such as `custom`, `command-latency`, and unconfigured `lighthouse-score` intentionally fail loudly until the benchmark command is replaced with a real workload that prints `METRIC name=value` or is wrapped by setup timing.
@@ -44,7 +42,7 @@ External catalogs can add local team recipes:
 node scripts/autoresearch.mjs setup-plan --cwd <project> --catalog ./recipes.json --recipe team-runtime
 ```
 
-Over MCP, external catalog setup guidance can materialize shell commands, so pass `allow_unsafe_command: true` deliberately.
+External catalog setup guidance can materialize shell commands, so inspect the generated plan before applying it.
 
 ## Good Recipe Shape
 

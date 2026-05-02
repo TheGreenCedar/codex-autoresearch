@@ -106,9 +106,9 @@ node scripts/autoresearch.mjs export --cwd <project>
 
 Static exports are review snapshots. They are not proof of current packet freshness and should not expose live mutation controls.
 
-## MCP Command Gate
+## Command Gate
 
-Over MCP, command-bearing fields require `allow_unsafe_command: true`:
+Command-bearing setup and inspection paths require deliberate approval before materializing custom commands:
 
 - `command`
 - `benchmark_command`

@@ -14,7 +14,7 @@ export function dashboardMode(meta: DashboardMeta = {}): DashboardMode {
       title: guidance.title || "Live runboard",
       detail: guidance.detail || "100 embedded packets.",
       refreshDone: "Live demo refreshed",
-      actionNote: "Demo shows the served readout; actions stay in CLI or MCP.",
+      actionNote: "Demo shows the served readout; actions stay in CLI.",
     };
   }
   if (liveRefresh) {
@@ -22,9 +22,9 @@ export function dashboardMode(meta: DashboardMeta = {}): DashboardMode {
       liveRefresh: true,
       liveActions,
       title: guidance.title || "Live dashboard",
-      detail: guidance.detail || "Live refresh is available; actions stay in CLI or MCP.",
+      detail: guidance.detail || "Live refresh is available; actions stay in CLI.",
       refreshDone: "Live data refreshed",
-      actionNote: "Use CLI or MCP for setup, packet runs, logging, and finalization.",
+      actionNote: "Use CLI for setup, packet runs, logging, and finalization.",
     };
   }
   return {

@@ -12,7 +12,9 @@ node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
 
-If MCP tools are available, prefer `prompt_plan` for broad new requests, then `onboarding_packet`, `recommend_next`, `read_state`, `guided_setup`, and `doctor_session`.
+For broad new requests, start with `prompt-plan`, then `onboarding-packet`, `recommend-next`, `state`, `guide`, and `doctor`.
+
+CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
 
 Read existing files before editing:
 
@@ -45,7 +47,7 @@ Static exports are offline snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-If you need actions, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use CLI or MCP for actions and logging.
+If you need actions, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use the CLI for actions and logging.
 
 ## Packet Loop
 

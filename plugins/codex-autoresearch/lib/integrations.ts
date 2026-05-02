@@ -25,7 +25,7 @@ const BUILT_IN_INTEGRATIONS = [
     id: "live-dashboard-readout",
     title: "Live dashboard readout",
     status: "available",
-    description: "Serves a local dashboard for fresh state while actions stay in CLI or MCP.",
+    description: "Serves a local dashboard for fresh state while actions stay in CLI.",
   },
 ];
 

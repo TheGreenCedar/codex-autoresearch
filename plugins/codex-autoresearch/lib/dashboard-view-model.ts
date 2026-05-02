@@ -1300,7 +1300,7 @@ export function buildActionRail({
       priority: "Safe",
       title: "Use the live runboard",
       detail: "Open the served dashboard for fresh state and next-action context.",
-      utilityCopy: "Static exports are fallback snapshots; CLI or MCP owns actions.",
+      utilityCopy: "Static exports are fallback snapshots; CLI owns actions.",
       command: commandMap.get("serve dashboard") || commandMap.get("export dashboard"),
       commandLabel: commandMap.get("serve dashboard") ? "Live" : "Export",
       tone: "neutral",
@@ -1358,7 +1358,7 @@ export function buildMissionControl({
 
   return {
     activeStep,
-    staticFallback: "Serve the dashboard locally for a fresh readout; use CLI or MCP for actions.",
+    staticFallback: "Serve the dashboard locally for a fresh readout; use CLI for actions.",
     steps: [
       missionStep({
         id: "setup",

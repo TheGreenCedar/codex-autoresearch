@@ -145,7 +145,7 @@ export async function serveAutoresearch(args: LooseObject) {
               res,
               actionErrorEnvelope(
                 action,
-                "Live dashboard actions are disabled. Use CLI or MCP for actions.",
+                "Live dashboard actions are disabled. Use CLI for actions.",
                 "actions_disabled",
               ),
               403,

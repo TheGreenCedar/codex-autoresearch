@@ -17,8 +17,6 @@ import {
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
 import { integrationsCommand } from "../lib/integrations.js";
-import { createMcpInterface } from "../lib/mcp-interface.js";
-import { runMcpSmoke, startMcpStdioServer } from "../lib/mcp-stdio-server.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -118,7 +116,6 @@ const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
-const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -192,8 +189,6 @@ Usage:
   node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose]
   node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
-  node scripts/autoresearch.mjs mcp-smoke
-  node scripts/autoresearch.mjs --mcp
 
 Benchmark output format:
   METRIC name=value
@@ -695,7 +690,7 @@ async function setupPlan(args: any) {
         ? `Setup still needs: ${missing.join(", ")}.`
         : "Create or refresh the Autoresearch session files before the first packet.",
       command,
-      mcpTool: "setup_session",
+      toolName: "setup_session",
       safety: "state_mutation",
       missingEssentials: missing,
     }),
@@ -716,7 +711,7 @@ function sharedNextStep({
   title,
   reason,
   command = "",
-  mcpTool = "",
+  toolName = "",
   safety = "read",
   missingEssentials = [],
   staleState = null,
@@ -727,7 +722,7 @@ function sharedNextStep({
       title,
       reason,
       command,
-      mcpTool,
+      toolName,
       safety,
     },
     missingEssentials: listOption(missingEssentials),
@@ -749,7 +744,7 @@ function guidedNextStep({
       title: "Repair setup",
       reason: nextAction,
       command: commands?.setup || setup?.nextCommand || "",
-      mcpTool: "setup_session",
+      toolName: "setup_session",
       safety: "state_mutation",
       missingEssentials: setup?.missing || setup?.missingEssentials || [],
     });
@@ -760,7 +755,7 @@ function guidedNextStep({
       title: "Replace stale packet",
       reason: nextAction || "The saved packet no longer matches current state.",
       command: replacementAction,
-      mcpTool: "next_experiment",
+      toolName: "next_experiment",
       safety: "process_start",
       staleState: {
         stale: true,
@@ -775,7 +770,7 @@ function guidedNextStep({
       title: "Log packet decision",
       reason: nextAction,
       command: commands?.logLast || "",
-      mcpTool: "log_experiment",
+      toolName: "log_experiment",
       safety: "git_mutation",
     });
   }
@@ -785,7 +780,7 @@ function guidedNextStep({
       title: "Start or extend segment",
       reason: nextAction,
       command: commands?.newSegmentDryRun || "",
-      mcpTool: "new_segment",
+      toolName: "new_segment",
       safety: "state_mutation",
     });
   }
@@ -794,7 +789,7 @@ function guidedNextStep({
     title: stage === "ready" ? "Run next packet" : "Run baseline packet",
     reason: nextAction || "Run one measured packet, then log the decision with ASI.",
     command: commands?.baseline || "",
-    mcpTool: "next_experiment",
+    toolName: "next_experiment",
     safety: "process_start",
   });
 }
@@ -860,7 +855,7 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
         title: "Create session setup",
         reason: intent.nextAction,
         command: setup.nextCommand,
-        mcpTool: "setup_session",
+        toolName: "setup_session",
         safety: "state_mutation",
         missingEssentials: intent.missing || setup.missing || [],
       }),
@@ -1706,7 +1701,7 @@ function recommendedActionNextStep(
     title: action.title || "Run next safe action",
     reason: action.detail || viewModel.readout?.nextAction || compact.nextAction,
     command: action.command || action.primaryCommand?.command || "",
-    mcpTool:
+    toolName:
       stage === "log-decision"
         ? "log_experiment"
         : stage === "finalization-preview"
@@ -4010,7 +4005,7 @@ async function logExperiment(args: any) {
 async function clearSession(args: any) {
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) {
-    throw new Error("clear requires confirm=true for MCP or --yes for CLI");
+    throw new Error("clear requires --yes for CLI confirmation");
   }
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const targets = new Set([
@@ -4140,11 +4135,30 @@ function scrubDashboardPublicExport(value: any): any {
   if (typeof value === "string") return scrubDashboardPublicExportString(value);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]: [string, unknown]) => [
-      key,
-      scrubDashboardPublicExport(item),
-    ]),
+    Object.entries(value).map(([key, item]: [string, unknown]) => {
+      if (key === "dirtyFiles") return [key, scrubDashboardPublicExportDirtyFiles()];
+      if (isDashboardPublicExportPathList(key, item)) {
+        return [key, []];
+      }
+      return [key, scrubDashboardPublicExport(item)];
+    }),
   );
+}
+
+function isDashboardPublicExportPathList(key: string, value: unknown) {
+  return (
+    (key === "files" || key.endsWith("Files")) &&
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string")
+  );
+}
+
+function scrubDashboardPublicExportDirtyFiles() {
+  return {
+    sessionArtifacts: [],
+    scopedExperimentFiles: [],
+    unrelatedFiles: [],
+  };
 }
 
 function scrubDashboardPublicExportString(value: any) {
@@ -4481,7 +4495,7 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     {
       label: "Doctor",
-      command: `node ${script} doctor --cwd ${cwd} --check-benchmark --check-installed`,
+      command: `node ${script} doctor --cwd ${cwd} --check-benchmark`,
     },
     { label: "Benchmark lint", command: `node ${script} benchmark-lint --cwd ${cwd}` },
     { label: "Benchmark inspect", command: `node ${script} benchmark-inspect --cwd ${cwd}` },
@@ -4518,7 +4532,6 @@ function runtimeProvenance(drift: LooseObject | null = null) {
     pluginVersion: PLUGIN_VERSION,
     sourceRoot: PLUGIN_ROOT,
     repoRoot: REPO_ROOT,
-    mcpEntrypoint: MCP_SCRIPT_PATH,
     installedCachePath:
       drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
     driftConfidence: drift ? (drift.ok === false ? "drift-detected" : "checked") : "source-only",
@@ -4860,7 +4873,7 @@ async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
     limitations: [
       "Codex hooks are experimental.",
       "Use them as reminders or context injection, not irreversible enforcement.",
-      "Current hook behavior is best suited to shell/Bash-style tool observations, not complete MCP/write/web-search coverage.",
+      "Current hook behavior is best suited to shell/Bash-style tool observations, not complete write/web-search coverage.",
       "Autoresearch core behavior must remain correct without hooks.",
     ],
     templates: {
@@ -5260,71 +5273,11 @@ function compactNextExperimentPacket(packet: LooseObject) {
   };
 }
 
-const mcpInterface = createMcpInterface({
-  boolOption,
-  benchmarkInspect,
-  benchmarkLint,
-  checksInspect,
-  clearSession,
-  configureSession,
-  doctorHooks,
-  doctorSession,
-  exportDashboard,
-  finalizeCurrentTree: buildFinalizeCurrentTree,
-  finalizePreview: buildFinalizePreview,
-  gapCandidates: buildGapCandidates,
-  guidedSetup,
-  initExperiment,
-  integrationsCommand,
-  logExperiment,
-  measureQualityGap,
-  newSegment,
-  nextExperiment,
-  onboardingPacket,
-  parseJsonOption,
-  parseJsonFileOption,
-  promoteGate,
-  promptPlan,
-  publicState,
-  recommendNext,
-  recipeCommand,
-  runExperiment,
-  serveDashboard,
-  setupPlan,
-  setupResearchSession,
-  setupSession,
-});
-const { callTool, toolSchemas, validateToolArguments } = mcpInterface;
-
-function startMcpServer() {
-  startMcpStdioServer({
-    callTool,
-    serverVersion: PLUGIN_VERSION,
-    toolSchemas,
-    validateToolArguments,
-  });
-}
-
-async function mcpSmoke() {
-  return await runMcpSmoke({
-    mcpScriptPath: MCP_SCRIPT_PATH,
-    pluginRoot: PLUGIN_ROOT,
-  });
-}
-
 async function main() {
   const args = parseCliArgs(process.argv.slice(2));
-  if (args.mcp) {
-    startMcpServer();
-    return;
-  }
   const command = args._[0];
   if (!command || args.help || command === "help") {
     console.log(usage());
-    return;
-  }
-  if (command === "mcp-smoke") {
-    console.log(JSON.stringify(await mcpSmoke(), null, 2));
     return;
   }
   const handlers = createCliCommandHandlers({
