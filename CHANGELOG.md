@@ -8,6 +8,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Fixed
 
+- Hardened CI token permissions, generated command display escaping, Markdown table escaping, and live dashboard action error output to resolve CodeQL code-scanning findings.
 - Fixed recipe-backed setup planning so recommended recipes can supply their default benchmark command before missing setup fields are reported.
 - Fixed packet artifact evidence so relative artifact paths are checked against the target working directory instead of the plugin process directory.
 
