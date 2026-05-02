@@ -85,11 +85,19 @@ export function useLiveDashboard({
   }, [mode.liveRefresh, mode.refreshDone, setEntries, setMeta, setViewModel]);
 
   const runLiveAction = useCallback(
-    async (action: string, bodyOverride: Record<string, unknown> | null = null) => {
+    async (
+      action: string,
+      bodyOverride: Record<string, unknown> | null = null,
+    ): Promise<{
+      ok: boolean;
+      receipt: ActionReceipt | null;
+      payload?: ActionPayload;
+      error?: unknown;
+    } | void> => {
       if (!action || !mode.liveActions || typeof fetch !== "function") {
         setLiveStatus({
           title: "Live action unavailable",
-          detail: "Use CLI or MCP for actions; the served dashboard is a live readout.",
+          detail: "Use CLI for actions; the served dashboard is a live readout.",
         });
         return;
       }

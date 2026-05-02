@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -12,35 +11,15 @@ import {
   runGit,
   withTempDir as withNamedTempDir,
 } from "./helpers/process.js";
-import {
-  callMcpRequest as callMcpRequestWithServer,
-  mcpFrame,
-  waitForMcpResponseById,
-} from "./helpers/mcp.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
-const mcpServer = path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
-
-async function callMcpTool(name, args) {
-  return await callMcpRequest("tools/call", { name, arguments: args });
-}
-
-async function callMcpRequest(method, params = {}) {
-  return await callMcpRequestWithServer({
-    args: [mcpServer],
-    cwd: pluginRoot,
-    initialize: true,
-    method,
-    params,
-  });
-}
 
 async function renderExportedDashboard(html) {
   const dom = new JSDOM(html, {
@@ -390,6 +369,7 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
     const payload = JSON.parse(packet.stdout);
     assert.equal(payload.run.parsedPrimary, 7);
     assert.equal(payload.run.artifacts.manifest, "out/manifest.json");
+    assert.equal(payload.packetEvidence.artifacts[0].exists, true);
     assert.deepEqual(payload.run.envKeys, ["SCORE"]);
 
     const logged = await runCli([
@@ -940,12 +920,21 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     assert.equal(packet.decision.metric, 3);
     assert.equal(packet.decision.metrics.cache_hits, 8);
     assert.equal(packet.decision.safeSuggestedStatus, "keep");
+    assert.equal(packet.decision.promotion.label, "exploratory");
     assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
+    assert.match(packet.packetEvidence.packetId, /^packet-/);
+    assert.equal(packet.packetEvidence.commandIdentity.command, command);
+    assert.equal(packet.packetEvidence.exitStatus, 0);
+    assert.equal(packet.packetEvidence.metrics.seconds, 3);
+    assert.match(packet.packetEvidence.stdoutTail, /METRIC seconds=3/);
+    assert.match(packet.packetEvidence.freshnessFingerprint, /^[a-f0-9]{64}$/);
 
     const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
     assert.equal(lastRun.decision.metric, 3);
+    assert.equal(lastRun.decision.promotion.label, "exploratory");
+    assert.equal(lastRun.packetEvidence.metrics.cache_hits, 8);
     assert.equal(lastRun.history.nextRun, 1);
     assert.equal(lastRun.history.config.metricName, "seconds");
 
@@ -963,6 +952,9 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.experiment.metric, 3);
     assert.equal(payload.experiment.metrics.cache_hits, 8);
+    assert.equal(payload.experiment.metricEligible, true);
+    assert.equal(payload.experiment.promotion.label, "invalidated");
+    assert.match(payload.experiment.packetFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(payload.lastRunCleared, true);
     await assert.rejects(access(packet.lastRunPath));
 
@@ -1500,7 +1492,10 @@ test("metricless failure logs do not become baseline or best", async () => {
       "Benchmark crashed before metric",
     ]);
     assert.equal(crash.code, 0, crash.stderr);
-    assert.equal(JSON.parse(crash.stdout).experiment.metric, null);
+    const crashPayload = JSON.parse(crash.stdout);
+    assert.equal(crashPayload.experiment.metric, null);
+    assert.equal(crashPayload.experiment.metricEligible, false);
+    assert.equal(crashPayload.experiment.promotion.label, "blocked");
 
     const checksFailed = await runCli([
       "log",
@@ -1512,7 +1507,10 @@ test("metricless failure logs do not become baseline or best", async () => {
       "Checks failed before metric",
     ]);
     assert.equal(checksFailed.code, 0, checksFailed.stderr);
-    assert.equal(JSON.parse(checksFailed.stdout).experiment.metric, null);
+    const checksFailedPayload = JSON.parse(checksFailed.stdout);
+    assert.equal(checksFailedPayload.experiment.metric, null);
+    assert.equal(checksFailedPayload.experiment.metricEligible, false);
+    assert.equal(checksFailedPayload.experiment.promotion.label, "blocked");
 
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
@@ -1616,6 +1614,9 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
     assert.equal(logged.code, 0, logged.stderr);
     const payload = JSON.parse(logged.stdout);
     assert.equal(payload.experiment.metric, null);
+    assert.equal(payload.experiment.metricEligible, false);
+    assert.equal(payload.experiment.promotion.label, "blocked");
+    assert.match(payload.experiment.packetFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(payload.lastRunCleared, true);
     await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
   });
@@ -2410,33 +2411,6 @@ test("clear dry-run previews deletion targets without removing files", async () 
   });
 });
 
-test("mcp clear_session dry-run previews deletion targets without confirmation", async () => {
-  await withTempDir("mcp-clear-dry-run", async (dir) => {
-    await runCli([
-      "research-setup",
-      "--cwd",
-      dir,
-      "--slug",
-      "preview",
-      "--goal",
-      "Preview cleanup",
-    ]);
-    const researchRoot = path.join(dir, "autoresearch.research");
-    await access(researchRoot);
-
-    const response = await callMcpTool("clear_session", {
-      working_dir: dir,
-      dry_run: true,
-    });
-    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
-    const payload = JSON.parse(response.result.content[0].text);
-    assert.equal(payload.dryRun, true);
-    assert.equal(payload.deleted.length, 0);
-    assert.ok(payload.wouldDelete.includes(researchRoot));
-    await access(researchRoot);
-  });
-});
-
 test("setup-plan preserves explicit command and state inputs", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
     const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -2468,10 +2442,44 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.match(payload.nextCommand, /--max-iterations "7"/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
+    assert.equal(payload.missingEssentials.length, 0);
+    assert.equal(payload.nextStep.stage, "setup-repair");
+    assert.equal(payload.nextStep.nextAction.title, "Create session setup");
+    assert.equal(payload.nextStep.nextAction.safety, "state_mutation");
+    assert.match(payload.nextStep.nextAction.command, / setup /);
+    assert.equal(payload.nextStep.nextAction.toolName, "setup_session");
     assert.deepEqual(
       payload.firstRunChecklist.map((step) => step.step),
       ["setup", "benchmark-lint", "doctor", "checkpoint", "baseline", "log"],
     );
+
+    await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
+    const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
+    assert.equal(guide.code, 0, guide.stderr);
+    const guidePayload = JSON.parse(guide.stdout);
+    assert.equal(guidePayload.nextStep.stage, "baseline-packet");
+    assert.equal(guidePayload.nextStep.nextAction.title, "Run baseline packet");
+    assert.equal(guidePayload.nextStep.nextAction.safety, "process_start");
+    assert.match(guidePayload.nextStep.nextAction.command, / next /);
+  });
+});
+
+test("setup-plan treats recommended recipe benchmark as configured", async () => {
+  await withTempDir("setup-plan-recipe-defaults", async (dir) => {
+    await writeFile(
+      path.join(dir, "package.json"),
+      '{"scripts":{"test":"node -e \\"process.exit(0)\\""}}\n',
+      "utf8",
+    );
+
+    const result = await runCli(["setup-plan", "--cwd", dir]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.recommendedRecipe.id, "node-test-runtime");
+    assert.deepEqual(payload.missing, []);
+    assert.deepEqual(payload.missingEssentials, []);
+    assert.doesNotMatch(payload.nextStep.nextAction.reason, /benchmark_command/);
+    assert.match(payload.nextCommand, /--recipe "node-test-runtime"/);
   });
 });
 
@@ -2780,47 +2788,6 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
   });
 });
 
-test("mcp server returns a JSON-RPC parse error for malformed JSON", async () => {
-  const child = spawn(process.execPath, [mcpServer], {
-    cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  const body = "{bad json";
-  child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  child.kill();
-
-  assert.match(stdout, /Content-Length:/);
-  assert.match(stdout, /"code":-32700/);
-  assert.equal(stderr, "");
-});
-
-test("mcp-smoke reports direct stdio server readiness", async () => {
-  const result = await runCli(["mcp-smoke"]);
-  assert.equal(result.code, 0, result.stderr);
-
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ok, true);
-  assert.equal(payload.initialize.serverInfo.name, "codex-autoresearch");
-  assert.ok(payload.toolCount >= 6);
-  assert.equal(payload.missingRequiredTools.length, 0);
-  assert.match(payload.toolNames.join("\n"), /setup_session/);
-  assert.match(payload.toolNames.join("\n"), /next_experiment/);
-  assert.match(payload.toolNames.join("\n"), /checks_inspect/);
-});
-
 test("CLI parser accepts equals-form options", async () => {
   await withTempDir("equals-options", async (dir) => {
     const init = await runCli([
@@ -2836,66 +2803,13 @@ test("CLI parser accepts equals-form options", async () => {
   });
 });
 
-test("mcp tools/list exposes output contracts and safety annotations", async () => {
-  const child = spawn(process.execPath, [mcpServer], {
-    cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  child.stdin.write(
-    mcpFrame({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {} },
-    }),
-  );
-  child.stdin.write(mcpFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }));
-  child.stdin.write(mcpFrame({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
-
-  const response = await waitForMcpResponseById(
-    () => stdout,
-    () => stderr,
-    2,
-  );
-  child.kill();
-
-  const tools = response.result.tools;
-  assert.ok(tools.length >= 6);
-  const setupPlan = tools.find((tool) => tool.name === "setup_plan");
-  const guidedSetup = tools.find((tool) => tool.name === "guided_setup");
-  const nextExperiment = tools.find((tool) => tool.name === "next_experiment");
-  const clearSession = tools.find((tool) => tool.name === "clear_session");
-  assert.equal(setupPlan.outputSchema.type, "object");
-  assert.equal(setupPlan.inputSchema.properties.start_dashboard, undefined);
-  assert.equal(setupPlan.annotations.readOnlyHint, true);
-  assert.equal(guidedSetup.annotations.readOnlyHint, false);
-  assert.equal(guidedSetup.annotations.openWorldHint, true);
-  assert.equal(nextExperiment.annotations.readOnlyHint, false);
-  assert.equal(nextExperiment.annotations.destructiveHint, false);
-  assert.equal(nextExperiment.annotations.openWorldHint, true);
-  assert.equal(clearSession.annotations.destructiveHint, true);
-  assert.equal(clearSession.annotations.openWorldHint, false);
-  assert.equal(stderr, "");
-});
-
-test("mcp tools expose guidance and output contracts", async () => {
+test("tool schemas expose guidance and output contracts", async () => {
   const [
-    { mcpToolSchemasWithContracts, toolSchemas },
+    { toolSchemas },
     { validateToolContracts },
     { cliCommandForTool, toolMutates, validateToolRegistry },
   ] = await Promise.all([
-    import("../lib/mcp-interface.js"),
+    import("../lib/tool-schemas.js"),
     import("../lib/tool-contracts.js"),
     import("../lib/tool-registry.js"),
   ]);
@@ -2931,7 +2845,7 @@ test("mcp tools expose guidance and output contracts", async () => {
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
 
-  const richDoctor = mcpToolSchemasWithContracts.find((tool) => tool.name === "doctor_session");
+  const richDoctor = toolSchemas.find((tool) => tool.name === "doctor_session");
   assert.equal(richDoctor.outputSchema.type, "object");
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
   assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
@@ -2964,15 +2878,15 @@ test("mcp tools expose guidance and output contracts", async () => {
   assert.equal(toolMutates("read_state"), false);
 });
 
-test("CLI and MCP argument normalization share runtime contracts", async () => {
+test("CLI and tool argument normalization share runtime contracts", async () => {
   const {
     normalizeCliCommandArguments,
     normalizeRuntimeToolArguments,
     normalizeToolArguments,
     validateToolArguments,
-  } = await import("../lib/mcp-tool-schemas.js");
+  } = await import("../lib/tool-schemas.js");
 
-  const mcpArgs = validateToolArguments("setup_plan", {
+  const toolArgs = validateToolArguments("setup_plan", {
     workingDir: "C:/repo",
     recipe: "node-test-runtime",
     metricName: "seconds",
@@ -2980,7 +2894,7 @@ test("CLI and MCP argument normalization share runtime contracts", async () => {
     commitPaths: ["src"],
     allowUnsafeCommand: true,
   });
-  assert.deepEqual(mcpArgs, {
+  assert.deepEqual(toolArgs, {
     working_dir: "C:/repo",
     recipe_id: "node-test-runtime",
     metric_name: "seconds",
@@ -2988,7 +2902,7 @@ test("CLI and MCP argument normalization share runtime contracts", async () => {
     commit_paths: ["src"],
     allow_unsafe_command: true,
   });
-  assert.deepEqual(normalizeRuntimeToolArguments("setup_plan", mcpArgs), {
+  assert.deepEqual(normalizeRuntimeToolArguments("setup_plan", toolArgs), {
     cwd: "C:/repo",
     recipeId: "node-test-runtime",
     metricName: "seconds",
@@ -3015,473 +2929,16 @@ test("CLI and MCP argument normalization share runtime contracts", async () => {
   assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
 });
 
-test("plugin MCP registration uses the lightweight startup entrypoint", async () => {
-  const manifest = JSON.parse(await readFile(path.join(pluginRoot, ".mcp.json"), "utf8"));
-  const registration = manifest.mcpServers["codex-autoresearch"];
-
-  assert.deepEqual(registration.args, ["./scripts/autoresearch-mcp.mjs"]);
-  assert.equal(registration.startup_timeout_sec, 60);
-});
-
-test("mcp server dispatches tool calls through the CLI wrapper", async () => {
-  const child = spawn(process.execPath, [mcpServer], {
-    cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-
-  const send = (message) => {
-    child.stdin.write(mcpFrame(message));
-  };
-
-  send({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: { protocolVersion: "2024-11-05", capabilities: {} },
-  });
-  send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
-  send({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: { name: "setup_plan", arguments: { working_dir: pluginRoot } },
-  });
-
-  const init = await waitForMcpResponseById(
-    () => stdout,
-    () => stderr,
-    1,
+test("plugin manifest does not declare an MCP server", async () => {
+  const manifest = JSON.parse(
+    await readFile(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"),
   );
-  const tool = await waitForMcpResponseById(
-    () => stdout,
-    () => stderr,
-    2,
-  );
-  child.kill();
+  const pkg = JSON.parse(await readFile(path.join(pluginRoot, "package.json"), "utf8"));
 
-  assert.equal(init.result.serverInfo.name, "codex-autoresearch");
-  assert.ok(init.result.capabilities.resources);
-  assert.ok(init.result.capabilities.prompts);
-  const payload = JSON.parse(tool.result.content[0].text);
-  assert.equal(payload.ok, true);
-  assert.equal(payload.tool, "setup_plan");
-  assert.equal(payload.workDir, pluginRoot);
-  assert.equal(payload.result.workDir, pluginRoot);
-  assert.equal(tool.result.structuredContent.ok, true);
-  assert.equal(tool.result.structuredContent.tool, "setup_plan");
-  assert.equal(tool.result.structuredContent.workDir, pluginRoot);
-  assert.equal(stderr, "");
-});
-
-test("mcp server dispatches guided setup through the CLI wrapper", async () => {
-  await withTempDir("mcp-guided-setup", async (dir) => {
-    const response = await callMcpTool("guided_setup", { working_dir: dir });
-    assert.equal(response.result?.isError, undefined);
-
-    const payload = JSON.parse(response.result.content[0].text);
-    assert.equal(payload.ok, true);
-    assert.equal(payload.workDir, dir);
-    assert.equal(payload.setup.ok, true);
-    assert.equal(payload.dashboard.requested, false);
-  });
-});
-
-test("mcp guided_setup can explicitly start a verified live dashboard", async () => {
-  await withTempDir("mcp-guided-dashboard", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "mcp guided dashboard",
-      "--metric-name",
-      "seconds",
-    ]);
-    const response = await callMcpTool("guided_setup", {
-      working_dir: dir,
-      start_dashboard: true,
-      port: 0,
-    });
-    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
-    const payload = JSON.parse(response.result.content[0].text);
-    assert.equal(payload.dashboard.requested, true);
-    assert.equal(payload.dashboard.started, true);
-    assert.equal(payload.dashboard.verified, true);
-    assert.match(payload.dashboard.url, /^http:\/\/127\.0\.0\.1:/);
-    assert.match(payload.dashboard.healthUrl, /\/health$/);
-  });
-});
-
-test("mcp resources and prompts expose read-only session truth", async () => {
-  await withTempDir("mcp-resources-prompts", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "mcp resources", "--metric-name", "seconds"]);
-    const researchDir = path.join(dir, "autoresearch.research", "resource-study");
-    await mkdir(researchDir, { recursive: true });
-    await writeFile(
-      path.join(researchDir, "quality-gaps.md"),
-      "- [ ] Resource gap\n- [x] Closed resource gap\n",
-      "utf8",
-    );
-
-    const resources = await callMcpRequest("resources/list");
-    assert.equal(resources.result.resources.length, 0);
-
-    const resourceTemplates = await callMcpRequest("resources/templates/list");
-    assert.equal(resourceTemplates.result.resourceTemplates.length, 4);
-    assert.ok(
-      resourceTemplates.result.resourceTemplates.some(
-        (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
-      ),
-    );
-
-    const stateUri = `autoresearch://state?working_dir=${encodeURIComponent(dir)}`;
-    const state = await callMcpRequest("resources/read", { uri: stateUri });
-    assert.equal(state.result.contents[0].mimeType, "application/json");
-    const statePayload = JSON.parse(state.result.contents[0].text);
-    assert.equal(statePayload.ok, true);
-    assert.equal(statePayload.workDir, dir);
-
-    const qualityUri = `autoresearch://quality-gaps?working_dir=${encodeURIComponent(dir)}&research_slug=resource-study`;
-    const quality = await callMcpRequest("resources/read", { uri: qualityUri });
-    const qualityPayload = JSON.parse(quality.result.contents[0].text);
-    assert.equal(qualityPayload.open, 1);
-    assert.equal(qualityPayload.closed, 1);
-
-    const dashboardUri = `autoresearch://dashboard-summary?working_dir=${encodeURIComponent(dir)}`;
-    const dashboard = await callMcpRequest("resources/read", { uri: dashboardUri });
-    const dashboardPayload = JSON.parse(dashboard.result.contents[0].text);
-    assert.equal(dashboardPayload.workDir, dir);
-    assert.match(dashboardPayload.dashboardCommand, /serve --cwd/);
-
-    const missing = await callMcpRequest("resources/read", { uri: "autoresearch://state" });
-    assert.equal(missing.error.code, -32602);
-    assert.match(missing.error.message, /working_dir/);
-
-    const prompts = await callMcpRequest("prompts/list");
-    assert.ok(prompts.result.prompts.some((prompt) => prompt.name === "first-valid-loop"));
-
-    const prompt = await callMcpRequest("prompts/get", {
-      name: "first-valid-loop",
-      arguments: { working_dir: dir },
-    });
-    const text = prompt.result.messages[0].content.text;
-    assert.match(text, /guided_setup/);
-    assert.match(text, /start_dashboard=true/);
-    assert.match(text, /autoresearch:\/\/state/);
-  });
-});
-
-test("mcp server rejects unknown arguments and gated command materialization", async () => {
-  await withTempDir("mcp-contract-rejections", async (dir) => {
-    const unknown = await callMcpTool("setup_plan", { working_dir: dir, typo_argument: true });
-    assert.equal(unknown.result.isError, true);
-    assert.equal(unknown.result.structuredContent.ok, false);
-    assert.match(unknown.result.content[0].text, /Unknown argument/);
-    assert.doesNotMatch(unknown.result.content[0].text, /\n\s+at\s/);
-
-    const gatedPlan = await callMcpTool("setup_plan", {
-      working_dir: dir,
-      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
-    });
-    assert.equal(gatedPlan.result.isError, true);
-    assert.match(gatedPlan.result.content[0].text, /allow_unsafe_command=true/);
-
-    const readOnlyPlan = await callMcpTool("setup_plan", {
-      working_dir: dir,
-      name: "read only command plan",
-      metric_name: "seconds",
-      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
-      checks_command: 'node -e "process.exit(0)"',
-      commit_paths: ["src", "tests"],
-      max_iterations: 7,
-      allow_unsafe_command: true,
-    });
-    assert.equal(readOnlyPlan.result?.isError, undefined, readOnlyPlan.result?.content?.[0]?.text);
-    const readOnlyPayload = JSON.parse(readOnlyPlan.result.content[0].text);
-    assert.match(readOnlyPayload.nextCommand, /--checks-command/);
-    assert.match(readOnlyPayload.nextCommand, /--commit-paths "src,tests"/);
-    assert.match(readOnlyPayload.nextCommand, /--max-iterations "7"/);
-
-    const fractionalPlan = await callMcpTool("setup_plan", {
-      working_dir: dir,
-      max_iterations: 1.5,
-    });
-    assert.equal(fractionalPlan.result.isError, true);
-    assert.match(fractionalPlan.result.content[0].text, /max_iterations must be an integer/);
-
-    const gatedGuide = await callMcpTool("guided_setup", {
-      working_dir: dir,
-      checks_command: 'node -e "process.exit(0)"',
-    });
-    assert.equal(gatedGuide.result.isError, true);
-    assert.match(gatedGuide.result.content[0].text, /allow_unsafe_command=true/);
-
-    const catalog = path.join(dir, "recipes.json");
-    await writeFile(
-      catalog,
-      JSON.stringify({
-        recipes: [
-          {
-            id: "external-runtime",
-            title: "External Runtime",
-            metricName: "seconds",
-            metricUnit: "s",
-            direction: "lower",
-            benchmarkCommand: "node -e \"console.log('METRIC seconds=1')\"",
-            checksCommand: 'node -e "process.exit(0)"',
-          },
-        ],
-      }),
-      "utf8",
-    );
-    const gatedCatalog = await callMcpTool("setup_plan", {
-      working_dir: dir,
-      recipe_id: "external-runtime",
-      catalog,
-    });
-    assert.equal(gatedCatalog.result.isError, true);
-    assert.match(gatedCatalog.result.content[0].text, /allow_unsafe_command=true/);
-
-    const readOnlyGuide = await callMcpTool("guided_setup", {
-      working_dir: dir,
-      name: "read only guide",
-      metric_name: "seconds",
-      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
-      checks_command: 'node -e "process.exit(0)"',
-      commit_paths: ["src"],
-      max_iterations: 3,
-      allow_unsafe_command: true,
-    });
-    assert.equal(
-      readOnlyGuide.result?.isError,
-      undefined,
-      readOnlyGuide.result?.content?.[0]?.text,
-    );
-    const guidePayload = JSON.parse(readOnlyGuide.result.content[0].text);
-    assert.match(guidePayload.setup.nextCommand, /--checks-command/);
-    assert.match(guidePayload.setup.nextCommand, /--commit-paths "src"/);
-    assert.match(guidePayload.setup.nextCommand, /--max-iterations "3"/);
-
-    const allowedCatalog = await callMcpTool("setup_plan", {
-      working_dir: dir,
-      recipe_id: "external-runtime",
-      catalog,
-      allow_unsafe_command: true,
-    });
-    assert.equal(
-      allowedCatalog.result?.isError,
-      undefined,
-      allowedCatalog.result?.content?.[0]?.text,
-    );
-    const catalogPayload = JSON.parse(allowedCatalog.result.content[0].text);
-    assert.match(catalogPayload.nextCommand, /--benchmark-command/);
-    assert.match(catalogPayload.nextCommand, /--checks-command/);
-
-    const fractionalExtend = await callMcpTool("configure_session", {
-      working_dir: dir,
-      extend: 1.5,
-    });
-    assert.equal(fractionalExtend.result.isError, true);
-    assert.match(fractionalExtend.result.content[0].text, /extend must be an integer/);
-
-    const gated = await callMcpTool("setup_session", {
-      working_dir: dir,
-      name: "unsafe setup",
-      metric_name: "seconds",
-      benchmark_command: "node -e \"console.log('METRIC seconds=1')\"",
-    });
-    assert.equal(gated.result.isError, true);
-    assert.match(gated.result.content[0].text, /allow_unsafe_command=true/);
-    assert.doesNotMatch(gated.result.content[0].text, /\n\s+at\s/);
-  });
-});
-
-test("mcp quality-gap tools infer active research slug deterministically", async () => {
-  await withTempDir("mcp-quality-gap-slug", async (dir) => {
-    const alphaDir = path.join(dir, "autoresearch.research", "alpha-study");
-    await mkdir(alphaDir, { recursive: true });
-    await writeFile(
-      path.join(alphaDir, "quality-gaps.md"),
-      "- [ ] Alpha open gap\n- [x] Alpha closed gap\n",
-      "utf8",
-    );
-    await writeFile(
-      path.join(alphaDir, "synthesis.md"),
-      [
-        "# Research Synthesis",
-        "",
-        "## High-Impact Findings",
-        "- Add alpha evidence guidance.",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const measured = await callMcpTool("measure_quality_gap", { working_dir: dir });
-    assert.equal(measured.result?.isError, undefined, measured.result?.content?.[0]?.text);
-    const measuredPayload = JSON.parse(measured.result.content[0].text);
-    assert.equal(measuredPayload.slug, "alpha-study");
-    assert.equal(measuredPayload.open, 1);
-    assert.deepEqual(measuredPayload.openItems, ["Alpha open gap"]);
-
-    const candidates = await callMcpTool("gap_candidates", { working_dir: dir });
-    assert.equal(candidates.result?.isError, undefined, candidates.result?.content?.[0]?.text);
-    const candidatesPayload = JSON.parse(candidates.result.content[0].text);
-    assert.equal(candidatesPayload.slug, "alpha-study");
-    assert.equal(candidatesPayload.candidates.length, 1);
-
-    const betaDir = path.join(dir, "autoresearch.research", "beta-study");
-    await mkdir(betaDir, { recursive: true });
-    await writeFile(path.join(betaDir, "quality-gaps.md"), "- [ ] Beta open gap\n", "utf8");
-
-    const ambiguous = await callMcpTool("measure_quality_gap", { working_dir: dir });
-    assert.equal(ambiguous.result?.isError, true);
-    assert.match(ambiguous.result.content[0].text, /research_slug explicitly/);
-    assert.match(ambiguous.result.content[0].text, /alpha-study/);
-    assert.match(ambiguous.result.content[0].text, /beta-study/);
-
-    const explicit = await callMcpTool("measure_quality_gap", {
-      working_dir: dir,
-      research_slug: "beta-study",
-    });
-    assert.equal(explicit.result?.isError, undefined, explicit.result?.content?.[0]?.text);
-    const explicitPayload = JSON.parse(explicit.result.content[0].text);
-    assert.equal(explicitPayload.slug, "beta-study");
-    assert.equal(explicitPayload.open, 1);
-  });
-});
-
-test("mcp CLI adapter forwards schema-supported options that need CLI flags", async () => {
-  const { buildCliInvocationForTool, createCliToolCaller } =
-    await import("../lib/mcp-cli-adapter.js");
-  await withTempDir("mcp-cli-adapter", async (dir) => {
-    const fakeCli = path.join(dir, "fake-cli.mjs");
-    await writeFile(
-      fakeCli,
-      "console.log(JSON.stringify({ args: process.argv.slice(2) }));\n",
-      "utf8",
-    );
-    const callTool = createCliToolCaller({
-      cliScript: fakeCli,
-      pluginRoot: dir,
-      toolTimeoutSeconds: 5,
-    });
-
-    const guided = await callTool("guided_setup", {
-      working_dir: dir,
-      recipe_id: "node-test-runtime",
-      metric_name: "seconds",
-      checks_command: "npm test",
-      commit_paths: ["src"],
-      max_iterations: 3,
-    });
-    assert.deepEqual(guided.args.slice(0, 3), ["guide", "--cwd", dir]);
-    assert.ok(guided.args.includes("--recipe"));
-    assert.ok(guided.args.includes("--metric-name"));
-    assert.ok(guided.args.includes("--checks-command"));
-    assert.ok(guided.args.includes("--commit-paths"));
-    assert.ok(guided.args.includes("--max-iterations"));
-
-    const setupPlan = await callTool("setup_plan", {
-      working_dir: dir,
-      metric_name: "seconds",
-      checks_command: "npm test",
-      commit_paths: ["src", "tests"],
-      max_iterations: 7,
-    });
-    assert.deepEqual(setupPlan.args.slice(0, 3), ["setup-plan", "--cwd", dir]);
-    assert.ok(setupPlan.args.includes("--checks-command"));
-    assert.ok(setupPlan.args.includes("src,tests"));
-    assert.ok(setupPlan.args.includes("--max-iterations"));
-
-    const clear = buildCliInvocationForTool("clear_session", {
-      working_dir: dir,
-      dry_run: true,
-    });
-    assert.deepEqual(clear.args.slice(0, 3), ["clear", "--cwd", dir]);
-    assert.ok(clear.args.includes("--dry-run"));
-    assert.equal(clear.args.includes("--yes"), false);
-
-    const log = await callTool("log_experiment", {
-      working_dir: dir,
-      metric: 1,
-      status: "keep",
-      description: "Keep broad change",
-      allow_add_all: true,
-    });
-    assert.ok(log.args.includes("--allow-add-all"));
-
-    const exported = await callTool("export_dashboard", { working_dir: dir, full: true });
-    assert.ok(exported.args.includes("--json-full"));
-
-    const doctor = await callTool("doctor_session", {
-      working_dir: dir,
-      check_benchmark: true,
-      check_installed: true,
-    });
-    assert.ok(doctor.args.includes("--check-benchmark"));
-    assert.ok(doctor.args.includes("--check-installed"));
-
-    const invocation = buildCliInvocationForTool(
-      "gap_candidates",
-      {
-        working_dir: dir,
-        model_command: "node model.js",
-        model_timeout_seconds: 3,
-      },
-      { cliScript: fakeCli, cwd: dir, timeoutSeconds: 5 },
-    );
-    assert.equal(invocation.command, process.execPath);
-    assert.deepEqual(invocation.args.slice(0, 3), [fakeCli, "gap-candidates", "--cwd"]);
-    assert.ok(invocation.args.includes("--model-timeout-seconds"));
-    assert.deepEqual(invocation.unsafeFields, ["model_command"]);
-    assert.equal(invocation.actionPolicy, "preview");
-    assert.equal(invocation.mutates, false);
-    assert.equal(invocation.timeoutSeconds, 5);
-
-    const appliedInvocation = buildCliInvocationForTool(
-      "gap_candidates",
-      {
-        working_dir: dir,
-        apply: true,
-      },
-      { cliScript: fakeCli, cwd: dir, timeoutSeconds: 5 },
-    );
-    assert.equal(appliedInvocation.actionPolicy, "state_mutation");
-    assert.equal(appliedInvocation.mutates, true);
-  });
-});
-
-test("mcp server rejects oversized frames before parsing", async () => {
-  const child = spawn(process.execPath, [mcpServer], {
-    cwd: pluginRoot,
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-
-  const body = "x".repeat(1024 * 1024 + 1);
-  child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  child.kill();
-
-  assert.match(stdout, /"code":-32000/);
-  assert.match(stdout, /Request too large/);
+  assert.equal(manifest.mcpServers, undefined);
+  assert.equal(pkg.files.includes(".mcp.json"), false);
+  await assert.rejects(access(path.join(pluginRoot, ".mcp.json")));
+  await assert.rejects(access(path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs")));
 });
 
 test("metric names must match the METRIC parser grammar", async () => {
@@ -3885,40 +3342,38 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
   });
 });
 
-test("drift report warns when installed Codex MCP runtime lags source", async () => {
+test("drift report treats installed routing as removed", async () => {
   const { buildDriftReport } = await import("../lib/drift-doctor.js");
   const report = await buildDriftReport({
     pluginRoot,
     includeInstalled: true,
     inspectInstalled: async () => ({
       ok: true,
-      available: true,
+      available: false,
       pluginName: "codex-autoresearch",
-      path: "C:\\Users\\alber\\.codex\\plugins\\cache\\thegreencedar-autoresearch\\codex-autoresearch\\0.5.1\\.",
-      version: "0.5.1",
+      confidence: "not-applicable",
     }),
   });
 
-  assert.equal(report.ok, false);
+  assert.equal(report.ok, true);
   assert.equal(report.local.version, PLUGIN_VERSION);
-  assert.equal(report.local.surfaces.cliServer, PLUGIN_VERSION);
-  assert.equal(report.local.surfaces.mcpEntrypoint, PLUGIN_VERSION);
-  assert.equal(report.installed.version, "0.5.1");
-  assert.match(report.warnings.join("\n"), /Installed Codex MCP runtime is 0\.5\.1/);
-  assert.match(report.warnings.join("\n"), /restart Codex/);
+  assert.equal(report.local.surfaces.cliRuntime, PLUGIN_VERSION);
+  assert.equal(report.installed.available, false);
+  assert.deepEqual(report.warnings, []);
 });
 
 test("runShell configures a POSIX process group for timeout cleanup", async () => {
-  const [shim, bootstrap, runner] = await Promise.all([
+  const [cliShim, bootstrap, runner] = await Promise.all([
     readFile(cli, "utf8"),
     readFile(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs"), "utf8"),
     readFile(path.join(pluginRoot, "lib", "runner.ts"), "utf8"),
   ]);
-  assert.match(shim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(cliShim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
   assert.match(
-    shim,
+    cliShim,
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
   );
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
+  assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
 });

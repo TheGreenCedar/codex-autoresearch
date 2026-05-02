@@ -21,8 +21,10 @@ const CONTRACTS = {
       "ok",
       "workDir",
       "missing",
+      "missingEssentials",
       "recommendedRecipe",
       "guidedFlow",
+      "nextStep",
     ]),
   },
   guided_setup: {
@@ -36,6 +38,8 @@ const CONTRACTS = {
       "stage",
       "commands",
       "nextAction",
+      "nextStep",
+      "lastRun",
       "dashboard",
     ]),
   },
@@ -44,21 +48,37 @@ const CONTRACTS = {
     whenToUse: "Use when the user gives a broad goal before benchmark details are known.",
     contrast: "Use setup_plan when the metric and benchmark inputs are already explicit.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "intent", "setup", "nextAction"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "intent",
+      "setup",
+      "missingEssentials",
+      "nextAction",
+      "nextStep",
+    ]),
   },
   onboarding_packet: {
     purpose: "Return a compact resume packet for a new human or AI operator.",
     whenToUse: "Use at the start of a turn or handoff before reading the full docs.",
     contrast: "Use read_state for raw state or guided_setup for setup-only flow.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "protocol", "nextAction", "templates"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "protocol",
+      "missingEssentials",
+      "nextAction",
+      "nextStep",
+      "templates",
+    ]),
   },
   recommend_next: {
     purpose: "Return the single safest next action and its evidence.",
     whenToUse: "Use when the operator asks what to do now or an agent needs one next command.",
     contrast: "Use onboarding_packet for broader handoff context.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "action", "whySafe", "commands"]),
+    outputSchema: basicOutputSchema(["ok", "workDir", "action", "whySafe", "nextStep", "commands"]),
   },
   list_recipes: {
     purpose: "List or recommend built-in and catalog benchmark recipes.",
@@ -107,7 +127,15 @@ const CONTRACTS = {
     whenToUse: "Use for the normal measured loop iteration.",
     contrast: "Use run_experiment only for low-level benchmark probing.",
     safety: "Runs commands and writes the last-run packet, but does not log keep/discard.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "doctor", "run", "decision", "continuation"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "doctor",
+      "run",
+      "decision",
+      "packetEvidence",
+      "continuation",
+    ]),
   },
   log_experiment: {
     purpose: "Record a keep/discard/crash/checks_failed decision.",
@@ -179,7 +207,7 @@ const CONTRACTS = {
       "Use before benchmark_lint or next_experiment when a list/dry-run/artifact command might prevent an accidental full run.",
     contrast: "Use benchmark_lint to validate METRIC parsing after the probe is known bounded.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "warnings", "hints", "outputPreview"]),
   },
   benchmark_lint: {
@@ -187,7 +215,7 @@ const CONTRACTS = {
     whenToUse: "Use before setup, doctor, or next when the benchmark contract is uncertain.",
     contrast: "Use run_experiment or next_experiment to execute the actual loop packet.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "issues", "parsedMetrics"]),
   },
   checks_inspect: {
@@ -196,7 +224,7 @@ const CONTRACTS = {
       "Use when a checks command fails, looks broad, or may be malformed before treating it as experiment evidence.",
     contrast: "Use benchmark_inspect for metric-producing commands.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "failedTests", "warnings", "hints"]),
   },
   new_segment: {
@@ -282,9 +310,21 @@ const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
   "gap_candidates",
 ]);
 
-export function applyToolContracts(toolSchemas) {
+type ToolName = keyof typeof CONTRACTS;
+type ToolSchema = {
+  name: string;
+  description?: string;
+  annotations?: Record<string, unknown>;
+  [key: string]: any;
+};
+
+function contractFor(name: string) {
+  return CONTRACTS[name as ToolName] || null;
+}
+
+export function applyToolContracts(toolSchemas: ToolSchema[]): ToolSchema[] {
   return toolSchemas.map((tool) => {
-    const contract = CONTRACTS[tool.name];
+    const contract = contractFor(tool.name);
     if (!contract) return tool;
     return {
       ...tool,
@@ -299,15 +339,15 @@ export function applyToolContracts(toolSchemas) {
   });
 }
 
-export function validateToolContracts(toolSchemas) {
-  const issues = [];
+export function validateToolContracts(toolSchemas: ToolSchema[]) {
+  const issues: string[] = [];
   for (const tool of toolSchemas) {
-    const contract = CONTRACTS[tool.name];
+    const contract = contractFor(tool.name);
     if (!contract) {
       issues.push(`${tool.name}: missing contract`);
       continue;
     }
-    for (const field of ["purpose", "whenToUse", "contrast", "safety", "outputSchema"]) {
+    for (const field of ["purpose", "whenToUse", "contrast", "safety", "outputSchema"] as const) {
       if (!contract[field]) issues.push(`${tool.name}: missing ${field}`);
     }
     if (String(tool.description || "").length > 280) {
@@ -317,15 +357,15 @@ export function validateToolContracts(toolSchemas) {
   return { ok: issues.length === 0, issues };
 }
 
-export function toolGuidanceFor(name) {
-  return CONTRACTS[name] || null;
+export function toolGuidanceFor(name: string) {
+  return contractFor(name);
 }
 
-export function outputContractFor(name) {
-  return CONTRACTS[name]?.outputSchema || null;
+export function outputContractFor(name: string) {
+  return contractFor(name)?.outputSchema || null;
 }
 
-function toolHintAnnotations(name) {
+function toolHintAnnotations(name: string) {
   const readOnly = READ_ONLY_TOOLS.has(name);
   const policy = actionPolicyForTool(name);
   const openWorld = policy === "process_start" || CONDITIONALLY_OPEN_WORLD_TOOLS.has(name);
@@ -338,7 +378,7 @@ function toolHintAnnotations(name) {
   };
 }
 
-function humanizeToolName(name) {
+function humanizeToolName(name: string) {
   return String(name)
     .split("_")
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
@@ -384,20 +424,33 @@ function outputFieldSchemas(): Record<string, JsonSchema> {
     init: objectSchema("Initial ledger entry result."),
     intent: objectSchema("Inferred prompt intent."),
     issues: arraySchema(stringSchema("Validation or readiness issue."), "Issues."),
+    lastRun: objectSchema("Pending last-run packet summary and freshness metadata."),
     logHint: objectSchema("Suggested log command or payload."),
     memory: objectSchema("Experiment memory summary."),
     missing: arraySchema(stringSchema("Missing required setup field."), "Missing setup fields."),
+    missingEssentials: arraySchema(
+      stringSchema("Missing required setup field."),
+      "Missing essentials for the first valid loop.",
+    ),
     modeGuidance: objectSchema("Dashboard mode guidance."),
     nextAction: stringSchema("Recommended next operator action."),
+    nextStep: objectSchema(
+      "Shared next safe action contract with stage, reason, command/tool, safety, and gaps.",
+    ),
     ok: booleanSchema("True when the tool completed successfully."),
     open: numberSchema("Open quality-gap item count."),
     openItems: arraySchema(stringSchema("Open quality-gap item."), "Open quality-gap items."),
     output: stringSchema("Output file path or command output."),
     outputPreview: stringSchema("Bounded command output preview."),
+    packetEvidence: objectSchema(
+      "Last-run packet evidence bundle with command identity, output tails, metrics, artifacts, checks, and fingerprint.",
+    ),
+    packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
     parsedMetrics: objectSchema("Parsed METRIC values keyed by metric name."),
     port: numberSchema("Local dashboard port."),
     protocol: objectSchema("Operator protocol guidance."),
     qualityGap: objectSchema("Quality-gap scratchpad summary."),
+    promotion: objectSchema("Promotion state label and reasons for evidence readiness."),
     ready: booleanSchema("True when the preview is ready to apply."),
     recipes: arraySchema(objectSchema("Recipe summary."), "Available recipes."),
     recommendedRecipe: objectSchema("Recommended benchmark recipe."),

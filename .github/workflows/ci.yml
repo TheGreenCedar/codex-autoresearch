@@ -39,5 +39,5 @@ jobs:
       - name: Run full check gate
         run: npm run check
 
-      - name: Run MCP smoke test
-        run: node scripts/autoresearch.mjs mcp-smoke
+      - name: Run CLI smoke test
+        run: node scripts/autoresearch.mjs --help

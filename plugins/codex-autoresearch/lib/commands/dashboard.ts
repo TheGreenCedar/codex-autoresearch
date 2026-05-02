@@ -82,7 +82,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       difference:
         "The exported HTML is a read-only fallback snapshot; share the served dashboard URL when the operator needs a live link.",
       fullJson:
-        "Pass --json-full/--verbose on the CLI or full=true over MCP to include the full viewModel in the command response.",
+        "Pass --json-full/--verbose on the CLI to include the full viewModel in the command response.",
     };
     const progress = deps.operationProgress({
       stage: "export",
@@ -149,7 +149,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           actionNonceHeader,
           modeGuidance: {
             title: "Live dashboard",
-            detail: "Live refresh is available; actions stay in CLI or MCP.",
+            detail: "Live refresh is available; actions stay in CLI.",
           },
           refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
           commands: deps.dashboardCommands(workDir),
@@ -213,7 +213,7 @@ async function verifyLiveDashboardUrl(url: string) {
         error: `GET /health returned ${response.status}`,
       };
     }
-    const payload = (await response.json().catch(() => null)) as LooseObject | null;
+    const payload = (await response.json().catch((): null => null)) as LooseObject | null;
     return {
       ok: payload?.ok === true,
       url: healthUrl,

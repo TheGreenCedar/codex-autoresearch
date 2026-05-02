@@ -61,7 +61,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         <a href="#strategy-memory">Session memory</a>
         <a href="#ledger">Ledger</a>
       </nav>
-      <SideRail live={mode.liveRefresh} showcase={mode.showcase} />
+      <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
 
       <main className="wrap">
         <Header

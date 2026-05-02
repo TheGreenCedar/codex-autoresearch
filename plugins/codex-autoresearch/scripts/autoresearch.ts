@@ -17,8 +17,6 @@ import {
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
 import { integrationsCommand } from "../lib/integrations.js";
-import { createMcpInterface } from "../lib/mcp-interface.js";
-import { runMcpSmoke, startMcpStdioServer } from "../lib/mcp-stdio-server.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -48,6 +46,7 @@ import {
   readJsonl,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
+  promotionGradeValue,
 } from "../lib/session-core.js";
 import {
   buildResearchIntegrity,
@@ -58,6 +57,27 @@ import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
 type LooseObject = Record<string, any>;
+type CliArgs = LooseObject & { _: string[] };
+type WorkDirResolution = {
+  config: LooseObject;
+  sessionCwd: string;
+  workDir: string;
+};
+type ProcessRunResult = LooseObject & {
+  durationSeconds?: number;
+  exitCode?: number | null;
+  output?: string;
+  timedOut?: boolean;
+};
+type ProgressStageResult = {
+  durationSeconds: number;
+  exitCode: number | null;
+  label: string;
+  outputTail: string;
+  stage: string;
+  status: string;
+  timedOut: boolean;
+};
 
 interface LocalProcessResult {
   code: number | null;
@@ -96,7 +116,6 @@ const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
-const MCP_SCRIPT_PATH = path.join(PLUGIN_ROOT, "scripts", "autoresearch-mcp.mjs");
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
 const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
 const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
@@ -170,8 +189,6 @@ Usage:
   node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]
   node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose]
   node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
-  node scripts/autoresearch.mjs mcp-smoke
-  node scripts/autoresearch.mjs --mcp
 
 Benchmark output format:
   METRIC name=value
@@ -179,8 +196,8 @@ Benchmark output format:
 `;
 }
 
-function parseCliArgs(argv): LooseObject {
-  const out: LooseObject = { _: [] };
+function parseCliArgs(argv: string[]): CliArgs {
+  const out: CliArgs = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--") {
@@ -193,7 +210,7 @@ function parseCliArgs(argv): LooseObject {
     }
     const equalsAt = arg.indexOf("=");
     const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
-    const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const key = rawKey.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
     if (equalsAt > 2) {
       out[key] = arg.slice(equalsAt + 1);
       continue;
@@ -209,35 +226,48 @@ function parseCliArgs(argv): LooseObject {
   return out;
 }
 
-function parseJsonOption(value, fallback) {
+function parseJsonOption(value: unknown, fallback: unknown): any {
   if (value == null || value === "") return fallback;
   if (typeof value === "object") return value;
   try {
-    return JSON.parse(value);
+    return JSON.parse(String(value));
   } catch (error) {
-    throw new Error(`Invalid JSON option: ${error.message}`);
+    const parseError = error as Error;
+    throw new Error(`Invalid JSON option: ${parseError.message}`);
   }
 }
 
-async function parseJsonFileOption(filePath, workDir, optionName) {
+async function parseJsonFileOption(
+  filePath: string | null | undefined,
+  workDir: string,
+  optionName: string,
+): Promise<any> {
   if (filePath == null || filePath === "") return null;
   const input = String(filePath);
   const resolved = path.isAbsolute(input) ? input : path.join(workDir, input);
   try {
     return parseJsonOption(await fsp.readFile(resolved, "utf8"), {});
   } catch (error) {
-    throw new Error(`${optionName} must point to a valid JSON file: ${error.message}`);
+    const parseError = error as Error;
+    throw new Error(`${optionName} must point to a valid JSON file: ${parseError.message}`);
   }
 }
 
-function numberOption(value, fallback) {
+function numberOption(value: unknown, fallback: number): number;
+function numberOption(value: unknown, fallback: null): number | null;
+function numberOption(value: unknown, fallback: number | null): number | null;
+function numberOption(value: unknown, fallback: number | null): number | null {
   if (value == null || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
   return parsed;
 }
 
-function positiveIntegerOption(value, fallback, optionName) {
+function positiveIntegerOption(
+  value: unknown,
+  fallback: number | null,
+  optionName: string,
+): number | null {
   const parsed = numberOption(value, fallback);
   if (parsed == null) return parsed;
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -246,7 +276,11 @@ function positiveIntegerOption(value, fallback, optionName) {
   return parsed;
 }
 
-function nonNegativeIntegerOption(value, fallback, optionName) {
+function nonNegativeIntegerOption(
+  value: unknown,
+  fallback: number | null,
+  optionName: string,
+): number | null {
   const parsed = numberOption(value, fallback);
   if (parsed == null) return parsed;
   if (!Number.isInteger(parsed) || parsed < 0) {
@@ -255,22 +289,27 @@ function nonNegativeIntegerOption(value, fallback, optionName) {
   return parsed;
 }
 
-function boolOption(value, fallback = false) {
+function boolOption(value: unknown, fallback = false): boolean {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
   return ["1", "true", "yes", "y"].includes(String(value).toLowerCase());
 }
 
-function enumOption(value, allowed, fallback, optionName) {
+function enumOption<T extends string>(
+  value: unknown,
+  allowed: Set<T>,
+  fallback: T | null,
+  optionName: string,
+): T | null {
   if (value == null || value === "") return fallback;
-  const normalized = String(value).toLowerCase();
+  const normalized = String(value).toLowerCase() as T;
   if (!allowed.has(normalized)) {
     throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
   }
-  return normalized;
+  return normalized as T;
 }
 
-function listOption(value) {
+function listOption(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (value == null || value === "") return [];
   return String(value)
@@ -279,7 +318,7 @@ function listOption(value) {
     .filter(Boolean);
 }
 
-function safeSlug(value, fallback = "research") {
+function safeSlug(value: unknown, fallback = "research"): string {
   const slug = String(value || fallback)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -289,17 +328,17 @@ function safeSlug(value, fallback = "research") {
   return slug || fallback;
 }
 
-function shellQuote(value) {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+function shellQuote(value: unknown): string {
+  return JSON.stringify(String(value));
 }
 
-function slashPath(value) {
+function slashPath(value: unknown): string {
   return String(value || "")
     .replace(/\\/g, "/")
     .replace(/\/+$/g, "");
 }
 
-function validateMetricName(name) {
+function validateMetricName(name: string) {
   if (!METRIC_NAME_PATTERN.test(String(name || "")) || DENIED_METRIC_NAMES.has(String(name))) {
     throw new Error(
       `Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${name}`,
@@ -308,7 +347,7 @@ function validateMetricName(name) {
   return String(name);
 }
 
-function normalizeRelativePaths(paths, optionName = "paths") {
+function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): string[] {
   return listOption(paths).map((item) => {
     const normalized = item.replace(/\\/g, "/").replace(/\/+/g, "/");
     if (
@@ -329,7 +368,7 @@ function normalizeRelativePaths(paths, optionName = "paths") {
   });
 }
 
-function resolveOutputInside(workDir, output) {
+function resolveOutputInside(workDir: string, output: string) {
   const target = path.resolve(workDir, output || "autoresearch-dashboard.html");
   const relative = path.relative(workDir, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -338,7 +377,7 @@ function resolveOutputInside(workDir, output) {
   return target;
 }
 
-async function pathExists(filePath) {
+async function pathExists(filePath: string) {
   try {
     await fsp.access(filePath);
     return true;
@@ -347,19 +386,31 @@ async function pathExists(filePath) {
   }
 }
 
-function readConfig(sessionCwd) {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCodeOrMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const payload = error as { code?: unknown; message?: unknown };
+    return String(payload.code || payload.message || error);
+  }
+  return String(error);
+}
+
+function readConfig(sessionCwd: string): LooseObject {
   const configPath = path.join(sessionCwd, "autoresearch.config.json");
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
-function runtimeConfigPath(sessionCwd) {
+function runtimeConfigPath(sessionCwd: string): string {
   return path.join(sessionCwd, "autoresearch.config.json");
 }
 
-function resolveWorkDir(cwdArg) {
+function resolveWorkDir(cwdArg: unknown): WorkDirResolution {
   const sessionCwd = path.resolve(
-    cwdArg || process.env.CODEX_AUTORESEARCH_WORKDIR || process.cwd(),
+    String(cwdArg || process.env.CODEX_AUTORESEARCH_WORKDIR || process.cwd()),
   );
   const config = readConfig(sessionCwd);
   const workDir = config.workingDir ? path.resolve(sessionCwd, config.workingDir) : sessionCwd;
@@ -369,15 +420,15 @@ function resolveWorkDir(cwdArg) {
   return { sessionCwd, workDir, config };
 }
 
-function assetPath(fileName) {
+function assetPath(fileName: string) {
   return path.join(PLUGIN_ROOT, "assets", fileName);
 }
 
-function readAssetTemplate(fileName) {
+function readAssetTemplate(fileName: string) {
   return fs.readFileSync(assetPath(fileName), "utf8");
 }
 
-function replaceAllText(text, replacements) {
+function replaceAllText(text: string, replacements: Record<string, unknown>): string {
   let out = text;
   for (const [from, to] of Object.entries(replacements)) {
     out = out.split(from).join(String(to));
@@ -385,19 +436,19 @@ function replaceAllText(text, replacements) {
   return out;
 }
 
-function shellKindFromArgs(args) {
+function shellKindFromArgs(args: LooseObject): string {
   const requested = String(args.shell || args.script || "").toLowerCase();
   if (["bash", "sh", "posix"].includes(requested)) return "bash";
   if (["powershell", "pwsh", "ps1", "windows"].includes(requested)) return "powershell";
   return process.platform === "win32" ? "powershell" : "bash";
 }
 
-async function withRecipeDefaults(args) {
+async function withRecipeDefaults(args: LooseObject): Promise<LooseObject> {
   const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
   return recipeId ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog) : args;
 }
 
-function explicitBenchmarkPrintsMetric(args) {
+function explicitBenchmarkPrintsMetric(args: LooseObject): boolean {
   const hasExplicitBenchmarkCommand = Boolean(args.benchmark_command || args.benchmarkCommand);
   return boolOption(
     args.benchmark_prints_metric ?? args.benchmarkPrintsMetric,
@@ -405,7 +456,7 @@ function explicitBenchmarkPrintsMetric(args) {
   );
 }
 
-function scopeWarningsFromArgs(args) {
+function scopeWarningsFromArgs(args: LooseObject): string[] {
   const scope = normalizeRelativePaths(
     args.files_in_scope ?? args.filesInScope ?? args.scope,
     "filesInScope",
@@ -415,7 +466,7 @@ function scopeWarningsFromArgs(args) {
     "commitPaths",
   ).map(slashPath);
   if (!scope.length || !commitPaths.length) return [];
-  const covers = (container, item) =>
+  const covers = (container: string, item: string) =>
     container === item || item.startsWith(`${container}/`) || container.startsWith(`${item}/`);
   const commitOutsideScope = commitPaths.filter((commitPath) =>
     scope.every((scopePath) => !covers(scopePath, commitPath)),
@@ -423,7 +474,7 @@ function scopeWarningsFromArgs(args) {
   const scopeOutsideCommit = scope.filter((scopePath) =>
     commitPaths.every((commitPath) => !covers(commitPath, scopePath)),
   );
-  const warnings = [];
+  const warnings: string[] = [];
   if (commitOutsideScope.length) {
     warnings.push(`commitPaths not represented in filesInScope: ${commitOutsideScope.join(", ")}`);
   }
@@ -440,7 +491,7 @@ function firstRunChecklist({
   checkpoint,
   baselineCommand,
   logCommand,
-}) {
+}: LooseObject) {
   const steps = [
     { step: "setup", command: setupCommand, purpose: "Create or refresh the session files." },
   ];
@@ -474,7 +525,7 @@ function firstRunChecklist({
   return steps;
 }
 
-async function setupPlan(args) {
+async function setupPlan(args: any) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
   const storedRecipe = config?.recipeId;
@@ -490,19 +541,19 @@ async function setupPlan(args) {
   }
   const state = currentState(workDir);
   const hasDefaultBenchmarkCommand = await defaultBenchmarkCommandExists(workDir);
-  const hasBenchmarkInput = Boolean(args.benchmark_command || args.benchmarkCommand);
-  const missing = [];
-  if (!args.name && !state.config.name && !recommended) missing.push("name");
-  if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended)
-    missing.push("metric_name");
-  if (state.current.length === 0 && !hasBenchmarkInput && !hasDefaultBenchmarkCommand) {
-    missing.push("benchmark_command");
-  }
   const planArgs = await withRecipeDefaults({
     ...args,
     recipe: recommended?.id,
     name: args.name || recommended?.title || "Autoresearch session",
   });
+  const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
+  const missing = [];
+  if (!args.name && !state.config.name && !recommended) missing.push("name");
+  if (!args.metric_name && !args.metricName && !state.config.metricName && !recommended)
+    missing.push("metric_name");
+  if (state.current.length === 0 && !benchmarkCommand && !hasDefaultBenchmarkCommand) {
+    missing.push("benchmark_command");
+  }
   const shellKind = shellKindFromArgs(planArgs);
   const setupMaxIterations = positiveIntegerOption(
     planArgs.max_iterations ?? planArgs.maxIterations,
@@ -513,7 +564,6 @@ async function setupPlan(args) {
     planArgs.commit_paths ?? planArgs.commitPaths,
     "commitPaths",
   );
-  const benchmarkCommand = planArgs.benchmark_command || planArgs.benchmarkCommand || "";
   const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
   const metricName = validateMetricName(planArgs.metric_name || planArgs.metricName || "seconds");
   const benchmarkPrintsMetric = explicitBenchmarkPrintsMetric(planArgs);
@@ -632,6 +682,18 @@ async function setupPlan(args) {
     nextCommand: command,
     guideCommand,
     baselineCommand,
+    missingEssentials: missing,
+    nextStep: sharedNextStep({
+      stage: "setup-repair",
+      title: "Create session setup",
+      reason: missing.length
+        ? `Setup still needs: ${missing.join(", ")}.`
+        : "Create or refresh the Autoresearch session files before the first packet.",
+      command,
+      toolName: "setup_session",
+      safety: "state_mutation",
+      missingEssentials: missing,
+    }),
     firstRunChecklist: checklist,
     guidedFlow: checklist,
     notes: [
@@ -639,9 +701,97 @@ async function setupPlan(args) {
       "Before the first live packet, run benchmark-lint or doctor --check-benchmark so a broken or expensive benchmark is caught early.",
       "Generated recipe scripts remain inspectable and should be checkpointed before experiment-scoped keep commits.",
       benchmarkMode.note,
-      ...scopeWarnings.map((warning) => `Scope warning: ${warning}`),
+      ...scopeWarnings.map((warning: any) => `Scope warning: ${warning}`),
     ],
   };
+}
+
+function sharedNextStep({
+  stage,
+  title,
+  reason,
+  command = "",
+  toolName = "",
+  safety = "read",
+  missingEssentials = [],
+  staleState = null,
+}: LooseObject) {
+  return {
+    stage,
+    nextAction: {
+      title,
+      reason,
+      command,
+      toolName,
+      safety,
+    },
+    missingEssentials: listOption(missingEssentials),
+    ...(staleState ? { staleState } : {}),
+  };
+}
+
+function guidedNextStep({
+  stage,
+  nextAction,
+  setup,
+  commands,
+  lastRunFreshness = null,
+}: LooseObject) {
+  const replacementAction = commands?.replaceLast || "";
+  if (stage === "needs-setup" || stage === "needs-benchmark-command") {
+    return sharedNextStep({
+      stage: "setup-repair",
+      title: "Repair setup",
+      reason: nextAction,
+      command: commands?.setup || setup?.nextCommand || "",
+      toolName: "setup_session",
+      safety: "state_mutation",
+      missingEssentials: setup?.missing || setup?.missingEssentials || [],
+    });
+  }
+  if (stage === "stale-last-run") {
+    return sharedNextStep({
+      stage: "log-decision",
+      title: "Replace stale packet",
+      reason: nextAction || "The saved packet no longer matches current state.",
+      command: replacementAction,
+      toolName: "next_experiment",
+      safety: "process_start",
+      staleState: {
+        stale: true,
+        reason: lastRunFreshness?.reason || nextAction || "",
+        replacementAction,
+      },
+    });
+  }
+  if (stage === "needs-log-decision") {
+    return sharedNextStep({
+      stage: "log-decision",
+      title: "Log packet decision",
+      reason: nextAction,
+      command: commands?.logLast || "",
+      toolName: "log_experiment",
+      safety: "git_mutation",
+    });
+  }
+  if (stage === "limit-reached") {
+    return sharedNextStep({
+      stage: "segment-reset",
+      title: "Start or extend segment",
+      reason: nextAction,
+      command: commands?.newSegmentDryRun || "",
+      toolName: "new_segment",
+      safety: "state_mutation",
+    });
+  }
+  return sharedNextStep({
+    stage: "baseline-packet",
+    title: stage === "ready" ? "Run next packet" : "Run baseline packet",
+    reason: nextAction || "Run one measured packet, then log the decision with ASI.",
+    command: commands?.baseline || "",
+    toolName: "next_experiment",
+    safety: "process_start",
+  });
 }
 
 async function promptPlan(args: LooseObject): Promise<LooseObject> {
@@ -693,10 +843,22 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     commands: {
       promptPlan: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} prompt-plan --cwd ${shellQuote(workDir)} --prompt ${shellQuote(prompt)}`,
       setup: setup.nextCommand,
-      doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command || "",
+      doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command || "",
       dashboard: dashboardCommand,
       firstPacket: setup.baselineCommand,
     },
+    missingEssentials: intent.missing || setup.missing || [],
+    nextStep:
+      setup.nextStep ||
+      sharedNextStep({
+        stage: "setup-repair",
+        title: "Create session setup",
+        reason: intent.nextAction,
+        command: setup.nextCommand,
+        toolName: "setup_session",
+        safety: "state_mutation",
+        missingEssentials: intent.missing || setup.missing || [],
+      }),
     nextAction: intent.nextAction,
   };
 }
@@ -763,7 +925,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     ...explicit.secondaryMetrics,
     ...(speed && memory ? ["seconds", "rss_mb"] : []),
     ...(latencyRatio ? ["p90_ms", "p99_ms"] : []),
-    ...suspects.map((suspect) => `suspect:${suspect}`),
+    ...suspects.map((suspect: any) => `suspect:${suspect}`),
   ]);
   const constraints = uniqueStrings([
     ...explicit.constraints,
@@ -883,7 +1045,7 @@ async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
   candidates.push(...(await discoverDocumentationBenchmarkHints(workDir, prompt)));
   candidates.push(...(await discoverPackageBenchmarkScripts(workDir, prompt)));
   candidates.push(...(await discoverCargoBenchmarkHints(workDir, prompt)));
-  candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  candidates.sort((a: any, b: any) => b.score - a.score || a.path.localeCompare(b.path));
   const best = candidates[0];
   if (!best || best.score <= 0) return null;
   return {
@@ -925,7 +1087,7 @@ async function collectDocumentationHintFiles(
   depth: number,
 ) {
   if (depth > 2 || files.length >= 100) return;
-  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch((): [] => [])) {
     const absolute = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       await collectDocumentationHintFiles(workDir, absolute, files, depth + 1);
@@ -951,7 +1113,7 @@ function commandFromDocumentationHint(text: string) {
       /`([^`\r\n]*(?:node|python|cargo|npm|pnpm|yarn|bash|powershell|pwsh)[^`\r\n]*)`/gi,
     ),
   ];
-  const preferred = commandMatches.find((match) =>
+  const preferred = commandMatches.find((match: any) =>
     /METRIC|holdout|benchmark|autoresearch|score|eval|harness/i.test(
       `${match[1]}\n${text.slice(Math.max(0, match.index || 0), (match.index || 0) + 800)}`,
     ),
@@ -961,7 +1123,7 @@ function commandFromDocumentationHint(text: string) {
 
 async function discoverBenchmarkFiles(workDir: string) {
   const roots = ["scripts", "bench", "benches", "benchmarks", "test", "tests", "docs"];
-  const candidates = [];
+  const candidates: LooseObject[] = [];
   for (const rootName of roots) {
     const root = path.join(workDir, rootName);
     if (!(await pathExists(root))) continue;
@@ -970,16 +1132,21 @@ async function discoverBenchmarkFiles(workDir: string) {
   const gitHints = path.join(workDir, ".git", "autoresearch");
   if (await pathExists(gitHints)) await collectBenchmarkFiles(workDir, gitHints, candidates, 0);
   const seen = new Set<string>();
-  return candidates.filter((candidate) => {
+  return candidates.filter((candidate: any) => {
     if (seen.has(candidate.path)) return false;
     seen.add(candidate.path);
     return true;
   });
 }
 
-async function collectBenchmarkFiles(workDir: string, dir: string, candidates, depth: number) {
+async function collectBenchmarkFiles(
+  workDir: string,
+  dir: string,
+  candidates: any[],
+  depth: number,
+) {
   if (depth > 3 || candidates.length >= 200) return;
-  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch((): [] => [])) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "target") continue;
     const absolute = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -1070,13 +1237,13 @@ function metricNamesFromScript(text: string) {
   for (const match of text.matchAll(/METRIC\s+\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\s*=/g)) {
     names.add(match[1]);
   }
-  return [...names].filter((name) => /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name));
+  return [...names].filter((name: string) => /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name));
 }
 
 function choosePrimaryMetricName(metrics: string[]) {
   return (
-    metrics.find((metric) => /(^|[_:-])score$/i.test(metric)) ||
-    metrics.find((metric) => /^quality_gap$/i.test(metric)) ||
+    metrics.find((metric: any) => /(^|[_:-])score$/i.test(metric)) ||
+    metrics.find((metric: any) => /^quality_gap$/i.test(metric)) ||
     metrics[0]
   );
 }
@@ -1092,13 +1259,13 @@ function benchmarkPromptScore(
     prompt
       .toLowerCase()
       .split(/[^a-z0-9_]+/)
-      .filter((word) => word.length >= 4),
+      .filter((word: any) => word.length >= 4),
   );
   let score = relativePath.includes("autoresearch") ? 2 : 0;
   for (const word of words) {
     if (haystack.includes(word)) score += 1;
   }
-  if (metrics.some((metric) => /score/i.test(metric))) score += 2;
+  if (metrics.some((metric: any) => /score/i.test(metric))) score += 2;
   if (
     /parse|index|embed|pipeline|benchmark/.test(prompt.toLowerCase()) &&
     /parse|index|embed|pipeline/.test(haystack)
@@ -1112,7 +1279,7 @@ function benchmarkConstraintsFromScript(relativePath: string, metrics: string[])
   const constraints = [
     `Use existing benchmark surface ${relativePath} before inventing a new timer.`,
   ];
-  if (metrics.some((metric) => /quality|score/i.test(metric))) {
+  if (metrics.some((metric: any) => /quality|score/i.test(metric))) {
     constraints.push(
       "Treat the primary score as the decision contract; inspect quality, speed, and footprint components before promoting a speedup.",
     );
@@ -1131,7 +1298,7 @@ function inferMetricUnit(metricName: string) {
 }
 
 function parsePromptFields(prompt: string) {
-  const field = (name) => {
+  const field = (name: string) => {
     const match = prompt.match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
     return match?.[1]?.trim() || "";
   };
@@ -1157,7 +1324,7 @@ function splitHumanList(value: string) {
   if (!value) return [];
   return value
     .split(/\r?\n|,|;|\band\b/i)
-    .map((item) => item.trim())
+    .map((item: any) => item.trim())
     .filter(Boolean);
 }
 
@@ -1171,20 +1338,20 @@ function positiveIntegerFromPrompt(prompt: string) {
 function parseSuspects(prompt: string) {
   const match = prompt.match(/\bI suspect:\s*([^.\n]+)/i);
   if (!match) return [];
-  return uniqueStrings(splitHumanList(match[1]).map((item) => item.replace(/^or\s+/i, "")));
+  return uniqueStrings(splitHumanList(match[1]).map((item: any) => item.replace(/^or\s+/i, "")));
 }
 
 function parseReferencedFiles(prompt: string) {
   return uniqueStrings(
-    [...prompt.matchAll(/@([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)/g)].map((m) => m[1]),
+    [...prompt.matchAll(/@([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)/g)].map((m: any) => m[1]),
   );
 }
 
-function uniqueStrings(items) {
+function uniqueStrings(items: any[]) {
   return [
     ...new Set(
       listOption(items)
-        .map((item) => String(item).trim())
+        .map((item: any) => String(item).trim())
         .filter(Boolean),
     ),
   ];
@@ -1246,7 +1413,7 @@ function promptPlanConfidence({
   memory,
   bugs,
   productResearch,
-}) {
+}: LooseObject) {
   let score = 0.35;
   if (benchmarkCommand) score += 0.25;
   if (explicit.metricName) score += 0.15;
@@ -1270,7 +1437,7 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const setup = await setupPlan(args);
   const state: LooseObject = await publicState({ cwd: workDir });
   const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
-  const lastRun = await readLastRunPacket(workDir).catch(() => null);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const lastRunLogStatus = lastRun
@@ -1287,10 +1454,10 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const baselineCommand = setup.baselineCommand;
   const logCommand = lastRun
     ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRunLogStatus)} --description ${shellQuote("Describe the last packet")}`
-    : setup.guidedFlow.find((step) => step.step === "log")?.command;
+    : setup.guidedFlow.find((step: any) => step.step === "log")?.command;
   let stage = "ready";
   let nextAction = "Run the next measured packet.";
-  if (setup.missing.length && state.runs === 0) {
+  if ((setup.missing.length || !state.config.name) && state.runs === 0) {
     stage = "needs-setup";
     nextAction = "Create or complete the session setup before running a baseline.";
   } else if (lastRun && lastRunFreshness?.fresh === false) {
@@ -1310,10 +1477,30 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     nextAction =
       "Add autoresearch.ps1 or autoresearch.sh, or run setup with a benchmark command before using next.";
   }
+  const commands = {
+    setup: setup.nextCommand,
+    benchmarkLint: setup.benchmarkLintCommand,
+    doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command,
+    checkpoint:
+      setup.firstRunChecklist.find((step: any) => step.step === "checkpoint")?.command || "",
+    baseline: baselineCommand,
+    logLast: logCommand,
+    replaceLast: replaceLastRunCommand,
+    dashboard: dashboardCommand,
+    newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
+  };
   return {
     ok: doctor.issues.length === 0,
     workDir,
     stage,
+    missingEssentials: setup.missingEssentials || setup.missing || [],
+    nextStep: guidedNextStep({
+      stage,
+      nextAction,
+      setup,
+      commands,
+      lastRunFreshness,
+    }),
     setup,
     state,
     scaffoldHealth: state.scaffoldHealth,
@@ -1337,21 +1524,13 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
             lastRun.decision?.diversityGuidance || state.memory?.diversityGuidance || null,
           lanePortfolio: lastRun.decision?.lanePortfolio || state.memory?.lanePortfolio || [],
           metric: lastRun.decision?.metric ?? null,
+          packetEvidence: lastRun.packetEvidence || null,
           path: lastRun.lastRunPath || "",
           fingerprint: lastRunFingerprint,
           freshness: lastRunFreshness,
         }
       : null,
-    commands: {
-      setup: setup.nextCommand,
-      benchmarkLint: setup.benchmarkLintCommand,
-      doctor: setup.guidedFlow.find((step) => step.step === "doctor")?.command,
-      checkpoint: setup.firstRunChecklist.find((step) => step.step === "checkpoint")?.command || "",
-      baseline: baselineCommand,
-      logLast: logCommand,
-      replaceLast: replaceLastRunCommand,
-      dashboard: dashboardCommand,
-    },
+    commands,
     firstRunChecklist: setup.firstRunChecklist,
     scopeWarnings: setup.scopeWarnings,
     settings: dashboardSettings(config),
@@ -1373,7 +1552,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const [state, guide, doctor, next] = await Promise.all([
     publicState({ cwd: workDir, compact: true }),
-    guidedSetup({ cwd: workDir }).catch((error) => ({
+    guidedSetup({ cwd: workDir }).catch((error: any) => ({
       ok: false,
       stage: "blocked",
       warnings: [error.message],
@@ -1384,20 +1563,25 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       checkBenchmark: false,
       checkInstalled: true,
       explain: true,
-    }).catch((error) => ({
-      ok: false,
-      issues: [error.message],
-      warnings: [],
-      drift: null,
-      nextAction: "Fix doctor before running packets.",
-    })),
-    recommendNext({ cwd: workDir, compact: true }).catch((error) => ({
-      ok: false,
-      action: null,
-      nextAction: error.message,
-    })),
+    }).catch(
+      (error: any): LooseObject => ({
+        ok: false,
+        issues: [error.message],
+        warnings: [] as string[],
+        drift: null as LooseObject | null,
+        nextAction: "Fix doctor before running packets.",
+      }),
+    ),
+    recommendNext({ cwd: workDir, compact: true }).catch(
+      (error: any): LooseObject => ({
+        ok: false,
+        action: null as LooseObject | null,
+        nextAction: error.message,
+      }),
+    ),
   ]);
   const commands = continuationCommands(workDir);
+  const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
   return {
     ok: true,
@@ -1419,7 +1603,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "autoresearch.last-run.json when present",
     ],
     state,
-    guidedSetup: guide,
+    guidedSetup: guidePacket,
     doctor: {
       ok: doctor.ok,
       issues: doctor.issues || [],
@@ -1437,12 +1621,17 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
           : "Installed-runtime drift was checked during onboarding.",
     },
     nextAction:
-      nextPacket.action || nextPacket.nextBestAction || nextPacket.nextAction || guide.nextAction,
+      nextPacket.action ||
+      nextPacket.nextBestAction ||
+      nextPacket.nextAction ||
+      guidePacket.nextAction,
     hazards: compactHazards({
       doctor,
-      guide,
+      guide: guidePacket,
       state,
     }),
+    missingEssentials: guidePacket.missingEssentials || guidePacket.setup?.missing || [],
+    nextStep: guidePacket.nextStep || nextPacket.nextStep || null,
     commands: {
       ...commands,
       guide: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`,
@@ -1462,7 +1651,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     pluginVersion: PLUGIN_VERSION,
   });
   const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
-  const action = viewModel.nextBestAction || {};
+  const action = (viewModel.nextBestAction || {}) as LooseObject;
   return {
     ok: true,
     workDir,
@@ -1482,8 +1671,51 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
       primary: action.command || action.primaryCommand?.command || "",
       ...compact.commands,
     },
+    nextStep:
+      viewModel.guidedSetup?.nextStep || recommendedActionNextStep(action, viewModel, compact),
     compactState: boolOption(args.compact, false) ? compact : undefined,
   };
+}
+
+function recommendedActionNextStep(
+  action: LooseObject,
+  viewModel: LooseObject,
+  compact: LooseObject,
+) {
+  const kind = String(action.kind || action.safeAction || "");
+  const stage = kind.includes("finalize")
+    ? "finalization-preview"
+    : kind.includes("segment")
+      ? "segment-reset"
+      : kind.includes("log")
+        ? "log-decision"
+        : kind.includes("serve") || kind.includes("dashboard")
+          ? "dashboard-serve"
+          : kind.includes("doctor")
+            ? "doctor"
+            : (viewModel.trustBlockers || compact.blockers || []).length
+              ? "blocker"
+              : "baseline-packet";
+  return sharedNextStep({
+    stage,
+    title: action.title || "Run next safe action",
+    reason: action.detail || viewModel.readout?.nextAction || compact.nextAction,
+    command: action.command || action.primaryCommand?.command || "",
+    toolName:
+      stage === "log-decision"
+        ? "log_experiment"
+        : stage === "finalization-preview"
+          ? "finalize_preview"
+          : stage === "segment-reset"
+            ? "new_segment"
+            : stage === "doctor"
+              ? "doctor_session"
+              : stage === "blocker"
+                ? ""
+                : "next_experiment",
+    safety:
+      stage === "log-decision" ? "git_mutation" : stage === "blocker" ? "read" : "process_start",
+  });
 }
 
 function compactHazards({ doctor, guide, state }: LooseObject) {
@@ -1493,7 +1725,7 @@ function compactHazards({ doctor, guide, state }: LooseObject) {
     ...(Array.isArray(guide?.warnings) ? guide.warnings : []),
     ...(Array.isArray(state?.blockers) ? state.blockers : []),
   ]
-    .map((item) => (typeof item === "object" ? item.message || item.code : item))
+    .map((item: any) => (typeof item === "object" ? item.message || item.code : item))
     .filter(Boolean)
     .slice(0, 8);
 }
@@ -1511,7 +1743,11 @@ function agentReportTemplates(config: LooseObject = {}) {
   };
 }
 
-function replacementNextCommandFromLastRun(workDir, packet, defaultBenchmarkCommandReady) {
+function replacementNextCommandFromLastRun(
+  workDir: string,
+  packet: any,
+  defaultBenchmarkCommandReady: boolean,
+) {
   const parts = [
     "node",
     shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
@@ -1536,7 +1772,7 @@ function replacementNextCommandFromLastRun(workDir, packet, defaultBenchmarkComm
   return parts.join(" ");
 }
 
-async function recipeCommand(subcommand, args) {
+async function recipeCommand(subcommand: string, args: any) {
   if (!subcommand || subcommand === "list") {
     const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
     return { ok: true, recipes: [...listBuiltInRecipes(), ...catalogRecipes] };
@@ -1557,26 +1793,26 @@ async function recipeCommand(subcommand, args) {
         ? `Detected project shape matches ${recipe.title}.`
         : "No built-in recipe matched strongly; use custom setup.",
       nextCommand: setup.nextCommand,
-      doctorCommand: setup.guidedFlow.find((step) => step.step === "doctor")?.command || "",
+      doctorCommand: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command || "",
     };
   }
   if (subcommand === "show") {
     const id = args._[2] || args.id || args.recipe || args.recipeId;
     if (!id) throw new Error("recipes show requires a recipe id");
     const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
-    const recipe = [...listBuiltInRecipes(), ...catalogRecipes].find((item) => item.id === id);
+    const recipe = [...listBuiltInRecipes(), ...catalogRecipes].find((item: any) => item.id === id);
     if (!recipe) throw new Error(`Unknown recipe: ${id}`);
     return { ok: true, recipe };
   }
   throw new Error(`Unknown recipes subcommand: ${subcommand}`);
 }
 
-async function interactiveSetup(args) {
+async function interactiveSetup(args: any) {
   const plan = await setupPlan(args);
   const recipe = plan.recommendedRecipe || getBuiltInRecipe("custom");
   const rl = createInterface({ input, output });
   try {
-    const ask = async (prompt, fallback) => {
+    const ask = async (prompt: any, fallback: any) => {
       const answer = await rl.question(`${prompt}${fallback ? ` (${fallback})` : ""}: `);
       return answer.trim() || fallback;
     };
@@ -1627,17 +1863,17 @@ async function interactiveSetup(args) {
   }
 }
 
-function markdownList(items, emptyText) {
+function markdownList(items: any[], emptyText: string) {
   if (!items.length) return `- ${emptyText}`;
-  return items.map((item) => `- ${item}`).join("\n");
+  return items.map((item: any) => `- ${item}`).join("\n");
 }
 
-function renderSessionDocument(args) {
+function renderSessionDocument(args: any) {
   const explicitScope = listOption(args.files_in_scope ?? args.filesInScope ?? args.scope);
   const commitScope = normalizeRelativePaths(
     args.commit_paths ?? args.commitPaths,
     "commitPaths",
-  ).map((item) => `\`${item}\`: in configured commit scope`);
+  ).map((item: any) => `\`${item}\`: in configured commit scope`);
   const scope = explicitScope.length ? explicitScope : commitScope;
   const offLimits = listOption(args.off_limits ?? args.offLimits);
   const constraints = listOption(args.constraints);
@@ -1672,7 +1908,7 @@ function renderSessionDocument(args) {
   });
 }
 
-function renderIdeasDocument(args) {
+function renderIdeasDocument(args: any) {
   const title = args.name || "Autoresearch";
   const goal = String(args.goal || args.name || "").trim();
   const constraints = listOption(args.constraints);
@@ -1681,16 +1917,18 @@ function renderIdeasDocument(args) {
     ...(goal ? [`Baseline the current behavior for: ${goal}`] : []),
     ...(secondary.length ? [`Track secondary metrics explicitly: ${secondary.join(", ")}.`] : []),
     ...constraints
-      .filter((constraint) => !/^Decision contract:/i.test(constraint))
+      .filter((constraint: any) => !/^Decision contract:/i.test(constraint))
       .slice(0, 3)
-      .map((constraint) => `Validate constraint before promotion: ${constraint}`),
+      .map((constraint: any) => `Validate constraint before promotion: ${constraint}`),
     "Reserve one packet for a distant-scout lane before repeating the same near-neighbor tweak.",
     "If a promotion-grade packet has no decision row, log it as benchmark coverage work rather than a candidate regression.",
   ]);
-  return [`# Autoresearch Ideas: ${title}`, "", ...ideas.map((idea) => `- ${idea}`), ""].join("\n");
+  return [`# Autoresearch Ideas: ${title}`, "", ...ideas.map((idea: any) => `- ${idea}`), ""].join(
+    "\n",
+  );
 }
 
-function renderResumeBlock(workDir) {
+function renderResumeBlock(workDir: string) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   return [
@@ -1709,7 +1947,7 @@ function renderResumeBlock(workDir) {
   ].join("\n");
 }
 
-function renderBenchmarkScript(args, shellKind) {
+function renderBenchmarkScript(args: any, shellKind: string) {
   const command = args.benchmark_command || args.benchmarkCommand;
   if (!command) {
     return renderMissingCommandScript(shellKind, "benchmark", "--benchmark-command");
@@ -1750,7 +1988,7 @@ function renderBenchmarkScript(args, shellKind) {
   });
 }
 
-function renderChecksScript(args, shellKind) {
+function renderChecksScript(args: any, shellKind: string) {
   const command = args.checks_command || args.checksCommand;
   if (!command) {
     return renderMissingCommandScript(shellKind, "checks", "--checks-command");
@@ -1762,7 +2000,7 @@ function renderChecksScript(args, shellKind) {
   });
 }
 
-function renderMissingCommandScript(shellKind, kind, optionName) {
+function renderMissingCommandScript(shellKind: string, kind: string, optionName: string) {
   const message = `Autoresearch ${kind} command is not configured. Re-run setup with ${optionName}.`;
   if (shellKind === "bash") {
     return [
@@ -1783,19 +2021,19 @@ function renderMissingCommandScript(shellKind, kind, optionName) {
   ].join("\n");
 }
 
-function researchSlugFromArgs(args) {
+function researchSlugFromArgs(args: any) {
   return safeSlug(args.research_slug ?? args.researchSlug ?? args.slug ?? args.name ?? "research");
 }
 
-function researchRelativeDir(slug) {
+function researchRelativeDir(slug: string) {
   return `${RESEARCH_DIR}/${slug}`;
 }
 
-function researchDirPath(workDir, slug) {
+function researchDirPath(workDir: string, slug: string) {
   return path.join(workDir, RESEARCH_DIR, slug);
 }
 
-function renderResearchBenchmarkScript(slug, shellKind) {
+function renderResearchBenchmarkScript(slug: string, shellKind: string) {
   const script = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
   if (shellKind === "bash") {
     return [
@@ -1815,12 +2053,12 @@ function renderResearchBenchmarkScript(slug, shellKind) {
   ].join("\n");
 }
 
-function researchTitle(value) {
+function researchTitle(value: any) {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
-const RESEARCH_FILE_TEMPLATES = {
-  "brief.md": ({ title, goal, args }) => `# Research Brief: ${title}
+const RESEARCH_FILE_TEMPLATES: Record<string, (input: LooseObject) => string> = {
+  "brief.md": ({ title, goal, args }: LooseObject) => `# Research Brief: ${title}
 
 ## Request
 ${goal}
@@ -1840,7 +2078,7 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## Known Unknowns
 - TBD: add unresolved questions before delegating or implementing.
 `,
-  "plan.md": ({ title }) => `# Research Plan: ${title}
+  "plan.md": ({ title }: LooseObject) => `# Research Plan: ${title}
 
 ## Workstreams
 - Project essence and audience
@@ -1854,7 +2092,7 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 - Convert actionable findings into \`quality-gaps.md\`.
 - Iterate with the Codex Autoresearch skill until \`quality_gap=0\`.
 `,
-  "tasks.md": ({ title }) => `# Research Tasks: ${title}
+  "tasks.md": ({ title }: LooseObject) => `# Research Tasks: ${title}
 
 ## queued
 - Capture project essence from repo evidence.
@@ -1870,13 +2108,13 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## blockers
 - None.
 `,
-  "sources.md": ({ title }) => `# Research Sources: ${title}
+  "sources.md": ({ title }: LooseObject) => `# Research Sources: ${title}
 
 | Source | Date Checked | Claim Supported | Confidence |
 | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD |
 `,
-  "synthesis.md": ({ title }) => `# Research Synthesis: ${title}
+  "synthesis.md": ({ title }: LooseObject) => `# Research Synthesis: ${title}
 
 ## Project Essence
 - TBD: summarize what the project is trying to become.
@@ -1890,7 +2128,7 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 ## Confidence And Gaps
 - TBD: record confidence, contradictions, and unresolved questions.
 `,
-  "quality-gaps.md": ({ title }) => `# Quality Gaps: ${title}
+  "quality-gaps.md": ({ title }: LooseObject) => `# Quality Gaps: ${title}
 
 - [ ] Project essence is accurate and source-backed.
 - [ ] Sources are logged with dates, claims, and confidence.
@@ -1901,14 +2139,14 @@ ${markdownList(listOption(args.constraints), "TBD: add constraints as they are d
 `,
 };
 
-function renderResearchFile(fileName, args, slug) {
+function renderResearchFile(fileName: string, args: any, slug: string) {
   const goal = args.goal || args.name || slug;
   const renderer = RESEARCH_FILE_TEMPLATES[fileName];
   if (renderer) return renderer({ title: researchTitle(goal), goal, args });
   throw new Error(`Unknown research file template: ${fileName}`);
 }
 
-function parseQualityGaps(text) {
+function parseQualityGaps(text: string) {
   const items = parseQualityGapItems(text);
   return {
     open: items.open.length,
@@ -1917,7 +2155,7 @@ function parseQualityGaps(text) {
   };
 }
 
-function parseQualityGapItems(text) {
+function parseQualityGapItems(text: string) {
   const open = [];
   const closed = [];
   for (const line of text.split(/\r?\n/)) {
@@ -1930,7 +2168,7 @@ function parseQualityGapItems(text) {
   return { open, closed };
 }
 
-async function writeSessionFile(filePath, content, options: LooseObject = {}) {
+async function writeSessionFile(filePath: string, content: any, options: LooseObject = {}) {
   const exists = await pathExists(filePath);
   if (exists && !options.overwrite) return { path: filePath, action: "kept" };
   await fsp.writeFile(filePath, content.endsWith("\n") ? content : `${content}\n`, "utf8");
@@ -1940,7 +2178,7 @@ async function writeSessionFile(filePath, content, options: LooseObject = {}) {
   return { path: filePath, action: exists ? "overwritten" : "created" };
 }
 
-function bestMetric(runs, direction) {
+function bestMetric(runs: any[], direction: any) {
   let best = null;
   for (const run of runs) {
     const metric = finiteMetric(run.metric);
@@ -1950,37 +2188,40 @@ function bestMetric(runs, direction) {
   return best;
 }
 
-function bestKeptMetric(runs, direction) {
+function bestKeptMetric(runs: any[], direction: any) {
   return bestMetric(
-    runs.filter((run) => run.status === "keep"),
+    runs.filter((run: any) => run.status === "keep"),
     direction,
   );
 }
 
-function isBetter(value, current, direction) {
+function isBetter(value: any, current: any, direction: any) {
   return direction === "higher" ? value > current : value < current;
 }
 
-function median(values) {
+function median(values: any) {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = [...values].sort((a: any, b: any) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-function computeConfidence(runs, direction) {
-  const values = runs.filter(isBaselineEligibleMetricRun).map((run) => finiteMetric(run.metric));
+function computeConfidence(runs: any[], direction: any) {
+  const values = runs
+    .filter(isBaselineEligibleMetricRun)
+    .map((run: any) => finiteMetric(run.metric))
+    .filter((value): value is number => value != null);
   if (values.length < 3) return null;
   const baseline = values[0];
   const best = bestKeptMetric(runs, direction);
   if (best == null || best === baseline) return null;
   const med = median(values);
-  const mad = median(values.map((value) => Math.abs(value - med)));
+  const mad = median(values.map((value: any) => Math.abs(value - med)));
   if (mad === 0) return null;
   return Math.abs(best - baseline) / mad;
 }
 
-function metricParseSource(result) {
+function metricParseSource(result: any) {
   if (!result) return "";
   const retained = result.retainedMetricOutput || "";
   if (result.metricOutput) {
@@ -1995,8 +2236,8 @@ function metricParseSource(result) {
   return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
 }
 
-function parseArtifactLines(output, workDir) {
-  const artifacts = {};
+function parseArtifactLines(output: string, workDir: string) {
+  const artifacts: Record<string, string> = {};
   for (const line of String(output || "").split(/\r?\n/)) {
     const match = line.match(/^ARTIFACT\s+([A-Za-z_][A-Za-z0-9_.:-]*)=(.+)$/);
     if (!match) continue;
@@ -2013,7 +2254,11 @@ function parseArtifactLines(output, workDir) {
   return artifacts;
 }
 
-function headText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES) {
+function headText(
+  text: string,
+  maxLines: any = OUTPUT_MAX_LINES,
+  maxBytes: number = OUTPUT_MAX_BYTES,
+) {
   let trimmed = text;
   if (Buffer.byteLength(trimmed, "utf8") > maxBytes) {
     const buf = Buffer.from(trimmed, "utf8");
@@ -2024,7 +2269,7 @@ function headText(text, maxLines = OUTPUT_MAX_LINES, maxBytes = OUTPUT_MAX_BYTES
   return trimmed;
 }
 
-async function defaultBenchmarkCommand(workDir) {
+async function defaultBenchmarkCommand(workDir: string) {
   if (await pathExists(path.join(workDir, "autoresearch.ps1"))) {
     return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   }
@@ -2036,14 +2281,14 @@ async function defaultBenchmarkCommand(workDir) {
   );
 }
 
-async function defaultBenchmarkCommandExists(workDir) {
+async function defaultBenchmarkCommandExists(workDir: string) {
   return (
     (await pathExists(path.join(workDir, "autoresearch.ps1"))) ||
     (await pathExists(path.join(workDir, "autoresearch.sh")))
   );
 }
 
-async function benchmarkCommandFromArgs(args: LooseObject, workDir) {
+async function benchmarkCommandFromArgs(args: LooseObject, workDir: string) {
   const commandFile = args.command_file ?? args.commandFile;
   if (args.command && commandFile) {
     throw new Error("Use either --command or --command-file, not both.");
@@ -2061,25 +2306,25 @@ async function benchmarkCommandFromArgs(args: LooseObject, workDir) {
     command,
     env: env?.values || undefined,
     commandFile: commandFile ? resolveOptionPath(commandFile, workDir) : "",
-    envFile: envFile ? env.path : "",
-    envKeys: env ? Object.keys(env.values).sort((a, b) => a.localeCompare(b)) : [],
+    envFile: env?.path || "",
+    envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
     separatorCommand,
   };
 }
 
-function resolveOptionPath(filePath, workDir) {
+function resolveOptionPath(filePath: string, workDir: string) {
   const input = String(filePath || "").trim();
   return path.isAbsolute(input) ? input : path.resolve(workDir, input);
 }
 
-async function readCommandFile(filePath, workDir) {
+async function readCommandFile(filePath: string, workDir: string) {
   const resolved = resolveOptionPath(filePath, workDir);
   const text = (await fsp.readFile(resolved, "utf8")).trim();
   if (!text) throw new Error(`--command-file is empty: ${resolved}`);
   return text;
 }
 
-async function readEnvFile(filePath, workDir) {
+async function readEnvFile(filePath: string, workDir: string) {
   const resolved = resolveOptionPath(filePath, workDir);
   const text = await fsp.readFile(resolved, "utf8");
   const trimmed = text.trim();
@@ -2092,11 +2337,14 @@ async function readEnvFile(filePath, workDir) {
     return {
       path: resolved,
       values: Object.fromEntries(
-        Object.entries(parsed).map(([key, value]) => [validateEnvName(key), String(value ?? "")]),
+        Object.entries(parsed).map(([key, value]: [string, unknown]) => [
+          validateEnvName(key),
+          String(value ?? ""),
+        ]),
       ),
     };
   }
-  const values = {};
+  const values: Record<string, string> = {};
   for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -2107,14 +2355,14 @@ async function readEnvFile(filePath, workDir) {
   return { path: resolved, values };
 }
 
-function validateEnvName(name) {
+function validateEnvName(name: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || ""))) {
     throw new Error(`Invalid environment variable name in --env-file: ${name}`);
   }
   return String(name);
 }
 
-function unquoteEnvValue(value) {
+function unquoteEnvValue(value: any) {
   const text = String(value ?? "");
   if (
     (text.startsWith('"') && text.endsWith('"')) ||
@@ -2125,7 +2373,7 @@ function unquoteEnvValue(value) {
   return text;
 }
 
-async function defaultChecksCommand(workDir) {
+async function defaultChecksCommand(workDir: string) {
   if (await pathExists(path.join(workDir, "autoresearch.checks.ps1"))) {
     return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.checks.ps1";
   }
@@ -2135,7 +2383,7 @@ async function defaultChecksCommand(workDir) {
   return null;
 }
 
-function checksPolicyFromArgs(args, config) {
+function checksPolicyFromArgs(args: any, config: any) {
   return enumOption(
     args.checks_policy ?? args.checksPolicy ?? config.checksPolicy,
     CHECKS_POLICIES,
@@ -2144,7 +2392,7 @@ function checksPolicyFromArgs(args, config) {
   );
 }
 
-function shouldRunChecks(policy, context) {
+function shouldRunChecks(policy: any, context: any) {
   if (!context.benchmarkPassed || !context.primaryPresent || !context.checksCommand) return false;
   if (policy === "always") return true;
   if (policy === "on-improvement") return context.improvesPrimary || context.explicitChecksCommand;
@@ -2152,9 +2400,9 @@ function shouldRunChecks(policy, context) {
 }
 
 async function runProcess(
-  command,
-  args,
-  cwd,
+  command: string,
+  args: any,
+  cwd: string,
   options: LooseObject = {},
 ): Promise<LocalProcessResult> {
   const result = await runBoundedProcess(command, args, {
@@ -2164,20 +2412,20 @@ async function runProcess(
   return { code: result.code, stdout: result.stdout, stderr: result.stderr };
 }
 
-async function git(args, cwd): Promise<LocalProcessResult> {
+async function git(args: any, cwd: string): Promise<LocalProcessResult> {
   return await runProcess("git", args, cwd);
 }
 
-function gitOutput(result, fallback) {
+function gitOutput(result: any, fallback: any) {
   return (result.stderr || result.stdout || fallback || "").trim();
 }
 
-async function insideGitRepo(cwd) {
+async function insideGitRepo(cwd: string) {
   const result = await git(["rev-parse", "--is-inside-work-tree"], cwd);
   return result.code === 0 && result.stdout.trim() === "true";
 }
 
-async function gitPrivatePath(cwd, relativePath) {
+async function gitPrivatePath(cwd: string, relativePath: string) {
   const result = await git(["rev-parse", "--git-path", relativePath], cwd);
   if (result.code !== 0)
     throw new Error(`Git path lookup failed: ${gitOutput(result, "unknown error")}`);
@@ -2185,17 +2433,22 @@ async function gitPrivatePath(cwd, relativePath) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
 }
 
-async function assertNoGitIndexLock(workDir, phase = "git operation") {
+async function assertNoGitIndexLock(workDir: string, phase: string = "git operation") {
   const lockPath = await gitPrivatePath(workDir, "index.lock");
   if (!(await pathExists(lockPath))) return;
   throw new Error(await gitIndexLockMessage(workDir, lockPath, phase, false));
 }
 
-function gitIndexLockFailure(result) {
+function gitIndexLockFailure(result: any) {
   return /index\.lock|another git process|Unable to create/i.test(gitOutput(result, ""));
 }
 
-async function gitIndexLockMessage(workDir, lockPath, phase, stagedMayHaveChanged) {
+async function gitIndexLockMessage(
+  workDir: string,
+  lockPath: string,
+  phase: string,
+  stagedMayHaveChanged: boolean,
+) {
   const liveGit = await liveGitProcessSummary(workDir);
   return [
     `Git index lock blocked ${phase}: ${lockPath}.`,
@@ -2207,7 +2460,7 @@ async function gitIndexLockMessage(workDir, lockPath, phase, stagedMayHaveChange
   ].join(" ");
 }
 
-async function liveGitProcessSummary(workDir) {
+async function liveGitProcessSummary(workDir: string) {
   try {
     const result =
       process.platform === "win32"
@@ -2226,16 +2479,16 @@ async function liveGitProcessSummary(workDir) {
     if (!outputText) return "no live git process found";
     return outputText.split(/\r?\n/).slice(0, 5).join(", ");
   } catch (error) {
-    return `process check unavailable (${error?.message || String(error)})`;
+    return `process check unavailable (${errorMessage(error)})`;
   }
 }
 
-async function shortHead(cwd) {
+async function shortHead(cwd: string) {
   const result = await git(["rev-parse", "--short=7", "HEAD"], cwd);
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-async function resolveCommitRef(cwd, commit) {
+async function resolveCommitRef(cwd: string, commit: any) {
   const value = String(commit || "").trim();
   if (!value) throw new Error("commit is required");
   const result = await git(["rev-parse", "--verify", `${value}^{commit}`], cwd);
@@ -2244,12 +2497,12 @@ async function resolveCommitRef(cwd, commit) {
   return result.stdout.trim();
 }
 
-async function hasStagedChanges(cwd) {
+async function hasStagedChanges(cwd: string) {
   const result = await git(["diff", "--cached", "--quiet"], cwd);
   return result.code === 1;
 }
 
-async function isGitClean(cwd) {
+async function isGitClean(cwd: string) {
   if (!(await insideGitRepo(cwd))) return null;
   const result = await git(["status", "--porcelain"], cwd);
   if (result.code !== 0) return false;
@@ -2276,15 +2529,15 @@ function shouldWarnEmptyCommitPaths({
   return Boolean(inGit && !explicitCommit && !allowAddAll && commitPaths.length === 0);
 }
 
-async function assertCommitPathsExist(workDir, commitPaths) {
-  const missing = [];
+async function assertCommitPathsExist(workDir: string, commitPaths: any[]) {
+  const missing: string[] = [];
   for (const relative of commitPaths) {
     if (await pathExists(path.join(workDir, relative))) continue;
     if (await gitPathIsTracked(workDir, relative)) continue;
     missing.push(relative);
   }
   if (!missing.length) return;
-  const remaining = commitPaths.filter((item) => !missing.includes(item));
+  const remaining = commitPaths.filter((item: any) => !missing.includes(item));
   throw new Error(
     [
       `Configured commitPaths do not exist before git add: ${missing.slice(0, 8).join(", ")}.`,
@@ -2296,34 +2549,34 @@ async function assertCommitPathsExist(workDir, commitPaths) {
   );
 }
 
-async function gitPathIsTracked(workDir, relativePath) {
+async function gitPathIsTracked(workDir: string, relativePath: string) {
   const result = await git(["ls-files", "--", relativePath], workDir);
   return result.code === 0 && result.stdout.trim().length > 0;
 }
 
-async function gitStatusShort(cwd) {
+async function gitStatusShort(cwd: string) {
   const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
   if (result.code !== 0)
     throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
   return result.stdout.trim();
 }
 
-function hashText(value) {
+function hashText(value: any) {
   return createHash("sha256")
     .update(String(value || ""), "utf8")
     .digest("hex");
 }
 
-async function scopedFileFingerprints(workDir, paths = []) {
+async function scopedFileFingerprints(workDir: string, paths: any[] = []) {
   const safePaths = normalizeRelativePaths(paths, "commitPaths");
   if (safePaths.length === 0) return [];
   const result = await git(["ls-files", "--", ...safePaths], workDir);
   if (result.code !== 0) return [];
   const files = result.stdout
     .split(/\r?\n/)
-    .map((file) => file.trim())
+    .map((file: any) => file.trim())
     .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b));
+    .sort((a: any, b: any) => a.localeCompare(b));
   const fingerprints = [];
   for (const file of files) {
     const filePath = path.join(workDir, file);
@@ -2334,32 +2587,34 @@ async function scopedFileFingerprints(workDir, paths = []) {
       fingerprints.push({
         path: file,
         missing: true,
-        error: error?.code || error?.message || String(error),
+        error: errorCodeOrMessage(error),
       });
     }
   }
   return fingerprints;
 }
 
-function dirtyPathsFromStatus(statusShort) {
+function dirtyPathsFromStatus(statusShort: string) {
   return String(statusShort || "")
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
+    .map((line: string) => line.trimEnd())
     .filter(Boolean)
-    .map((line) => {
+    .map((line: string) => {
       const rawPath = /^.. /.test(line)
         ? line.slice(3).trim()
         : line.replace(/^[ MADRCU?!]{1,2}\s+/, "").trim();
-      const renamedPath = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) : rawPath;
+      const renamedPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").at(-1) || rawPath
+        : rawPath;
       return renamedPath.replace(/^"|"$/g, "").replace(/\\"/g, '"').replace(/\\/g, "/");
     })
     .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b));
+    .sort((a: any, b: any) => a.localeCompare(b));
 }
 
-async function fileFingerprintsForPaths(workDir, paths = []) {
+async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
   const fingerprints = [];
-  for (const file of [...new Set(paths)].sort((a, b) => a.localeCompare(b))) {
+  for (const file of [...new Set(paths)].sort((a: any, b: any) => a.localeCompare(b))) {
     const filePath = path.join(workDir, file);
     try {
       const stats = await fsp.lstat(filePath);
@@ -2378,23 +2633,23 @@ async function fileFingerprintsForPaths(workDir, paths = []) {
       fingerprints.push({
         path: file,
         missing: true,
-        error: error?.code || error?.message || String(error),
+        error: errorCodeOrMessage(error),
       });
     }
   }
   return fingerprints;
 }
 
-async function directoryFingerprints(workDir, rootPath) {
+async function directoryFingerprints(workDir: string, rootPath: string) {
   const root = path.resolve(workDir, rootPath);
   const base = path.resolve(workDir);
   const relativeRoot = path.relative(base, root);
   if (relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) return [];
-  const entries = [];
-  async function visit(relativeDir) {
+  const entries: LooseObject[] = [];
+  async function visit(relativeDir: any) {
     const absoluteDir = path.join(workDir, relativeDir);
     const dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
-    for (const dirent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const dirent of dirents.sort((a: any, b: any) => a.name.localeCompare(b.name))) {
       const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
       const absolutePath = path.join(workDir, relativePath);
       if (dirent.isDirectory()) {
@@ -2418,7 +2673,7 @@ async function directoryFingerprints(workDir, rootPath) {
   return entries;
 }
 
-async function lastRunGitSnapshot(workDir, config: LooseObject = {}) {
+async function lastRunGitSnapshot(workDir: string, config: LooseObject = {}) {
   if (!(await insideGitRepo(workDir).catch(() => false))) return { inside: false };
   const scopedPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
   const statusShort = await gitStatusShort(workDir);
@@ -2436,7 +2691,7 @@ async function lastRunGitSnapshot(workDir, config: LooseObject = {}) {
   };
 }
 
-async function benchmarkContractSnapshot(workDir, context: LooseObject = {}) {
+async function benchmarkContractSnapshot(workDir: string, context: LooseObject = {}) {
   const fixedFiles = [
     "autoresearch.sh",
     "autoresearch.ps1",
@@ -2482,7 +2737,7 @@ async function benchmarkContractSnapshot(workDir, context: LooseObject = {}) {
   };
 }
 
-async function contractFileFingerprint(workDir, filePath, label = "") {
+async function contractFileFingerprint(workDir: string, filePath: string, label: any = "") {
   const resolved = resolveOptionPath(filePath, workDir);
   const display = label || contractPathLabel(workDir, resolved);
   try {
@@ -2495,12 +2750,12 @@ async function contractFileFingerprint(workDir, filePath, label = "") {
     return {
       path: display,
       missing: true,
-      error: error?.code || error?.message || String(error),
+      error: errorCodeOrMessage(error),
     };
   }
 }
 
-function contractPathLabel(workDir, filePath) {
+function contractPathLabel(workDir: string, filePath: string) {
   const input = String(filePath || "").trim();
   if (!input) return "";
   const resolved = resolveOptionPath(input, workDir);
@@ -2510,10 +2765,10 @@ function contractPathLabel(workDir, filePath) {
     : resolved;
 }
 
-async function benchmarkContractDrift(workDir, state) {
+async function benchmarkContractDrift(workDir: string, state: any) {
   const latest = [...(state.current || [])]
     .reverse()
-    .find((run) => run?.benchmarkContract?.surfaceHash);
+    .find((run: any) => run?.benchmarkContract?.surfaceHash);
   if (!latest) return null;
   const current = await benchmarkContractSnapshot(workDir, {
     command: latest.benchmarkContract.command,
@@ -2533,7 +2788,7 @@ async function benchmarkContractDrift(workDir, state) {
   };
 }
 
-async function preserveSessionFiles(workDir) {
+async function preserveSessionFiles(workDir: string) {
   const saved = new Map();
   for (const file of SESSION_FILES) {
     const filePath = path.join(workDir, file);
@@ -2550,7 +2805,7 @@ async function preserveSessionFiles(workDir) {
   return saved;
 }
 
-async function restoreSessionFiles(workDir, saved) {
+async function restoreSessionFiles(workDir: string, saved: any) {
   for (const [file, artifact] of saved.entries()) {
     const filePath = path.join(workDir, file);
     if (artifact.type === "dir") {
@@ -2565,7 +2820,12 @@ async function restoreSessionFiles(workDir, saved) {
   }
 }
 
-async function appendSessionRunNote(workDir, experiment, state, messages: LooseObject = {}) {
+async function appendSessionRunNote(
+  workDir: string,
+  experiment: any,
+  state: any,
+  messages: LooseObject = {},
+) {
   const filePath = path.join(workDir, "autoresearch.md");
   if (!(await pathExists(filePath))) return;
   const startMarker = "<!-- AUTORESEARCH_RUN_LEDGER:START -->";
@@ -2589,7 +2849,7 @@ async function appendSessionRunNote(workDir, experiment, state, messages: LooseO
   await fsp.writeFile(filePath, `${existing.trimEnd()}\n${block}`, "utf8");
 }
 
-async function revertExceptSessionFiles(workDir) {
+async function revertExceptSessionFiles(workDir: string) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const saved = await preserveSessionFiles(workDir);
   const restore = await git(["restore", "--worktree", "--staged", "--", "."], workDir);
@@ -2610,7 +2870,7 @@ async function revertExceptSessionFiles(workDir) {
   return "Git: reverted non-session changes; autoresearch files preserved.";
 }
 
-async function revertScopedPathsExceptSessionFiles(workDir, paths) {
+async function revertScopedPathsExceptSessionFiles(workDir: string, paths: any[]) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const safePaths = normalizeRelativePaths(paths, "revertPaths");
   if (!safePaths.length) throw new Error("No scoped paths were provided for discard cleanup.");
@@ -2633,7 +2893,7 @@ async function revertScopedPathsExceptSessionFiles(workDir, paths) {
   return `Git: reverted scoped experiment paths (${safePaths.join(", ")}); autoresearch files preserved.`;
 }
 
-async function discardCleanupPlan(workDir, args, config) {
+async function discardCleanupPlan(workDir: string, args: any, config: any) {
   const scopedPaths = normalizeRelativePaths(
     args.revert_paths ??
       args.revertPaths ??
@@ -2644,10 +2904,12 @@ async function discardCleanupPlan(workDir, args, config) {
   );
   const statusShort = await gitStatusShort(workDir);
   const dirtyPaths = dirtyPathsFromStatus(statusShort);
-  const ownedDirtyPaths = dirtyPaths.filter((dirtyPath) =>
-    scopedPaths.some((scopedPath) => pathIsCoveredByScope(dirtyPath, scopedPath)),
+  const ownedDirtyPaths = dirtyPaths.filter((dirtyPath: any) =>
+    scopedPaths.some((scopedPath: any) => pathIsCoveredByScope(dirtyPath, scopedPath)),
   );
-  const unownedDirtyPaths = dirtyPaths.filter((dirtyPath) => !ownedDirtyPaths.includes(dirtyPath));
+  const unownedDirtyPaths = dirtyPaths.filter(
+    (dirtyPath: any) => !ownedDirtyPaths.includes(dirtyPath),
+  );
   return {
     scopedPaths,
     dirtyPaths,
@@ -2660,13 +2922,13 @@ async function discardCleanupPlan(workDir, args, config) {
   };
 }
 
-function pathIsCoveredByScope(filePath, scopePath) {
+function pathIsCoveredByScope(filePath: string, scopePath: any) {
   const file = slashPath(filePath);
   const scope = slashPath(scopePath);
   return file === scope || file.startsWith(`${scope}/`);
 }
 
-async function cleanupDiscardChanges(workDir, args, config) {
+async function cleanupDiscardChanges(workDir: string, args: any, config: any) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const plan = await discardCleanupPlan(workDir, args, config);
   if (plan.scopedPaths.length > 0) {
@@ -2685,7 +2947,7 @@ async function cleanupDiscardChanges(workDir, args, config) {
   );
 }
 
-function mergeRuntimeConfig(sessionCwd, updates) {
+function mergeRuntimeConfig(sessionCwd: any, updates: any) {
   const configPath = runtimeConfigPath(sessionCwd);
   const existing = readConfig(sessionCwd);
   const nextConfig = { ...existing, ...updates };
@@ -2696,18 +2958,21 @@ function mergeRuntimeConfig(sessionCwd, updates) {
   };
 }
 
-async function appendRuntimeConfigFile(files, sessionCwd, updates) {
+async function appendRuntimeConfigFile(files: any[], sessionCwd: any, updates: any) {
   if (Object.keys(updates).length === 0) return;
   const { configPath, content } = mergeRuntimeConfig(sessionCwd, updates);
   files.push(await writeSessionFile(configPath, content, { overwrite: true }));
 }
 
-function setupCheckpointGuidance(workDir, files, name) {
+function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
   const paths = [
     ...new Set(
       files
-        .map((file) => path.relative(workDir, file.path).replace(/\\/g, "/"))
-        .filter((filePath) => filePath && !filePath.startsWith("..") && !path.isAbsolute(filePath)),
+        .map((file: any) => path.relative(workDir, file.path).replace(/\\/g, "/"))
+        .filter(
+          (filePath: string) =>
+            filePath && !filePath.startsWith("..") && !path.isAbsolute(filePath),
+        ),
     ),
   ];
   return {
@@ -2722,7 +2987,7 @@ function setupCheckpointGuidance(workDir, files, name) {
   };
 }
 
-async function ensureAutoresearchGitattributes(workDir) {
+async function ensureAutoresearchGitattributes(workDir: string) {
   const filePath = path.join(workDir, ".gitattributes");
   const exists = await pathExists(filePath);
   const current = exists ? await fsp.readFile(filePath, "utf8") : "";
@@ -2741,7 +3006,7 @@ async function ensureAutoresearchGitattributes(workDir) {
   return { path: filePath, action: exists ? "updated" : "created" };
 }
 
-async function writeRuntimeConfig(sessionCwd, updates) {
+async function writeRuntimeConfig(sessionCwd: any, updates: any) {
   if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
   const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
   await fsp.writeFile(configPath, `${content}\n`, "utf8");
@@ -2786,7 +3051,7 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
   const shellKind = shellKindFromArgs(args);
   const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
   const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
-  const files = [];
+  const files: LooseObject[] = [];
   const context = { sessionCwd, workDir, overwrite, shellKind, benchmarkFile, checksFile, files };
 
   if (options.beforeCommonFiles) await options.beforeCommonFiles(context);
@@ -2838,7 +3103,7 @@ async function setupSession(args: LooseObject) {
   validateMetricName(args.metric_name || args.metricName);
   const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
     sessionDocumentArgs: () => args,
-    benchmarkContent: ({ shellKind: setupShellKind }) =>
+    benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
       renderBenchmarkScript(args, setupShellKind),
     ideasContent: () => renderIdeasDocument(args),
   });
@@ -2909,11 +3174,15 @@ async function setupSession(args: LooseObject) {
   };
 }
 
-async function setupResearchSession(args) {
+async function setupResearchSession(args: any) {
   const slug = researchSlugFromArgs(args);
   const goal = args.goal || args.name || slug;
   const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
-    beforeCommonFiles: async ({ workDir: setupWorkDir, overwrite, files: setupFiles }) => {
+    beforeCommonFiles: async ({
+      workDir: setupWorkDir,
+      overwrite,
+      files: setupFiles,
+    }: LooseObject) => {
       const researchDir = researchDirPath(setupWorkDir, slug);
       await fsp.mkdir(path.join(researchDir, "notes"), { recursive: true });
       await fsp.mkdir(path.join(researchDir, "deliverables"), { recursive: true });
@@ -2934,7 +3203,7 @@ async function setupResearchSession(args) {
         );
       }
     },
-    sessionDocumentArgs: ({ shellKind: setupShellKind }) => {
+    sessionDocumentArgs: ({ shellKind: setupShellKind }: LooseObject) => {
       const benchmarkCommand =
         setupShellKind === "bash"
           ? "./autoresearch.sh"
@@ -2959,7 +3228,7 @@ async function setupResearchSession(args) {
         ],
       };
     },
-    benchmarkContent: ({ shellKind: setupShellKind }) =>
+    benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
       renderResearchBenchmarkScript(slug, setupShellKind),
     ideasContent: () =>
       `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
@@ -3036,7 +3305,7 @@ async function setupResearchSession(args) {
   };
 }
 
-async function measureQualityGap(args) {
+async function measureQualityGap(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
   const slug = slugResolution.slug;
@@ -3070,7 +3339,7 @@ async function measureQualityGap(args) {
   };
 }
 
-async function currentQualityGapSummary(workDir) {
+async function currentQualityGapSummary(workDir: string) {
   const researchRoot = path.join(workDir, RESEARCH_DIR);
   if (!(await pathExists(researchRoot))) return null;
   const entries = await fsp.readdir(researchRoot, { withFileTypes: true });
@@ -3094,7 +3363,7 @@ async function currentQualityGapSummary(workDir) {
   return null;
 }
 
-function dashboardSettings(config, extra: LooseObject = {}) {
+function dashboardSettings(config: any, extra: LooseObject = {}) {
   return {
     autonomyMode: config.autonomyMode || "guarded",
     checksPolicy: config.checksPolicy || "always",
@@ -3104,7 +3373,7 @@ function dashboardSettings(config, extra: LooseObject = {}) {
   };
 }
 
-async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
+async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -3119,25 +3388,25 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
     (await buildDriftReport({
       pluginRoot: PLUGIN_ROOT,
       includeInstalled: Boolean(context.includeInstalledRuntime),
-    }).catch((error) => ({
+    }).catch((error: any) => ({
       ok: false,
       warnings: [error.message],
     })));
-  const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error) => ({
+  const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
     ok: false,
     ready: false,
     warnings: [error.message],
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
   return buildDashboardViewModel({
-    state: enrichedState,
+    state: enrichedState as any,
     settings,
     commands: dashboardCommands(workDir, qualityGap),
-    setupPlan: await setupPlan({ cwd: workDir }).catch((error) => ({
+    setupPlan: await setupPlan({ cwd: workDir }).catch((error: any) => ({
       ok: false,
       warnings: [error.message],
     })),
-    guidedSetup: await guidedSetup({ cwd: workDir }).catch((error) => ({
+    guidedSetup: await guidedSetup({ cwd: workDir }).catch((error: any) => ({
       ok: false,
       warnings: [error.message],
     })),
@@ -3145,7 +3414,7 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
     finalizePreview: context.suppressEnvironmentWarnings
       ? suppressEnvironmentWarningsFromPreview(finalizePreview)
       : finalizePreview,
-    recipes: listBuiltInRecipes().map((recipe) => ({
+    recipes: listBuiltInRecipes().map((recipe: any) => ({
       id: recipe.id,
       title: recipe.title,
       tags: recipe.tags || [],
@@ -3160,7 +3429,7 @@ async function dashboardViewModel(workDir, config, context: LooseObject = {}) {
   });
 }
 
-async function operatorWarningsForWorkDir(workDir) {
+async function operatorWarningsForWorkDir(workDir: string) {
   const inGit = await insideGitRepo(workDir);
   const config = readConfig(workDir);
   const state = currentState(workDir);
@@ -3193,7 +3462,7 @@ async function operatorWarningsForWorkDir(workDir) {
   return warnings;
 }
 
-async function benchmarkIntegrityPreflight(workDir, config, state) {
+async function benchmarkIntegrityPreflight(workDir: string, config: any, state: any) {
   const warnings = [];
   const hasIntegrityGuard = Boolean(
     config.benchmarkIntegrityCommand ||
@@ -3239,21 +3508,21 @@ async function benchmarkIntegrityPreflight(workDir, config, state) {
   return warnings;
 }
 
-async function gitPrivateDirectoryHasBenchmarkArtifacts(workDir, relativePath) {
+async function gitPrivateDirectoryHasBenchmarkArtifacts(workDir: string, relativePath: string) {
   try {
     const directory = await gitPrivatePath(workDir, relativePath);
-    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch(() => []);
-    return entries.some((entry) => entry.name !== "last-run.json");
+    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch((): [] => []);
+    return entries.some((entry: any) => entry.name !== "last-run.json");
   } catch {
     return false;
   }
 }
 
-function suppressEnvironmentWarningsFromPreview(preview) {
+function suppressEnvironmentWarningsFromPreview(preview: any) {
   if (!preview || typeof preview !== "object" || Array.isArray(preview)) return preview;
   const copy = { ...preview };
   const warnings = listOption(copy.warnings).filter(
-    (warning) => !/dirty|working tree/i.test(String(warning)),
+    (warning: any) => !/dirty|working tree/i.test(String(warning)),
   );
   if (warnings.length > 0) copy.warnings = warnings;
   else delete copy.warnings;
@@ -3325,15 +3594,14 @@ async function runExperiment(args: LooseObject) {
   }
   const commandInput = await benchmarkCommandFromArgs(args, workDir);
   const { command } = commandInput;
-  const benchmark = await runShell(
-    command,
-    workDir,
-    numberOption(args.timeout_seconds ?? args.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-    {
-      env: commandInput.env,
-      retainMetricNames: [state.config.metricName],
-    },
+  const timeoutSeconds = numberOption(
+    args.timeout_seconds ?? args.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
   );
+  const benchmark = await runShell(command, workDir, timeoutSeconds, {
+    env: commandInput.env,
+    retainMetricNames: [state.config.metricName],
+  });
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
   const parseSource = metricParseSource(benchmark);
   const parsedMetricResult = parseMetricLines(parseSource, {
@@ -3359,6 +3627,7 @@ async function runExperiment(args: LooseObject) {
   const checksPolicy = checksPolicyFromArgs(args, config);
   const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
   if (
+    checksCommand &&
     shouldRunChecks(checksPolicy, {
       benchmarkPassed,
       primaryPresent,
@@ -3407,6 +3676,7 @@ async function runExperiment(args: LooseObject) {
     ok: passed,
     workDir,
     command,
+    timeoutSeconds,
     commandFile: commandInput.commandFile,
     envFile: commandInput.envFile,
     envKeys: commandInput.envKeys,
@@ -3452,7 +3722,9 @@ async function runExperiment(args: LooseObject) {
     logHint: {
       metric: primary,
       metrics: Object.fromEntries(
-        Object.entries(parsedMetrics).filter(([key]) => key !== state.config.metricName),
+        Object.entries(parsedMetrics).filter(
+          ([key]: [string, unknown]) => key !== state.config.metricName,
+        ),
       ),
       status: passed ? null : failedStatus,
       suggestedStatus,
@@ -3471,8 +3743,20 @@ async function runExperiment(args: LooseObject) {
   };
 }
 
-function buildRunProgress({ benchmark, checks, checksCommand, passed }) {
-  const stages = [progressStage("benchmark", "Run benchmark command", benchmark)];
+function buildRunProgress({
+  benchmark,
+  checks,
+  checksCommand,
+  passed,
+}: {
+  benchmark: ProcessRunResult;
+  checks: ProcessRunResult | null;
+  checksCommand: string | null;
+  passed: boolean;
+}) {
+  const stages: ProgressStageResult[] = [
+    progressStage("benchmark", "Run benchmark command", benchmark),
+  ];
   if (checksCommand) {
     stages.push(
       checks
@@ -3502,19 +3786,29 @@ function buildRunProgress({ benchmark, checks, checksCommand, passed }) {
   };
 }
 
-function progressStage(stage, label, result) {
+function progressStage(
+  stage: string,
+  label: string,
+  result: ProcessRunResult,
+): ProgressStageResult {
   return {
     stage,
     label,
     status: result.timedOut ? "timed_out" : result.exitCode === 0 ? "completed" : "failed",
-    durationSeconds: result.durationSeconds,
-    exitCode: result.exitCode,
-    timedOut: result.timedOut,
-    outputTail: tailText(result.output),
+    durationSeconds: Number(result.durationSeconds || 0),
+    exitCode: result.exitCode ?? null,
+    timedOut: Boolean(result.timedOut),
+    outputTail: tailText(result.output || ""),
   };
 }
 
-function operationProgress({ stage, label, startedAt, status = "completed", outputTail = "" }) {
+function operationProgress({
+  stage,
+  label,
+  startedAt,
+  status = "completed",
+  outputTail = "",
+}: LooseObject): LooseObject {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   return {
     mode: "synchronous",
@@ -3537,7 +3831,7 @@ function operationProgress({ stage, label, startedAt, status = "completed", outp
   };
 }
 
-async function logExperiment(args) {
+async function logExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false)
     ? await readLastRunPacket(workDir)
@@ -3658,12 +3952,22 @@ async function logExperiment(args) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
+    metricEligible: !FAILURE_STATUSES.has(status) && finiteMetric(metric) != null,
     status,
     description,
     timestamp: Date.now(),
     segment: stateBefore.segment,
     confidence: null,
   };
+  if (lastPacket?.packetEvidence?.freshnessFingerprint) {
+    experiment.packetFingerprint = lastPacket.packetEvidence.freshnessFingerprint;
+  }
+  experiment.promotion = promotionStateForLoggedDecision({
+    status,
+    metric,
+    metrics,
+    packetPromotion: lastPacket?.decision?.promotion,
+  });
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
   if (artifacts && Object.keys(artifacts).length > 0) experiment.artifacts = artifacts;
   const benchmarkContract =
@@ -3698,14 +4002,14 @@ async function logExperiment(args) {
   };
 }
 
-async function clearSession(args) {
+async function clearSession(args: any) {
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) {
-    throw new Error("clear requires confirm=true for MCP or --yes for CLI");
+    throw new Error("clear requires --yes for CLI confirmation");
   }
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const targets = new Set([
-    ...SESSION_FILES.map((file) => path.join(workDir, file)),
+    ...SESSION_FILES.map((file: any) => path.join(workDir, file)),
     await resolveLastRunPath(workDir),
     path.join(workDir, RESEARCH_DIR),
     path.join(workDir, "autoresearch-dashboard.html"),
@@ -3738,7 +4042,7 @@ async function clearSession(args) {
   };
 }
 
-function dashboardHtml(entries, meta: LooseObject = {}) {
+function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const staticExport =
     meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
   const dataForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
@@ -3778,12 +4082,12 @@ function dashboardHtml(entries, meta: LooseObject = {}) {
     .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
 }
 
-function readDashboardBuildAsset(fileName) {
+function readDashboardBuildAsset(fileName: string) {
   const filePath = path.join(DASHBOARD_BUILD_DIR, fileName);
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") {
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
       throw new Error(
         `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`,
       );
@@ -3792,7 +4096,7 @@ function readDashboardBuildAsset(fileName) {
   }
 }
 
-function stripDashboardCommandFields(value) {
+function stripDashboardCommandFields(value: any): any {
   const commandKeys = new Set([
     "argv",
     "baselineCommand",
@@ -3817,25 +4121,47 @@ function stripDashboardCommandFields(value) {
     "suggestedCommands",
     "workDir",
   ]);
-  if (Array.isArray(value)) return value.map((item) => stripDashboardCommandFields(item));
+  if (Array.isArray(value)) return value.map((item: any) => stripDashboardCommandFields(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !commandKeys.has(key))
-      .map(([key, item]) => [key, stripDashboardCommandFields(item)]),
+      .filter(([key]: [string, unknown]) => !commandKeys.has(key))
+      .map(([key, item]: [string, unknown]) => [key, stripDashboardCommandFields(item)]),
   );
 }
 
-function scrubDashboardPublicExport(value) {
-  if (Array.isArray(value)) return value.map((item) => scrubDashboardPublicExport(item));
+function scrubDashboardPublicExport(value: any): any {
+  if (Array.isArray(value)) return value.map((item: any) => scrubDashboardPublicExport(item));
   if (typeof value === "string") return scrubDashboardPublicExportString(value);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, scrubDashboardPublicExport(item)]),
+    Object.entries(value).map(([key, item]: [string, unknown]) => {
+      if (key === "dirtyFiles") return [key, scrubDashboardPublicExportDirtyFiles()];
+      if (isDashboardPublicExportPathList(key, item)) {
+        return [key, []];
+      }
+      return [key, scrubDashboardPublicExport(item)];
+    }),
   );
 }
 
-function scrubDashboardPublicExportString(value) {
+function isDashboardPublicExportPathList(key: string, value: unknown) {
+  return (
+    (key === "files" || key.endsWith("Files")) &&
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string")
+  );
+}
+
+function scrubDashboardPublicExportDirtyFiles() {
+  return {
+    sessionArtifacts: [],
+    scopedExperimentFiles: [],
+    unrelatedFiles: [],
+  };
+}
+
+function scrubDashboardPublicExportString(value: any) {
   const placeholders = [
     [PLUGIN_ROOT, "<plugin-root>"],
     [REPO_ROOT, "<repo-root>"],
@@ -3852,21 +4178,21 @@ function scrubDashboardPublicExportString(value) {
     .replace(/[A-Za-z]:\/[^\r\n" ]+/g, "<local-path>");
 }
 
-async function resolveLastRunPath(workDir) {
+async function resolveLastRunPath(workDir: string) {
   if (await insideGitRepo(workDir)) {
     return await gitPrivatePath(workDir, "autoresearch/last-run.json");
   }
   return path.join(workDir, "autoresearch.last-run.json");
 }
 
-async function writeLastRunPacket(workDir, packet, filePath = null) {
+async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await fsp.mkdir(path.dirname(target), { recursive: true });
   await fsp.writeFile(target, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
   return target;
 }
 
-async function readLastRunPacket(workDir) {
+async function readLastRunPacket(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
   const legacyPath = path.join(workDir, "autoresearch.last-run.json");
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
@@ -3875,7 +4201,7 @@ async function readLastRunPacket(workDir) {
   return JSON.parse(fs.readFileSync(readablePath, "utf8"));
 }
 
-async function lastRunPacketFingerprint(workDir) {
+async function lastRunPacketFingerprint(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
   const legacyPath = path.join(workDir, "autoresearch.last-run.json");
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
@@ -3883,12 +4209,12 @@ async function lastRunPacketFingerprint(workDir) {
   return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
 }
 
-async function assertFreshLastRunPacket(workDir, packet) {
+async function assertFreshLastRunPacket(workDir: string, packet: any) {
   const freshness = await lastRunPacketFreshness(workDir, packet);
   if (!freshness.fresh) throw new Error(freshness.reason);
 }
 
-async function lastRunPacketFreshness(workDir, packet) {
+async function lastRunPacketFreshness(workDir: string, packet: any) {
   const expectedNextRun = Number(packet.history?.nextRun);
   const expectedSegment = Number(packet.history?.segment);
   if (!Number.isFinite(expectedNextRun)) {
@@ -4024,7 +4350,7 @@ function lastRunConfigSnapshot(config: LooseObject = {}) {
   };
 }
 
-async function deleteLastRunPacket(workDir) {
+async function deleteLastRunPacket(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
   const legacyPath = path.join(workDir, "autoresearch.last-run.json");
   for (const target of new Set([filePath, legacyPath])) {
@@ -4044,9 +4370,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     settings: dashboardSettings(config),
   });
   const statusCounts = Object.fromEntries(
-    [...STATUS_VALUES].map((status) => [
+    [...STATUS_VALUES].map((status: string) => [
       status,
-      state.current.filter((run) => run.status === status).length,
+      state.current.filter((run: any) => run.status === status).length,
     ]),
   );
   const fullState = {
@@ -4077,7 +4403,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       commitPaths: config.commitPaths || [],
     },
     commands: dashboardCommands(workDir),
-    warnings: warningDetails.map((warning) => warning.message),
+    warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
     memory,
     continuation: loopContinuation(workDir, state, config, "state"),
@@ -4090,7 +4416,7 @@ function compactPublicState(state: LooseObject) {
   const continuation = state.continuation || {};
   const blockers = [
     ...(Array.isArray(state.warningDetails)
-      ? state.warningDetails.map((warning) => warning.message || warning.code)
+      ? state.warningDetails.map((warning: any) => warning.message || warning.code)
       : []),
     ...(Array.isArray(state.warnings) ? state.warnings : []),
   ].filter(Boolean);
@@ -4114,8 +4440,8 @@ function compactPublicState(state: LooseObject) {
           ok: state.scaffoldHealth.ok,
           status: state.scaffoldHealth.status,
           blockers: (state.scaffoldHealth.checks || [])
-            .filter((check) => check.severity === "blocker")
-            .map((check) => check.message || check.code),
+            .filter((check: any) => check.severity === "blocker")
+            .map((check: any) => check.message || check.code),
         }
       : null,
     researchIntegrity: state.researchIntegrity
@@ -4155,7 +4481,7 @@ function compactPublicState(state: LooseObject) {
   };
 }
 
-function dashboardCommands(workDir, qualityGap = null) {
+function dashboardCommands(workDir: string, qualityGap: any = null) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
@@ -4169,7 +4495,7 @@ function dashboardCommands(workDir, qualityGap = null) {
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     {
       label: "Doctor",
-      command: `node ${script} doctor --cwd ${cwd} --check-benchmark --check-installed`,
+      command: `node ${script} doctor --cwd ${cwd} --check-benchmark`,
     },
     { label: "Benchmark lint", command: `node ${script} benchmark-lint --cwd ${cwd}` },
     { label: "Benchmark inspect", command: `node ${script} benchmark-inspect --cwd ${cwd}` },
@@ -4206,7 +4532,6 @@ function runtimeProvenance(drift: LooseObject | null = null) {
     pluginVersion: PLUGIN_VERSION,
     sourceRoot: PLUGIN_ROOT,
     repoRoot: REPO_ROOT,
-    mcpEntrypoint: MCP_SCRIPT_PATH,
     installedCachePath:
       drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
     driftConfidence: drift ? (drift.ok === false ? "drift-detected" : "checked") : "source-only",
@@ -4214,10 +4539,10 @@ function runtimeProvenance(drift: LooseObject | null = null) {
 }
 
 function loopContinuation(
-  workDir,
-  state,
+  workDir: string,
+  state: any,
   config: LooseObject = {},
-  stage = "state",
+  stage: any = "state",
   options: LooseObject = {},
 ) {
   const mode = config.autonomyMode || "guarded";
@@ -4326,7 +4651,7 @@ function loopContinuation(
   };
 }
 
-function continuationCommands(workDir) {
+function continuationCommands(workDir: string) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   return {
@@ -4349,12 +4674,12 @@ function continuationCommands(workDir) {
   };
 }
 
-function currentQualityGapSlug(workDir) {
+function currentQualityGapSlug(workDir: string) {
   const researchRoot = path.join(workDir, RESEARCH_DIR);
   try {
     for (const entry of fs
       .readdirSync(researchRoot, { withFileTypes: true })
-      .sort((a, b) => a.name.localeCompare(b.name))) {
+      .sort((a: any, b: any) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue;
       if (fs.existsSync(path.join(researchRoot, entry.name, "quality-gaps.md"))) return entry.name;
     }
@@ -4408,7 +4733,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   });
   warnings.push(...drift.warnings);
 
-  const benchmark = {
+  const benchmark: LooseObject = {
     checked: false,
     command: args.command || "",
     emitsPrimary: null,
@@ -4465,17 +4790,17 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   }
 
   let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (issues.some((issue) => /contract changed/i.test(issue))) {
+  if (issues.some((issue: any) => /contract changed/i.test(issue))) {
     nextAction =
       "Start a new segment or explicitly invalidate the old evidence before running another packet.";
-  } else if (issues.some((issue) => /primary metric|Benchmark/.test(issue))) {
+  } else if (issues.some((issue: any) => /primary metric|Benchmark/.test(issue))) {
     nextAction =
       "Fix the benchmark command so it emits the configured primary metric before continuing.";
   } else if (state.runs === 0) {
     nextAction = "Run and log a baseline before trying optimizations.";
   } else if (state.limit.limitReached) {
     nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
-  } else if (warnings.some((warning) => /dirty/.test(String(warning)))) {
+  } else if (warnings.some((warning: any) => /dirty/.test(String(warning)))) {
     nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
@@ -4522,7 +4847,7 @@ function doctorExplanation(result: LooseObject): LooseObject {
       : "Doctor found issues that must be fixed before trusting the loop.",
     priorityFixes: [
       ...(result.issues || []),
-      ...(result.warnings || []).filter((warning) =>
+      ...(result.warnings || []).filter((warning: any) =>
         /dirty|drift|benchmark|missing|stale|commitPaths/i.test(String(warning)),
       ),
     ].slice(0, 5),
@@ -4548,7 +4873,7 @@ async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
     limitations: [
       "Codex hooks are experimental.",
       "Use them as reminders or context injection, not irreversible enforcement.",
-      "Current hook behavior is best suited to shell/Bash-style tool observations, not complete MCP/write/web-search coverage.",
+      "Current hook behavior is best suited to shell/Bash-style tool observations, not complete write/web-search coverage.",
       "Autoresearch core behavior must remain correct without hooks.",
     ],
     templates: {
@@ -4565,7 +4890,7 @@ async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
   };
 }
 
-async function newSegment(args) {
+async function newSegment(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
@@ -4599,7 +4924,7 @@ async function newSegment(args) {
   };
 }
 
-async function promoteGate(args) {
+async function promoteGate(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
@@ -4647,7 +4972,136 @@ async function promoteGate(args) {
   };
 }
 
-async function nextExperiment(args) {
+function promotionStateForPacket(run: LooseObject, state: LooseObject) {
+  const promotionGrade = promotionGradeValue({
+    metric: run.parsedPrimary,
+    metrics: run.parsedMetrics || {},
+  });
+  if (!run.ok) {
+    return {
+      label: "blocked",
+      reasons: [run.metricError || `Benchmark exit ${run.exitCode ?? "none"}`],
+    };
+  }
+  if (promotionGrade === true) {
+    return {
+      label: "promotion_eligible",
+      reasons: ["Packet carries explicit promotion-grade metadata."],
+    };
+  }
+  const best = state.development?.best;
+  const primary = finiteMetric(run.parsedPrimary);
+  const reasons = [
+    "New packet evidence is exploratory until repeat, holdout, breadth, or promotion-gate metadata is recorded.",
+  ];
+  if (primary != null && best != null && primary === best) {
+    reasons.push("Packet matches the current development best but is not promotion-grade.");
+  }
+  return { label: "exploratory", reasons };
+}
+
+function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
+  const packetSource = {
+    history,
+    command: run.command,
+    metrics: run.parsedMetrics || {},
+    exitStatus: run.exitCode ?? null,
+    artifacts: run.artifacts || {},
+  };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(packetSource), "utf8")
+    .digest("hex");
+  return {
+    packetId: `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`,
+    cwd: run.workDir,
+    commandIdentity: {
+      command: run.command || "",
+      commandFile: run.commandFile || "",
+      envFile: run.envFile || "",
+      envKeys: run.envKeys || [],
+      commandHash: run.command
+        ? createHash("sha256").update(run.command, "utf8").digest("hex")
+        : "",
+    },
+    timeoutSeconds: run.timeoutSeconds ?? null,
+    exitStatus: run.exitCode ?? null,
+    timedOut: Boolean(run.timedOut),
+    stdoutTail: run.tailOutput || run.progress?.latestOutputTail || "",
+    stderrTail: "",
+    metrics: run.parsedMetrics || {},
+    primaryMetric: run.parsedPrimary ?? null,
+    artifacts: artifactList(run.artifacts, run.workDir),
+    checks: run.checks
+      ? {
+          command: run.checks.command || "",
+          exitStatus: run.checks.exitCode ?? null,
+          timedOut: Boolean(run.checks.timedOut),
+          passed: run.checks.passed ?? null,
+        }
+      : null,
+    freshnessFingerprint: fingerprint,
+  };
+}
+
+function artifactList(artifacts: LooseObject = {}, workDir = "") {
+  return Object.entries(artifacts || {}).map(([name, artifactPath]) => ({
+    name,
+    path: String(artifactPath || ""),
+    exists: artifactExists(String(artifactPath || ""), workDir),
+  }));
+}
+
+function artifactExists(artifactPath: string, workDir: string) {
+  if (!artifactPath) return false;
+  const resolved = path.isAbsolute(artifactPath)
+    ? artifactPath
+    : path.resolve(workDir || process.cwd(), artifactPath);
+  return fs.existsSync(resolved);
+}
+
+function promotionStateForLoggedDecision({
+  status,
+  metric,
+  metrics = {},
+  packetPromotion = null,
+}: LooseObject) {
+  if (status === "keep") {
+    if (packetPromotion?.label) return packetPromotion;
+    if (promotionGradeValue({ metrics }) === true) {
+      return {
+        label: "promotion_eligible",
+        reasons: ["Logged keep carries explicit promotion-grade metadata."],
+      };
+    }
+    return finiteMetric(metric) == null
+      ? {
+          label: "blocked",
+          reasons: ["Kept decisions require a finite metric before promotion can be assessed."],
+        }
+      : {
+          label: "exploratory",
+          reasons: [
+            "Logged keep is exploratory until repeat, holdout, breadth, or promotion-gate metadata is recorded.",
+          ],
+        };
+  }
+  if (status === "discard") {
+    return {
+      label: "invalidated",
+      reasons: ["Logged as discard; metric evidence is retained but not promotable."],
+    };
+  }
+  return {
+    label: "blocked",
+    reasons: [
+      status === "checks_failed"
+        ? "Correctness checks failed; packet evidence is blocked from promotion."
+        : "Crash evidence is retained without sentinel metrics and is blocked from promotion.",
+    ],
+  };
+}
+
+async function nextExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const doctor = await doctorSession({
     ...args,
@@ -4659,8 +5113,8 @@ async function nextExperiment(args) {
       ok: false,
       workDir: doctor.workDir,
       doctor,
-      run: null,
-      decision: null,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
       nextAction: doctor.nextAction,
       continuation: loopContinuation(
         doctor.workDir,
@@ -4694,6 +5148,7 @@ async function nextExperiment(args) {
     lanePortfolio: memory.lanePortfolio,
     plateau: memory.plateau,
     novelty: memory.novelty,
+    promotion: promotionStateForPacket(run, stateBeforeLog),
     needsDecision: run.logHint.needsDecision,
     asiTemplate: run.ok
       ? {
@@ -4712,24 +5167,27 @@ async function nextExperiment(args) {
         },
   };
   const lastRunFile = await resolveLastRunPath(run.workDir);
+  const history = {
+    segment: stateBeforeLog.segment,
+    config: lastRunConfigSnapshot(stateBeforeLog.config),
+    command: run.command,
+    workDir: run.workDir,
+    currentRuns: stateBeforeLog.current.length,
+    totalRuns: stateBeforeLog.results.length,
+    nextRun: stateBeforeLog.results.length + 1,
+    benchmarkContract: run.benchmarkContract || null,
+    git: await lastRunGitSnapshot(run.workDir, config).catch((error: any) => ({
+      inside: null as boolean | null,
+      error: error.message || String(error),
+    })),
+  };
+  const packetEvidence = packetEvidenceForRun(run, history);
   const packet = {
     ok: doctor.ok && run.ok,
     workDir: run.workDir,
     lastRunPath: lastRunFile,
-    history: {
-      segment: stateBeforeLog.segment,
-      config: lastRunConfigSnapshot(stateBeforeLog.config),
-      command: run.command,
-      workDir: run.workDir,
-      currentRuns: stateBeforeLog.current.length,
-      totalRuns: stateBeforeLog.results.length,
-      nextRun: stateBeforeLog.results.length + 1,
-      benchmarkContract: run.benchmarkContract || null,
-      git: await lastRunGitSnapshot(run.workDir, config).catch((error) => ({
-        inside: null,
-        error: error.message || String(error),
-      })),
-    },
+    packetEvidence,
+    history,
     doctor,
     run,
     decision,
@@ -4757,6 +5215,7 @@ function compactNextExperimentPacket(packet: LooseObject) {
     ok: packet.ok,
     workDir: packet.workDir,
     lastRunPath: packet.lastRunPath,
+    packetEvidence: packet.packetEvidence,
     history: {
       segment: packet.history?.segment,
       currentRuns: packet.history?.currentRuns,
@@ -4793,6 +5252,7 @@ function compactNextExperimentPacket(packet: LooseObject) {
       allowedStatuses: decision.allowedStatuses || [],
       suggestedStatus: suggested,
       statusGuidance: decision.statusGuidance || "",
+      promotion: decision.promotion || null,
       asiTemplate: decision.asiTemplate || {},
       diversityGuidance: decision.diversityGuidance || null,
       plateau: decision.plateau || null,
@@ -4813,71 +5273,11 @@ function compactNextExperimentPacket(packet: LooseObject) {
   };
 }
 
-const mcpInterface = createMcpInterface({
-  boolOption,
-  benchmarkInspect,
-  benchmarkLint,
-  checksInspect,
-  clearSession,
-  configureSession,
-  doctorHooks,
-  doctorSession,
-  exportDashboard,
-  finalizeCurrentTree: buildFinalizeCurrentTree,
-  finalizePreview: buildFinalizePreview,
-  gapCandidates: buildGapCandidates,
-  guidedSetup,
-  initExperiment,
-  integrationsCommand,
-  logExperiment,
-  measureQualityGap,
-  newSegment,
-  nextExperiment,
-  onboardingPacket,
-  parseJsonOption,
-  parseJsonFileOption,
-  promoteGate,
-  promptPlan,
-  publicState,
-  recommendNext,
-  recipeCommand,
-  runExperiment,
-  serveDashboard,
-  setupPlan,
-  setupResearchSession,
-  setupSession,
-});
-const { callTool, toolSchemas, validateToolArguments } = mcpInterface;
-
-function startMcpServer() {
-  startMcpStdioServer({
-    callTool,
-    serverVersion: PLUGIN_VERSION,
-    toolSchemas,
-    validateToolArguments,
-  });
-}
-
-async function mcpSmoke() {
-  return await runMcpSmoke({
-    mcpScriptPath: MCP_SCRIPT_PATH,
-    pluginRoot: PLUGIN_ROOT,
-  });
-}
-
 async function main() {
   const args = parseCliArgs(process.argv.slice(2));
-  if (args.mcp) {
-    startMcpServer();
-    return;
-  }
   const command = args._[0];
   if (!command || args.help || command === "help") {
     console.log(usage());
-    return;
-  }
-  if (command === "mcp-smoke") {
-    console.log(JSON.stringify(await mcpSmoke(), null, 2));
     return;
   }
   const handlers = createCliCommandHandlers({
@@ -4932,7 +5332,7 @@ async function main() {
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 
-main().catch((error) => {
+main().catch((error: any) => {
   console.error(error.stack || error.message || String(error));
   process.exitCode = 1;
 });

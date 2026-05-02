@@ -25,11 +25,11 @@ const BUILT_IN_INTEGRATIONS = [
     id: "live-dashboard-readout",
     title: "Live dashboard readout",
     status: "available",
-    description: "Serves a local dashboard for fresh state while actions stay in CLI or MCP.",
+    description: "Serves a local dashboard for fresh state while actions stay in CLI.",
   },
 ];
 
-export async function integrationsCommand(subcommand, args: LooseObject = {}) {
+export async function integrationsCommand(subcommand: string | undefined, args: LooseObject = {}) {
   if (subcommand === "list" || !subcommand) {
     return { ok: true, integrations: BUILT_IN_INTEGRATIONS };
   }
@@ -45,11 +45,12 @@ export async function integrationsCommand(subcommand, args: LooseObject = {}) {
           description: `Loaded ${recipes.length} recipes from ${args.catalog}.`,
         });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         checks.push({
           id: "recipe-catalog-input",
           title: "Configured recipe catalog",
           status: "blocked",
-          description: error.message,
+          description: message,
         });
       }
     }

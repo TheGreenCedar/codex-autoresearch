@@ -7,6 +7,20 @@ import { parseQualityGaps, researchDirPath, safeSlug, RESEARCH_DIR } from "./ses
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
 type LooseObject = Record<string, any>;
+type GapCandidate = {
+  text: string;
+  source: string;
+  confidence: string;
+  impact: string;
+  validationHint: string;
+  origin: string;
+};
+type SlugCandidate = {
+  slug: string;
+  researchDir: string;
+  qualityGapsPath: string;
+};
+type QualityGap = { open: number; closed: number; total: number };
 
 export async function gapCandidates(args: LooseObject) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
@@ -112,7 +126,7 @@ export function resolveResearchSlugForQualityGapSync(
   throw error;
 }
 
-export function activeQualityGapSlugCandidatesSync(workDir = process.cwd()) {
+export function activeQualityGapSlugCandidatesSync(workDir = process.cwd()): SlugCandidate[] {
   const researchRoot = path.join(path.resolve(workDir), RESEARCH_DIR);
   if (!fs.existsSync(researchRoot)) return [];
   return fs
@@ -148,13 +162,13 @@ export function researchRoundGuidance() {
   };
 }
 
-async function candidatesFromSynthesis(researchDir) {
+async function candidatesFromSynthesis(researchDir: string): Promise<LooseObject[]> {
   const text = await readIfExists(path.join(researchDir, "synthesis.md"));
   if (!text.trim()) return [];
   const fenced = parseFencedCandidates(text);
   if (fenced.length) return fenced;
   const lines = text.split(/\r?\n/);
-  const out = [];
+  const out: LooseObject[] = [];
   let activeHeading = "";
   for (const raw of lines) {
     const heading = raw.match(/^#{2,3}\s+(.+)/);
@@ -180,7 +194,7 @@ async function candidatesFromSynthesis(researchDir) {
   return out;
 }
 
-function parseFencedCandidates(text) {
+function parseFencedCandidates(text: string): LooseObject[] {
   const match = text.match(/```(?:autoresearch-gap-candidates|json)\s*([\s\S]*?)```/i);
   if (!match) return [];
   const parsed = JSON.parse(match[1]);
@@ -189,7 +203,11 @@ function parseFencedCandidates(text) {
   return parsed;
 }
 
-async function candidatesFromModelCommand(command, cwd, timeoutSeconds) {
+async function candidatesFromModelCommand(
+  command: string | undefined,
+  cwd: string,
+  timeoutSeconds: number,
+): Promise<LooseObject[]> {
   if (!command) return [];
   const result = await runBoundedShell(command, cwd, timeoutSeconds);
   if (result.exitCode !== 0 || result.timedOut) {
@@ -201,7 +219,8 @@ async function candidatesFromModelCommand(command, cwd, timeoutSeconds) {
   try {
     parsed = JSON.parse(result.output);
   } catch (error) {
-    throw new Error(`model-command must print a JSON array of candidates: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`model-command must print a JSON array of candidates: ${message}`);
   }
   if (!Array.isArray(parsed))
     throw new Error("model-command must print a JSON array of candidates.");
@@ -212,13 +231,13 @@ async function candidatesFromModelCommand(command, cwd, timeoutSeconds) {
   return parsed.map((candidate) => ({ ...candidate, origin: candidate.origin || "model-command" }));
 }
 
-function numberOption(value, fallback) {
+function numberOption(value: unknown, fallback: number): number {
   if (value == null || value === "") return fallback;
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-function validateCandidate(candidate) {
+function validateCandidate(candidate: LooseObject): GapCandidate {
   const text = String(candidate.text || candidate.title || "").trim();
   if (!text) throw new Error("Gap candidate is missing text.");
   if (text.length > MAX_CANDIDATE_TEXT_LENGTH)
@@ -239,16 +258,16 @@ function validateCandidate(candidate) {
   };
 }
 
-function printableText(value) {
+function printableText(value: unknown): string {
   return Array.from(String(value || ""), (char) => {
     const code = char.charCodeAt(0);
     return code < 0x20 || code === 0x7f ? "" : char;
   }).join("");
 }
 
-async function appendCandidates(gapsPath, candidates) {
+async function appendCandidates(gapsPath: string, candidates: GapCandidate[]): Promise<void> {
   const existing = stripGeneratedCandidateSection(await readIfExists(gapsPath)).trimEnd();
-  const lines = [];
+  const lines: string[] = [];
   if (existing) lines.push(existing, "");
   if (candidates.length) {
     lines.push(
@@ -269,7 +288,7 @@ async function appendCandidates(gapsPath, candidates) {
   await fsp.writeFile(gapsPath, content ? `${content}\n` : "", "utf8");
 }
 
-function stripGeneratedCandidateSection(text) {
+function stripGeneratedCandidateSection(text: string): string {
   const start = "<!-- codex-autoresearch:generated-candidates -->";
   const end = "<!-- /codex-autoresearch:generated-candidates -->";
   if (text.includes(start) && text.includes(end)) {
@@ -286,11 +305,11 @@ function stripGeneratedCandidateSection(text) {
   return text;
 }
 
-function escapeRegex(value) {
+function escapeRegex(value: string): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function readIfExists(file) {
+async function readIfExists(file: string): Promise<string> {
   try {
     return await fsp.readFile(file, "utf8");
   } catch {
@@ -298,7 +317,7 @@ async function readIfExists(file) {
   }
 }
 
-function normalizeCandidateText(text) {
+function normalizeCandidateText(text: string): string {
   return String(text || "")
     .replace(/^\s*-\s*\[[ xX]\]\s*/, "")
     .replace(/(?:[.;]\s+|\s+-\s+)Evidence:\s+.*$/i, "")
@@ -308,7 +327,15 @@ function normalizeCandidateText(text) {
     .trim();
 }
 
-function candidateStopStatus({ candidates, qualityGap, applied }) {
+function candidateStopStatus({
+  candidates,
+  qualityGap,
+  applied,
+}: {
+  candidates: GapCandidate[];
+  qualityGap: QualityGap;
+  applied: boolean;
+}) {
   const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
   const open = Number(qualityGap?.open ?? 0);
   const total = Number(qualityGap?.total ?? 0);

@@ -1,10 +1,22 @@
 import http from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runProcess, tailText } from "./runner.js";
 
 type LooseObject = Record<string, any>;
+type DashboardActionPolicy = {
+  className: string;
+  allowedBodyKeys: string[];
+  timeoutSeconds?: number;
+};
+type DashboardActionResult = {
+  ok: boolean;
+  action: string;
+  [key: string]: any;
+};
+type AsiValidationResult = { ok: true; value: LooseObject } | { ok: false; error: string };
 
 const ACTION_NONCE_HEADER = "x-autoresearch-action-nonce";
 const ACTION_BODY_MAX_BYTES = 16 * 1024;
@@ -16,7 +28,7 @@ const LOG_ACTION_STATUS = new Map([
   ["log-crash", "crash"],
   ["log-checks-failed", "checks_failed"],
 ]);
-const DASHBOARD_ACTIONS = new Map([
+const DASHBOARD_ACTIONS = new Map<string, DashboardActionPolicy>([
   ["doctor", { className: "read", allowedBodyKeys: [] }],
   ["doctor-explain", { className: "read", allowedBodyKeys: [] }],
   ["onboarding-packet", { className: "read", allowedBodyKeys: [] }],
@@ -95,7 +107,7 @@ export async function serveAutoresearch(args: LooseObject) {
   const actionNonce = randomBytes(32).toString("base64url");
   const server = http.createServer(async (req, res) => {
     try {
-      const url = new URL(req.url, "http://127.0.0.1");
+      const url = new URL(req.url || "/", "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/") {
         send(
           res,
@@ -126,14 +138,14 @@ export async function serveAutoresearch(args: LooseObject) {
         return;
       }
       if (req.method === "POST" && url.pathname.startsWith("/actions/")) {
-        const action = url.pathname.split("/").at(-1);
+        const action = url.pathname.split("/").at(-1) || "";
         try {
           if (!actionsEnabled) {
             sendJson(
               res,
               actionErrorEnvelope(
                 action,
-                "Live dashboard actions are disabled. Use CLI or MCP for actions.",
+                "Live dashboard actions are disabled. Use CLI for actions.",
                 "actions_disabled",
               ),
               403,
@@ -157,7 +169,11 @@ export async function serveAutoresearch(args: LooseObject) {
           if (!admission.ok) {
             sendJson(
               res,
-              actionErrorEnvelope(action, admission.error, admission.code),
+              actionErrorEnvelope(
+                action,
+                admission.error || "Dashboard action request was rejected.",
+                admission.code || "action_request_invalid",
+              ),
               admission.status,
             );
             return;
@@ -212,15 +228,22 @@ export async function serveAutoresearch(args: LooseObject) {
   };
 }
 
-async function actionArgs(action, workDir, body) {
+async function actionArgs(action: string, workDir: string, body: LooseObject): Promise<string[]> {
   const factory = DASHBOARD_CLI_ACTIONS.get(action);
   if (factory) return await factory(workDir, body);
   if (LOG_ACTION_STATUS.has(action)) return logActionArgs(action, workDir, body);
   return [];
 }
 
-async function logActionArgs(action, workDir, body) {
+async function logActionArgs(
+  action: string,
+  workDir: string,
+  body: LooseObject,
+): Promise<string[]> {
   const status = LOG_ACTION_STATUS.get(action);
+  if (!status) {
+    throw new DashboardActionError(`Unsupported log action: ${action}`, 400, "log_action_unknown");
+  }
   if (body?.confirm !== action)
     throw new DashboardActionError(
       `Log actions require confirm="${action}".`,
@@ -238,9 +261,13 @@ async function logActionArgs(action, workDir, body) {
   }
   const asi = normalizeAsi(status, body.asi);
   if (!asi.ok) {
-    throw new DashboardActionError(asi.error, 400, "log_asi_invalid");
+    throw new DashboardActionError(
+      (asi as { ok: false; error: string }).error,
+      400,
+      "log_asi_invalid",
+    );
   }
-  const args = [
+  const args: string[] = [
     "log",
     "--cwd",
     workDir,
@@ -258,14 +285,14 @@ class DashboardActionError extends Error {
   code: string;
   statusCode: number;
 
-  constructor(message, statusCode = 400, code = "dashboard_action_invalid") {
+  constructor(message: string, statusCode = 400, code = "dashboard_action_invalid") {
     super(message);
     this.statusCode = statusCode;
     this.code = code;
   }
 }
 
-function validateActionRequest(req, { actionNonce }) {
+function validateActionRequest(req: IncomingMessage, { actionNonce }: { actionNonce: string }) {
   const nonce = req.headers[ACTION_NONCE_HEADER];
   if (nonce !== actionNonce) {
     return {
@@ -342,7 +369,7 @@ function validateActionRequest(req, { actionNonce }) {
   return { ok: true };
 }
 
-function sameLoopbackOrigin(origin, host) {
+function sameLoopbackOrigin(origin: string, host: string): boolean {
   try {
     const parsed = new URL(origin);
     return parsed.protocol === "http:" && parsed.host.toLowerCase() === host.toLowerCase();
@@ -351,7 +378,11 @@ function sameLoopbackOrigin(origin, host) {
   }
 }
 
-function validateActionBody(action, policy, body) {
+function validateActionBody(
+  action: string,
+  policy: DashboardActionPolicy,
+  body: LooseObject,
+): void {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new DashboardActionError(
       "Dashboard action body must be a JSON object.",
@@ -390,13 +421,13 @@ function validateActionBody(action, policy, body) {
   }
 }
 
-function normalizeAsi(status, value) {
+function normalizeAsi(status: string | undefined, value: unknown): AsiValidationResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, error: "Log actions require ASI JSON object evidence." };
   }
   const out: LooseObject = {};
   for (const key of ["hypothesis", "evidence", "rollback_reason", "next_action_hint"]) {
-    const text = String(value[key] || "").trim();
+    const text = String((value as LooseObject)[key] || "").trim();
     if (text) out[key] = text.slice(0, 4000);
   }
   if (status === "keep" && (!out.hypothesis || !out.evidence)) {
@@ -411,7 +442,7 @@ function normalizeAsi(status, value) {
   return { ok: true, value: out };
 }
 
-async function assertLastRunFingerprint(workDir, submitted) {
+async function assertLastRunFingerprint(workDir: string, submitted: unknown): Promise<void> {
   if (!submitted) {
     throw new DashboardActionError(
       "Log actions require the current last-run fingerprint.",
@@ -436,8 +467,8 @@ async function assertLastRunFingerprint(workDir, submitted) {
   }
 }
 
-async function currentLastRunFingerprint(workDir) {
-  const candidates = [];
+async function currentLastRunFingerprint(workDir: string): Promise<string> {
+  const candidates: string[] = [];
   const gitPath = await runProcess(
     "git",
     ["rev-parse", "--git-path", "autoresearch/last-run.json"],
@@ -446,7 +477,7 @@ async function currentLastRunFingerprint(workDir) {
       timeoutSeconds: 5,
       maxOutputBytes: 4096,
     },
-  ).catch(() => null);
+  ).catch((): null => null);
   if (gitPath?.exitCode === 0 && gitPath.stdout.trim())
     candidates.push(path.resolve(workDir, gitPath.stdout.trim()));
   candidates.push(path.join(workDir, "autoresearch.last-run.json"));
@@ -461,7 +492,7 @@ async function currentLastRunFingerprint(workDir) {
   return "";
 }
 
-async function firstResearchSlug(workDir) {
+async function firstResearchSlug(workDir: string): Promise<string> {
   const researchRoot = path.join(workDir, "autoresearch.research");
   try {
     const entries = await fsp.readdir(researchRoot, { withFileTypes: true });
@@ -480,7 +511,7 @@ async function firstResearchSlug(workDir) {
   return "";
 }
 
-async function readJsonBody(req, maxBytes) {
+async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<LooseObject> {
   let body = "";
   let bytes = 0;
   for await (const chunk of req) {
@@ -506,15 +537,21 @@ async function readJsonBody(req, maxBytes) {
     return parsed;
   } catch (error) {
     if (error instanceof DashboardActionError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
     throw new DashboardActionError(
-      `Malformed dashboard action JSON: ${error.message}`,
+      `Malformed dashboard action JSON: ${message}`,
       400,
       "body_malformed_json",
     );
   }
 }
 
-async function runDashboardCliAction(scriptPath, args, cwd, policy) {
+async function runDashboardCliAction(
+  scriptPath: string,
+  args: string[],
+  cwd: string,
+  policy: DashboardActionPolicy,
+) {
   return await runProcess(process.execPath, [scriptPath, ...args], {
     cwd,
     timeoutSeconds: policy.timeoutSeconds || DEFAULT_ACTION_TIMEOUT_SECONDS,
@@ -522,7 +559,11 @@ async function runDashboardCliAction(scriptPath, args, cwd, policy) {
   });
 }
 
-function actionResultEnvelope(action, cliArgs, result) {
+function actionResultEnvelope(
+  action: string,
+  cliArgs: string[],
+  result: LooseObject,
+): DashboardActionResult {
   const ok = result.exitCode === 0 && !result.timedOut;
   const parsed = parseJsonObject(result.stdout);
   const receipt = {
@@ -560,7 +601,12 @@ function actionResultEnvelope(action, cliArgs, result) {
   };
 }
 
-function actionErrorEnvelope(action, error, code = "dashboard_action_failed", details = null) {
+function actionErrorEnvelope(
+  action: string,
+  error: string,
+  code = "dashboard_action_failed",
+  details: LooseObject | null = null,
+): DashboardActionResult {
   return {
     ok: false,
     action,
@@ -578,7 +624,7 @@ function actionErrorEnvelope(action, error, code = "dashboard_action_failed", de
   };
 }
 
-function parseJsonObject(text) {
+function parseJsonObject(text: string): LooseObject | null {
   try {
     const parsed = JSON.parse(text || "");
     return parsed && typeof parsed === "object" ? parsed : null;
@@ -587,11 +633,11 @@ function parseJsonObject(text) {
   }
 }
 
-function sendJson(res, body, status = 200) {
+function sendJson(res: ServerResponse, body: LooseObject, status = 200): void {
   send(res, status, "application/json; charset=utf-8", JSON.stringify(body, null, 2));
 }
 
-function send(res, status, contentType, body) {
+function send(res: ServerResponse, status: number, contentType: string, body: string): void {
   res.writeHead(status, {
     "content-type": contentType,
     "cache-control": "no-store",

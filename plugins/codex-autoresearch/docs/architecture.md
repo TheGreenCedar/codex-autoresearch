@@ -1,6 +1,6 @@
 # Architecture Diagrams
 
-Autoresearch has one product surface and several implementation paths. The rule of thumb: the skill tells Codex how to behave, MCP/CLI execute bounded operations, and durable session files remain the source of truth. Everything else is plumbing, and plumbing only matters when it leaks.
+Autoresearch has one product surface and a CLI execution path. The rule of thumb: the skill tells Codex how to behave, the CLI executes bounded operations, and durable session files remain the source of truth. Everything else is plumbing, and plumbing only matters when it leaks.
 
 ## Runtime Surfaces
 
@@ -8,12 +8,9 @@ Autoresearch has one product surface and several implementation paths. The rule 
 flowchart TD
   U["Human in Codex"] --> S["codex-autoresearch skill"]
   A["Future AI / resumed context"] --> S
-  S --> MCP["MCP tools"]
-  S --> CLI["CLI fallback"]
-  MCP --> C["mcp-interface"]
+  S --> CLI["CLI commands"]
   CLI --> H["cli-handlers"]
-  C --> Core["session, runner, recipes, dashboard view-model"]
-  H --> Core
+  H --> Core["session, runner, recipes, dashboard view-model"]
   Core --> Files["autoresearch.md / jsonl / config / ideas / research"]
   Core --> Dash["Live dashboard server"]
   Dash --> Browser["Human-readable runboard"]
@@ -39,31 +36,29 @@ flowchart LR
 ```mermaid
 flowchart TD
   Scripts["scripts/*.ts"] --> CLI["Public CLI shims and command functions"]
-  Lib["lib/*.ts"] --> Core["Reusable session, MCP, runner, recipe, dashboard logic"]
+  Lib["lib/*.ts"] --> Core["Reusable session, runner, recipe, dashboard logic"]
   Dashboard["dashboard/src"] --> Assets["assets/dashboard-build"]
   Assets --> Export["Self-contained export HTML"]
   Docs["README + docs + skill"] --> Product["Human and AI onboarding contract"]
   Tests["tests/*.ts"] --> Gate["npm run check / npm test"]
 ```
 
-## MCP Tool Path
+## CLI Command Path
 
 ```mermaid
 sequenceDiagram
   participant Codex
-  participant MCP as autoresearch-mcp
-  participant Schema as mcp-tool-schemas
-  participant Interface as mcp-interface
-  participant CLI as CLI adapter
+  participant CLI as scripts/autoresearch.mjs
+  participant Handlers as cli-handlers
+  participant Schema as tool-schemas
   participant Core as Core functions
 
-  Codex->>MCP: tools/call
-  MCP->>Schema: normalize and validate args
-  Schema-->>MCP: typed arguments
-  MCP->>Interface: callTool(name, args)
-  Interface->>Core: in-process handler
-  Interface-->>Codex: structured result
-  Interface->>CLI: fallback command shape when needed
+  Codex->>CLI: command with flags
+  CLI->>Handlers: dispatch command
+  Handlers->>Schema: normalize CLI arguments
+  Schema-->>Handlers: runtime argument shape
+  Handlers->>Core: in-process handler
+  Core-->>Codex: JSON or text result
 ```
 
 ## Finalization

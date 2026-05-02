@@ -12,15 +12,16 @@ const node = process.execPath;
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
 
-const syntaxChecks = [
+type CommandSpec = [label: string, command: string, args: string[]];
+
+const syntaxChecks: CommandSpec[] = [
   ["syntax:autoresearch", node, ["--check", "scripts/autoresearch.mjs"]],
-  ["syntax:mcp", node, ["--check", "scripts/autoresearch-mcp.mjs"]],
   ["syntax:finalize", node, ["--check", "scripts/finalize-autoresearch.mjs"]],
   ["syntax:benchmark", node, ["--check", "scripts/perfection-benchmark.mjs"]],
   ["syntax:check", node, ["--check", "scripts/check.mjs"]],
 ];
 
-const productChecks = [
+const productChecks: CommandSpec[] = [
   ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
   ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
   ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
@@ -41,7 +42,7 @@ const productChecks = [
   ],
 ];
 
-const dashboardBuildChecks = [
+const dashboardBuildChecks: CommandSpec[] = [
   [
     "build:dashboard",
     node,
@@ -64,7 +65,6 @@ const dashboardAssets = [
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
-  "plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs",
 ];
 
 interface CommandResult {
@@ -97,7 +97,7 @@ const ok =
 
 process.exit(ok ? 0 : 1);
 
-async function runPhase(name, commands) {
+async function runPhase(name: string, commands: CommandSpec[]): Promise<boolean> {
   console.log(`\n== ${name} ==`);
   const results = await Promise.all(commands.map(runCommand));
   for (const result of results) {
@@ -114,7 +114,7 @@ async function runPhase(name, commands) {
   return results.every((result) => result.code === 0);
 }
 
-async function runDashboardBuildWithParity() {
+async function runDashboardBuildWithParity(): Promise<boolean> {
   const before = await dashboardAssetHashes();
   const buildOk = await runPhase("dashboard", dashboardBuildChecks);
   if (!buildOk) return false;
@@ -134,8 +134,8 @@ async function runDashboardBuildWithParity() {
   return true;
 }
 
-async function dashboardAssetHashes() {
-  const hashes = {};
+async function dashboardAssetHashes(): Promise<Record<string, string>> {
+  const hashes: Record<string, string> = {};
   for (const file of dashboardAssets) {
     const bytes = await fsp.readFile(path.join(ROOT, file));
     hashes[file] = createHash("sha256").update(bytes).digest("hex");
@@ -175,19 +175,23 @@ async function runPackageArtifactCheck() {
     const packedEntries = packageEntryMap(packInfo);
     const requiredPaths = [
       ".codex-plugin/plugin.json",
-      ".mcp.json",
       "assets/dashboard-build/dashboard-app.js",
       "docs/index.md",
-      "dist/lib/mcp-cli-adapter.mjs",
-      "dist/lib/mcp-interface.mjs",
-      "dist/lib/mcp-tool-schemas.mjs",
       "dist/lib/runtime-paths.mjs",
+      "dist/lib/tool-schemas.mjs",
       "dist/scripts/autoresearch.mjs",
-      "dist/scripts/autoresearch-mcp.mjs",
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
-      "scripts/autoresearch-mcp.mjs",
       "skills/codex-autoresearch/SKILL.md",
+    ];
+    const forbiddenPackagePaths = [
+      ".mcp.json",
+      "dist/scripts/autoresearch-mcp.mjs",
+      "scripts/autoresearch-mcp.mjs",
+      "dist/lib/mcp-cli-adapter.mjs",
+      "dist/lib/mcp-interface.mjs",
+      "dist/lib/mcp-protocol.mjs",
+      "dist/lib/mcp-stdio-server.mjs",
     ];
     const forbiddenPaths = [
       "dashboard/src/Dashboard.tsx",
@@ -197,7 +201,9 @@ async function runPackageArtifactCheck() {
     ];
 
     const missing = requiredPaths.filter((file) => !packedPaths.has(file));
-    const unexpected = forbiddenPaths.filter((file) => packedPaths.has(file));
+    const unexpected = [...forbiddenPaths, ...forbiddenPackagePaths].filter((file) =>
+      packedPaths.has(file),
+    );
     const leakedExamples = Array.from(packedPaths).filter((file) => file.startsWith("examples/"));
     const wrapperProblems = await packageWrapperProblems(packedEntries);
 
@@ -264,10 +270,7 @@ function normalizedPackagePath(entry: PackageEntry) {
 }
 
 async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {
-  const wrappers = [
-    ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
-    ["scripts/autoresearch-mcp.mjs", 'ensureRuntime("autoresearch-mcp.mjs"'],
-  ];
+  const wrappers = [["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"']];
   const problems: string[] = [];
 
   for (const [file, target] of wrappers) {
@@ -308,6 +311,7 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
     'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
     "tar",
     "dist",
+    "Run `node scripts/autoresearch.mjs --help`",
   ]) {
     if (!bootstrap.includes(expected)) {
       problems.push(`scripts/bootstrap-runtime.mjs should contain ${expected}`);
@@ -360,7 +364,7 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
   const smoke = await runCommand([
     "package-runtime-smoke",
     node,
-    [path.join(extractDir, "package", "scripts", "autoresearch.mjs"), "mcp-smoke"],
+    [path.join(extractDir, "package", "scripts", "autoresearch.mjs"), "--help"],
   ]);
   if (smoke.code !== 0) {
     console.log("fail package-runtime-smoke");
@@ -369,22 +373,13 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
     return false;
   }
 
-  try {
-    const payload = JSON.parse(smoke.stdout);
-    if (
-      payload?.ok &&
-      payload?.initialize?.serverInfo?.name === "codex-autoresearch" &&
-      Number(payload.toolCount) > 0
-    ) {
-      console.log("ok package-runtime-smoke");
-      return true;
-    }
-  } catch {
-    // Report the raw output below.
+  if (smoke.stdout.includes("Codex Autoresearch") && smoke.stdout.includes("Usage:")) {
+    console.log("ok package-runtime-smoke");
+    return true;
   }
 
   console.log("fail package-runtime-smoke");
-  console.log(indent(smoke.stdout.trim() || "Package smoke output was not valid MCP smoke JSON."));
+  console.log(indent(smoke.stdout.trim() || "Package smoke output did not include CLI help."));
   return false;
 }
 
@@ -617,7 +612,7 @@ async function runSourceCheckoutLauncherCheck() {
   return true;
 }
 
-function runCommand([label, command, args]): Promise<CommandResult> {
+function runCommand([label, command, args]: CommandSpec): Promise<CommandResult> {
   return new Promise((resolve) => {
     const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
     const child = spawn(command, args, {
@@ -643,7 +638,7 @@ function runCommand([label, command, args]): Promise<CommandResult> {
   });
 }
 
-function indent(text) {
+function indent(text: string): string {
   return text
     .split(/\r?\n/)
     .map((line) => `  ${line}`)

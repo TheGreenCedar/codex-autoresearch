@@ -21,7 +21,7 @@ export async function buildScaffoldHealth({
   ];
   const gitLock = await gitIndexLockHealth(workDir);
   if (gitLock) checks.push(gitLock);
-  const dirtyFiles = await classifyDirtyFiles(workDir, config).catch(() => null);
+  const dirtyFiles = await classifyDirtyFiles(workDir, config).catch((): null => null);
   const blockers = checks.filter((check) => check.severity === "blocker");
   return {
     ok: blockers.length === 0,
@@ -337,7 +337,7 @@ async function gitIndexLockHealth(workDir: string) {
   if (!gitPath.ok || !gitPath.stdout.trim()) return null;
   const lockPath = path.resolve(workDir, gitPath.stdout.trim());
   if (!fs.existsSync(lockPath)) return null;
-  const stat = await fsp.stat(lockPath).catch(() => null);
+  const stat = await fsp.stat(lockPath).catch((): null => null);
   const ageSeconds = stat ? Math.max(0, Math.round((Date.now() - stat.mtimeMs) / 1000)) : null;
   return {
     code: "git_index_lock",

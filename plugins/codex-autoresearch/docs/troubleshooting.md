@@ -4,16 +4,15 @@ Find the failing layer first. Do not mash retry like a vending machine button wh
 
 | Symptom | Likely Layer | What To Do |
 | --- | --- | --- |
-| MCP tools do not appear | Codex session or installed cache | Run `node scripts/autoresearch.mjs mcp-smoke`, then inspect `codex mcp get codex-autoresearch`. |
-| `mcp-smoke` fails | Local MCP entrypoint | Check `.mcp.json`, `scripts/autoresearch-mcp.mjs`, startup noise, and schema imports. |
-| Source differs from Codex behavior | Installed runtime drift | Compare source version to `codex mcp get codex-autoresearch`; refresh installed plugin/cache before changing source again. |
+| CLI command is missing or fails before loading runtime | Source checkout missing `dist/` | Run `node scripts/autoresearch.mjs --help` from the plugin directory once to hydrate the matching release runtime. |
+| Source differs from Codex behavior | Installed runtime drift | Refresh the installed plugin/cache before changing source again. |
 | Benchmark has no primary metric | Benchmark contract | Run `benchmark-lint`; repair output to `METRIC <primary>=<number>`. |
 | Benchmark parses but is not promotable | Research integrity | Inspect `researchIntegrity`; add repeat/holdout/freshness/promotion metadata before treating a dev best as final. |
 | Perfect metric looks too good | Evaluator contamination or cache replay | Treat it as suspicious until breadth, freshness, holdout/adversarial coverage, and repeat evidence are present. |
 | Current benchmark is far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor/check-benchmark and start a new segment if the old phase is stale. |
 | Setup wrapper loops forever or calls itself | Scaffold health | Inspect `scaffoldHealth`; replace the self-recursive wrapper with the real workload or rerun setup with `--benchmark-command`. |
 | Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL for fresh state. |
-| Dashboard looks actionable but does not mutate | Product contract | The dashboard is a readout. Use CLI or MCP for setup, packet runs, logging, gap review, export, and finalization preview. |
+| Dashboard looks actionable but does not mutate | Product contract | The dashboard is a readout. Use CLI for setup, packet runs, logging, gap review, export, and finalization preview. |
 | Last packet will not log | Packet freshness | Rerun `next`; the ledger, config, command, working directory, Git, or relevant file fingerprint changed. |
 | Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or intentionally use `--allow-add-all`. |
 | Configured commit paths are missing | Stale config | Update `autoresearch.config.json` or pass explicit paths on the next log. |
@@ -45,5 +44,5 @@ node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 For this repo, run from the wrapper root:
 
 ```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
+node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 ```

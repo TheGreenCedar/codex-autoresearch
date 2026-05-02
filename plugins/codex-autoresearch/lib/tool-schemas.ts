@@ -11,15 +11,7 @@ type JsonSchema = {
   required?: string[];
   items?: JsonSchema;
 };
-type ToolSchema = {
-  name: string;
-  description: string;
-  inputSchema: JsonSchema;
-  outputSchema?: JsonSchema;
-  annotations?: Record<string, JsonValue | undefined>;
-};
-
-const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
+const ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
 
 const LOOP_INTENT_PROPERTIES = {
   name: { type: "string" },
@@ -525,13 +517,6 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-export const mcpToolSchemas = toolSchemas.map((tool) =>
-  toMcpToolSchema(tool, { includeContracts: true }),
-);
-export const mcpToolSchemasWithContracts = toolSchemas.map((tool) =>
-  toMcpToolSchema(tool, { includeContracts: true }),
-);
-
 const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   setup: "setup_session",
   "setup-plan": "setup_plan",
@@ -604,7 +589,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   working_dir: "cwd",
 };
 
-export function validateToolArguments(name: string, args, options: ToolArgs = {}) {
+export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {
   const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
@@ -622,7 +607,7 @@ export function validateToolArguments(name: string, args, options: ToolArgs = {}
     if (value == null) continue;
     assertSchemaArgument(key, value, property);
   }
-  inferMcpResearchSlug(name, normalized);
+  inferActiveResearchSlug(name, normalized);
   return normalized;
 }
 
@@ -665,7 +650,11 @@ export function normalizeCliCommandArguments(command: string, args: ToolArgs = {
   return normalizeRuntimeToolArguments(toolName, args);
 }
 
-export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoolOption) {
+export function requireUnsafeCommandGate(
+  toolName: string,
+  args: ToolArgs = {},
+  boolOption = defaultBoolOption,
+) {
   const normalized: ToolArgs = normalizeToolArguments(toolName, args);
   const setupCatalogCanMaterializeCommands =
     (toolName === "setup_plan" || toolName === "guided_setup") && Boolean(normalized.catalog);
@@ -681,13 +670,13 @@ export function requireUnsafeCommandGate(toolName, args, boolOption = defaultBoo
   );
   if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
     throw new Error(
-      `${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`,
+      `${toolName} custom shell commands require allow_unsafe_command=true. Prefer a configured autoresearch script when possible.`,
     );
   }
 }
 
-function inferMcpResearchSlug(name: string, normalized: ToolArgs) {
-  if (!MCP_ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
+function inferActiveResearchSlug(name: string, normalized: ToolArgs) {
+  if (!ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
   if (normalized.research_slug != null && normalized.research_slug !== "") return;
   normalized.research_slug = resolveResearchSlugForQualityGapSync(
     normalized,
@@ -718,18 +707,6 @@ function assertSchemaArgument(key: string, value: unknown, property: Record<stri
 
 function isObjectArgument(value: unknown) {
   return typeof value === "object" && !Array.isArray(value);
-}
-
-export function toMcpToolSchema(tool: ToolSchema, options: ToolArgs = {}) {
-  const schema: ToolSchema = {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-  };
-  if (!options.includeContracts) return schema;
-  if (tool.outputSchema) schema.outputSchema = tool.outputSchema;
-  if (tool.annotations) schema.annotations = tool.annotations;
-  return schema;
 }
 
 function toCamel(value: string) {

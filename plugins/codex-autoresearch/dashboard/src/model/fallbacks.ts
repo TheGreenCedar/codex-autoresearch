@@ -1,4 +1,9 @@
-import type { DashboardViewModel, MissionControlModel, SessionSegment } from "../types";
+import type {
+  AiSummaryModel,
+  DashboardViewModel,
+  MissionControlModel,
+  SessionSegment,
+} from "../types";
 import { asiText } from "./asi";
 import { statusCounts } from "./status";
 
@@ -38,7 +43,10 @@ export function fallbackMissionControl(viewModel: DashboardViewModel): MissionCo
   };
 }
 
-export function fallbackAiSummary(session: SessionSegment, viewModel: DashboardViewModel) {
+export function fallbackAiSummary(
+  session: SessionSegment,
+  viewModel: DashboardViewModel,
+): AiSummaryModel {
   const runs = session.runs || [];
   const counts = statusCounts(runs);
   const latest = runs.at(-1);

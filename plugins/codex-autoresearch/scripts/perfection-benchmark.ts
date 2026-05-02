@@ -7,11 +7,14 @@ import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
 
-async function readText(file) {
+type LooseObject = Record<string, any>;
+type CheckResult = { ok: boolean; message: string };
+
+async function readText(file: string): Promise<string> {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
-async function readOptionalText(file) {
+async function readOptionalText(file: string): Promise<string> {
   try {
     return await readText(file);
   } catch {
@@ -19,7 +22,7 @@ async function readOptionalText(file) {
   }
 }
 
-async function readDashboardSurface() {
+async function readDashboardSurface(): Promise<string> {
   const files = [
     "assets/template.html",
     ...(await listDashboardSourceFiles()),
@@ -30,7 +33,7 @@ async function readDashboardSurface() {
   return parts.join("\n");
 }
 
-async function listDashboardSourceFiles(dir = "dashboard/src") {
+async function listDashboardSourceFiles(dir = "dashboard/src"): Promise<string[]> {
   const absoluteDir = path.join(pluginRoot, dir);
   const entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
   const files = await Promise.all(
@@ -44,15 +47,15 @@ async function listDashboardSourceFiles(dir = "dashboard/src") {
   return files.flat().sort();
 }
 
-async function readRootText(file) {
+async function readRootText(file: string): Promise<string> {
   return await fsp.readFile(path.join(repoRoot, file), "utf8");
 }
 
-async function readJson(file) {
+async function readJson(file: string): Promise<LooseObject> {
   return JSON.parse(await readText(file));
 }
 
-async function fileExists(file) {
+async function fileExists(file: string): Promise<boolean> {
   try {
     await fsp.access(path.join(pluginRoot, file));
     return true;
@@ -61,7 +64,7 @@ async function fileExists(file) {
   }
 }
 
-async function markdownFilesUnder(dir) {
+async function markdownFilesUnder(dir: string): Promise<string[]> {
   const absolute = path.join(pluginRoot, dir);
   try {
     const entries = await fsp.readdir(absolute, { withFileTypes: true });
@@ -73,10 +76,10 @@ async function markdownFilesUnder(dir) {
   }
 }
 
-async function skillFiles() {
+async function skillFiles(): Promise<string[]> {
   const skillsRoot = path.join(pluginRoot, "skills");
-  const found = [];
-  async function walk(dir) {
+  const found: string[] = [];
+  async function walk(dir: string): Promise<void> {
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const next = path.join(dir, entry.name);
@@ -89,79 +92,58 @@ async function skillFiles() {
   return found.sort();
 }
 
-function includesAll(text, values) {
+function includesAll(text: string, values: string[]): boolean {
   return values.every((value) => text.includes(value));
 }
 
-function hasRegex(text, pattern) {
+function hasRegex(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
 }
 
-function fail(message) {
+function fail(message: string): CheckResult {
   return { ok: false, message };
 }
 
-function pass(message = "") {
+function pass(message = ""): CheckResult {
   return { ok: true, message };
 }
 
 const checks = [
   {
     id: "version-sync",
-    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs, scripts/autoresearch-mcp.mjs, scripts/autoresearch.ts, scripts/autoresearch-mcp.ts, lib/mcp-stdio-server.ts",
+    file: "package.json, .codex-plugin/plugin.json, scripts/autoresearch.mjs, scripts/autoresearch.ts",
     description: "All public version surfaces expose the same plugin version.",
     run: async () => {
       const pkg = await readJson("package.json");
       const manifest = await readJson(".codex-plugin/plugin.json");
       const cli = await readText("scripts/autoresearch.ts");
-      const cliServer = await readText("lib/mcp-stdio-server.ts");
-      const mcp = await readText("scripts/autoresearch-mcp.ts");
       const cliVersionBound =
         cli.includes('from "../lib/plugin-version.js"') &&
-        /pluginVersion:\s*PLUGIN_VERSION/.test(cli) &&
-        /serverVersion:\s*PLUGIN_VERSION/.test(cli) &&
-        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*serverVersion/.test(
-          cliServer,
-        );
-      const mcpVersionBound =
-        mcp.includes('from "../lib/plugin-version.js"') &&
-        /serverInfo:\s*\{\s*name:\s*"codex-autoresearch",\s*version:\s*PLUGIN_VERSION/.test(mcp);
-      if (
-        pkg.version === manifest.version &&
-        pkg.version === PLUGIN_VERSION &&
-        cliVersionBound &&
-        mcpVersionBound
-      )
+        /pluginVersion:\s*PLUGIN_VERSION/.test(cli);
+      if (pkg.version === manifest.version && pkg.version === PLUGIN_VERSION && cliVersionBound)
         return pass();
       return fail(
-        `package=${pkg.version}, manifest=${manifest.version}, CLI version-bound=${cliVersionBound}, MCP version-bound=${mcpVersionBound}, shared=${PLUGIN_VERSION}`,
+        `package=${pkg.version}, manifest=${manifest.version}, CLI version-bound=${cliVersionBound}, shared=${PLUGIN_VERSION}`,
       );
     },
   },
   {
-    id: "local-mcp-config",
-    file: ".mcp.json",
-    description:
-      "The local MCP server starts through the lightweight entrypoint and exposes the one-packet next flow.",
+    id: "no-mcp-surface",
+    file: ".codex-plugin/plugin.json, package.json, scripts/autoresearch.ts",
+    description: "The plugin is CLI/skill-only and does not declare an MCP server.",
     run: async () => {
-      const config = await readJson(".mcp.json");
-      const server = config.mcpServers?.["codex-autoresearch"];
-      if (!server) return fail("codex-autoresearch MCP server is missing");
-      const args = Array.isArray(server.args) ? server.args.join(" ") : "";
-      const note = String(server.note || "");
-      if (
-        server.cwd === "." &&
-        args.includes("./scripts/autoresearch-mcp.mjs") &&
-        Number(server.startup_timeout_sec) >= 30 &&
-        note.includes("next_experiment") &&
-        note.includes("setup_research_session") &&
-        note.includes("measure_quality_gap")
-      ) {
-        return pass();
-      }
-      return fail(
-        "MCP config should use cwd='.', the lightweight startup script, startup_timeout_sec, and mention next_experiment plus research tools.",
-      );
+      const manifest = await readJson(".codex-plugin/plugin.json");
+      const pkg = await readJson("package.json");
+      const cli = await readText("scripts/autoresearch.ts");
+      const noConfig = !(await fileExists(".mcp.json"));
+      const packageFiles = (pkg.files || []).join("\n");
+      return noConfig &&
+        !manifest.mcpServers &&
+        !packageFiles.includes(".mcp.json") &&
+        !cli.includes("mcp-smoke") &&
+        !cli.includes("--mcp")
+        ? pass()
+        : fail("MCP declaration, package entry, or CLI server command is still present.");
     },
   },
   {
@@ -271,7 +253,6 @@ const checks = [
         readText("docs/trust.md"),
         readText("docs/workflows.md"),
         readText("docs/architecture.md"),
-        readText("docs/mcp-tools.md"),
         readText("docs/maintainers.md"),
         readText("examples/index.md"),
         readText("examples/demo-session/demo.md"),
@@ -295,12 +276,12 @@ const checks = [
           "Architecture Diagrams",
           "METRIC name=value",
           "quality_gap",
-          "prompt_plan",
-          "serve_dashboard",
+          "prompt-plan",
+          "serve --cwd",
           "gap-candidates",
           "finalize-preview",
-          "Use CLI or MCP for actions and logging",
-          "Tool calls return structured content",
+          "Use the CLI for actions and logging",
+          "CLI commands return structured content",
           "specification-delight-roadmap",
         ])
         ? pass()
@@ -335,9 +316,9 @@ const checks = [
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(skill, [
         "## Start Or Resume",
-        "setup_plan",
-        "setup_session",
-        "doctor_session",
+        "setup-plan",
+        "setup",
+        "doctor",
         "directly provide the live dashboard URL",
         "session start and resume",
         "http://127.0.0.1:<port>/",
@@ -364,10 +345,10 @@ const checks = [
         "quality_gap=0 only means",
         "filter hallucinations",
         "## Dashboard",
-        "serve_dashboard",
+        "serve --cwd <project>",
         "Static exports are read-only",
         "## Finalize",
-        "finalize_preview",
+        "finalize-preview",
         "Runway order",
       ])
         ? pass()
@@ -376,32 +357,33 @@ const checks = [
   },
   {
     id: "active-loop-continuation-contract",
-    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.ts",
+    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/tool-schemas.ts",
     description:
       "Owner-autonomous loops expose and document a machine-readable continuation contract after each packet.",
     run: async () => {
       const readme = await readRootText("README.md");
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       const cli = await readText("scripts/autoresearch.ts");
-      const mcp = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}`;
-      return includesAll(`${readme}\n${skill}\n${cli}\n${mcp}`, [
+      const contracts = await readText("lib/tool-schemas.ts");
+      return includesAll(`${readme}\n${skill}\n${cli}\n${contracts}`, [
         "continuation.shouldContinue",
         "continuation.forbidFinalAnswer",
         "loopContinuation",
         "active-loop continuation contract",
       ])
         ? pass()
-        : fail("Missing active-loop continuation docs or CLI/MCP continuation output.");
+        : fail("Missing active-loop continuation docs or CLI continuation output.");
     },
   },
   {
-    id: "research-cli-and-mcp",
-    file: "scripts/autoresearch.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.ts",
-    description: "CLI help and MCP schema expose research setup and quality-gap measurement.",
+    id: "research-cli",
+    file: "scripts/autoresearch.mjs, lib/tool-schemas.ts",
+    description:
+      "CLI help and internal tool schemas expose research setup and quality-gap measurement.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.ts");
-      const mcp = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}`;
-      return includesAll(`${cli}\n${mcp}`, [
+      const contracts = await readText("lib/tool-schemas.ts");
+      return includesAll(`${cli}\n${contracts}`, [
         "research-setup --cwd <project>",
         "quality-gap --cwd <project>",
         "setup_research_session",
@@ -409,7 +391,7 @@ const checks = [
         "METRIC quality_closed",
       ])
         ? pass()
-        : fail("CLI/MCP research commands are not fully exposed.");
+        : fail("CLI research commands are not fully exposed.");
     },
   },
   {
@@ -430,7 +412,7 @@ const checks = [
     description: "Marketplace prompts point to the plugin, not subskills or slash commands.",
     run: async () => {
       const manifest = await readJson(".codex-plugin/plugin.json");
-      const prompts = manifest.interface?.defaultPrompt || [];
+      const prompts = (manifest.interface?.defaultPrompt || []) as string[];
       const promptText = prompts.join("\n");
       return prompts.length <= 3 &&
         prompts.every((prompt) => prompt.length < 128) &&
@@ -458,7 +440,6 @@ const checks = [
       const pkg = await readJson("package.json");
       const packageFiles = (pkg.files || []).join("\n");
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
-      const mcpLauncher = await readText("scripts/autoresearch-mcp.mjs");
       const bootstrap = await readText("scripts/bootstrap-runtime.mjs");
       const release = await readRootText(".github/workflows/release.yml");
       const tagPushTrigger = /push:\s*\n\s*tags:/m.test(release);
@@ -469,30 +450,30 @@ const checks = [
           "dist/scripts/",
           "scripts/*.mjs",
           ".codex-plugin/",
-          ".mcp.json",
         ]) &&
         autoresearchLauncher.includes("./bootstrap-runtime.mjs") &&
         autoresearchLauncher.includes('ensureRuntime("autoresearch.mjs"') &&
-        mcpLauncher.includes("./bootstrap-runtime.mjs") &&
-        mcpLauncher.includes('ensureRuntime("autoresearch-mcp.mjs"') &&
+        !packageFiles.includes(".mcp.json") &&
+        !packageFiles.includes("autoresearch-mcp") &&
         includesAll(bootstrap, [
           "github.com/TheGreenCedar/codex-autoresearch/releases/download",
           'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
           "package.json",
           "tar",
           "dist",
+          "Run `node scripts/autoresearch.mjs --help`",
         ]) &&
         includesAll(release, [
           "workflow_dispatch:",
           "gh release create",
           '--target "$GITHUB_SHA"',
           "npm pack",
-          "mcp-smoke",
+          "--help",
           "codex-autoresearch-${VERSION}.tgz",
         ])
         ? pass()
         : fail(
-            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, launchers should bootstrap missing dist from the matching GitHub release tarball, and release CI should smoke the tarball before creating the release tag.",
+            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, the CLI launcher should bootstrap missing dist from the matching GitHub release tarball, no MCP launcher/config should ship, and release CI should smoke the tarball before creating the release tag.",
           );
     },
   },
@@ -688,14 +669,14 @@ const checks = [
   },
   {
     id: "full-product-cli-surface",
-    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/mcp-interface.mjs, lib/mcp-tool-schemas.ts, lib/mcp-protocol.ts",
+    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/tool-schemas.ts",
     description:
-      "CLI and MCP expose guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
+      "CLI exposes guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.ts");
       const cliHandlers = await readText("lib/cli-handlers.ts");
-      const mcpInterface = `${await readText("lib/mcp-interface.ts")}\n${await readText("lib/mcp-tool-schemas.ts")}\n${await readText("lib/mcp-protocol.ts")}`;
-      return includesAll(cli + cliHandlers + mcpInterface, [
+      const contracts = await readText("lib/tool-schemas.ts");
+      return includesAll(cli + cliHandlers + contracts, [
         "setup-plan --cwd <project>",
         "prompt-plan --cwd <project>",
         "onboarding-packet --cwd <project>",
@@ -713,11 +694,6 @@ const checks = [
         "onboarding_packet",
         "recommend_next",
         "serve_dashboard",
-        "resources/list",
-        "resources/templates/list",
-        "prompts/list",
-        "autoresearch://state",
-        "first-valid-loop",
         "benchmark_lint",
         "checks_inspect",
         "new_segment",
@@ -725,7 +701,7 @@ const checks = [
         "finalize_preview",
       ])
         ? pass()
-        : fail("Missing one or more full-product CLI/MCP surfaces.");
+        : fail("Missing one or more full-product CLI surfaces.");
     },
   },
   {
@@ -737,10 +713,7 @@ const checks = [
         "lib/session-core.ts",
         "lib/runner.ts",
         "lib/cli-handlers.ts",
-        "lib/mcp-interface.ts",
-        "lib/mcp-tool-schemas.ts",
-        "lib/mcp-cli-adapter.ts",
-        "lib/mcp-protocol.ts",
+        "lib/tool-schemas.ts",
         "lib/recipes.ts",
         "lib/dashboard-view-model.ts",
         "lib/research-gaps.ts",
@@ -770,10 +743,8 @@ const checks = [
         "gap-candidates",
         "finalize-preview",
         "visual aid",
-        "Use CLI or MCP",
-        "serve_dashboard",
-        "autoresearch://state",
-        "first-valid-loop",
+        "Use the CLI",
+        "live dashboard URL",
         "recipes",
       ])
         ? pass()
@@ -791,16 +762,13 @@ const checks = [
         "runner parses metrics",
         "catalog recipes can drive setup-plan",
         "delight commands provide compact state",
-        "MCP exposes onboarding",
+        "CLI exposes onboarding",
         "setup-plan",
         "gap-candidates",
         "finalize-preview",
         "integrations",
         "live server",
-        "serve_dashboard",
-        "resources/list",
-        "resources/templates/list",
-        "prompts/get",
+        "CLI owns mutations",
       ])
         ? pass()
         : fail("Missing focused full-product regression tests.");
@@ -814,7 +782,8 @@ for (const check of checks) {
     const outcome = await check.run();
     results.push({ ...check, ...outcome });
   } catch (error) {
-    results.push({ ...check, ok: false, message: error.message || String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    results.push({ ...check, ok: false, message });
   }
 }
 

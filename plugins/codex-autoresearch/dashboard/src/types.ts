@@ -92,6 +92,21 @@ export interface EvidenceChip {
   [key: string]: unknown;
 }
 
+export interface EvidenceReadoutModel {
+  label?: string;
+  title?: string;
+  promotable?: boolean;
+  reasons?: string[];
+  [key: string]: unknown;
+}
+
+export interface ProofGapModel {
+  label?: string;
+  detail?: string;
+  nextAction?: string;
+  [key: string]: unknown;
+}
+
 export interface NextBestAction {
   priority?: string;
   title?: string;
@@ -256,6 +271,8 @@ export interface DashboardViewModel {
   trustWarnings?: unknown;
   warnings?: unknown;
   evidenceChips?: EvidenceChip[];
+  evidenceReadout?: EvidenceReadoutModel;
+  proofGaps?: ProofGapModel[];
   readout?: {
     nextAction?: string;
     confidenceText?: string;

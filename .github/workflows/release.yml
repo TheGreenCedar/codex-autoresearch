@@ -40,8 +40,8 @@ jobs:
       - name: Run full check gate
         run: npm run check
 
-      - name: Run MCP smoke test
-        run: node scripts/autoresearch.mjs mcp-smoke
+      - name: Run CLI smoke test
+        run: node scripts/autoresearch.mjs --help
 
   publish:
     needs: test
@@ -122,7 +122,7 @@ jobs:
           test -f "$tarball"
           mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" mcp-smoke
+          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
 
       - name: Create GitHub release with tarball
         env:

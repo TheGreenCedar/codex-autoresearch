@@ -11,7 +11,6 @@ import {
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
-import { callMcpRequest as callMcpRequestWithServer } from "./helpers/mcp.js";
 import {
   createCliRunner,
   createInteractiveCliRunner,
@@ -42,21 +41,6 @@ const withLiveServer = (dir, fn) => {
     },
   );
 };
-
-async function callMcpTool(name, args) {
-  return await callMcpRequest("tools/call", { name, arguments: args });
-}
-
-async function callMcpRequest(method, params = {}) {
-  const response = await callMcpRequestWithServer({
-    args: [cli, "--mcp"],
-    cwd: pluginRoot,
-    method,
-    params,
-  });
-  assert.equal(response.id, 1);
-  return response;
-}
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
   await withTempDir("session-core", async (dir) => {
@@ -231,10 +215,17 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(inspectPayload.ranCommand, false);
     assert.match(inspectPayload.hints.join("\n"), /METRIC score=<number>/);
 
-    const checksInspect = await runCli(["checks-inspect", "--cwd", dir]);
+    const checksInspect = await runCli([
+      "checks-inspect",
+      "--cwd",
+      dir,
+      "--command",
+      `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    ]);
     assert.equal(checksInspect.code, 0, checksInspect.stderr);
     const checksInspectPayload = JSON.parse(checksInspect.stdout);
-    assert.equal(checksInspectPayload.ranCommand, false);
+    assert.equal(checksInspectPayload.ranCommand, true);
+    assert.equal(checksInspectPayload.ok, true);
     assert.match(checksInspectPayload.hints.join("\n"), /Cargo/);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
@@ -399,21 +390,18 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
   });
 });
 
-test("MCP setup_session can use recipe defaults without explicit name and metric", async () => {
-  await withTempDir("mcp-recipe-setup", async (dir) => {
-    const response = await callMcpTool("setup_session", {
-      working_dir: dir,
-      recipe_id: "memory-usage",
-    });
-    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
-    const payload = JSON.parse(response.result.content[0].text);
+test("CLI setup can use recipe defaults without explicit name and metric", async () => {
+  await withTempDir("cli-recipe-setup", async (dir) => {
+    const setup = await runCli(["setup", "--cwd", dir, "--recipe", "memory-usage"]);
+    assert.equal(setup.code, 0, setup.stderr);
+    const payload = JSON.parse(setup.stdout);
     assert.equal(payload.init.config.metricName, "rss_mb");
   });
 });
 
-test("MCP exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
-  await withTempDir("mcp-delight-tools", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "mcp delight", "--metric-name", "score"]);
+test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
+  await withTempDir("cli-delight-tools", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "cli delight", "--metric-name", "score"]);
     await runCli([
       "log",
       "--cwd",
@@ -428,157 +416,64 @@ test("MCP exposes onboarding, prompt planning, benchmark probes, recommend-next,
       JSON.stringify({ hypothesis: "baseline", evidence: "score=3" }),
     ]);
 
-    const onboarding = await callMcpTool("onboarding_packet", {
-      working_dir: dir,
-      compact: true,
-    });
-    assert.equal(onboarding.result?.isError, undefined, onboarding.result?.content?.[0]?.text);
-    assert.match(onboarding.result.content[0].text, /codex-autoresearch-onboarding-packet/);
+    const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
+    assert.equal(onboarding.code, 0, onboarding.stderr);
+    assert.match(onboarding.stdout, /codex-autoresearch-onboarding-packet/);
 
-    const promptPlan = await callMcpTool("prompt_plan", {
-      working_dir: dir,
-      prompt:
-        "Use $Codex Autoresearch to figure out why p99 latency is so much higher than p90. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. Use @experiments.md.",
-    });
-    assert.equal(promptPlan.result?.isError, undefined, promptPlan.result?.content?.[0]?.text);
-    assert.match(promptPlan.result.content[0].text, /p99_p90_ratio/);
-    assert.match(promptPlan.result.content[0].text, /DNS lookup/);
-    assert.match(promptPlan.result.content[0].text, /experiments\.md/);
-
-    const lint = await callMcpTool("benchmark_lint", {
-      working_dir: dir,
-      metric_name: "score",
-      sample: "METRIC score=2",
-    });
-    assert.equal(lint.result?.isError, undefined, lint.result?.content?.[0]?.text);
-    assert.match(lint.result.content[0].text, /"emitsPrimary": true/);
-
-    const inspect = await callMcpTool("benchmark_inspect", {
-      working_dir: dir,
-    });
-    assert.equal(inspect.result?.isError, undefined, inspect.result?.content?.[0]?.text);
-    assert.match(inspect.result.content[0].text, /benchmark-native list/);
-
-    const checksInspect = await callMcpTool("checks_inspect", {
-      working_dir: dir,
-    });
-    assert.equal(
-      checksInspect.result?.isError,
-      undefined,
-      checksInspect.result?.content?.[0]?.text,
-    );
-    assert.match(checksInspect.result.content[0].text, /correctness command/);
-
-    const next = await callMcpTool("recommend_next", { working_dir: dir, compact: true });
-    assert.equal(next.result?.isError, undefined, next.result?.content?.[0]?.text);
-    assert.match(next.result.content[0].text, /"whySafe"/);
-
-    const dryRun = await callMcpTool("new_segment", { working_dir: dir, dry_run: true });
-    assert.equal(dryRun.result?.isError, undefined, dryRun.result?.content?.[0]?.text);
-    assert.match(dryRun.result.content[0].text, /"dryRun": true/);
-
-    const promote = await callMcpTool("promote_gate", {
-      working_dir: dir,
-      reason: "larger gate",
-      query_count: 20,
-      dry_run: true,
-    });
-    assert.equal(promote.result?.isError, undefined, promote.result?.content?.[0]?.text);
-    assert.match(promote.result.content[0].text, /"queryCount": 20/);
-  });
-});
-
-test("MCP exposes resource templates and prompts/get for session truth handoffs", async () => {
-  await withTempDir("mcp-resources-prompts", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "mcp resources", "--metric-name", "seconds"]);
-
-    const resources = await callMcpRequest("resources/list");
-    assert.deepEqual(resources.result.resources, []);
-
-    const resourceTemplates = await callMcpRequest("resources/templates/list");
-    assert.ok(
-      resourceTemplates.result.resourceTemplates.some(
-        (resource) => resource.uriTemplate === "autoresearch://state{?working_dir}",
-      ),
-    );
-
-    const stateUri = `autoresearch://state?working_dir=${encodeURIComponent(dir)}`;
-    const state = await callMcpRequest("resources/read", { uri: stateUri });
-    assert.equal(JSON.parse(state.result.contents[0].text).workDir, dir);
-
-    const prompt = await callMcpRequest("prompts/get", {
-      name: "first-valid-loop",
-      arguments: { working_dir: dir },
-    });
-    assert.match(prompt.result.messages[0].content.text, /start_dashboard=true/);
-  });
-});
-
-test("MCP export_dashboard supports compact and full payloads", async () => {
-  await withTempDir("mcp-export", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "mcp export", "--metric-name", "seconds"]);
-    await runCli([
-      "log",
+    const promptPlan = await runCli([
+      "prompt-plan",
       "--cwd",
       dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+      "--prompt",
+      "Use $Codex Autoresearch to figure out why p99 latency is so much higher than p90. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. Use @experiments.md.",
     ]);
+    assert.equal(promptPlan.code, 0, promptPlan.stderr);
+    assert.match(promptPlan.stdout, /p99_p90_ratio/);
+    assert.match(promptPlan.stdout, /DNS lookup/);
+    assert.match(promptPlan.stdout, /experiments\.md/);
 
-    const compact = await callMcpTool("export_dashboard", { working_dir: dir });
-    assert.equal(compact.result?.isError, undefined, compact.result?.content?.[0]?.text);
-    const compactPayload = JSON.parse(compact.result.content[0].text);
-    assert.equal(compactPayload.summary.runs, 1);
-    assert.equal(compactPayload.viewModel, undefined);
-
-    const full = await callMcpTool("export_dashboard", { working_dir: dir, full: true });
-    assert.equal(full.result?.isError, undefined, full.result?.content?.[0]?.text);
-    const fullPayload = JSON.parse(full.result.content[0].text);
-    assert.equal(fullPayload.viewModel.summary.runs, 1);
-  });
-});
-
-test("MCP serve_dashboard returns a live dashboard URL", async () => {
-  await withTempDir("mcp-serve", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "mcp serve", "--metric-name", "seconds"]);
-    await runCli([
-      "log",
+    const lint = await runCli([
+      "benchmark-lint",
       "--cwd",
       dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+      "--metric-name",
+      "score",
+      "--sample",
+      "METRIC score=2",
     ]);
+    assert.equal(lint.code, 0, lint.stderr);
+    assert.match(lint.stdout, /"emitsPrimary": true/);
 
-    const response = await callMcpTool("serve_dashboard", { working_dir: dir, port: 0 });
-    assert.equal(response.result?.isError, undefined, response.result?.content?.[0]?.text);
-    const payload = JSON.parse(response.result.content[0].text);
-    assert.equal(payload.modeGuidance.deliveryMode, "live-server");
-    assert.equal(payload.verified, true);
-    assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
-    assert.match(payload.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+    const inspect = await runCli(["benchmark-inspect", "--cwd", dir]);
+    assert.equal(inspect.code, 0, inspect.stderr);
+    assert.match(inspect.stdout, /benchmark-native list/);
+
+    const checksInspect = await runCli(["checks-inspect", "--cwd", dir]);
+    assert.equal(checksInspect.code, 0, checksInspect.stderr);
+    assert.match(checksInspect.stdout, /correctness command/);
+
+    const next = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+    assert.match(next.stdout, /"whySafe"/);
+
+    const dryRun = await runCli(["new-segment", "--cwd", dir, "--dry-run"]);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    assert.match(dryRun.stdout, /"dryRun": true/);
+
+    const promote = await runCli([
+      "promote-gate",
+      "--cwd",
+      dir,
+      "--reason",
+      "larger gate",
+      "--query-count",
+      "20",
+      "--dry-run",
+    ]);
+    assert.equal(promote.code, 0, promote.stderr);
+    assert.match(promote.stdout, /"queryCount": 20/);
   });
 });
-
-test("MCP gap_candidates requires the unsafe command gate for model commands", async () => {
-  await withTempDir("mcp-gap-gate", async (dir) => {
-    const response = await callMcpTool("gap_candidates", {
-      working_dir: dir,
-      research_slug: "study",
-      model_command: `${JSON.stringify(process.execPath)} -e "console.log([])"`,
-    });
-    assert.equal(response.result?.isError, true);
-    assert.match(response.result.content[0].text, /allow_unsafe_command=true/);
-  });
-});
-
 test("catalog recipes can drive setup-plan and setup", async () => {
   await withTempDir("catalog-setup", async (dir) => {
     const catalog = path.join(dir, "recipes.json");
@@ -1031,7 +926,7 @@ test("live server exposes health and view-model endpoints", async () => {
   });
 });
 
-test("live server rejects dashboard actions because CLI and MCP own mutations", async () => {
+test("live server rejects dashboard actions because CLI owns mutations", async () => {
   await withTempDir("live-gap-action", async (dir) => {
     await runCli([
       "research-setup",
