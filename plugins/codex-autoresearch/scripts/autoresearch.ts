@@ -329,7 +329,7 @@ function safeSlug(value: unknown, fallback = "research"): string {
 }
 
 function shellQuote(value: unknown): string {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+  return JSON.stringify(String(value));
 }
 
 function slashPath(value: unknown): string {
