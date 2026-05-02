@@ -75,15 +75,15 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated and ignored in the Git tree. If a Git marketplace source checkout is missing `dist/`, the CLI launcher downloads and extracts the matching GitHub release tarball into the plugin cache before importing the runtime. A publishable release tarball must include the built runtime, exclude authored source and tests, ship no MCP launcher/config, and pass `node <extracted-package>/scripts/autoresearch.mjs --help`.
 
-Do not push release tags by hand. After the version bump lands on `main`, run the `Release` GitHub Actions workflow manually with the package version. The workflow runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. This keeps update clients on the previous release until the new install artifact exists.
+Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 
 ## Version Surfaces
 
 For a version bump, update all version surfaces together:
 
 - `plugins/codex-autoresearch/package.json`
+- `plugins/codex-autoresearch/package-lock.json`
 - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
-- `plugins/codex-autoresearch/scripts/autoresearch.mjs` `serverInfo.version`
 - root `CHANGELOG.md`
 - any tests or docs that intentionally assert or display the version
 

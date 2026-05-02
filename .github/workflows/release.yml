@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release version from plugins/codex-autoresearch/package.json, for example 1.1.12'
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -83,9 +89,11 @@ jobs:
             exit 1
           fi
           package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+          lock_version="$(node -p "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8')).version")"
+          lock_root_version="$(node -p "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8')).packages[''].version")"
           manifest_version="$(node -p "JSON.parse(require('fs').readFileSync('.codex-plugin/plugin.json', 'utf8')).version")"
-          if [ "$version" != "$package_version" ] || [ "$version" != "$manifest_version" ]; then
-            echo "::error::Input version $version does not match package.json $package_version and plugin.json $manifest_version."
+          if [ "$version" != "$package_version" ] || [ "$version" != "$lock_version" ] || [ "$version" != "$lock_root_version" ] || [ "$version" != "$manifest_version" ]; then
+            echo "::error::Input version $version does not match package.json $package_version, package-lock.json $lock_version, package-lock root $lock_root_version, and plugin.json $manifest_version."
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"

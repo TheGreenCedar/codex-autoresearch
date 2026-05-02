@@ -1,0 +1,100 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - plugins/codex-autoresearch/package.json
+      - plugins/codex-autoresearch/package-lock.json
+      - plugins/codex-autoresearch/.codex-plugin/plugin.json
+      - CHANGELOG.md
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  detect-version:
+    name: Detect version bump
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compare package versions
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          package_path="plugins/codex-autoresearch/package.json"
+          lock_path="plugins/codex-autoresearch/package-lock.json"
+          manifest_path="plugins/codex-autoresearch/.codex-plugin/plugin.json"
+
+          echo "Comparing $BEFORE_SHA to $AFTER_SHA."
+
+          read_json_version() {
+            node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(data.version || '');" "$1"
+          }
+
+          read_lock_root_version() {
+            node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log((data.packages && data.packages[''] && data.packages[''].version) || '');" "$1"
+          }
+
+          new_version="$(read_json_version "$package_path")"
+          old_version=""
+
+          if [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            old_package="$RUNNER_TEMP/old-package.json"
+            if git show "$BEFORE_SHA:$package_path" > "$old_package" 2>/dev/null; then
+              old_version="$(read_json_version "$old_package")"
+            fi
+          fi
+
+          echo "Previous package version: ${old_version:-<missing>}"
+          echo "Current package version: $new_version"
+
+          if [ "$old_version" = "$new_version" ]; then
+            echo "Package version did not change; skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "version=$new_version" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Package version must look like 1.2.3, got $new_version."
+            exit 1
+          fi
+
+          lock_version="$(read_json_version "$lock_path")"
+          lock_root_version="$(read_lock_root_version "$lock_path")"
+          manifest_version="$(read_json_version "$manifest_path")"
+
+          if [ "$new_version" != "$lock_version" ] || [ "$new_version" != "$lock_root_version" ] || [ "$new_version" != "$manifest_version" ]; then
+            echo "::error::Version surfaces are not synchronized. package.json=$new_version package-lock.json=$lock_version package-lock root=$lock_root_version plugin.json=$manifest_version."
+            exit 1
+          fi
+
+          echo "Detected release version $new_version."
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Release
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.detect-version.outputs.version }}
