@@ -50,7 +50,7 @@ export function safeSlug(value: unknown, fallback = "research"): string {
 }
 
 export function shellQuote(value: unknown): string {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+  return `"${String(value).replace(/[\\"]/g, "\\$&")}"`;
 }
 
 const METRIC_VALUE_PATTERN = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;

@@ -197,7 +197,7 @@ const BUILT_IN_RECIPES: Recipe[] = [
 ];
 
 function quoteCommandArg(value: unknown): string {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
+  return `"${String(value).replace(/[\\"]/g, "\\$&")}"`;
 }
 
 export function listBuiltInRecipes(): Recipe[] {

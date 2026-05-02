@@ -184,31 +184,15 @@ export async function serveAutoresearch(args: LooseObject) {
           const result = await runDashboardCliAction(scriptPath, cliArgs, workDir, policy);
           sendJson(res, actionResultEnvelope(action, cliArgs, result), result.timedOut ? 504 : 200);
         } catch (error) {
-          const failure = error as DashboardActionError;
-          sendJson(
-            res,
-            actionErrorEnvelope(
-              action,
-              failure.message || String(failure),
-              failure.code || "dashboard_action_failed",
-            ),
-            failure.statusCode || 500,
-          );
+          const failure = dashboardActionFailure(action, error);
+          sendJson(res, failure.body, failure.status);
         }
         return;
       }
       sendJson(res, { ok: false, error: "Not found" }, 404);
     } catch (error) {
-      const failure = error as DashboardActionError;
-      sendJson(
-        res,
-        actionErrorEnvelope(
-          "dashboard",
-          failure.message || String(failure),
-          failure.code || "dashboard_action_failed",
-        ),
-        failure.statusCode || 500,
-      );
+      const failure = dashboardActionFailure("dashboard", error);
+      sendJson(res, failure.body, failure.status);
     }
   });
   await new Promise<void>((resolve) => {
@@ -537,12 +521,7 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<Loo
     return parsed;
   } catch (error) {
     if (error instanceof DashboardActionError) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    throw new DashboardActionError(
-      `Malformed dashboard action JSON: ${message}`,
-      400,
-      "body_malformed_json",
-    );
+    throw new DashboardActionError("Malformed dashboard action JSON.", 400, "body_malformed_json");
   }
 }
 
@@ -566,6 +545,12 @@ function actionResultEnvelope(
 ): DashboardActionResult {
   const ok = result.exitCode === 0 && !result.timedOut;
   const parsed = parseJsonObject(result.stdout);
+  const stdout = dashboardSafeText(result.stdout || "");
+  const stderr = dashboardSafeText(result.stderr || "");
+  const parsedNextStep =
+    parsed?.continuation?.nextAction ||
+    parsed?.nextAction ||
+    (ok ? "Refresh complete." : "Inspect the action output before retrying.");
   const receipt = {
     ok,
     action,
@@ -581,23 +566,39 @@ function actionResultEnvelope(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     outputTruncated: result.outputTruncated,
-    stdoutSummary: tailText(result.stdout || "", 10, 4096),
-    stderrSummary: tailText(result.stderr || "", 10, 4096),
+    stdoutSummary: tailText(stdout, 10, 4096),
+    stderrSummary: tailText(stderr, 10, 4096),
     lastRunCleared: parsed?.lastRunCleared,
     ledgerRun: parsed?.run || null,
     nextStep:
-      parsed?.continuation?.nextAction ||
-      parsed?.nextAction ||
-      (ok ? "Refresh complete." : "Inspect the action output before retrying."),
+      typeof parsedNextStep === "string" ? dashboardSafeText(parsedNextStep) : parsedNextStep,
   };
   return {
     ok,
     action,
     receipt,
-    stdout: result.stdout,
-    stderr: result.stderr,
     code: result.exitCode,
     timedOut: result.timedOut,
+  };
+}
+
+function dashboardActionFailure(
+  action: string,
+  error: unknown,
+): { body: DashboardActionResult; status: number } {
+  if (error instanceof DashboardActionError) {
+    return {
+      body: actionErrorEnvelope(action, dashboardSafeText(error.message), error.code),
+      status: error.statusCode,
+    };
+  }
+  return {
+    body: actionErrorEnvelope(
+      action,
+      "Dashboard action failed unexpectedly. Check the server terminal for details.",
+      "dashboard_action_failed",
+    ),
+    status: 500,
   };
 }
 
@@ -622,6 +623,24 @@ function actionErrorEnvelope(
       nextStep: "Refresh the dashboard state before retrying.",
     },
   };
+}
+
+function dashboardSafeText(value: unknown): string {
+  const text = String(value || "");
+  const lines = text.split(/\r?\n/);
+  let omitted = 0;
+  const safeLines = lines.filter((line) => {
+    if (!isStackTraceLine(line)) return true;
+    omitted += 1;
+    return false;
+  });
+  if (omitted === 0) return text;
+  const suffix = `[${omitted} stack trace line${omitted === 1 ? "" : "s"} omitted]`;
+  return [...safeLines, suffix].filter(Boolean).join("\n");
+}
+
+function isStackTraceLine(line: string): boolean {
+  return /^\s*at\s+\S/.test(line) || /^\s*(?:file|node):.+:\d+:\d+/.test(line);
 }
 
 function parseJsonObject(text: string): LooseObject | null {

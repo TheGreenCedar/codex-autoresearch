@@ -451,6 +451,7 @@ function shortHash(hash: string): string {
 
 function markdownEscape(text: string): string {
   return String(text || "")
+    .replace(/\\/g, "\\\\")
     .replace(/\|/g, "\\|")
     .replace(/\r?\n/g, "<br>");
 }

@@ -136,5 +136,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes \
-            --fail-on-no-commits
+            --generate-notes

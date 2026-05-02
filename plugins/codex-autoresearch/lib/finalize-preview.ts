@@ -730,7 +730,7 @@ function safeSlug(value: unknown): string {
 function shellQuote(value: unknown): string {
   const text = String(value);
   if (/^--[A-Za-z0-9-]+$/.test(text) || text === "plan") return text;
-  return `"${text.replace(/"/g, '\\"')}"`;
+  return `"${text.replace(/[\\"]/g, "\\$&")}"`;
 }
 
 async function git(args: string[], cwd: string): Promise<GitResult> {
