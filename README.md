@@ -85,7 +85,7 @@ Codex Autoresearch helps Codex:
 
 1. identify the target repo or child package
 2. check for an existing session
-3. return a shared next-step contract with stage, reason, command or MCP tool, safety, and missing essentials
+3. return a shared next-step contract with stage, reason, CLI command, safety, and missing essentials
 4. verify the benchmark contract
 5. run a measured packet with command identity, output tails, metrics, artifacts, checks, and a freshness fingerprint
 6. log the result as `keep`, `discard`, `crash`, or `checks_failed`
@@ -168,7 +168,6 @@ Finalization should:
 * [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
 * [Hooks](plugins/codex-autoresearch/docs/hooks.md)
-* [MCP tools](plugins/codex-autoresearch/docs/mcp-tools.md)
 * [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
 
 The active package lives under:
@@ -195,7 +194,7 @@ From `plugins/codex-autoresearch`:
 npm install
 npm run check
 npm test
-node scripts/autoresearch.mjs mcp-smoke
+node scripts/autoresearch.mjs --help
 ```
 
 Targeted checks:

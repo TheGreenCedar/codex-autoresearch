@@ -11,15 +11,7 @@ type JsonSchema = {
   required?: string[];
   items?: JsonSchema;
 };
-type ToolSchema = {
-  name: string;
-  description: string;
-  inputSchema: JsonSchema;
-  outputSchema?: JsonSchema;
-  annotations?: Record<string, unknown>;
-};
-
-const MCP_ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
+const ACTIVE_RESEARCH_SLUG_TOOLS = new Set(["measure_quality_gap", "gap_candidates"]);
 
 const LOOP_INTENT_PROPERTIES = {
   name: { type: "string" },
@@ -525,13 +517,6 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-export const mcpToolSchemas = (toolSchemas as ToolSchema[]).map((tool) =>
-  toMcpToolSchema(tool, { includeContracts: true }),
-);
-export const mcpToolSchemasWithContracts = (toolSchemas as ToolSchema[]).map((tool) =>
-  toMcpToolSchema(tool, { includeContracts: true }),
-);
-
 const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   setup: "setup_session",
   "setup-plan": "setup_plan",
@@ -622,7 +607,7 @@ export function validateToolArguments(name: string, args: ToolArgs = {}, options
     if (value == null) continue;
     assertSchemaArgument(key, value, property);
   }
-  inferMcpResearchSlug(name, normalized);
+  inferActiveResearchSlug(name, normalized);
   return normalized;
 }
 
@@ -685,13 +670,13 @@ export function requireUnsafeCommandGate(
   );
   if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
     throw new Error(
-      `${toolName} custom shell commands require allow_unsafe_command=true over MCP. Prefer a configured autoresearch script when possible.`,
+      `${toolName} custom shell commands require allow_unsafe_command=true. Prefer a configured autoresearch script when possible.`,
     );
   }
 }
 
-function inferMcpResearchSlug(name: string, normalized: ToolArgs) {
-  if (!MCP_ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
+function inferActiveResearchSlug(name: string, normalized: ToolArgs) {
+  if (!ACTIVE_RESEARCH_SLUG_TOOLS.has(name)) return;
   if (normalized.research_slug != null && normalized.research_slug !== "") return;
   normalized.research_slug = resolveResearchSlugForQualityGapSync(
     normalized,
@@ -722,18 +707,6 @@ function assertSchemaArgument(key: string, value: unknown, property: Record<stri
 
 function isObjectArgument(value: unknown) {
   return typeof value === "object" && !Array.isArray(value);
-}
-
-export function toMcpToolSchema(tool: ToolSchema, options: ToolArgs = {}) {
-  const schema: ToolSchema = {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-  };
-  if (!options.includeContracts) return schema;
-  if (tool.outputSchema) schema.outputSchema = tool.outputSchema;
-  if (tool.annotations) schema.annotations = tool.annotations;
-  return schema;
 }
 
 function toCamel(value: string) {

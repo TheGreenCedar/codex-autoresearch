@@ -207,7 +207,7 @@ const CONTRACTS = {
       "Use before benchmark_lint or next_experiment when a list/dry-run/artifact command might prevent an accidental full run.",
     contrast: "Use benchmark_lint to validate METRIC parsing after the probe is known bounded.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "warnings", "hints", "outputPreview"]),
   },
   benchmark_lint: {
@@ -215,7 +215,7 @@ const CONTRACTS = {
     whenToUse: "Use before setup, doctor, or next when the benchmark contract is uncertain.",
     contrast: "Use run_experiment or next_experiment to execute the actual loop packet.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "issues", "parsedMetrics"]),
   },
   checks_inspect: {
@@ -224,7 +224,7 @@ const CONTRACTS = {
       "Use when a checks command fails, looks broad, or may be malformed before treating it as experiment evidence.",
     contrast: "Use benchmark_inspect for metric-producing commands.",
     safety:
-      "Read-only unless a command is explicitly provided; command execution is gated over MCP.",
+      "Read-only unless a command is explicitly provided; command execution requires allow_unsafe_command=true.",
     outputSchema: basicOutputSchema(["ok", "workDir", "failedTests", "warnings", "hints"]),
   },
   new_segment: {

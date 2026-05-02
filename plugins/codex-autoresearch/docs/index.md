@@ -5,7 +5,7 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 ## Read In This Order
 
 1. [Workflow diagrams](workflows.md): the motion of the thing, from first prompt to finalization.
-2. [Architecture diagrams](architecture.md): runtime surfaces, trust boundaries, source layout, MCP path, and finalization.
+2. [Architecture diagrams](architecture.md): runtime surfaces, trust boundaries, source layout, CLI path, and finalization.
 3. [Concepts](concepts.md): glossary of packets, ASI, segments, lanes, families, trust blockers, and other domain terms.
 4. [Start](start.md): first five minutes, session files, benchmark contract, and first packet.
 5. [Walkthrough](walkthrough.md): an end-to-end narrated loop showing inputs and real terminal output.
@@ -13,18 +13,17 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 7. [Trust](trust.md): metric integrity, stale packets, drift, dirty Git, static exports, and unsafe command gates.
 8. [Finish](finish.md): finalization preview, review branches, merge/cleanup, and reporting.
 9. [Recipes](recipes.md): built-in recipes, recommendation flow, benchmark linting, and external catalogs.
-10. [Troubleshooting](troubleshooting.md): symptom-to-layer diagnosis for MCP, cache drift, dashboard, metrics, Git, and stale sessions.
+10. [Troubleshooting](troubleshooting.md): symptom-to-layer diagnosis for cache drift, dashboard, metrics, Git, and stale sessions.
 11. [Hooks](hooks.md): optional Codex hook ideas and the caveats that keep them from becoming load-bearing mythology.
 
 Reference pages:
 
-- [MCP tools](mcp-tools.md)
 - [Maintainers](maintainers.md)
 
 ## Documentation Boundary
 
 Keep the root README short and human-facing. It should answer what the plugin does, how to install it, how to start, where to see the dashboard, and where the docs live.
 
-Keep workflow rules here. If a command, MCP tool, dashboard mode, finalization behavior, or safety rule changes, update the closest topic page together with the skill, changelog, tests, and product benchmark.
+Keep workflow rules here. If a command, dashboard mode, finalization behavior, or safety rule changes, update the closest topic page together with the skill, changelog, tests, and product benchmark.
 
 There is no current public `specification-delight-roadmap/` page. Historical design notes should stay out of first-run onboarding unless they are deliberately restored as an archive.

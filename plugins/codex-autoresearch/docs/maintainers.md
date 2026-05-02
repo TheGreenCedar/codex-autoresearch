@@ -20,7 +20,7 @@ When this repo is the target, use the repo-local plugin before any globally inst
 From the wrapper root:
 
 ```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
+node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
 node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
 node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
@@ -29,20 +29,20 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 From `plugins/codex-autoresearch`, use:
 
 ```bash
-node scripts/autoresearch.mjs mcp-smoke
+node scripts/autoresearch.mjs --help
 node scripts/autoresearch.mjs doctor --cwd . --check-benchmark
 ```
 
 ## User-Facing Change Sync
 
-When behavior, command surfaces, dashboard behavior, MCP contracts, migration behavior, or finalization behavior changes, keep these surfaces synchronized:
+When behavior, command surfaces, dashboard behavior, migration behavior, or finalization behavior changes, keep these surfaces synchronized:
 
 - root `README.md` for public promise and short getting-started path
 - root `CHANGELOG.md` for release notes and migration notes
 - `skills/codex-autoresearch/SKILL.md` for Codex operator behavior
 - closest topic doc under `docs/`
 - relevant tests and `scripts/perfection-benchmark.mjs` expectations
-- MCP schemas or CLI help when tool or command contracts change
+- CLI help and internal tool schemas when tool or command contracts change
 
 For non-versioned user-facing changes, refresh the newest dated changelog entry. Removed invocation surfaces need migration notes.
 
@@ -58,10 +58,9 @@ Useful targeted checks:
 
 ```bash
 node --check scripts/autoresearch.mjs
-node --check scripts/autoresearch-mcp.mjs
 node --test tests/autoresearch-cli.test.mjs
 node --test tests/dashboard-verification.test.mjs
-node scripts/autoresearch.mjs mcp-smoke
+node scripts/autoresearch.mjs --help
 npm pack
 git diff --check
 ```
@@ -74,7 +73,7 @@ When refreshing the checked-in demo, use the public showcase export so workstati
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
 ```
 
-Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated and ignored in the Git tree. If a Git marketplace source checkout is missing `dist/`, the launcher bootstrap downloads and extracts the matching GitHub release tarball into the plugin cache before importing the runtime. A publishable release tarball must include the built runtime, exclude authored source and tests, and pass `node <extracted-package>/scripts/autoresearch.mjs mcp-smoke`.
+Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated and ignored in the Git tree. If a Git marketplace source checkout is missing `dist/`, the CLI launcher downloads and extracts the matching GitHub release tarball into the plugin cache before importing the runtime. A publishable release tarball must include the built runtime, exclude authored source and tests, ship no MCP launcher/config, and pass `node <extracted-package>/scripts/autoresearch.mjs --help`.
 
 Do not push release tags by hand. After the version bump lands on `main`, run the `Release` GitHub Actions workflow manually with the package version. The workflow runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. This keeps update clients on the previous release until the new install artifact exists.
 
@@ -85,14 +84,7 @@ For a version bump, update all version surfaces together:
 - `plugins/codex-autoresearch/package.json`
 - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
 - `plugins/codex-autoresearch/scripts/autoresearch.mjs` `serverInfo.version`
-- `plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs` `VERSION`
 - root `CHANGELOG.md`
 - any tests or docs that intentionally assert or display the version
 
-If installed Codex behavior differs from source, inspect the active runtime before changing source again:
-
-```bash
-codex mcp get codex-autoresearch
-```
-
-Then check the versioned cache under the user's Codex plugin cache. Typical drift layers are wrong cwd, stale marketplace cache, old versioned cache, schema/tool metadata mismatch, startup noise, and slow full-CLI imports.
+If installed Codex behavior differs from source, refresh or inspect the versioned cache under the user's Codex plugin cache before changing source again. Typical drift layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, and slow full-CLI imports.

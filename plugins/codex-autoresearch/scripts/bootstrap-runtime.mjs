@@ -10,12 +10,14 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_TIMEOUT_MS = 120_000;
 const LOCK_RETRY_MS = 250;
 
-export async function ensureRuntime(entrypoint, importerUrl) {
+export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
+  const { install = true } = options;
   const scriptDir = path.dirname(fileURLToPath(importerUrl));
   const pluginRoot = path.resolve(scriptDir, "..");
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
   if (await fileExists(target)) return pathToFileURL(target).href;
+  if (!install) throw missingRuntimeError(pluginRoot, target);
 
   await withRuntimeInstallLock(pluginRoot, async () => {
     if (await fileExists(target)) return;
@@ -26,6 +28,16 @@ export async function ensureRuntime(entrypoint, importerUrl) {
   });
 
   return pathToFileURL(target).href;
+}
+
+function missingRuntimeError(pluginRoot, target) {
+  const relativeTarget = path.relative(pluginRoot, target).replace(/\\/g, "/");
+  return new Error(
+    [
+      `Codex Autoresearch runtime is missing (${relativeTarget}).`,
+      "Run `node scripts/autoresearch.mjs --help` from the plugin directory once to hydrate the matching release runtime.",
+    ].join(" "),
+  );
 }
 
 async function installRuntimeFromRelease(pluginRoot) {

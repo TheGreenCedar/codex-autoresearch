@@ -3,11 +3,11 @@
 ## Project Shape
 
 - This repository is a wrapper for the Codex Autoresearch plugin. The active product code lives under `plugins/codex-autoresearch`.
-- Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, the main plugin skill, MCP server code, and dashboard assets.
+- Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, the main plugin skill, CLI code, and dashboard assets.
 - The root `README.md` is the only README and the public-facing documentation surface. Keep root-relative links valid.
 - Do not put AI/operator self-instructions, implementation notes, or workflow reminders in the root `README.md`; keep it friendly for users evaluating or installing the plugin.
 - When leaving instructions for future Codex work, update only this `AGENTS.md`, the AI-facing plugin skill at `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`, or the plugin docs under `plugins/codex-autoresearch/docs/`.
-- The root `CHANGELOG.md` is the release-note surface. Update it for user-facing behavior, docs, skill, command-surface, dashboard, MCP, migration, or version changes.
+- The root `CHANGELOG.md` is the release-note surface. Update it for user-facing behavior, docs, skill, command-surface, dashboard, migration, or version changes.
 - Do not assume root-level npm scripts exist. The package scripts live in `plugins/codex-autoresearch/package.json`.
 
 ## Product Intent
@@ -24,7 +24,7 @@
 - From the repository root, prefer:
 
 ```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
+node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
 node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
 node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
@@ -36,26 +36,25 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/co
 ## Implementation Map
 
 - CLI command handling is split between `scripts/autoresearch.mjs` and `lib/cli-handlers.mjs`.
-- MCP tool schemas and argument validation live in `lib/mcp-tool-schemas.mjs`; in-process dispatch lives in `lib/mcp-interface.mjs`; stdio CLI bridging lives in `lib/mcp-cli-adapter.mjs`; the lightweight wrapper lives in `scripts/autoresearch-mcp.mjs`.
+- CLI command validation and internal tool argument normalization live in `lib/tool-schemas.mjs`.
 - Session state and metrics logic live in `lib/session-core.mjs`; keep script-facing and library-facing behavior in sync.
 - Dashboard data shaping lives in `lib/dashboard-view-model.mjs`; dashboard HTML/CSS/JS lives in `assets/template.html`.
 - Runner behavior lives in `lib/runner.mjs`; recipes and research-gap logic live in `lib/recipes.mjs` and `lib/research-gaps.mjs`.
 - Finalization behavior lives in `scripts/finalize-autoresearch.mjs` and related tests.
-- Product-quality expectations are encoded in `scripts/perfection-benchmark.mjs`. Update this benchmark when public commands, docs, MCP contracts, or session hygiene expectations intentionally change.
-- Keep `skills/codex-autoresearch/SKILL.md`, the root README, the root changelog, tests, and MCP schemas synchronized when user-facing contracts change.
+- Product-quality expectations are encoded in `scripts/perfection-benchmark.mjs`. Update this benchmark when public commands, docs, CLI contracts, or session hygiene expectations intentionally change.
+- Keep `skills/codex-autoresearch/SKILL.md`, the root README, the root changelog, tests, and CLI/internal tool schemas synchronized when user-facing contracts change.
 
-## MCP And Cache Drift
+## Runtime And Cache Drift
 
-- The local MCP config is `plugins/codex-autoresearch/.mcp.json`. It should launch `node ./scripts/autoresearch-mcp.mjs` with `cwd: "."` and a startup timeout.
-- Keep `scripts/autoresearch-mcp.mjs` lightweight. It should answer `initialize` and `tools/list` from static metadata before loading or spawning heavier CLI behavior for `tools/call`.
-- For MCP startup failures, do not guess. Check the direct smoke path first:
+- The plugin is CLI/skill-only. Do not add a default MCP server declaration unless product direction explicitly changes again.
+- For CLI startup failures, do not guess. Check the direct smoke path first:
 
 ```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
+node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 ```
 
-- If the installed Codex plugin behaves differently from source, verify the live runtime with `codex mcp get codex-autoresearch` and inspect the versioned cache under the user's Codex plugin cache. Source files and installed runtime can drift.
-- Typical MCP failure layers are wrong cwd, stale marketplace cache, old versioned cache, schema/tool metadata mismatch, startup noise, and slow full-CLI imports. Identify the layer before changing timeouts.
+- If the installed Codex plugin behaves differently from source, inspect the versioned cache under the user's Codex plugin cache. Source files and installed runtime can drift.
+- Typical failure layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, command metadata mismatch, and slow full-CLI imports. Identify the layer before changing timeouts.
 
 ## Autoresearch Workflow Safety
 
@@ -81,7 +80,6 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
   - `plugins/codex-autoresearch/package.json`
   - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
   - `plugins/codex-autoresearch/scripts/autoresearch.mjs` `serverInfo.version`
-  - `plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs` `VERSION`
   - `CHANGELOG.md`
   - any tests or docs that intentionally assert or display the version
 - For non-versioned user-facing changes, add or refresh the newest dated or versioned `CHANGELOG.md` entry. Removed invocation surfaces need migration notes.
@@ -95,10 +93,9 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
 
 ```bash
 node --check plugins/codex-autoresearch/scripts/autoresearch.mjs
-node --check plugins/codex-autoresearch/scripts/autoresearch-mcp.mjs
 node --test plugins/codex-autoresearch/tests/autoresearch-cli.test.mjs
 node --test plugins/codex-autoresearch/tests/dashboard-verification.test.mjs
-node plugins/codex-autoresearch/scripts/autoresearch.mjs mcp-smoke
+node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 git diff --check
 ```
 

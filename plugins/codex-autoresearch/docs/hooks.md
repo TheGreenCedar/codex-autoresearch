@@ -40,7 +40,7 @@ Hooks are experimental. They are best used as reminders or context injection, no
 
 They must not replace:
 
-- MCP schemas
+- CLI validation
 - CLI validation
 - unsafe command gates
 - last-run freshness checks

@@ -1434,7 +1434,7 @@ test("served dashboard exposes live refresh but no command-center controls", asy
     liveActionsAvailable: false,
     modeGuidance: {
       title: "Live dashboard",
-      detail: "Served mode can refresh the view model; actions stay in CLI or MCP.",
+      detail: "Served mode can refresh the view model; actions stay in CLI.",
     },
     viewModel,
     commands: [],
