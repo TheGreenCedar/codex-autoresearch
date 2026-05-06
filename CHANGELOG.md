@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## 1.3.3
+## 1.3.4
 
 ### Changed
 
@@ -13,11 +13,17 @@ This project uses a root-only changelog because the root README is the public do
 - Added explicit `--trust-catalog` admission for external recipe catalogs, provenance drift checks, redacted evidence boundaries, and workdir-confined `ARTIFACT` handling.
 - Removed dormant dashboard mutation routes and client action controls from the packaged readout path while sharpening mode labels, copy feedback, and chart dialog keyboard behavior.
 
+Bumped public package and plugin manifest version surfaces to `1.3.4`.
+
+## 1.3.3
+
 ### Fixed
 
 - Hardened CI token permissions, generated command display escaping, Markdown table escaping, and live dashboard action error output to resolve CodeQL code-scanning findings.
 - Fixed recipe-backed setup planning so recommended recipes can supply their default benchmark command before missing setup fields are reported.
 - Fixed packet artifact evidence so relative artifact paths are checked against the target working directory instead of the plugin process directory.
+
+### Changed
 
 - Removed the MCP server declaration and launcher surface. Codex Autoresearch now runs as a CLI/skill-only plugin to avoid Codex startup hangs from automatic MCP registration.
 - Updated package checks, CI/release smoke tests, docs, and skill guidance to use `node scripts/autoresearch.mjs --help` and normal CLI commands instead of `mcp-smoke`.
