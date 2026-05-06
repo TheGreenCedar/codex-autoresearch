@@ -25,7 +25,7 @@ export const DEMO_META: DashboardMeta = {
   liveActionsAvailable: false,
   showcaseMode: true,
   generatedAt: new Date().toISOString(),
-  modeGuidance: { title: "Live runboard", detail: "100 embedded packets." },
+  modeGuidance: { title: "Demo Snapshot", detail: "100 embedded packets." },
   viewModel: {
     summary: { segment: 0, confidence: 4.61, runs: 100 },
     nextBestAction: {

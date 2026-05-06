@@ -51,6 +51,14 @@ Scope: test runner config and test helpers only
 
 Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, starting the dashboard, running one packet, and logging the result with experiment details.
 
+Prerequisites:
+
+* Codex plugin marketplace access
+* a Git repo with a reviewable edit scope
+* a repeatable benchmark that emits `METRIC name=value`
+* optional correctness checks
+* Node/npm only for local source development
+
 ## Install
 
 This repository is a Codex plugin marketplace. Add the marketplace:

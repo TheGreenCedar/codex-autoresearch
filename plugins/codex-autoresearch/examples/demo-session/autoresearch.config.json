@@ -4,6 +4,10 @@
   "keepPolicy": "primary-only",
   "dashboardRefreshSeconds": 5,
   "commitPaths": [
-    "src/indexer"
+    "autoresearch.ps1",
+    "autoresearch.checks.ps1",
+    "autoresearch.md",
+    "autoresearch.ideas.md",
+    "demo.md"
   ]
 }

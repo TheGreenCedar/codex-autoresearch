@@ -8,27 +8,37 @@ interface ScoreStripProps {
 
 export function ScoreStrip({ session, readout }: ScoreStripProps) {
   const counts = statusCounts(session.runs);
+  const latest = readout.recentRuns[0] || null;
   return (
-    <section className="score-strip" aria-label="Current readout">
+    <section className="score-strip" aria-label="What changed">
+      <ScoreCell
+        label="Best kept change"
+        id="best-value"
+        value={formatMetricValue(readout.best, readout.metricDefinition)}
+      />
+      <ScoreCell
+        label="Latest packet"
+        id="latest-value"
+        value={
+          latest
+            ? `#${latest.run} ${latest.status || "logged"}`
+            : `${session.runs.length} run${session.runs.length === 1 ? "" : "s"}`
+        }
+      />
       <ScoreCell
         label="Baseline"
         id="baseline-value"
         value={formatMetricValue(readout.baseline, readout.metricDefinition)}
       />
       <ScoreCell
-        label="Best"
-        id="best-value"
-        value={formatMetricValue(readout.best, readout.metricDefinition)}
+        label="Confidence"
+        id="confidence-value"
+        value={formatConfidence(readout.confidence)}
       />
       <ScoreCell
         label="Improvement"
         id="improvement-value"
         value={formatImprovement(readout.improvement)}
-      />
-      <ScoreCell
-        label="Confidence"
-        id="confidence-value"
-        value={formatConfidence(readout.confidence)}
       />
       <ScoreCell
         label="Runs"

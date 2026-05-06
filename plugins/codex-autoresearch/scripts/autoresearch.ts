@@ -11,6 +11,12 @@ import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
+import {
+  redactCommandDisplay,
+  redactEvidenceObject,
+  redactEvidenceText,
+  redactPathDisplay,
+} from "../lib/evidence-redaction.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
@@ -29,6 +35,7 @@ import {
   listBuiltInRecipes,
   loadRecipeCatalog,
   recommendRecipe,
+  revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
 import {
@@ -159,10 +166,10 @@ function usage() {
   return `Codex Autoresearch
 
 Usage:
-  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
-  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
@@ -445,7 +452,15 @@ function shellKindFromArgs(args: LooseObject): string {
 
 async function withRecipeDefaults(args: LooseObject): Promise<LooseObject> {
   const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
-  return recipeId ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog) : args;
+  return recipeId
+    ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog, {
+        trustCatalog: trustCatalogOption(args),
+      })
+    : args;
+}
+
+function trustCatalogOption(args: LooseObject): boolean {
+  return boolOption(args.trust_catalog ?? args.trustCatalog, false);
 }
 
 function explicitBenchmarkPrintsMetric(args: LooseObject): boolean {
@@ -615,6 +630,7 @@ async function setupPlan(args: any) {
     commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
     args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
+    args.catalog && trustCatalogOption(args) ? "--trust-catalog" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -799,6 +815,7 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
   const prompt = String(args.prompt || args.goal || args.request || "").trim();
   if (!prompt) throw new Error("prompt-plan requires --prompt <text>.");
   const intent = await analyzeAutoresearchPrompt(workDir, prompt, args);
+  const setupDefaults = intent.setupDefaults as LooseObject;
   const setupArgs = {
     cwd: workDir,
     ...intent.setupDefaults,
@@ -830,6 +847,9 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     max_iterations: args.max_iterations ?? args.maxIterations ?? intent.setupDefaults.maxIterations,
     recipe: args.recipe ?? args.recipe_id ?? args.recipeId ?? intent.setupDefaults.recipe,
     recipe_id: args.recipe_id ?? args.recipeId ?? args.recipe ?? intent.setupDefaults.recipe,
+    catalog: args.catalog ?? setupDefaults.catalog,
+    trustCatalog: args.trustCatalog ?? args.trust_catalog ?? setupDefaults.trustCatalog,
+    trust_catalog: args.trust_catalog ?? args.trustCatalog ?? setupDefaults.trustCatalog,
   };
   const setup = await setupPlan(setupArgs);
   const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
@@ -2238,6 +2258,7 @@ function metricParseSource(result: any) {
 
 function parseArtifactLines(output: string, workDir: string) {
   const artifacts: Record<string, string> = {};
+  const artifactWarnings: string[] = [];
   for (const line of String(output || "").split(/\r?\n/)) {
     const match = line.match(/^ARTIFACT\s+([A-Za-z_][A-Za-z0-9_.:-]*)=(.+)$/);
     if (!match) continue;
@@ -2246,12 +2267,16 @@ function parseArtifactLines(output: string, workDir: string) {
     if (!value) continue;
     const absolute = path.isAbsolute(value) ? value : path.resolve(workDir, value);
     const relative = path.relative(workDir, absolute);
-    artifacts[name] =
-      relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-        ? relative.replace(/\\/g, "/")
-        : absolute;
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      artifacts[name] = relative.replace(/\\/g, "/");
+    } else {
+      artifacts[name] = "<outside-workdir>";
+      artifactWarnings.push(
+        `ARTIFACT ${name} points outside the working directory and was quarantined: ${redactPathDisplay(value, workDir)}.`,
+      );
+    }
   }
-  return artifacts;
+  return { artifacts, artifactWarnings };
 }
 
 function headText(
@@ -3119,6 +3144,11 @@ async function setupSession(args: LooseObject) {
     setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
   if (Object.keys(setupConfig).length > 0)
     await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
+  if (args.recipeCatalogProvenance) {
+    await appendRuntimeConfigFile(files, sessionCwd, {
+      recipeCatalogProvenance: args.recipeCatalogProvenance,
+    });
+  }
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (commitPaths.length > 0) {
     await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
@@ -3609,7 +3639,7 @@ async function runExperiment(args: LooseObject) {
     maxMetrics: MAX_PARSED_METRICS,
     withTruncation: true,
   });
-  const artifacts = parseArtifactLines(
+  const { artifacts, artifactWarnings } = parseArtifactLines(
     benchmark.fullOutput || benchmark.output || parseSource,
     workDir,
   );
@@ -3692,6 +3722,7 @@ async function runExperiment(args: LooseObject) {
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
     artifacts,
+    artifactWarnings,
     parsedPrimary: primary,
     metricError,
     checksPolicy,
@@ -4045,7 +4076,11 @@ async function clearSession(args: any) {
 function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const staticExport =
     meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
-  const dataForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
+  const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
+  const dataForClient = redactEvidenceObject(
+    staticExport ? stripDashboardCommandFields(entries) : entries,
+    dashboardContext,
+  );
   const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
   const metaForClient = stripDashboardCommandFields(meta);
   const publicExport = Boolean(
@@ -4055,7 +4090,10 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
     meta.settings?.showcaseMode,
   );
   const metaData = JSON.stringify(
-    publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
+    redactEvidenceObject(
+      publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
+      dashboardContext,
+    ),
   ).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
@@ -4727,6 +4765,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   for (const blocker of state.researchIntegrity?.blockers || []) {
     issues.push(blocker);
   }
+  const catalogTrust = await catalogTrustCheck(config).catch((error: unknown) => ({
+    ok: false,
+    issues: [`Trusted recipe catalog could not be revalidated: ${errorMessage(error)}`],
+  }));
+  if (!catalogTrust.ok) issues.push(...catalogTrust.issues);
   const drift = await buildDriftReport({
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
@@ -4826,6 +4869,12 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
   return result;
+}
+
+async function catalogTrustCheck(config: LooseObject) {
+  const provenance = config.recipeCatalogProvenance || config.recipe_catalog_provenance || null;
+  if (!provenance) return { ok: true, issues: [] as string[] };
+  return await revalidateRecipeCatalogProvenance(provenance);
 }
 
 function benchmarkDriftWarning({ currentMetric, bestMetric, direction, metricName }: LooseObject) {
@@ -5013,11 +5062,11 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .digest("hex");
   return {
     packetId: `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`,
-    cwd: run.workDir,
+    cwd: redactPathDisplay(run.workDir, run.workDir),
     commandIdentity: {
-      command: run.command || "",
-      commandFile: run.commandFile || "",
-      envFile: run.envFile || "",
+      command: redactCommandDisplay(run.command || "", { workDir: run.workDir }),
+      commandFile: redactPathDisplay(run.commandFile || "", run.workDir),
+      envFile: run.envFile ? "<env-file>" : "",
       envKeys: run.envKeys || [],
       commandHash: run.command
         ? createHash("sha256").update(run.command, "utf8").digest("hex")
@@ -5026,14 +5075,17 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timeoutSeconds: run.timeoutSeconds ?? null,
     exitStatus: run.exitCode ?? null,
     timedOut: Boolean(run.timedOut),
-    stdoutTail: run.tailOutput || run.progress?.latestOutputTail || "",
+    stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
+      workDir: run.workDir,
+    }),
     stderrTail: "",
     metrics: run.parsedMetrics || {},
     primaryMetric: run.parsedPrimary ?? null,
     artifacts: artifactList(run.artifacts, run.workDir),
+    artifactWarnings: run.artifactWarnings || [],
     checks: run.checks
       ? {
-          command: run.checks.command || "",
+          command: redactCommandDisplay(run.checks.command || "", { workDir: run.workDir }),
           exitStatus: run.checks.exitCode ?? null,
           timedOut: Boolean(run.checks.timedOut),
           passed: run.checks.passed ?? null,
@@ -5044,11 +5096,18 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
 }
 
 function artifactList(artifacts: LooseObject = {}, workDir = "") {
-  return Object.entries(artifacts || {}).map(([name, artifactPath]) => ({
-    name,
-    path: String(artifactPath || ""),
-    exists: artifactExists(String(artifactPath || ""), workDir),
-  }));
+  return Object.entries(artifacts || {}).map(([name, artifactPath]) => {
+    const quarantined = String(artifactPath || "") === "<outside-workdir>";
+    return {
+      name,
+      path: quarantined
+        ? "<outside-workdir>"
+        : redactPathDisplay(String(artifactPath || ""), workDir),
+      exists: quarantined ? false : artifactExists(String(artifactPath || ""), workDir),
+      quarantined,
+      warning: quarantined ? "Artifact path is outside the working directory." : "",
+    };
+  });
 }
 
 function artifactExists(artifactPath: string, workDir: string) {

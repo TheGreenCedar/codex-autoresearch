@@ -17,6 +17,7 @@ Over 100 packets, the loop explores several distinct `lanes` and `families` of i
 
 The ledger includes:
 
+- a demo-scoped commit surface: `autoresearch.ps1`, `autoresearch.checks.ps1`, `autoresearch.md`, `autoresearch.ideas.md`, and `demo.md`
 - kept runs when an indexing strategy beats the current best metric
 - rejected runs when a new batching or cache idea is slower than the best kept path
 - checks-failed runs when a measurable packet is unsafe to keep

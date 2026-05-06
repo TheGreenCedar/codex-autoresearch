@@ -14,8 +14,11 @@ Optimize the indexing pipeline so rebuilds finish faster without letting peak me
 
 ## Scope
 
-- `src/indexer`: benchmarked indexing work
-- `examples/demo-session`: scripted demo session and showcase evidence
+- `autoresearch.ps1`: replayable benchmark script for the embedded 100-packet ledger
+- `autoresearch.checks.ps1`: replayable correctness check for the demo packet
+- `autoresearch.md`, `autoresearch.ideas.md`, and `demo.md`: human-readable demo context and next-step notes
+
+The demo is intentionally self-contained. Its configured `commitPaths` point only at those demo-owned files, so doctor and showcase checks can prove the example scaffold is not referring to a missing project tree.
 
 ## Constraints
 

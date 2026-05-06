@@ -25,7 +25,7 @@ Read existing files before editing:
 
 ## Dashboard
 
-Serve the live local runboard:
+Serve the live local readout:
 
 ```bash
 node scripts/autoresearch.mjs serve --cwd <project>

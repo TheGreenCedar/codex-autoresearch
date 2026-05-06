@@ -57,7 +57,7 @@ The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the so
 5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
 6. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
 7. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
-8. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark_lint` or `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
+8. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
 9. Start the live dashboard with `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
 10. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
 11. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
@@ -136,7 +136,7 @@ Prefer the served dashboard:
 - Restart `serve` if live refresh failed, the old process ended, or the user is looking at a `file://` export but needs fresh data.
 - Use `export` only for offline snapshots.
 - Static exports are read-only; use the served dashboard when packet freshness matters.
-- Treat the dashboard as a visual aid, not a command center. It should not expose inert live controls, mutation buttons, or action receipts.
+- Treat the dashboard as a visual aid, not a control surface. It should not expose inert live controls, mutation buttons, or command receipts.
 
 Read dashboard evidence in this order:
 

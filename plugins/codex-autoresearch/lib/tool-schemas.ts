@@ -33,6 +33,7 @@ const LOOP_INTENT_PROPERTIES = {
 const SETUP_SOURCE_PROPERTIES = {
   recipe_id: { type: "string" },
   catalog: { type: "string" },
+  trust_catalog: { type: "boolean" },
 } satisfies Record<string, JsonSchema>;
 
 const UNSAFE_COMMAND_PROPERTY = {
@@ -82,6 +83,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         prompt: { type: "string" },
+        ...SETUP_SOURCE_PROPERTIES,
         ...LOOP_INTENT_PROPERTIES,
         ...UNSAFE_COMMAND_PROPERTY,
       },
@@ -137,6 +139,7 @@ export const toolSchemas = applyToolContracts([
         working_dir: { type: "string" },
         recipe_id: { type: "string" },
         catalog: { type: "string" },
+        trust_catalog: { type: "boolean" },
         name: { type: "string" },
         goal: { type: "string" },
         metric_name: { type: "string" },
@@ -586,6 +589,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   skip_init: "skipInit",
   start_dashboard: "startDashboard",
   timeout_seconds: "timeoutSeconds",
+  trust_catalog: "trustCatalog",
   working_dir: "cwd",
 };
 
@@ -657,7 +661,11 @@ export function requireUnsafeCommandGate(
 ) {
   const normalized: ToolArgs = normalizeToolArguments(toolName, args);
   const setupCatalogCanMaterializeCommands =
-    (toolName === "setup_plan" || toolName === "guided_setup") && Boolean(normalized.catalog);
+    (toolName === "setup_plan" ||
+      toolName === "guided_setup" ||
+      toolName === "prompt_plan" ||
+      toolName === "setup_session") &&
+    Boolean(normalized.catalog);
   const hasCustomCommand = Boolean(
     normalized.command ||
     normalized.command_file ||

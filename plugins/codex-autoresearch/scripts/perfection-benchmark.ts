@@ -267,8 +267,13 @@ const checks = [
         .filter((line) => line.trim().startsWith('{"run":')).length;
       return screenshotExists &&
         demoRuns === 100 &&
+        demoExport.includes(`"pluginVersion":"${PLUGIN_VERSION}"`) &&
         !demoExport.includes("C:\\Users\\alber") &&
         !demoExport.includes("C:\\Program Files") &&
+        !demoExport.includes("actionNonce") &&
+        !demoExport.includes("/actions/") &&
+        !demoExport.includes("live-actions-panel") &&
+        !demoExport.includes("action-receipt") &&
         !readme.includes("```mermaid") &&
         includesAll(readme, ["Docs index", "dashboard-demo.png"]) &&
         includesAll(joined, [
@@ -550,15 +555,13 @@ const checks = [
       const template = await readDashboardSurface();
       const labelCount = (template.match(/<label\b/g) || []).length;
       if (
-        labelCount >= 4 &&
+        labelCount >= 1 &&
         (template.includes('<label for="segment-select">') ||
           template.includes('htmlFor="segment-select"') ||
           template.includes("htmlFor:`segment-select`")) &&
-        template.includes('htmlFor="log-decision-status"') &&
-        template.includes('htmlFor="log-decision-description"') &&
-        template.includes('htmlFor="log-decision-asi"') &&
         template.includes("score-label") &&
         template.includes("readout-label") &&
+        !template.includes("log-decision-panel") &&
         !template.includes("<label>Best kept change</label>")
       ) {
         return pass();
@@ -621,7 +624,7 @@ const checks = [
         "what happened and what it plans",
       ];
       return banned.every((phrase) => !combined.includes(phrase)) &&
-        includesAll(combined, ["Current readout", "Next move", "Ledger, ASI"])
+        includesAll(combined, ["Current operator decision", "Next move", "Ledger, ASI"])
         ? pass()
         : fail("Dashboard still contains placeholder or explanatory narration.");
     },

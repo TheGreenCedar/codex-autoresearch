@@ -436,11 +436,15 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
     .map((node) => node.textContent?.trim() || "")
     .filter(Boolean);
   const timestampLikeLabels = axisText.filter((label) => label.includes(":"));
+  const chartButton = getById("trend-chart").querySelector(".chart-point-button");
 
   assert.ok(
     timestampLikeLabels.length >= 4,
     `Expected timestamp labels in x-axis ticks, saw: ${axisText.join(", ")}`,
   );
+  assert.equal(chartButton?.tagName.toLowerCase(), "button");
+  assert.equal(chartButton?.getAttribute("aria-haspopup"), "dialog");
+  assert.match(chartButton?.getAttribute("aria-label") || "", /Open details for run/);
 });
 
 test("dashboard formats large raw y-axis labels compactly", () => {
@@ -1378,7 +1382,7 @@ test("showcase dashboard presents the demo as live while keeping diagnostics in 
     liveActionsAvailable: false,
     showcaseMode: true,
     modeGuidance: {
-      title: "Live runboard",
+      title: "Demo Snapshot",
       detail: "100 embedded packets.",
     },
     viewModel: {
@@ -1433,7 +1437,7 @@ test("served dashboard exposes live refresh but no command-center controls", asy
     liveRefreshAvailable: true,
     liveActionsAvailable: false,
     modeGuidance: {
-      title: "Live dashboard",
+      title: "Live Readout",
       detail: "Served mode can refresh the view model; actions stay in CLI.",
     },
     viewModel,
@@ -1441,7 +1445,8 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   });
 
   assert.ok(getById("dashboard-toolbar"));
-  assert.equal(queryById("live-region"), null);
+  assert.equal(getById("live-title").textContent, "Live Readout");
+  assert.match(getById("live-detail").textContent || "", /refresh the view model/);
   assert.equal(queryById("trust-strip"), null);
   assert.equal(getById("refresh-now").textContent, "Refresh live data");
   assert.equal(getById("live-toggle").textContent, "Auto-refresh on");
@@ -1456,9 +1461,9 @@ test("served dashboard exposes live refresh but no command-center controls", asy
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
   const viewModel = {
     trustState: {
-      modeLabel: "Live evidence runboard",
-      detail: "Local host with guarded action nonce.",
-      actionState: "Safe actions only.",
+      modeLabel: "Live Readout",
+      detail: "Local host with read-only refresh.",
+      actionState: "CLI owns mutations.",
       evidenceState: "2 runs plus finalize preview.",
       warnings: ["Doctor warning is visible."],
     },
@@ -1713,6 +1718,55 @@ test("served dashboard live refresh starts by default and can be stopped", async
     () => dom.window.__clearedLiveInterval === 42,
     "Live toggle did not clear the interval.",
   );
+  dom.window.close();
+});
+
+test("served dashboard live refresh reports endpoint failures without success", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "served dashboard",
+      metricName: "quality_gap",
+      bestDirection: "lower",
+      metricUnit: "gaps",
+    },
+    { type: "run", run: 1, metric: 1, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const viewModel = {
+    summary: { segment: 0, baseline: 1, best: 1, confidence: 1 },
+  };
+  const { getById, dom } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 1234,
+      viewModel,
+    },
+    {
+      beforeParse(window) {
+        window.fetch = async (url) => {
+          if (String(url).includes("view-model")) {
+            return { ok: false, status: 500, statusText: "Internal Server Error" };
+          }
+          return {
+            ok: true,
+            text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n"),
+          };
+        };
+        window.setInterval = () => 42;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => /failed/i.test(getById("live-title").textContent || ""),
+    "Live refresh failure was not announced.",
+  );
+  assert.match(getById("live-detail").textContent || "", /view-model\.json returned HTTP 500/);
+  assert.doesNotMatch(getById("live-title").textContent || "", /refreshed/i);
   dom.window.close();
 });
 

@@ -29,7 +29,7 @@ Parsing a metric is not enough. Perfect score-like metrics, dev-only bests, miss
 
 ## Scaffold Health
 
-`state`, `doctor`, `guided_setup`, and the dashboard expose `scaffoldHealth`.
+`state`, `doctor`, `guide`, and the dashboard expose `scaffoldHealth`.
 
 Treat these as setup blockers:
 
@@ -114,9 +114,11 @@ Command-bearing setup and inspection paths require deliberate approval before ma
 - `benchmark_command`
 - `checks_command`
 - `model_command`
-- setup guidance materialized from external recipe catalogs
+- setup guidance materialized from external recipe catalogs, admitted with `--trust-catalog`
 
 Prefer project-local `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
+
+Trusted external recipes store catalog provenance in session config. `doctor` and `next` revalidate that provenance and block when the recipe or catalog has drifted, cannot be fetched, or no longer matches the trusted hash.
 
 ## Corrupt Or Partial State
 
