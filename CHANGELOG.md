@@ -10,8 +10,13 @@ This project uses a root-only changelog because the root README is the public do
 
 - Repaired the checked-in demo session scaffold so its commit scope points at existing demo files, refreshed the static dashboard export, and added product checks for demo doctor/export drift.
 - Aligned current README, docs, AGENTS, and skill guidance around CLI command names and the dashboard as a served live readout / visual aid. Historical changelog entries and internal tool-contract names may still use older snake_case identifiers.
+- Removed the README prerequisites checklist so the public install path stays focused on trying and installing the plugin.
 - Added explicit `--trust-catalog` admission for external recipe catalogs, provenance drift checks, redacted evidence boundaries, and workdir-confined `ARTIFACT` handling.
 - Removed dormant dashboard mutation routes and client action controls from the packaged readout path while sharpening mode labels, copy feedback, and chart dialog keyboard behavior.
+
+### Fixed
+
+- Added a Unix-compatible demo benchmark replay script and prefer it on non-Windows hosts so demo doctor checks do not require PowerShell in CI.
 
 Bumped public package and plugin manifest version surfaces to `1.3.4`.
 

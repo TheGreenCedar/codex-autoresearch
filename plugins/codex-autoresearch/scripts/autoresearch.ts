@@ -2295,10 +2295,15 @@ function headText(
 }
 
 async function defaultBenchmarkCommand(workDir: string) {
-  if (await pathExists(path.join(workDir, "autoresearch.ps1"))) {
+  const powershellScript = await pathExists(path.join(workDir, "autoresearch.ps1"));
+  const bashScript = await pathExists(path.join(workDir, "autoresearch.sh"));
+  if (process.platform !== "win32" && bashScript) {
+    return "bash ./autoresearch.sh";
+  }
+  if (powershellScript) {
     return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   }
-  if (await pathExists(path.join(workDir, "autoresearch.sh"))) {
+  if (bashScript) {
     return "bash ./autoresearch.sh";
   }
   throw new Error(
