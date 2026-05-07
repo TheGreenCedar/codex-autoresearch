@@ -19,11 +19,3 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 Reference pages:
 
 - [Maintainers](maintainers.md)
-
-## Documentation Boundary
-
-Keep the root README short and human-facing. It should answer what the plugin does, how to install it, how to start, where to see the dashboard, and where the docs live.
-
-Keep workflow rules here. If a command, dashboard mode, finalization behavior, or safety rule changes, update the closest topic page together with the skill, changelog, tests, and product benchmark.
-
-There is no current public `specification-delight-roadmap/` page. Historical design notes should stay out of first-run onboarding unless they are deliberately restored as an archive.

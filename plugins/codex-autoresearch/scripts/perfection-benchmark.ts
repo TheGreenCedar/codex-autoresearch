@@ -285,9 +285,8 @@ const checks = [
           "serve --cwd",
           "gap-candidates",
           "finalize-preview",
-          "Use the CLI for actions and logging",
+          "Use the CLI for setup, packet runs, logging, gap review, export, and finalization",
           "CLI commands return structured content",
-          "specification-delight-roadmap",
         ])
         ? pass()
         : fail("Docs split, visual docs, live demo, or scrubbed demo export is incomplete.");

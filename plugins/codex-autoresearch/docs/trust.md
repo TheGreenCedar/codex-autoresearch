@@ -20,7 +20,7 @@ Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not repor
 
 `crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep` or `discard` needs a finite primary metric.
 
-`benchmark-lint` now reports two layers:
+`benchmark-lint` reports two layers:
 
 - **metric parsing**: whether `METRIC <primary>=<number>` was parsed
 - **research integrity**: whether the evidence is promotable or merely local/dev evidence

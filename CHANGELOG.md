@@ -6,18 +6,24 @@ This project uses a root-only changelog because the root README is the public do
 
 ## 1.3.4
 
+### Added
+
+- External recipe catalogs now require explicit `--trust-catalog` opt-in before their commands can be used. Trusted catalog recipes record provenance in session config and later `doctor` / `next` runs block if the recipe changes.
+- Packet evidence now quarantines `ARTIFACT` paths that resolve outside the target working directory instead of storing them as usable artifact paths.
+- The checked-in demo session now includes a Unix-compatible benchmark replay script, so demo doctor checks work on non-Windows hosts without requiring PowerShell.
+
 ### Changed
 
-- Repaired the checked-in demo session scaffold so its commit scope points at existing demo files, refreshed the static dashboard export, and added product checks for demo doctor/export drift.
-- Aligned current README, docs, AGENTS, and skill guidance around CLI command names and the dashboard as a served live readout / visual aid. Historical changelog entries and internal tool-contract names may still use older snake_case identifiers.
-- Removed the README prerequisites checklist so the public install path stays focused on trying and installing the plugin.
-- Restored workflow and architecture diagrams to the top of the docs index.
-- Added explicit `--trust-catalog` admission for external recipe catalogs, provenance drift checks, redacted evidence boundaries, and workdir-confined `ARTIFACT` handling.
-- Removed dormant dashboard mutation routes and client action controls from the packaged readout path while sharpening mode labels, copy feedback, and chart dialog keyboard behavior.
+- The served dashboard and static export are now strictly read-only readouts. Dashboard action routes, action controls, nonce plumbing, and action receipts were removed; setup, packet runs, logging, export, and finalization remain CLI-owned.
+- Dashboard wording, mode labels, copy feedback, and chart dialog behavior now describe the surface as an `Autoresearch Readout` instead of an action console.
+- Public docs and skill guidance now use the current CLI command names, keep workflow and architecture diagrams first in the docs index, and keep the root README focused on trying and installing the plugin.
+- The checked-in demo dashboard export and showcase image were refreshed for the current readout design and plugin version.
 
 ### Fixed
 
-- Added a Unix-compatible demo benchmark replay script and prefer it on non-Windows hosts so demo doctor checks do not require PowerShell in CI.
+- Demo scaffold `commitPaths` now point at existing demo-owned files, and product checks now fail when the checked-in demo doctor/export evidence drifts from the current source.
+- Default benchmark discovery now prefers `autoresearch.sh` on non-Windows hosts before falling back to `autoresearch.ps1`, preventing Linux CI from failing demo doctor checks with `exit 127`.
+- Generated command displays, benchmark output tails, dashboard JSONL, and static readouts now redact token-looking values, URL credentials, home paths, and env-file paths before storing or serving evidence.
 
 Bumped public package and plugin manifest version surfaces to `1.3.4`.
 
