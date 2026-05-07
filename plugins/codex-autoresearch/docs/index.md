@@ -19,8 +19,6 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 Reference pages:
 
 - [Maintainers](maintainers.md)
-- [High-impact improvement plan](high-impact-improvement-plan.md)
-- [Deferred improvement plan](deferred-improvement-plan.md)
 
 ## Documentation Boundary
 

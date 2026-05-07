@@ -434,7 +434,7 @@ test("external catalog recipes require trust and record provenance", async () =>
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.recipeId, "external-speed");
     assert.equal(config.recipeCatalogProvenance.recipeId, "external-speed");
-    assert.equal(config.recipeCatalogProvenance.source, catalogPath);
+    assert.equal(config.recipeCatalogProvenance.source, "recipes.json");
     assert.match(config.recipeCatalogProvenance.recipeHash, /^[a-f0-9]{64}$/);
 
     const promptPlan = await runCli([
@@ -520,6 +520,53 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
     ]);
     assert.equal(logged.code, 0, logged.stderr);
     assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+  });
+});
+
+test("last-run packet storage redacts raw benchmark evidence and still logs from last", async () => {
+  await withTempDir("last-run-redaction", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "redacted packet", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "runner.mjs"),
+      [
+        "console.log('METRIC seconds=1');",
+        "console.log('api_key=abcdefghijklmnop');",
+        "console.log('Bearer zyxwvutsrqponmlkjihgfedcba');",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} runner.mjs`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const payload = JSON.parse(packet.stdout);
+    assert.equal(payload.packetEvidence.stdoutTail.includes("abcdefghijklmnop"), false);
+
+    const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+    assert.doesNotMatch(lastRunText, /abcdefghijklmnop/);
+    assert.doesNotMatch(lastRunText, /zyxwvutsrqponmlkjihgfedcba/);
+    assert.match(lastRunText, /api_key=<redacted>/);
+    assert.match(lastRunText, /Bearer <redacted>/);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep redacted packet",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const loggedPayload = JSON.parse(logged.stdout);
+    assert.equal(loggedPayload.experiment.metric, 1);
+    assert.equal(loggedPayload.lastRunCleared, true);
   });
 });
 

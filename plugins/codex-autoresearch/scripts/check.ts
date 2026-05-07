@@ -273,14 +273,18 @@ async function runDemoTrustCheck() {
     "utf8",
   );
   const forbidden = [
-    "C:\\Users\\",
-    "C:\\Program Files",
-    "actionNonce",
-    "X-Autoresearch-Action-Nonce",
-    "/actions/",
-    "live-actions-panel",
-    "action-receipt",
-  ].filter((needle) => html.includes(needle));
+    { label: "Windows user path", pattern: /C:(?:\\+|\/)Users(?:\\+|\/)/ },
+    {
+      label: "Windows Program Files path",
+      pattern: /C:(?:\\+|\/)Program Files(?:\\+|\/)/,
+    },
+    { label: "POSIX user path", pattern: /\/(?:Users|home)\/[^/"'<>\s]+/ },
+    { label: "actionNonce", pattern: /actionNonce/ },
+    { label: "action nonce header", pattern: /X-Autoresearch-Action-Nonce/ },
+    { label: "dashboard action route", pattern: /\/actions\// },
+    { label: "live actions panel", pattern: /live-actions-panel/ },
+    { label: "action receipt", pattern: /action-receipt/ },
+  ].filter((entry) => entry.pattern.test(html));
   if (!html.includes(`"pluginVersion":"${pkg.version}"`) || forbidden.length) {
     console.log("fail demo:export");
     if (!html.includes(`"pluginVersion":"${pkg.version}"`)) {
@@ -288,7 +292,11 @@ async function runDemoTrustCheck() {
     }
     if (forbidden.length) {
       console.log(
-        indent(`Demo export includes forbidden readout content:\n${forbidden.join("\n")}`),
+        indent(
+          `Demo export includes forbidden readout content:\n${forbidden
+            .map((entry) => entry.label)
+            .join("\n")}`,
+        ),
       );
     }
     return false;

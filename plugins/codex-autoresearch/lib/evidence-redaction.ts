@@ -12,8 +12,25 @@ const WINDOWS_HOME = /[A-Za-z]:\\Users\\[^\\\s"'<>]+/g;
 const POSIX_HOME = /\/(?:Users|home)\/[^/\s"'<>]+/g;
 const ENV_FILE_PATH =
   /(?:[A-Za-z]:\\|\/|\.{1,2}[\\/])(?:[^\s"'<>|]+[\\/])*\.?env(?:\.[A-Za-z0-9_-]+)?/gi;
+const SENSITIVE_VALUE_KEYS = new Set([
+  "apikey",
+  "accesstoken",
+  "authtoken",
+  "authorization",
+  "bearer",
+  "clientsecret",
+  "credential",
+  "credentials",
+  "password",
+  "secret",
+  "secrets",
+  "token",
+]);
 
 export function redactEvidenceObject<T = unknown>(value: T, context: LooseObject = {}): T {
+  if (isSensitiveEvidenceKey(context.key) && value != null && value !== "") {
+    return "<redacted>" as T;
+  }
   if (typeof value === "string") return redactEvidenceText(value, context) as T;
   if (Array.isArray(value)) return value.map((item) => redactEvidenceObject(item, context)) as T;
   if (!value || typeof value !== "object") return value;
@@ -40,6 +57,17 @@ export function redactEvidenceText(value: unknown, context: LooseObject = {}): s
     text = text.split(String(context.workDir)).join("<workdir>");
   }
   return text;
+}
+
+function isSensitiveEvidenceKey(key: unknown): boolean {
+  const normalized = String(key || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return (
+    SENSITIVE_VALUE_KEYS.has(normalized) ||
+    normalized.endsWith("token") ||
+    normalized.endsWith("secret")
+  );
 }
 
 export function redactCommandDisplay(value: unknown, context: LooseObject = {}): string {

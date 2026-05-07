@@ -200,9 +200,20 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
 
   const object = redactEvidenceObject({
     command: text,
-    nested: { token: "token=123456789abcdef" },
+    nested: {
+      token: "123456789abcdef",
+      accessToken: "zyxwvutsrqponmlkjihg",
+      client_secret: "sk-test-structured-secret",
+      tokenCount: 123456789,
+    },
   });
   assert.doesNotMatch(JSON.stringify(object), /123456789abcdef/);
+  assert.doesNotMatch(JSON.stringify(object), /zyxwvutsrqponmlkjihg/);
+  assert.doesNotMatch(JSON.stringify(object), /sk-test-structured-secret/);
+  assert.equal(object.nested.token, "<redacted>");
+  assert.equal(object.nested.accessToken, "<redacted>");
+  assert.equal(object.nested.client_secret, "<redacted>");
+  assert.equal(object.nested.tokenCount, 123456789);
   assert.equal(redactPathDisplay("out/report.json", "/tmp/project"), "out/report.json");
   assert.equal(
     redactPathDisplay("/tmp/elsewhere/report.json", "/tmp/project"),

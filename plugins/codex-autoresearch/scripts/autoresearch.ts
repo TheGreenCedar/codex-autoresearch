@@ -454,9 +454,18 @@ async function withRecipeDefaults(args: LooseObject): Promise<LooseObject> {
   const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
   return recipeId
     ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog, {
+        catalogBaseDir: recipeCatalogBaseDir(args),
         trustCatalog: trustCatalogOption(args),
       })
     : args;
+}
+
+function recipeCatalogBaseDir(args: LooseObject): string {
+  try {
+    return resolveWorkDir(args.working_dir || args.cwd).sessionCwd;
+  } catch {
+    return process.cwd();
+  }
 }
 
 function trustCatalogOption(args: LooseObject): boolean {
@@ -542,15 +551,17 @@ function firstRunChecklist({
 
 async function setupPlan(args: any) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const catalogOptions = { catalogBaseDir: sessionCwd };
   const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
   const storedRecipe = config?.recipeId;
   let recommended = null;
   if (requestedRecipe) {
-    recommended = await findRecipe(requestedRecipe, args.catalog);
+    recommended = await findRecipe(requestedRecipe, args.catalog, catalogOptions);
     if (!recommended) throw new Error(`Unknown recipe: ${requestedRecipe}`);
   } else if (storedRecipe) {
     recommended =
-      (await findRecipe(storedRecipe, args.catalog)) || (await recommendRecipe(workDir));
+      (await findRecipe(storedRecipe, args.catalog, catalogOptions)) ||
+      (await recommendRecipe(workDir));
   } else {
     recommended = await recommendRecipe(workDir);
   }
@@ -1793,8 +1804,11 @@ function replacementNextCommandFromLastRun(
 }
 
 async function recipeCommand(subcommand: string, args: any) {
+  const catalogOptions = { catalogBaseDir: recipeCatalogBaseDir(args) };
   if (!subcommand || subcommand === "list") {
-    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    const catalogRecipes = args.catalog
+      ? await loadRecipeCatalog(args.catalog, catalogOptions)
+      : [];
     return { ok: true, recipes: [...listBuiltInRecipes(), ...catalogRecipes] };
   }
   if (subcommand === "recommend") {
@@ -1819,7 +1833,9 @@ async function recipeCommand(subcommand: string, args: any) {
   if (subcommand === "show") {
     const id = args._[2] || args.id || args.recipe || args.recipeId;
     if (!id) throw new Error("recipes show requires a recipe id");
-    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    const catalogRecipes = args.catalog
+      ? await loadRecipeCatalog(args.catalog, catalogOptions)
+      : [];
     const recipe = [...listBuiltInRecipes(), ...catalogRecipes].find((item: any) => item.id === id);
     if (!recipe) throw new Error(`Unknown recipe: ${id}`);
     return { ok: true, recipe };
@@ -1830,6 +1846,7 @@ async function recipeCommand(subcommand: string, args: any) {
 async function interactiveSetup(args: any) {
   const plan = await setupPlan(args);
   const recipe = plan.recommendedRecipe || getBuiltInRecipe("custom");
+  const catalogOptions = { catalogBaseDir: recipeCatalogBaseDir(args) };
   const rl = createInterface({ input, output });
   try {
     const ask = async (prompt: any, fallback: any) => {
@@ -1837,7 +1854,7 @@ async function interactiveSetup(args: any) {
       return answer.trim() || fallback;
     };
     const selectedRecipeId = await ask("Recipe id", recipe?.id || "custom");
-    const selectedRecipe = await findRecipe(selectedRecipeId, args.catalog);
+    const selectedRecipe = await findRecipe(selectedRecipeId, args.catalog, catalogOptions);
     if (!selectedRecipe) throw new Error(`Unknown recipe: ${selectedRecipeId}`);
     const nextArgs = await withRecipeDefaults({
       ...args,
@@ -4231,8 +4248,81 @@ async function resolveLastRunPath(workDir: string) {
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+  await fsp.writeFile(
+    target,
+    `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
+    "utf8",
+  );
   return target;
+}
+
+function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
+  const stored = JSON.parse(JSON.stringify(packet || {}));
+  const context = { workDir: packet?.workDir || packet?.history?.workDir || "" };
+  if (stored.packetEvidence) {
+    stored.packetEvidence = redactEvidenceObject(stored.packetEvidence, context);
+  }
+  redactRunPacketProcessEvidence(stored.run, context);
+  if (stored.doctor) stored.doctor = redactEvidenceObject(stored.doctor, context);
+  if (stored.history) {
+    if (stored.history.command) {
+      stored.history.command = redactCommandDisplay(stored.history.command, context);
+    }
+    redactBenchmarkContractForStorage(stored.history.benchmarkContract, context);
+  }
+  return stored;
+}
+
+function redactRunPacketProcessEvidence(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  if (value.command) value.command = redactCommandDisplay(value.command, context);
+  if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
+  if (value.envFile) value.envFile = "<env-file>";
+  if (value.tailOutput) value.tailOutput = redactEvidenceText(value.tailOutput, context);
+  if (value.stdoutTail) value.stdoutTail = redactEvidenceText(value.stdoutTail, context);
+  if (value.stderrTail) value.stderrTail = redactEvidenceText(value.stderrTail, context);
+  redactProgressEvidence(value.progress, context);
+  if (value.commandDiagnostics) {
+    value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
+  }
+  if (value.checks && typeof value.checks === "object") {
+    if (value.checks.command) {
+      value.checks.command = redactCommandDisplay(value.checks.command, context);
+    }
+    if (value.checks.tailOutput) {
+      value.checks.tailOutput = redactEvidenceText(value.checks.tailOutput, context);
+    }
+    redactProgressEvidence(value.checks.progress, context);
+  }
+}
+
+function redactProgressEvidence(value: LooseObject | null | undefined, context: LooseObject) {
+  if (!value || typeof value !== "object") return;
+  if (value.latestOutputTail) {
+    value.latestOutputTail = redactEvidenceText(value.latestOutputTail, context);
+  }
+  if (Array.isArray(value.stages)) {
+    for (const stage of value.stages) {
+      if (!stage || typeof stage !== "object") continue;
+      if (stage.outputTail) stage.outputTail = redactEvidenceText(stage.outputTail, context);
+    }
+  }
+}
+
+function redactBenchmarkContractForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  if (value.command) value.command = redactCommandDisplay(value.command, context);
+  if (value.checksCommand) {
+    value.checksCommand = redactCommandDisplay(value.checksCommand, context);
+  }
+  if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
+  if (value.envFile) value.envFile = "<env-file>";
 }
 
 async function readLastRunPacket(workDir: string) {
@@ -4733,7 +4823,7 @@ function currentQualityGapSlug(workDir: string) {
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state: LooseObject = await publicState({ ...args, compact: false });
   const issues = [];
   const warnings = [];
@@ -4770,7 +4860,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   for (const blocker of state.researchIntegrity?.blockers || []) {
     issues.push(blocker);
   }
-  const catalogTrust = await catalogTrustCheck(config).catch((error: unknown) => ({
+  const catalogTrust = await catalogTrustCheck(config, sessionCwd).catch((error: unknown) => ({
     ok: false,
     issues: [`Trusted recipe catalog could not be revalidated: ${errorMessage(error)}`],
   }));
@@ -4876,10 +4966,10 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   return result;
 }
 
-async function catalogTrustCheck(config: LooseObject) {
+async function catalogTrustCheck(config: LooseObject, sessionCwd: string) {
   const provenance = config.recipeCatalogProvenance || config.recipe_catalog_provenance || null;
   if (!provenance) return { ok: true, issues: [] as string[] };
-  return await revalidateRecipeCatalogProvenance(provenance);
+  return await revalidateRecipeCatalogProvenance(provenance, { catalogBaseDir: sessionCwd });
 }
 
 function benchmarkDriftWarning({ currentMetric, bestMetric, direction, metricName }: LooseObject) {

@@ -18,6 +18,9 @@ type RecipeCatalogProvenance = {
   fetchedAt: string;
   commandRiskClass: string;
 };
+type RecipeCatalogOptions = {
+  catalogBaseDir?: string;
+};
 type Recipe = {
   id: string;
   title: string;
@@ -280,18 +283,22 @@ export function applyRecipeObjectDefaults(
 export async function findRecipe(
   id: string,
   catalog: string | null = null,
+  options: RecipeCatalogOptions = {},
 ): Promise<Recipe | null> {
   const builtIn = getBuiltInRecipe(id);
   if (builtIn) return builtIn;
-  const catalogRecipes = catalog ? await loadRecipeCatalog(catalog) : [];
+  const catalogRecipes = catalog ? await loadRecipeCatalog(catalog, options) : [];
   return catalogRecipes.find((recipe) => recipe.id === id) || null;
 }
 
-export async function revalidateRecipeCatalogProvenance(provenance: LooseObject | null) {
+export async function revalidateRecipeCatalogProvenance(
+  provenance: LooseObject | null,
+  options: RecipeCatalogOptions = {},
+) {
   if (!provenance || typeof provenance !== "object" || !provenance.source) {
     return { ok: true, issues: [] as string[], provenance: null };
   }
-  const loaded = await loadRecipeCatalogWithProvenance(String(provenance.source));
+  const loaded = await loadRecipeCatalogWithProvenance(String(provenance.source), options);
   const recipe = loaded.recipes.find((item) => item.id === provenance.recipeId);
   const issues: string[] = [];
   if (!recipe) {
@@ -311,10 +318,10 @@ export async function applyResolvedRecipeDefaults(
   args: LooseObject,
   recipeId?: string | null,
   catalog: string | null = null,
-  options: { trustCatalog?: boolean } = {},
+  options: RecipeCatalogOptions & { trustCatalog?: boolean } = {},
 ): Promise<LooseObject> {
   if (!recipeId) return args;
-  const recipe = await findRecipe(recipeId, catalog);
+  const recipe = await findRecipe(recipeId, catalog, options);
   if (!recipe) throw new Error(`Unknown recipe: ${recipeId}`);
   if (recipe.source === "catalog" && !options.trustCatalog) {
     const hash = recipe.provenance?.recipeHash
@@ -348,20 +355,29 @@ export async function recommendRecipe(workDir: string): Promise<Recipe | null> {
   return getBuiltInRecipe("custom");
 }
 
-export async function loadRecipeCatalog(catalog: string): Promise<Recipe[]> {
-  return (await loadRecipeCatalogWithProvenance(catalog)).recipes;
+export async function loadRecipeCatalog(
+  catalog: string,
+  options: RecipeCatalogOptions = {},
+): Promise<Recipe[]> {
+  return (await loadRecipeCatalogWithProvenance(catalog, options)).recipes;
 }
 
-export async function loadRecipeCatalogWithProvenance(catalog: string): Promise<{
+export async function loadRecipeCatalogWithProvenance(
+  catalog: string,
+  options: RecipeCatalogOptions = {},
+): Promise<{
   catalogHash: string;
   fetchedAt: string;
   recipes: Recipe[];
   source: string;
 }> {
   if (!catalog) return { catalogHash: "", fetchedAt: "", recipes: [], source: "" };
-  const source = /^https?:\/\//i.test(catalog) ? catalog : path.resolve(catalog);
+  const source = catalogSourceForProvenance(catalog, options.catalogBaseDir);
+  const readSource = resolveCatalogReadSource(catalog, options.catalogBaseDir);
   const text = (
-    /^https?:\/\//i.test(source) ? await fetchText(source) : await readBoundedCatalogFile(source)
+    /^https?:\/\//i.test(readSource)
+      ? await fetchText(readSource)
+      : await readBoundedCatalogFile(readSource)
   ) as string;
   const catalogHash = sha256(text);
   const fetchedAt = new Date().toISOString();
@@ -381,6 +397,23 @@ export async function loadRecipeCatalogWithProvenance(catalog: string): Promise<
     ),
     source,
   };
+}
+
+function resolveCatalogReadSource(catalog: string, baseDir = ""): string {
+  if (/^https?:\/\//i.test(catalog)) return catalog;
+  return path.isAbsolute(catalog) ? catalog : path.resolve(baseDir || process.cwd(), catalog);
+}
+
+function catalogSourceForProvenance(catalog: string, baseDir = ""): string {
+  if (/^https?:\/\//i.test(catalog)) return catalog;
+  const resolved = resolveCatalogReadSource(catalog, baseDir);
+  if (baseDir) {
+    const relative = path.relative(baseDir, resolved);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return relative.replace(/\\/g, "/");
+    }
+  }
+  return catalog;
 }
 
 async function readBoundedCatalogFile(filePath: string) {
