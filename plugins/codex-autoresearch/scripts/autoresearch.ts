@@ -907,6 +907,11 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     );
   const testSpeed = /\b(unit tests?|tests?)\b/.test(lower) && speed;
   const latencyRatio = /\bp99\b/.test(lower) && /\bp90\b/.test(lower);
+  const qualityGapIntent =
+    /\bquality[_ -]?gap\b/.test(lower) ||
+    /\b(friction|smooth|manual tests?|manual-test|end to end|e2e|user experience|ai experience|skill-first)\b/.test(
+      lower,
+    );
   const maxIterations =
     positiveIntegerFromPrompt(prompt) ??
     positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
@@ -915,12 +920,14 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   const explicitScope = explicit.scope.length ? explicit.scope : [];
   const repoRecipe = await recommendRecipe(workDir);
   const loopKind =
-    bugs || (productResearch && !speed && !memory) ? "quality-gap" : "measured-optimization";
+    bugs || qualityGapIntent || (productResearch && !speed && !memory)
+      ? "quality-gap"
+      : "measured-optimization";
   const useDiscoveredBenchmark = loopKind === "measured-optimization" ? discoveredBenchmark : null;
   const metricName =
     explicit.metricName ||
     useDiscoveredBenchmark?.metricName ||
-    (bugs || (productResearch && !speed && !memory)
+    (bugs || qualityGapIntent || (productResearch && !speed && !memory)
       ? "quality_gap"
       : latencyRatio
         ? "p99_p90_ratio"
