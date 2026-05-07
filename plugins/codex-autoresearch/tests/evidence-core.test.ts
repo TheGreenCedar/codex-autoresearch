@@ -188,6 +188,8 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
     "https://user:pass@example.test/path",
     "C:\\Users\\albert\\project\\.env.local",
     "/home/albert/project/.env",
+    "--packet-env-file=.env.production",
+    `/${"!/".repeat(200)}not-env`,
     "/Users/albert/project/file.txt",
   ].join("\n");
   const redacted = redactCommandDisplay(text);
@@ -196,6 +198,7 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
   assert.doesNotMatch(redacted, /sk-test/);
   assert.doesNotMatch(redacted, /user:pass/);
   assert.doesNotMatch(redacted, /albert/);
+  assert.doesNotMatch(redacted, /\.env\.production/);
   assert.match(redacted, /<redacted>|<credentials>|<env-file>|<user>/);
 
   const object = redactEvidenceObject({

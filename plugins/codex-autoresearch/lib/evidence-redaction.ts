@@ -10,8 +10,8 @@ const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/\-=]{12,}/gi;
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi;
 const WINDOWS_HOME = /[A-Za-z]:\\Users\\[^\\\s"'<>]+/g;
 const POSIX_HOME = /\/(?:Users|home)\/[^/\s"'<>]+/g;
-const ENV_FILE_PATH =
-  /(?:[A-Za-z]:\\|\/|\.{1,2}[\\/])(?:[^\s"'<>|]+[\\/])*\.?env(?:\.[A-Za-z0-9_-]+)?/gi;
+const TOKEN = /[^\s"'<>|]+/g;
+const TRAILING_ENV_TOKEN_PUNCTUATION = new Set([")", ",", ".", ";", ":"]);
 const SENSITIVE_VALUE_KEYS = new Set([
   "apikey",
   "accesstoken",
@@ -48,7 +48,7 @@ export function redactEvidenceText(value: unknown, context: LooseObject = {}): s
   text = text.replace(SECRET_ASSIGNMENT, (_match, key) => `${key}=<redacted>`);
   text = text.replace(BEARER_TOKEN, "Bearer <redacted>");
   text = text.replace(SECRET_PHRASE, (_match, key) => `${key} <redacted>`);
-  text = text.replace(ENV_FILE_PATH, "<env-file>");
+  text = redactEnvFileTokens(text);
   text = text.replace(WINDOWS_HOME, "C:\\Users\\<user>");
   text = text.replace(POSIX_HOME, (match) =>
     match.startsWith("/Users/") ? "/Users/<user>" : "/home/<user>",
@@ -57,6 +57,26 @@ export function redactEvidenceText(value: unknown, context: LooseObject = {}): s
     text = text.split(String(context.workDir)).join("<workdir>");
   }
   return text;
+}
+
+function redactEnvFileTokens(text: string): string {
+  return text.replace(TOKEN, (token) => {
+    const { core, suffix } = splitTrailingEnvTokenPunctuation(token);
+    return isEnvFileToken(core) ? `<env-file>${suffix}` : token;
+  });
+}
+
+function splitTrailingEnvTokenPunctuation(token: string): { core: string; suffix: string } {
+  let end = token.length;
+  while (end > 0 && TRAILING_ENV_TOKEN_PUNCTUATION.has(token[end - 1] || "")) {
+    end -= 1;
+  }
+  return { core: token.slice(0, end), suffix: token.slice(end) };
+}
+
+function isEnvFileToken(token: string): boolean {
+  const normalized = token.replace(/\\/g, "/");
+  return /(^|[=/])\.env(\.[A-Za-z0-9_-]+)?$/.test(normalized);
 }
 
 function isSensitiveEvidenceKey(key: unknown): boolean {
