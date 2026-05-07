@@ -368,6 +368,25 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     );
     assert.match(pipelinePayload.intent.setupDefaults.constraints.join("\n"), /primary score/);
 
+    await writeFile(
+      path.join(dir, "scripts", "cross-repo-promotion-benchmark.mjs"),
+      "console.log('METRIC cross_repo_score=0.9')\n",
+    );
+    const frictionPromptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Eliminate user and AI friction in a skill-first manual E2E flow. Use quality_gap as the primary metric and a deterministic manual-test harness.",
+    ]);
+    assert.equal(frictionPromptPlan.code, 0, frictionPromptPlan.stderr);
+    const frictionPayload = JSON.parse(frictionPromptPlan.stdout);
+    assert.equal(frictionPayload.intent.loopKind, "quality-gap");
+    assert.equal(frictionPayload.intent.metric.name, "quality_gap");
+    assert.equal(frictionPayload.intent.inferredFrom.discoveredBenchmark, null);
+    assert.equal(frictionPayload.intent.setupDefaults.benchmarkCommand, "");
+    assert.equal(frictionPayload.intent.setupDefaults.recipe, "quality-gap");
+
     const broadPromptPlan = await runCli([
       "prompt-plan",
       "--cwd",

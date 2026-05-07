@@ -4,6 +4,14 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.5
+
+### Fixed
+
+- Prompt planning now treats explicit `quality_gap`, friction, manual E2E, and user/AI experience prompts as quality-gap loops instead of borrowing unrelated existing benchmark scripts.
+
+Bumped public package and plugin manifest version surfaces to `1.3.5`.
+
 ## 1.3.4
 
 ### Added
