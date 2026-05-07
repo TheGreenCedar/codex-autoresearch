@@ -1,22 +1,23 @@
 import { useCallback, useState } from "react";
 
 export function useCopyText(resetMs = 1600) {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
 
   const copy = useCallback(
     async (value: string) => {
       try {
         await navigator.clipboard.writeText(value);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), resetMs);
+        setStatus("success");
+        window.setTimeout(() => setStatus("idle"), resetMs);
         return true;
       } catch {
-        setCopied(false);
+        setStatus("error");
+        window.setTimeout(() => setStatus("idle"), resetMs);
         return false;
       }
     },
     [resetMs],
   );
 
-  return { copied, copy };
+  return { copied: status === "success", copy, status };
 }

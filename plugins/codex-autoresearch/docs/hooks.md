@@ -1,8 +1,8 @@
 # Codex Hooks
 
-Hooks are optional future guardrails for Autoresearch. Useful, maybe. Load-bearing, no.
+Hooks are optional guardrails for Autoresearch. Useful, maybe. Load-bearing, no.
 
-## Current Position
+## Position
 
 - Keep hooks opt-in.
 - Do not enable hook templates by default.
@@ -40,7 +40,6 @@ Hooks are experimental. They are best used as reminders or context injection, no
 
 They must not replace:
 
-- CLI validation
 - CLI validation
 - unsafe command gates
 - last-run freshness checks

@@ -16,6 +16,11 @@ import {
   statusHash,
 } from "../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
+import {
+  redactCommandDisplay,
+  redactEvidenceObject,
+  redactPathDisplay,
+} from "../lib/evidence-redaction.js";
 import { quoteForShell } from "./helpers/process.js";
 
 const withTempDir = async (name, fn) => {
@@ -173,4 +178,45 @@ test("core last-run freshness can validate command, git, and scoped file context
     assert.equal(historyAdvanced.fresh, false);
     assert.match(historyAdvanced.reason, /expected next log run #1/);
   });
+});
+
+test("evidence redactor hides secrets, credentials, home paths, and env files", () => {
+  const text = [
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    "api_key=sk-test-1234567890abcdef",
+    "family key api key abcdefghijklmnop",
+    "https://user:pass@example.test/path",
+    "C:\\Users\\albert\\project\\.env.local",
+    "/home/albert/project/.env",
+    "/Users/albert/project/file.txt",
+  ].join("\n");
+  const redacted = redactCommandDisplay(text);
+  assert.doesNotMatch(redacted, /abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(redacted, /abcdefghijklmnop/);
+  assert.doesNotMatch(redacted, /sk-test/);
+  assert.doesNotMatch(redacted, /user:pass/);
+  assert.doesNotMatch(redacted, /albert/);
+  assert.match(redacted, /<redacted>|<credentials>|<env-file>|<user>/);
+
+  const object = redactEvidenceObject({
+    command: text,
+    nested: {
+      token: "123456789abcdef",
+      accessToken: "zyxwvutsrqponmlkjihg",
+      client_secret: "sk-test-structured-secret",
+      tokenCount: 123456789,
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(object), /123456789abcdef/);
+  assert.doesNotMatch(JSON.stringify(object), /zyxwvutsrqponmlkjihg/);
+  assert.doesNotMatch(JSON.stringify(object), /sk-test-structured-secret/);
+  assert.equal(object.nested.token, "<redacted>");
+  assert.equal(object.nested.accessToken, "<redacted>");
+  assert.equal(object.nested.client_secret, "<redacted>");
+  assert.equal(object.nested.tokenCount, 123456789);
+  assert.equal(redactPathDisplay("out/report.json", "/tmp/project"), "out/report.json");
+  assert.equal(
+    redactPathDisplay("/tmp/elsewhere/report.json", "/tmp/project"),
+    "<outside-workdir>",
+  );
 });

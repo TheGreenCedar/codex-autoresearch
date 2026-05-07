@@ -90,6 +90,7 @@ type PackageManifestParse =
 const ok =
   (await runPhase("syntax", syntaxChecks)) &&
   (await runDashboardBuildWithParity()) &&
+  (await runDemoTrustCheck()) &&
   (await runSourceCheckoutLauncherCheck()) &&
   (await runPackageArtifactCheck()) &&
   (await runDogfoodHealthCheck()) &&
@@ -229,6 +230,79 @@ async function runPackageArtifactCheck() {
   } finally {
     await fsp.rm(packDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function runDemoTrustCheck() {
+  console.log("\n== demo trust ==");
+  const doctor = await runCommand([
+    "demo:doctor",
+    node,
+    [
+      "scripts/autoresearch.mjs",
+      "doctor",
+      "--cwd",
+      "examples/demo-session",
+      "--check-benchmark",
+      "--explain",
+    ],
+  ]);
+  if (doctor.code !== 0) {
+    console.log("fail demo:doctor");
+    const output = `${doctor.stdout}${doctor.stderr}`.trim();
+    if (output) console.log(indent(output));
+    return false;
+  }
+  let doctorPayload: any;
+  try {
+    doctorPayload = JSON.parse(doctor.stdout);
+  } catch (error) {
+    console.log("fail demo:doctor");
+    console.log(indent(`Could not parse demo doctor JSON: ${String(error)}`));
+    return false;
+  }
+  if (doctorPayload.ok !== true || (doctorPayload.issues || []).length) {
+    console.log("fail demo:doctor");
+    console.log(indent(JSON.stringify({ ok: doctorPayload.ok, issues: doctorPayload.issues })));
+    return false;
+  }
+  console.log("ok demo:doctor");
+
+  const pkg = JSON.parse(await fsp.readFile(path.join(ROOT, "package.json"), "utf8"));
+  const html = await fsp.readFile(
+    path.join(ROOT, "examples", "demo-session", "autoresearch-dashboard.html"),
+    "utf8",
+  );
+  const forbidden = [
+    { label: "Windows user path", pattern: /C:(?:\\+|\/)Users(?:\\+|\/)/ },
+    {
+      label: "Windows Program Files path",
+      pattern: /C:(?:\\+|\/)Program Files(?:\\+|\/)/,
+    },
+    { label: "POSIX user path", pattern: /\/(?:Users|home)\/[^/"'<>\s]+/ },
+    { label: "actionNonce", pattern: /actionNonce/ },
+    { label: "action nonce header", pattern: /X-Autoresearch-Action-Nonce/ },
+    { label: "dashboard action route", pattern: /\/actions\// },
+    { label: "live actions panel", pattern: /live-actions-panel/ },
+    { label: "action receipt", pattern: /action-receipt/ },
+  ].filter((entry) => entry.pattern.test(html));
+  if (!html.includes(`"pluginVersion":"${pkg.version}"`) || forbidden.length) {
+    console.log("fail demo:export");
+    if (!html.includes(`"pluginVersion":"${pkg.version}"`)) {
+      console.log(indent(`Demo export does not embed current pluginVersion ${pkg.version}.`));
+    }
+    if (forbidden.length) {
+      console.log(
+        indent(
+          `Demo export includes forbidden readout content:\n${forbidden
+            .map((entry) => entry.label)
+            .join("\n")}`,
+        ),
+      );
+    }
+    return false;
+  }
+  console.log("ok demo:export");
+  return true;
 }
 
 function parseNpmPackManifest(output: string): PackageManifestParse {

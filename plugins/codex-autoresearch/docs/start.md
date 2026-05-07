@@ -10,6 +10,9 @@ Use this page for the first five minutes of a Codex Autoresearch session. The go
 - a benchmark command or recipe
 - optional correctness checks
 - a scoped file surface for commits and reverts
+- Codex plugin marketplace access
+- Git for reviewable kept work
+- Node/npm only when developing the local source checkout
 
 The benchmark must print:
 
@@ -34,7 +37,7 @@ Broad prompt:
 Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex should call `prompt_plan` or `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, missing essentials, and a read-only setup command.
+Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, missing essentials, and a read-only setup command.
 
 Specific prompt:
 

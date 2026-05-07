@@ -334,33 +334,11 @@ export interface DashboardMeta {
   showcaseMode?: boolean;
   generatedAt?: string;
   refreshMs?: number;
-  actionNonce?: string;
   modeGuidance?: { title?: string; detail?: string; [key: string]: unknown };
   settings?: { showcaseMode?: boolean; [key: string]: unknown };
   trustState?: TrustStateModel;
   viewModel?: DashboardViewModel;
   [key: string]: unknown;
-}
-
-export interface ActionReceipt {
-  ok?: boolean;
-  action?: string;
-  status?: string;
-  nextStep?: string;
-  stderrSummary?: string;
-  stdoutSummary?: string;
-  durationMs?: number;
-  ledgerRun?: number;
-  lastRunCleared?: boolean;
-  command?: string;
-  receiptId?: string;
-  [key: string]: unknown;
-}
-
-export interface ActionState {
-  pending?: boolean;
-  error?: string;
-  receipt?: ActionReceipt;
 }
 
 export interface WeightedMetricDefinition {

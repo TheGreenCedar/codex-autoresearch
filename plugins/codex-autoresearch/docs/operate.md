@@ -25,7 +25,7 @@ Read existing files before editing:
 
 ## Dashboard
 
-Serve the live local runboard:
+Serve the live local readout:
 
 ```bash
 node scripts/autoresearch.mjs serve --cwd <project>
@@ -47,7 +47,7 @@ Static exports are offline snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-If you need actions, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use the CLI for actions and logging.
+If you need fresh state, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use the CLI for setup, packet runs, logging, gap review, export, and finalization.
 
 ## Packet Loop
 

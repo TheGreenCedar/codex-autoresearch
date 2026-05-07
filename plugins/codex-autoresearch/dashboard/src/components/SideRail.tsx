@@ -6,8 +6,8 @@ const NAV_ITEMS = [
 ] as const;
 
 export function SideRail({ live, showcase }: { live: boolean; showcase: boolean }) {
-  const status = showcase ? "Live" : live ? "Live" : "Static";
-  const detail = showcase ? "Runboard" : live ? "Readout" : "Snapshot";
+  const status = showcase ? "Demo" : live ? "Live" : "Static";
+  const detail = showcase ? "Snapshot" : live ? "Readout" : "Snapshot";
   return (
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>

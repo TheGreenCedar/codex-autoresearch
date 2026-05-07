@@ -10,7 +10,7 @@ You give Codex a broad request:
 Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex uses the `prompt_plan` tool to convert this into a structured approach:
+Codex uses `prompt-plan` to convert this into a structured approach:
 
 ```json
 {

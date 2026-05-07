@@ -3,7 +3,6 @@ export { buildChart } from "./model/chart";
 export { defaultConfig, normalizeEntries } from "./model/entries";
 export { fallbackAiSummary, fallbackMissionControl } from "./model/fallbacks";
 export {
-  actionLabel,
   directionLabel,
   formatChartPercentValue,
   formatChartRunValue,
@@ -29,8 +28,6 @@ export { recordFrom } from "./model/records";
 export { bestRunFor, buildReadout } from "./model/readout";
 export { statusCounts } from "./model/status";
 export type {
-  ActionReceipt,
-  ActionState,
   ChartModel,
   DashboardEntry,
   DashboardContext,

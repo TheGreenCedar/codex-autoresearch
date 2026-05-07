@@ -6,21 +6,21 @@ Codex Autoresearch is easiest to understand as a few small loops. Use this page 
 
 ```mermaid
 flowchart TD
-  A["Human prompt"] --> B["prompt_plan or onboarding_packet"]
+  A["Human prompt"] --> B["prompt-plan or onboarding-packet"]
   B --> C{"Enough setup detail?"}
   C -- "No" --> D["Ask only for missing essentials"]
-  C -- "Yes" --> E["setup or setup_plan"]
+  C -- "Yes" --> E["setup or setup-plan"]
   D --> E
   E --> F["doctor --explain"]
   F --> G{"Benchmark prints METRIC?"}
-  G -- "No" --> H["benchmark_lint and repair command"]
+  G -- "No" --> H["benchmark-lint and repair command"]
   G -- "Yes" --> I["serve live dashboard"]
   H --> F
   I --> J["next: run one packet"]
   J --> K["log keep/discard/crash/checks_failed with ASI"]
   K --> L{"continuation says continue?"}
   L -- "Yes" --> J
-  L -- "No" --> M["finalize_preview or report blocker"]
+  L -- "No" --> M["finalize-preview or report blocker"]
 ```
 
 ## Prompt To Loop
@@ -45,13 +45,13 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
   [*] --> Inspect
-  Inspect --> Packet: next_experiment
+  Inspect --> Packet: next
   Packet --> Log: finite metric or metricless failure
-  Log --> Continue: log_experiment returns continuation
+  Log --> Continue: log returns continuation
   Continue --> Inspect: shouldContinue
   Continue --> Segment: stale or maxed segment
   Continue --> Finalize: useful kept work is ready
-  Segment --> Inspect: new_segment baseline
+  Segment --> Inspect: new-segment baseline
   Finalize --> [*]
 ```
 
@@ -59,7 +59,7 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-  A["Broad product/docs/UX prompt"] --> B["setup_research_session"]
+  A["Broad product/docs/UX prompt"] --> B["research-setup"]
   B --> C["brief, sources, synthesis"]
   C --> D["filter hallucinations"]
   D --> E["quality-gaps.md"]
@@ -77,6 +77,6 @@ flowchart LR
   A["Trust blockers"] --> B["Run chart"]
   B --> C["Next best action"]
   C --> D["Why safe"]
-  D --> E["Decision controls"]
+  D --> E["Read-only handoff"]
   E --> F["Ledger and finalization"]
 ```

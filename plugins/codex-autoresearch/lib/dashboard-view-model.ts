@@ -1,4 +1,5 @@
 import { STATUS_VALUES, finiteMetric } from "./session-core.js";
+import { redactEvidenceObject } from "./evidence-redaction.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -482,7 +483,7 @@ export function buildEvidenceChips({
             ? "Snapshot"
             : trustState.mode === UNKNOWN
               ? UNKNOWN
-              : "Runboard",
+              : "Readout",
       tone: trustState.mode === "live-server" || trustState.mode === "live" ? "good" : "neutral",
       detail: "Runtime diagnostics are preserved for Codex handoff when relevant.",
     }),
@@ -1298,7 +1299,7 @@ export function buildActionRail({
       }),
     actionItem({
       priority: "Safe",
-      title: "Use the live runboard",
+      title: "Use the live readout",
       detail: "Open the served dashboard for fresh state and next-action context.",
       utilityCopy: "Static exports are fallback snapshots; CLI owns actions.",
       command: commandMap.get("serve dashboard") || commandMap.get("export dashboard"),
@@ -1952,8 +1953,8 @@ function compactRun(run: RunLike) {
     run: run.run,
     metric: run.metric,
     status: run.status,
-    description: run.description || "",
+    description: redactEvidenceObject(run.description || ""),
     commit: run.commit || "",
-    asi: run.asi || {},
+    asi: redactEvidenceObject(run.asi || {}),
   };
 }

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import {
   CartesianGrid,
   LabelList,
@@ -37,6 +38,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 type ValueMode = "value" | "percent";
 type AxisMode = "iteration" | "timestamp";
+type ChartPointOpener = HTMLElement | SVGElement | null;
 type MetricDetailCard = { label: string; value: string; id: string };
 
 interface TrendPanelProps {
@@ -72,6 +74,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
   const [valueMode, setValueMode] = useState<ValueMode>("value");
   const [axisMode, setAxisMode] = useState<AxisMode>("iteration");
   const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
+  const modalOpenerRef = useRef<ChartPointOpener>(null);
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
   const chartData = useMemo(() => buildChartData(chart, readout), [chart, readout]);
   const chartState = useMemo(
@@ -81,6 +84,14 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
   const detailPoint = selectedPoint || chartData.at(-1) || null;
   const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
     chartState;
+  const openPoint = (point: ChartDatum, opener: ChartPointOpener) => {
+    modalOpenerRef.current = opener;
+    setSelectedPoint(point);
+  };
+  const closePoint = () => {
+    setSelectedPoint(null);
+    window.setTimeout(() => modalOpenerRef.current?.focus(), 0);
+  };
   return (
     <section
       className="panel trend-panel"
@@ -206,7 +217,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={5}
-              dot={<ChartDot onSelect={setSelectedPoint} />}
+              dot={<ChartDot onSelect={openPoint} />}
               activeDot={<ChartActiveDot />}
             >
               <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
@@ -237,7 +248,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
           point={selectedPoint}
           valueMode={valueMode}
           readout={readout}
-          onClose={() => setSelectedPoint(null)}
+          onClose={closePoint}
         />
       )}
     </section>
@@ -438,34 +449,34 @@ function ChartDot({
   cx?: number;
   cy?: number;
   payload?: ChartDatum;
-  onSelect?: (payload: ChartDatum) => void;
+  onSelect?: (payload: ChartDatum, opener: ChartPointOpener) => void;
 }) {
-  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !payload) return null;
-  const color = STATUS_COLORS[payload.status] || STATUS_COLORS.keep;
+  const x = Number(cx);
+  const y = Number(cy);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !payload) return null;
+  const targetSize = payload.latest ? 30 : 24;
   return (
-    <g
+    <foreignObject
       className="chart-point-wrap"
-      tabIndex={0}
-      focusable="true"
-      aria-label={`Open details for run ${payload.runNumber}`}
-      onClick={() => onSelect?.(payload)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect?.(payload);
-        }
-      }}
+      x={x - targetSize / 2}
+      y={y - targetSize / 2}
+      width={targetSize}
+      height={targetSize}
     >
-      <title>{`Open details for run ${payload.runNumber}`}</title>
-      {payload.latest && <circle className="latest-halo" cx={cx} cy={cy} r="15" />}
-      <circle
-        className={`chart-point ${payload.status}`}
-        cx={cx}
-        cy={cy}
-        r={payload.best ? 8 : 6}
-        fill={color}
-      />
-    </g>
+      <button
+        type="button"
+        className="chart-point-button"
+        aria-haspopup="dialog"
+        aria-label={`Open details for run ${payload.runNumber}`}
+        onClick={(event) => onSelect?.(payload, event.currentTarget)}
+      >
+        {payload.latest && <span className="latest-halo-ui" aria-hidden="true" />}
+        <span
+          className={`chart-point-dot ${payload.status}${payload.best ? " best" : ""}`}
+          aria-hidden="true"
+        />
+      </button>
+    </foreignObject>
   );
 }
 
@@ -552,16 +563,47 @@ function ExperimentModal({
   onClose: () => void;
 }) {
   const breakdown = point.breakdown;
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    closeRef.current?.focus();
+  }, []);
+  const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ) || [],
+    ).filter((item) => !item.hasAttribute("disabled") && !item.getAttribute("aria-hidden"));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
+        ref={dialogRef}
         className="experiment-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="experiment-modal-title"
         onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={onDialogKeyDown}
       >
         <button
+          ref={closeRef}
           className="modal-close"
           type="button"
           aria-label="Close experiment details"

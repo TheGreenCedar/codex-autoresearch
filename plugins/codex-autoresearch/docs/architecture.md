@@ -12,8 +12,8 @@ flowchart TD
   CLI --> H["cli-handlers"]
   H --> Core["session, runner, recipes, dashboard view-model"]
   Core --> Files["autoresearch.md / jsonl / config / ideas / research"]
-  Core --> Dash["Live dashboard server"]
-  Dash --> Browser["Human-readable runboard"]
+  Core --> Dash["Live readout server"]
+  Dash --> Browser["Human-readable readout"]
 ```
 
 ## Trust Boundary
@@ -65,7 +65,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  A["Logged keep decisions"] --> B["finalize_preview"]
+  A["Logged keep decisions"] --> B["finalize-preview"]
   B --> C{"Ready?"}
   C -- "No" --> D["Report dirty tree, missing commits, overlap, or stale plan"]
   C -- "Yes" --> E["Create review branches outside dashboard"]

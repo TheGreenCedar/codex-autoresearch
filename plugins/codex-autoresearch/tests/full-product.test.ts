@@ -12,7 +12,6 @@ import {
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { parseMetricLines, runProcess, runShell, tailText } from "../lib/runner.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
-import { serveAutoresearch } from "../lib/live-server.js";
 import {
   createCliRunner,
   createInteractiveCliRunner,
@@ -42,6 +41,18 @@ const withLiveServer = (dir, fn) => {
       return await fn(payload);
     },
   );
+};
+
+const assertNoSensitiveEvidence = (text) => {
+  for (const needle of [
+    "abcdefghijklmnop",
+    "zyxwvutsrqponmlkjihgfedcba",
+    "user:pass@example.com",
+    "C:\\Users\\Alice",
+    "/home/alice",
+  ]) {
+    assert.equal(text.includes(needle), false, `Dashboard payload leaked ${needle}`);
+  }
 };
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
@@ -524,11 +535,13 @@ test("catalog recipes can drive setup-plan and setup", async () => {
       "catalog-demo",
       "--catalog",
       catalog,
+      "--trust-catalog",
     ]);
     assert.equal(plan.code, 0, plan.stderr);
     const planPayload = JSON.parse(plan.stdout);
     assert.equal(planPayload.recommendedRecipe.id, "catalog-demo");
     assert.match(planPayload.nextCommand, /--catalog/);
+    assert.match(planPayload.nextCommand, /--trust-catalog/);
 
     const setup = await runCli([
       "setup",
@@ -538,6 +551,7 @@ test("catalog recipes can drive setup-plan and setup", async () => {
       "catalog-demo",
       "--catalog",
       catalog,
+      "--trust-catalog",
     ]);
     assert.equal(setup.code, 0, setup.stderr);
     const setupPayload = JSON.parse(setup.stdout);
@@ -942,7 +956,57 @@ test("live server exposes health and view-model endpoints", async () => {
   });
 });
 
-test("live server rejects dashboard actions because CLI owns mutations", async () => {
+test("dashboard export and live endpoints redact sensitive evidence", async () => {
+  await withTempDir("dashboard-redaction", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "redacted live", "--metric-name", "seconds"]);
+    const sensitiveEvidence = [
+      "api_key=abcdefghijklmnop",
+      "Bearer zyxwvutsrqponmlkjihgfedcba",
+      "https://user:pass@example.com/path",
+      "C:\\Users\\Alice\\.env.local",
+      "/home/alice/.env",
+    ].join(" ");
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      `Baseline ${sensitiveEvidence}`,
+      "--asi",
+      JSON.stringify({
+        hypothesis: `Try the secret-bearing path ${sensitiveEvidence}`,
+        evidence: sensitiveEvidence,
+        next_action_hint: `Continue without leaking ${sensitiveEvidence}`,
+      }),
+    ]);
+
+    const exported = await runCli(["export", "--cwd", dir]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const html = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    assertNoSensitiveEvidence(html);
+
+    await withLiveServer(dir, async (payload) => {
+      const html = await fetch(payload.url).then((res) => res.text());
+      const jsonl = await fetch(`${payload.url}autoresearch.jsonl`).then((res) => res.text());
+      const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
+      const viewModelText = JSON.stringify(viewModel);
+
+      assertNoSensitiveEvidence(html);
+      assertNoSensitiveEvidence(jsonl);
+      assertNoSensitiveEvidence(viewModelText);
+      assert.match(jsonl, /api_key=<redacted>/);
+      assert.match(jsonl, /Bearer <redacted>/);
+      assert.match(jsonl, /https:\/\/<credentials>@example\.com/);
+      assert.match(viewModelText, /<env-file>/);
+    });
+  });
+});
+
+test("live server has no dashboard action routes because CLI owns mutations", async () => {
   await withTempDir("live-gap-action", async (dir) => {
     await runCli([
       "research-setup",
@@ -960,64 +1024,11 @@ test("live server rejects dashboard actions because CLI owns mutations", async (
         headers: { "content-type": "application/json", Origin: new URL(payload.url).origin },
         body: JSON.stringify({}),
       });
-      assert.equal(action.status, 403);
+      assert.equal(action.status, 404);
       const body = await action.json();
       assert.equal(body.ok, false);
-      assert.equal(body.code, "actions_disabled");
+      assert.equal(body.error, "Not found");
     });
-  });
-});
-
-test("live server action receipts redact stack traces", async () => {
-  await withTempDir("live-stack-redaction", async (dir) => {
-    const stackScript = path.join(dir, "stack-action.mjs");
-    await writeFile(
-      stackScript,
-      [
-        "console.error('Error: hidden failure');",
-        "console.error('    at leak (file:///C:/secret/live-server.ts:1:2)');",
-        "console.error('    at run (node:internal/modules/run_main:1:2)');",
-        "process.exit(1);",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const served = await serveAutoresearch({
-      cwd: dir,
-      port: 0,
-      scriptPath: stackScript,
-      actionsEnabled: true,
-      dashboardHtml: async () => "<html></html>",
-      viewModel: async () => ({ ok: true }),
-    });
-
-    try {
-      const action = await fetch(`${served.url}actions/doctor`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-autoresearch-action-nonce": served.actionNonce,
-          Origin: new URL(served.url).origin,
-        },
-        body: JSON.stringify({}),
-      });
-      assert.equal(action.status, 200);
-      const body = await action.json();
-      assert.equal(body.ok, false);
-      assert.equal(body.receipt.status, "failed");
-      assert.match(body.receipt.stderrSummary, /Error: hidden failure/);
-      assert.match(body.receipt.stderrSummary, /2 stack trace lines omitted/);
-      assert.equal("stdout" in body, false);
-      assert.equal("stderr" in body, false);
-      const serialized = JSON.stringify(body);
-      assert.doesNotMatch(serialized, /at leak/);
-      assert.doesNotMatch(serialized, /node:internal/);
-      assert.doesNotMatch(serialized, /file:\/\/\/C:\/secret/);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        served.server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
   });
 });
 
@@ -1053,10 +1064,10 @@ test("live server log actions stay disabled and leave last-run packets untouched
           },
         }),
       });
-      assert.equal(action.status, 403);
+      assert.equal(action.status, 404);
       const actionBody = await action.json();
       assert.equal(actionBody.ok, false);
-      assert.equal(actionBody.code, "actions_disabled");
+      assert.equal(actionBody.error, "Not found");
 
       const state = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
       assert.equal(state.runs, 0);
