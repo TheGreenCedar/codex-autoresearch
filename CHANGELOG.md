@@ -24,6 +24,7 @@ This project uses a root-only changelog because the root README is the public do
 - Demo scaffold `commitPaths` now point at existing demo-owned files, and product checks now fail when the checked-in demo doctor/export evidence drifts from the current source.
 - Default benchmark discovery now prefers `autoresearch.sh` on non-Windows hosts before falling back to `autoresearch.ps1`, preventing Linux CI from failing demo doctor checks with `exit 127`.
 - Generated command displays, benchmark output tails, dashboard JSONL, and static readouts now redact token-looking values, URL credentials, home paths, and env-file paths before storing or serving evidence.
+- Prompt planning now treats explicit `quality_gap`, friction, manual E2E, and user/AI experience prompts as quality-gap loops instead of borrowing unrelated existing benchmark scripts.
 
 Bumped public package and plugin manifest version surfaces to `1.3.4`.
 
