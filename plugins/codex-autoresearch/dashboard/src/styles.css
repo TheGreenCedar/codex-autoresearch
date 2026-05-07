@@ -324,9 +324,7 @@ p {
 
 .segment-control label,
 .toolbar-status span,
-.generated-cell span,
-.log-field span,
-.log-field label {
+.generated-cell span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -836,25 +834,29 @@ p {
 }
 
 .legend-swatch.keep,
-.chart-point.keep {
+.chart-point.keep,
+.chart-point-dot.keep {
   background: var(--green);
   fill: var(--green);
 }
 
 .legend-swatch.discard,
-.chart-point.discard {
+.chart-point.discard,
+.chart-point-dot.discard {
   background: var(--red);
   fill: var(--red);
 }
 
 .legend-swatch.crash,
-.chart-point.crash {
+.chart-point.crash,
+.chart-point-dot.crash {
   background: #272f2b;
   fill: #272f2b;
 }
 
 .legend-swatch.checks_failed,
-.chart-point.checks_failed {
+.chart-point.checks_failed,
+.chart-point-dot.checks_failed {
   background: var(--amber);
   fill: var(--amber);
 }
@@ -912,6 +914,56 @@ p {
 }
 
 .chart-point-wrap {
+  overflow: visible;
+}
+
+.chart-point-button {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.chart-point-dot {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--cream);
+  border-radius: 999px;
+  filter: drop-shadow(0 4px 10px rgba(43, 168, 162, 0.3));
+}
+
+.chart-point-dot.best {
+  width: 16px;
+  height: 16px;
+}
+
+.chart-point-button:focus-visible {
+  outline: none;
+}
+
+.chart-point-button:focus-visible .chart-point-dot {
+  box-shadow: 0 0 0 3px var(--amber);
+}
+
+.latest-halo-ui {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--amber);
+  border-radius: 999px;
+  background: rgba(255, 210, 63, 0.26);
+}
+
+.chart-point-wrap,
+.chart-point-button {
   cursor: pointer;
 }
 
@@ -1185,14 +1237,11 @@ p {
   line-height: 1.45;
 }
 
-.mission-grid,
-.action-grid,
 .memory-list {
   display: grid;
   gap: 8px;
 }
 
-.mission-step,
 .memory-lane {
   display: grid;
   gap: 5px;
@@ -1200,30 +1249,6 @@ p {
   padding-top: 10px;
 }
 
-.mission-step {
-  border: 1px solid transparent;
-  border-top: 3px dashed var(--soft-line);
-  border-radius: 8px;
-}
-
-.mission-step.inactive-step {
-  opacity: 0.62;
-}
-
-.mission-step.active-step {
-  border: 1px solid var(--teal);
-  border-left: 6px solid var(--teal);
-  background: var(--primary-bg);
-  box-shadow: var(--shadow-teal-glow);
-  padding: 12px;
-  opacity: 1;
-}
-
-.mission-step.active-step strong {
-  font-size: 16px;
-}
-
-.mission-step span,
 .memory-lane span {
   color: var(--muted);
   font-size: 11px;
@@ -1231,199 +1256,16 @@ p {
   text-transform: uppercase;
 }
 
-.mission-step strong,
 .memory-lane strong {
   color: var(--ink);
   font-size: 14px;
 }
 
-.mission-step p,
 .memory-lane p,
 #quality-gap-detail {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.42;
-}
-
-.disabled-reason {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.log-decision-panel {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-}
-
-.log-field {
-  display: grid;
-  gap: 5px;
-}
-
-.asi-structured {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  padding: 10px;
-}
-
-.asi-structured legend {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.log-field input,
-.log-field select,
-.log-field textarea {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfa;
-  color: var(--ink);
-  padding: 8px 10px;
-}
-
-.form-error {
-  border-left: 4px solid var(--coral);
-  background: #fff0eb;
-  color: var(--coral-dark);
-  padding: 8px 10px;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.raw-asi-panel,
-.receipt-full {
-  border-top: 3px dashed var(--soft-line);
-  padding-top: 8px;
-}
-
-.raw-asi-panel summary,
-.receipt-full summary {
-  color: var(--teal-dark);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 850;
-}
-
-.command-preview {
-  display: grid;
-  gap: 5px;
-  border-top: 3px dashed var(--soft-line);
-  padding-top: 8px;
-}
-
-.command-preview span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.command-preview code,
-.receipt-full pre {
-  max-width: 100%;
-  overflow: auto;
-  border: 1px solid var(--soft-line);
-  border-radius: 8px;
-  background: #fbfcfa;
-  color: var(--ink);
-  padding: 8px;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-}
-
-.receipt-panel {
-  border-left-color: var(--blue);
-}
-
-.receipt-panel.ok {
-  border-left-color: var(--green);
-}
-
-.receipt-panel.error {
-  border-left-color: var(--coral);
-}
-
-.receipt-toast {
-  display: grid;
-  gap: 3px;
-  margin-bottom: 12px;
-  border: 1px solid var(--soft-line);
-  border-radius: 8px;
-  background: var(--primary-bg);
-  padding: 9px 10px;
-}
-
-.receipt-toast.error {
-  border-color: var(--coral);
-  background: #fff0eb;
-}
-
-.receipt-toast.idle {
-  background: #fbfcfa;
-}
-
-.receipt-toast strong {
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.receipt-toast span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 750;
-  line-height: 1.35;
-}
-
-.receipt-detail {
-  color: var(--ink);
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.receipt-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 12px 0 0;
-}
-
-.receipt-grid div {
-  border-top: 3px dashed var(--soft-line);
-  padding-top: 8px;
-}
-
-.receipt-grid dt {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.receipt-grid dd {
-  margin: 3px 0 0;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.log-field textarea {
-  min-height: 82px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
 }
 
 .truth-panel {
@@ -1584,10 +1426,6 @@ p {
   cursor: not-allowed;
   opacity: 0.54;
   transform: none;
-}
-
-.action-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .ledger-scroll {
@@ -1919,7 +1757,6 @@ p {
 
   .toolbar-controls,
   .score-strip,
-  .action-grid,
   .next-command-copy {
     grid-template-columns: 1fr;
   }

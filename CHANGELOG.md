@@ -4,6 +4,29 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.4
+
+### Added
+
+- External recipe catalogs now require explicit `--trust-catalog` opt-in before their commands can be used. Trusted catalog recipes record provenance in session config and later `doctor` / `next` runs block if the recipe changes.
+- Packet evidence now quarantines `ARTIFACT` paths that resolve outside the target working directory instead of storing them as usable artifact paths.
+- The checked-in demo session now includes a Unix-compatible benchmark replay script, so demo doctor checks work on non-Windows hosts without requiring PowerShell.
+
+### Changed
+
+- The served dashboard and static export are now strictly read-only readouts. Dashboard action routes, action controls, nonce plumbing, and action receipts were removed; setup, packet runs, logging, export, and finalization remain CLI-owned.
+- Dashboard wording, mode labels, copy feedback, and chart dialog behavior now describe the surface as an `Autoresearch Readout` instead of an action console.
+- Public docs and skill guidance now use the current CLI command names, keep workflow and architecture diagrams first in the docs index, and keep the root README focused on trying and installing the plugin.
+- The checked-in demo dashboard export and showcase image were refreshed for the current readout design and plugin version.
+
+### Fixed
+
+- Demo scaffold `commitPaths` now point at existing demo-owned files, and product checks now fail when the checked-in demo doctor/export evidence drifts from the current source.
+- Default benchmark discovery now prefers `autoresearch.sh` on non-Windows hosts before falling back to `autoresearch.ps1`, preventing Linux CI from failing demo doctor checks with `exit 127`.
+- Generated command displays, benchmark output tails, dashboard JSONL, and static readouts now redact token-looking values, URL credentials, home paths, and env-file paths before storing or serving evidence.
+
+Bumped public package and plugin manifest version surfaces to `1.3.4`.
+
 ## 1.3.3
 
 ### Fixed

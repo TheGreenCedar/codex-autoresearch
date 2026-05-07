@@ -10,12 +10,15 @@ Optimize the indexing pipeline so rebuilds finish faster without letting peak me
 - Secondary: memory_mb
 - Formula shown in the dashboard demo: `weighted_cost = 0.7 * (seconds / baseline_seconds) + 0.3 * (memory_mb / baseline_memory_mb)`
 
-`powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1` prints `METRIC name=value` lines.
+`bash ./autoresearch.sh` on Unix-like hosts and `powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1` on Windows print `METRIC name=value` lines.
 
 ## Scope
 
-- `src/indexer`: benchmarked indexing work
-- `examples/demo-session`: scripted demo session and showcase evidence
+- `autoresearch.sh` and `autoresearch.ps1`: replayable benchmark scripts for the embedded 100-packet ledger
+- `autoresearch.checks.ps1`: replayable correctness check for the demo packet
+- `autoresearch.md`, `autoresearch.ideas.md`, and `demo.md`: human-readable demo context and next-step notes
+
+The demo is intentionally self-contained. Its configured `commitPaths` point only at those demo-owned files, so doctor and showcase checks can prove the example scaffold is not referring to a missing project tree.
 
 ## Constraints
 

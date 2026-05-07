@@ -37,12 +37,12 @@ export function Header({
   refreshLiveData,
   readout,
 }: HeaderProps) {
-  const { copied: copiedUrl, copy: copyDashboardUrlText } = useCopyText();
+  const { copied: copiedUrl, copy: copyDashboardUrlText, status: copyUrlStatus } = useCopyText();
   const hasMultipleSegments = normalized.segments.length > 1;
   const generated = meta.generatedAt ? formatDisplayTime(meta.generatedAt) : "Snapshot";
   const metricLabel = readout.metricDefinition.metricName || session.config.metricName || "metric";
   const dashboardUrl = useMemo(() => dashboardUrlFrom(meta), [meta]);
-  const attentionStatus = attentionStatusFor(liveStatus);
+  const attentionStatus = statusFor(liveStatus, mode);
   const copyDashboardUrl = async () => {
     if (!dashboardUrl) return;
     await copyDashboardUrlText(dashboardUrl);
@@ -95,8 +95,21 @@ export function Header({
             <span>Generated</span>
             <strong>{generated}</strong>
           </div>
-          <em id="copy-dashboard-url-status" className="copy-status" hidden={!copiedUrl}>
+          <em
+            id="copy-dashboard-url-status"
+            className="copy-status"
+            aria-live="polite"
+            hidden={!copiedUrl}
+          >
             Dashboard URL copied.
+          </em>
+          <em
+            id="copy-dashboard-url-error"
+            className="copy-status"
+            aria-live="assertive"
+            hidden={copyUrlStatus !== "error"}
+          >
+            Dashboard URL copy failed.
           </em>
         </div>
       </div>
@@ -133,8 +146,8 @@ export function Header({
   );
 }
 
-function attentionStatusFor(liveStatus: { title?: string; detail?: string }) {
-  if (isAttentionStatus(liveStatus.title)) {
+function statusFor(liveStatus: { title?: string; detail?: string }, mode: DashboardMode) {
+  if (mode.liveRefresh || isAttentionStatus(liveStatus.title)) {
     return {
       title: liveStatus.title || "Dashboard notice",
       detail: liveStatus.detail || "Review the latest dashboard status.",

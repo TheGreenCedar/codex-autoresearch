@@ -68,8 +68,8 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 ## Dashboard Rules
 
 - Be explicit about dashboard mode. `autoresearch-dashboard.html` is a static read-only export with embedded data and no inert live controls or command-copy panel.
-- The served dashboard from `node scripts/autoresearch.mjs serve --cwd <project>` is the live-action surface.
-- Keep live dashboard actions local-only and bounded to safe operations such as doctor, setup-plan, recipes, gap-candidates preview, finalize-preview, export, and confirmed log decisions.
+- The served dashboard from `node scripts/autoresearch.mjs serve --cwd <project>` is the live readout.
+- Keep dashboard behavior readout-only. Use the CLI for setup, packets, logging, export, and finalization preview.
 - Mutating finalization stays outside the dashboard surface.
 - After dashboard or view-model changes, export or serve a dashboard and inspect the result, not just the tests.
 - Whenever dashboard UI, layout, or visual copy changes, refresh the checked-in demo in the same pass. Update `examples/demo-session/autoresearch-dashboard.html`, `assets/showcase/dashboard-demo.png`, and any compact manifest preview asset that visually represents the dashboard so the public demo stays aligned with the current UI.

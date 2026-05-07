@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
@@ -9,6 +10,17 @@ const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
 const RECIPE_CATALOG_TIMEOUT_MS = 10_000;
 type LooseObject = Record<string, any>;
+type RecipeCatalogProvenance = {
+  source: string;
+  recipeId: string;
+  recipeHash: string;
+  catalogHash: string;
+  fetchedAt: string;
+  commandRiskClass: string;
+};
+type RecipeCatalogOptions = {
+  catalogBaseDir?: string;
+};
 type Recipe = {
   id: string;
   title: string;
@@ -22,6 +34,7 @@ type Recipe = {
   caveats: string[];
   tags: string[];
   source?: string;
+  provenance?: RecipeCatalogProvenance;
 };
 type RecipeDefaults = ReturnType<typeof recipeDefaultsFromRecipe>;
 
@@ -226,6 +239,7 @@ export function recipeDefaultsFromRecipe(recipe: Recipe) {
     checksCommand: recipe.checksCommand,
     filesInScope: recipe.scope,
     constraints: recipe.caveats,
+    recipeCatalogProvenance: recipe.provenance,
   };
 }
 
@@ -259,27 +273,64 @@ export function applyRecipeObjectDefaults(
     filesInScope: args.filesInScope ?? args.files_in_scope ?? defaults.filesInScope,
     files_in_scope: args.files_in_scope ?? args.filesInScope ?? defaults.filesInScope,
     constraints: args.constraints || defaults.constraints,
+    recipeCatalogProvenance:
+      args.recipeCatalogProvenance ??
+      args.recipe_catalog_provenance ??
+      defaults.recipeCatalogProvenance,
   };
 }
 
 export async function findRecipe(
   id: string,
   catalog: string | null = null,
+  options: RecipeCatalogOptions = {},
 ): Promise<Recipe | null> {
   const builtIn = getBuiltInRecipe(id);
   if (builtIn) return builtIn;
-  const catalogRecipes = catalog ? await loadRecipeCatalog(catalog) : [];
+  const catalogRecipes = catalog ? await loadRecipeCatalog(catalog, options) : [];
   return catalogRecipes.find((recipe) => recipe.id === id) || null;
+}
+
+export async function revalidateRecipeCatalogProvenance(
+  provenance: LooseObject | null,
+  options: RecipeCatalogOptions = {},
+) {
+  if (!provenance || typeof provenance !== "object" || !provenance.source) {
+    return { ok: true, issues: [] as string[], provenance: null };
+  }
+  const loaded = await loadRecipeCatalogWithProvenance(String(provenance.source), options);
+  const recipe = loaded.recipes.find((item) => item.id === provenance.recipeId);
+  const issues: string[] = [];
+  if (!recipe) {
+    issues.push(`Trusted catalog recipe is no longer present: ${provenance.recipeId}.`);
+  } else {
+    if (recipe.provenance?.recipeHash !== provenance.recipeHash) {
+      issues.push(`Trusted catalog recipe changed: ${provenance.recipeId}.`);
+    }
+    if (recipe.provenance?.catalogHash !== provenance.catalogHash) {
+      issues.push(`Trusted catalog changed: ${provenance.source}.`);
+    }
+  }
+  return { ok: issues.length === 0, issues, provenance: recipe?.provenance || null };
 }
 
 export async function applyResolvedRecipeDefaults(
   args: LooseObject,
   recipeId?: string | null,
   catalog: string | null = null,
+  options: RecipeCatalogOptions & { trustCatalog?: boolean } = {},
 ): Promise<LooseObject> {
   if (!recipeId) return args;
-  const recipe = await findRecipe(recipeId, catalog);
+  const recipe = await findRecipe(recipeId, catalog, options);
   if (!recipe) throw new Error(`Unknown recipe: ${recipeId}`);
+  if (recipe.source === "catalog" && !options.trustCatalog) {
+    const hash = recipe.provenance?.recipeHash
+      ? ` Recipe hash: ${recipe.provenance.recipeHash}.`
+      : "";
+    throw new Error(
+      `External catalog recipe '${recipeId}' can materialize shell commands. Inspect the catalog source and rerun with --trust-catalog to admit it.${hash}`,
+    );
+  }
   return applyRecipeObjectDefaults(args, recipeDefaultsFromRecipe(recipe));
 }
 
@@ -304,18 +355,65 @@ export async function recommendRecipe(workDir: string): Promise<Recipe | null> {
   return getBuiltInRecipe("custom");
 }
 
-export async function loadRecipeCatalog(catalog: string): Promise<Recipe[]> {
-  if (!catalog) return [];
+export async function loadRecipeCatalog(
+  catalog: string,
+  options: RecipeCatalogOptions = {},
+): Promise<Recipe[]> {
+  return (await loadRecipeCatalogWithProvenance(catalog, options)).recipes;
+}
+
+export async function loadRecipeCatalogWithProvenance(
+  catalog: string,
+  options: RecipeCatalogOptions = {},
+): Promise<{
+  catalogHash: string;
+  fetchedAt: string;
+  recipes: Recipe[];
+  source: string;
+}> {
+  if (!catalog) return { catalogHash: "", fetchedAt: "", recipes: [], source: "" };
+  const source = catalogSourceForProvenance(catalog, options.catalogBaseDir);
+  const readSource = resolveCatalogReadSource(catalog, options.catalogBaseDir);
   const text = (
-    /^https?:\/\//i.test(catalog)
-      ? await fetchText(catalog)
-      : await readBoundedCatalogFile(path.resolve(catalog))
+    /^https?:\/\//i.test(readSource)
+      ? await fetchText(readSource)
+      : await readBoundedCatalogFile(readSource)
   ) as string;
+  const catalogHash = sha256(text);
+  const fetchedAt = new Date().toISOString();
   const parsed = JSON.parse(text);
   const recipes = Array.isArray(parsed) ? parsed : parsed.recipes;
   if (!Array.isArray(recipes))
     throw new Error("Recipe catalog must be an array or an object with recipes[].");
-  return recipes.map(validateExternalRecipe);
+  return {
+    catalogHash,
+    fetchedAt,
+    recipes: recipes.map((recipe) =>
+      withCatalogProvenance(validateExternalRecipe(recipe), {
+        catalogHash,
+        fetchedAt,
+        source,
+      }),
+    ),
+    source,
+  };
+}
+
+function resolveCatalogReadSource(catalog: string, baseDir = ""): string {
+  if (/^https?:\/\//i.test(catalog)) return catalog;
+  return path.isAbsolute(catalog) ? catalog : path.resolve(baseDir || process.cwd(), catalog);
+}
+
+function catalogSourceForProvenance(catalog: string, baseDir = ""): string {
+  if (/^https?:\/\//i.test(catalog)) return catalog;
+  const resolved = resolveCatalogReadSource(catalog, baseDir);
+  if (baseDir) {
+    const relative = path.relative(baseDir, resolved);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return relative.replace(/\\/g, "/");
+    }
+  }
+  return catalog;
 }
 
 async function readBoundedCatalogFile(filePath: string) {
@@ -344,6 +442,49 @@ function validateExternalRecipe(recipe: Record<string, unknown>): Recipe {
     tags: Array.isArray(recipe.tags) ? recipe.tags.map(String) : [],
     source: "catalog",
   };
+}
+
+function withCatalogProvenance(
+  recipe: Recipe,
+  catalog: { catalogHash: string; fetchedAt: string; source: string },
+): Recipe {
+  const canonical = {
+    benchmarkCommand: recipe.benchmarkCommand,
+    benchmarkPrintsMetric: Boolean(recipe.benchmarkPrintsMetric),
+    checksCommand: recipe.checksCommand || "",
+    direction: recipe.direction,
+    id: recipe.id,
+    metricName: recipe.metricName,
+    metricUnit: recipe.metricUnit || "",
+    scope: recipe.scope || [],
+    title: recipe.title,
+  };
+  return {
+    ...recipe,
+    provenance: {
+      source: catalog.source,
+      recipeId: recipe.id,
+      recipeHash: sha256(stableJson(canonical)),
+      catalogHash: catalog.catalogHash,
+      fetchedAt: catalog.fetchedAt,
+      commandRiskClass: recipe.checksCommand ? "benchmark-and-checks-command" : "benchmark-command",
+    },
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as LooseObject)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 async function fetchText(url: string): Promise<string> {

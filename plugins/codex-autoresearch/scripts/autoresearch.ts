@@ -11,6 +11,12 @@ import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
+import {
+  redactCommandDisplay,
+  redactEvidenceObject,
+  redactEvidenceText,
+  redactPathDisplay,
+} from "../lib/evidence-redaction.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
@@ -29,6 +35,7 @@ import {
   listBuiltInRecipes,
   loadRecipeCatalog,
   recommendRecipe,
+  revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
 import {
@@ -159,10 +166,10 @@ function usage() {
   return `Codex Autoresearch
 
 Usage:
-  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
   node scripts/autoresearch.mjs setup --cwd <project> --interactive
-  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
@@ -445,7 +452,24 @@ function shellKindFromArgs(args: LooseObject): string {
 
 async function withRecipeDefaults(args: LooseObject): Promise<LooseObject> {
   const recipeId = args.recipe_id ?? args.recipeId ?? args.recipe;
-  return recipeId ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog) : args;
+  return recipeId
+    ? await applyResolvedRecipeDefaults(args, recipeId, args.catalog, {
+        catalogBaseDir: recipeCatalogBaseDir(args),
+        trustCatalog: trustCatalogOption(args),
+      })
+    : args;
+}
+
+function recipeCatalogBaseDir(args: LooseObject): string {
+  try {
+    return resolveWorkDir(args.working_dir || args.cwd).sessionCwd;
+  } catch {
+    return process.cwd();
+  }
+}
+
+function trustCatalogOption(args: LooseObject): boolean {
+  return boolOption(args.trust_catalog ?? args.trustCatalog, false);
 }
 
 function explicitBenchmarkPrintsMetric(args: LooseObject): boolean {
@@ -527,15 +551,17 @@ function firstRunChecklist({
 
 async function setupPlan(args: any) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const catalogOptions = { catalogBaseDir: sessionCwd };
   const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
   const storedRecipe = config?.recipeId;
   let recommended = null;
   if (requestedRecipe) {
-    recommended = await findRecipe(requestedRecipe, args.catalog);
+    recommended = await findRecipe(requestedRecipe, args.catalog, catalogOptions);
     if (!recommended) throw new Error(`Unknown recipe: ${requestedRecipe}`);
   } else if (storedRecipe) {
     recommended =
-      (await findRecipe(storedRecipe, args.catalog)) || (await recommendRecipe(workDir));
+      (await findRecipe(storedRecipe, args.catalog, catalogOptions)) ||
+      (await recommendRecipe(workDir));
   } else {
     recommended = await recommendRecipe(workDir);
   }
@@ -615,6 +641,7 @@ async function setupPlan(args: any) {
     commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
     args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
+    args.catalog && trustCatalogOption(args) ? "--trust-catalog" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -799,6 +826,7 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
   const prompt = String(args.prompt || args.goal || args.request || "").trim();
   if (!prompt) throw new Error("prompt-plan requires --prompt <text>.");
   const intent = await analyzeAutoresearchPrompt(workDir, prompt, args);
+  const setupDefaults = intent.setupDefaults as LooseObject;
   const setupArgs = {
     cwd: workDir,
     ...intent.setupDefaults,
@@ -830,6 +858,9 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     max_iterations: args.max_iterations ?? args.maxIterations ?? intent.setupDefaults.maxIterations,
     recipe: args.recipe ?? args.recipe_id ?? args.recipeId ?? intent.setupDefaults.recipe,
     recipe_id: args.recipe_id ?? args.recipeId ?? args.recipe ?? intent.setupDefaults.recipe,
+    catalog: args.catalog ?? setupDefaults.catalog,
+    trustCatalog: args.trustCatalog ?? args.trust_catalog ?? setupDefaults.trustCatalog,
+    trust_catalog: args.trust_catalog ?? args.trustCatalog ?? setupDefaults.trustCatalog,
   };
   const setup = await setupPlan(setupArgs);
   const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
@@ -1773,8 +1804,11 @@ function replacementNextCommandFromLastRun(
 }
 
 async function recipeCommand(subcommand: string, args: any) {
+  const catalogOptions = { catalogBaseDir: recipeCatalogBaseDir(args) };
   if (!subcommand || subcommand === "list") {
-    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    const catalogRecipes = args.catalog
+      ? await loadRecipeCatalog(args.catalog, catalogOptions)
+      : [];
     return { ok: true, recipes: [...listBuiltInRecipes(), ...catalogRecipes] };
   }
   if (subcommand === "recommend") {
@@ -1799,7 +1833,9 @@ async function recipeCommand(subcommand: string, args: any) {
   if (subcommand === "show") {
     const id = args._[2] || args.id || args.recipe || args.recipeId;
     if (!id) throw new Error("recipes show requires a recipe id");
-    const catalogRecipes = args.catalog ? await loadRecipeCatalog(args.catalog) : [];
+    const catalogRecipes = args.catalog
+      ? await loadRecipeCatalog(args.catalog, catalogOptions)
+      : [];
     const recipe = [...listBuiltInRecipes(), ...catalogRecipes].find((item: any) => item.id === id);
     if (!recipe) throw new Error(`Unknown recipe: ${id}`);
     return { ok: true, recipe };
@@ -1810,6 +1846,7 @@ async function recipeCommand(subcommand: string, args: any) {
 async function interactiveSetup(args: any) {
   const plan = await setupPlan(args);
   const recipe = plan.recommendedRecipe || getBuiltInRecipe("custom");
+  const catalogOptions = { catalogBaseDir: recipeCatalogBaseDir(args) };
   const rl = createInterface({ input, output });
   try {
     const ask = async (prompt: any, fallback: any) => {
@@ -1817,7 +1854,7 @@ async function interactiveSetup(args: any) {
       return answer.trim() || fallback;
     };
     const selectedRecipeId = await ask("Recipe id", recipe?.id || "custom");
-    const selectedRecipe = await findRecipe(selectedRecipeId, args.catalog);
+    const selectedRecipe = await findRecipe(selectedRecipeId, args.catalog, catalogOptions);
     if (!selectedRecipe) throw new Error(`Unknown recipe: ${selectedRecipeId}`);
     const nextArgs = await withRecipeDefaults({
       ...args,
@@ -2238,6 +2275,7 @@ function metricParseSource(result: any) {
 
 function parseArtifactLines(output: string, workDir: string) {
   const artifacts: Record<string, string> = {};
+  const artifactWarnings: string[] = [];
   for (const line of String(output || "").split(/\r?\n/)) {
     const match = line.match(/^ARTIFACT\s+([A-Za-z_][A-Za-z0-9_.:-]*)=(.+)$/);
     if (!match) continue;
@@ -2246,12 +2284,16 @@ function parseArtifactLines(output: string, workDir: string) {
     if (!value) continue;
     const absolute = path.isAbsolute(value) ? value : path.resolve(workDir, value);
     const relative = path.relative(workDir, absolute);
-    artifacts[name] =
-      relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-        ? relative.replace(/\\/g, "/")
-        : absolute;
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      artifacts[name] = relative.replace(/\\/g, "/");
+    } else {
+      artifacts[name] = "<outside-workdir>";
+      artifactWarnings.push(
+        `ARTIFACT ${name} points outside the working directory and was quarantined: ${redactPathDisplay(value, workDir)}.`,
+      );
+    }
   }
-  return artifacts;
+  return { artifacts, artifactWarnings };
 }
 
 function headText(
@@ -2270,10 +2312,15 @@ function headText(
 }
 
 async function defaultBenchmarkCommand(workDir: string) {
-  if (await pathExists(path.join(workDir, "autoresearch.ps1"))) {
+  const powershellScript = await pathExists(path.join(workDir, "autoresearch.ps1"));
+  const bashScript = await pathExists(path.join(workDir, "autoresearch.sh"));
+  if (process.platform !== "win32" && bashScript) {
+    return "bash ./autoresearch.sh";
+  }
+  if (powershellScript) {
     return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   }
-  if (await pathExists(path.join(workDir, "autoresearch.sh"))) {
+  if (bashScript) {
     return "bash ./autoresearch.sh";
   }
   throw new Error(
@@ -3119,6 +3166,11 @@ async function setupSession(args: LooseObject) {
     setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
   if (Object.keys(setupConfig).length > 0)
     await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
+  if (args.recipeCatalogProvenance) {
+    await appendRuntimeConfigFile(files, sessionCwd, {
+      recipeCatalogProvenance: args.recipeCatalogProvenance,
+    });
+  }
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (commitPaths.length > 0) {
     await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
@@ -3609,7 +3661,7 @@ async function runExperiment(args: LooseObject) {
     maxMetrics: MAX_PARSED_METRICS,
     withTruncation: true,
   });
-  const artifacts = parseArtifactLines(
+  const { artifacts, artifactWarnings } = parseArtifactLines(
     benchmark.fullOutput || benchmark.output || parseSource,
     workDir,
   );
@@ -3692,6 +3744,7 @@ async function runExperiment(args: LooseObject) {
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
     artifacts,
+    artifactWarnings,
     parsedPrimary: primary,
     metricError,
     checksPolicy,
@@ -4045,7 +4098,11 @@ async function clearSession(args: any) {
 function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const staticExport =
     meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
-  const dataForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
+  const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
+  const dataForClient = redactEvidenceObject(
+    staticExport ? stripDashboardCommandFields(entries) : entries,
+    dashboardContext,
+  );
   const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
   const metaForClient = stripDashboardCommandFields(meta);
   const publicExport = Boolean(
@@ -4055,7 +4112,10 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
     meta.settings?.showcaseMode,
   );
   const metaData = JSON.stringify(
-    publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
+    redactEvidenceObject(
+      publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
+      dashboardContext,
+    ),
   ).replace(/</g, "\\u003c");
   const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
   if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
@@ -4188,8 +4248,81 @@ async function resolveLastRunPath(workDir: string) {
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+  await fsp.writeFile(
+    target,
+    `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
+    "utf8",
+  );
   return target;
+}
+
+function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
+  const stored = JSON.parse(JSON.stringify(packet || {}));
+  const context = { workDir: packet?.workDir || packet?.history?.workDir || "" };
+  if (stored.packetEvidence) {
+    stored.packetEvidence = redactEvidenceObject(stored.packetEvidence, context);
+  }
+  redactRunPacketProcessEvidence(stored.run, context);
+  if (stored.doctor) stored.doctor = redactEvidenceObject(stored.doctor, context);
+  if (stored.history) {
+    if (stored.history.command) {
+      stored.history.command = redactCommandDisplay(stored.history.command, context);
+    }
+    redactBenchmarkContractForStorage(stored.history.benchmarkContract, context);
+  }
+  return stored;
+}
+
+function redactRunPacketProcessEvidence(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  if (value.command) value.command = redactCommandDisplay(value.command, context);
+  if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
+  if (value.envFile) value.envFile = "<env-file>";
+  if (value.tailOutput) value.tailOutput = redactEvidenceText(value.tailOutput, context);
+  if (value.stdoutTail) value.stdoutTail = redactEvidenceText(value.stdoutTail, context);
+  if (value.stderrTail) value.stderrTail = redactEvidenceText(value.stderrTail, context);
+  redactProgressEvidence(value.progress, context);
+  if (value.commandDiagnostics) {
+    value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
+  }
+  if (value.checks && typeof value.checks === "object") {
+    if (value.checks.command) {
+      value.checks.command = redactCommandDisplay(value.checks.command, context);
+    }
+    if (value.checks.tailOutput) {
+      value.checks.tailOutput = redactEvidenceText(value.checks.tailOutput, context);
+    }
+    redactProgressEvidence(value.checks.progress, context);
+  }
+}
+
+function redactProgressEvidence(value: LooseObject | null | undefined, context: LooseObject) {
+  if (!value || typeof value !== "object") return;
+  if (value.latestOutputTail) {
+    value.latestOutputTail = redactEvidenceText(value.latestOutputTail, context);
+  }
+  if (Array.isArray(value.stages)) {
+    for (const stage of value.stages) {
+      if (!stage || typeof stage !== "object") continue;
+      if (stage.outputTail) stage.outputTail = redactEvidenceText(stage.outputTail, context);
+    }
+  }
+}
+
+function redactBenchmarkContractForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  if (value.command) value.command = redactCommandDisplay(value.command, context);
+  if (value.checksCommand) {
+    value.checksCommand = redactCommandDisplay(value.checksCommand, context);
+  }
+  if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
+  if (value.envFile) value.envFile = "<env-file>";
 }
 
 async function readLastRunPacket(workDir: string) {
@@ -4690,7 +4823,7 @@ function currentQualityGapSlug(workDir: string) {
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state: LooseObject = await publicState({ ...args, compact: false });
   const issues = [];
   const warnings = [];
@@ -4727,6 +4860,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   for (const blocker of state.researchIntegrity?.blockers || []) {
     issues.push(blocker);
   }
+  const catalogTrust = await catalogTrustCheck(config, sessionCwd).catch((error: unknown) => ({
+    ok: false,
+    issues: [`Trusted recipe catalog could not be revalidated: ${errorMessage(error)}`],
+  }));
+  if (!catalogTrust.ok) issues.push(...catalogTrust.issues);
   const drift = await buildDriftReport({
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
@@ -4826,6 +4964,12 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
   return result;
+}
+
+async function catalogTrustCheck(config: LooseObject, sessionCwd: string) {
+  const provenance = config.recipeCatalogProvenance || config.recipe_catalog_provenance || null;
+  if (!provenance) return { ok: true, issues: [] as string[] };
+  return await revalidateRecipeCatalogProvenance(provenance, { catalogBaseDir: sessionCwd });
 }
 
 function benchmarkDriftWarning({ currentMetric, bestMetric, direction, metricName }: LooseObject) {
@@ -5013,11 +5157,11 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .digest("hex");
   return {
     packetId: `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`,
-    cwd: run.workDir,
+    cwd: redactPathDisplay(run.workDir, run.workDir),
     commandIdentity: {
-      command: run.command || "",
-      commandFile: run.commandFile || "",
-      envFile: run.envFile || "",
+      command: redactCommandDisplay(run.command || "", { workDir: run.workDir }),
+      commandFile: redactPathDisplay(run.commandFile || "", run.workDir),
+      envFile: run.envFile ? "<env-file>" : "",
       envKeys: run.envKeys || [],
       commandHash: run.command
         ? createHash("sha256").update(run.command, "utf8").digest("hex")
@@ -5026,14 +5170,17 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timeoutSeconds: run.timeoutSeconds ?? null,
     exitStatus: run.exitCode ?? null,
     timedOut: Boolean(run.timedOut),
-    stdoutTail: run.tailOutput || run.progress?.latestOutputTail || "",
+    stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
+      workDir: run.workDir,
+    }),
     stderrTail: "",
     metrics: run.parsedMetrics || {},
     primaryMetric: run.parsedPrimary ?? null,
     artifacts: artifactList(run.artifacts, run.workDir),
+    artifactWarnings: run.artifactWarnings || [],
     checks: run.checks
       ? {
-          command: run.checks.command || "",
+          command: redactCommandDisplay(run.checks.command || "", { workDir: run.workDir }),
           exitStatus: run.checks.exitCode ?? null,
           timedOut: Boolean(run.checks.timedOut),
           passed: run.checks.passed ?? null,
@@ -5044,11 +5191,18 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
 }
 
 function artifactList(artifacts: LooseObject = {}, workDir = "") {
-  return Object.entries(artifacts || {}).map(([name, artifactPath]) => ({
-    name,
-    path: String(artifactPath || ""),
-    exists: artifactExists(String(artifactPath || ""), workDir),
-  }));
+  return Object.entries(artifacts || {}).map(([name, artifactPath]) => {
+    const quarantined = String(artifactPath || "") === "<outside-workdir>";
+    return {
+      name,
+      path: quarantined
+        ? "<outside-workdir>"
+        : redactPathDisplay(String(artifactPath || ""), workDir),
+      exists: quarantined ? false : artifactExists(String(artifactPath || ""), workDir),
+      quarantined,
+      warning: quarantined ? "Artifact path is outside the working directory." : "",
+    };
+  });
 }
 
 function artifactExists(artifactPath: string, workDir: string) {

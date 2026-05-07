@@ -66,8 +66,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       deliveryMode: "static-export",
       liveActionsAvailable: false,
       modeGuidance: {
-        title: "Static snapshot",
-        detail: "Read-only snapshot.",
+        title: showcaseExport ? "Demo Snapshot" : "Static Snapshot",
+        detail: showcaseExport ? "Bundled read-only demo snapshot." : "Read-only snapshot.",
       },
       refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
       commands,
@@ -127,7 +127,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       cwd: workDir,
       port: args.port,
       scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
-      dashboardHtml: async ({ actionNonce, actionNonceHeader }: LooseObject = {}) => {
+      dashboardHtml: async () => {
         const entries = deps.readJsonl(workDir);
         const generatedAt = new Date().toISOString();
         const dashboardContext = {
@@ -145,10 +145,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           deliveryMode: "live-server",
           liveRefreshAvailable: true,
           liveActionsAvailable: false,
-          actionNonce,
-          actionNonceHeader,
           modeGuidance: {
-            title: "Live dashboard",
+            title: "Live Readout",
             detail: "Live refresh is available; actions stay in CLI.",
           },
           refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,

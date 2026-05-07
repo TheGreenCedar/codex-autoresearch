@@ -387,6 +387,189 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
   });
 });
 
+test("external catalog recipes require trust and record provenance", async () => {
+  await withTempDir("catalog-trust", async (dir) => {
+    const catalogPath = path.join(dir, "recipes.json");
+    const catalog = {
+      recipes: [
+        {
+          id: "external-speed",
+          title: "External speed",
+          metricName: "seconds",
+          metricUnit: "s",
+          direction: "lower",
+          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          benchmarkPrintsMetric: true,
+          checksCommand: "",
+          scope: ["src"],
+        },
+      ],
+    };
+    await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
+
+    const blocked = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--recipe",
+      "external-speed",
+      "--catalog",
+      catalogPath,
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /trust-catalog|External catalog recipe/);
+
+    const trusted = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--recipe",
+      "external-speed",
+      "--catalog",
+      catalogPath,
+      "--trust-catalog",
+      "--skip-init",
+    ]);
+    assert.equal(trusted.code, 0, trusted.stderr);
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.recipeId, "external-speed");
+    assert.equal(config.recipeCatalogProvenance.recipeId, "external-speed");
+    assert.equal(config.recipeCatalogProvenance.source, "recipes.json");
+    assert.match(config.recipeCatalogProvenance.recipeHash, /^[a-f0-9]{64}$/);
+
+    const promptPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Optimize the external speed recipe.",
+      "--recipe",
+      "external-speed",
+      "--catalog",
+      catalogPath,
+      "--trust-catalog",
+    ]);
+    assert.equal(promptPlan.code, 0, promptPlan.stderr);
+    const promptPayload = JSON.parse(promptPlan.stdout);
+    assert.equal(promptPayload.setup.recommendedRecipe.id, "external-speed");
+    assert.match(promptPayload.setup.nextCommand, /--catalog/);
+    assert.match(promptPayload.setup.nextCommand, /--trust-catalog/);
+
+    catalog.recipes[0].benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.match(doctorPayload.issues.join("\n"), /Trusted catalog recipe changed/);
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const nextPayload = JSON.parse(next.stdout);
+    assert.equal(nextPayload.ok, false);
+    assert.match(nextPayload.doctor.issues.join("\n"), /Trusted catalog recipe changed/);
+  });
+});
+
+test("external ARTIFACT paths are quarantined instead of stored as usable paths", async () => {
+  await withTempDir("external-artifact", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "external artifact packet",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    const outside = path.join(path.dirname(dir), "outside-manifest.json");
+    await writeFile(
+      path.join(dir, "packet-runner.mjs"),
+      [
+        "console.log('METRIC score=7');",
+        `console.log('ARTIFACT manifest=${outside.replace(/\\/g, "\\\\")}');`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} packet-runner.mjs`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const payload = JSON.parse(packet.stdout);
+    assert.equal(payload.run.artifacts.manifest, "<outside-workdir>");
+    assert.equal(payload.packetEvidence.artifacts[0].exists, false);
+    assert.equal(payload.packetEvidence.artifacts[0].quarantined, true);
+    assert.match(payload.packetEvidence.artifactWarnings.join("\n"), /quarantined/);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep external artifact evidence",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+  });
+});
+
+test("last-run packet storage redacts raw benchmark evidence and still logs from last", async () => {
+  await withTempDir("last-run-redaction", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "redacted packet", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "runner.mjs"),
+      [
+        "console.log('METRIC seconds=1');",
+        "console.log('api_key=abcdefghijklmnop');",
+        "console.log('Bearer zyxwvutsrqponmlkjihgfedcba');",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} runner.mjs`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const payload = JSON.parse(packet.stdout);
+    assert.equal(payload.packetEvidence.stdoutTail.includes("abcdefghijklmnop"), false);
+
+    const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+    assert.doesNotMatch(lastRunText, /abcdefghijklmnop/);
+    assert.doesNotMatch(lastRunText, /zyxwvutsrqponmlkjihgfedcba/);
+    assert.match(lastRunText, /api_key=<redacted>/);
+    assert.match(lastRunText, /Bearer <redacted>/);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep redacted packet",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const loggedPayload = JSON.parse(logged.stdout);
+    assert.equal(loggedPayload.experiment.metric, 1);
+    assert.equal(loggedPayload.lastRunCleared, true);
+  });
+});
+
 test("command and env files are included in benchmark contract drift", async () => {
   await withTempDir("command-env-contract-drift", async (dir) => {
     await runCli([
@@ -2883,6 +3066,7 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     normalizeCliCommandArguments,
     normalizeRuntimeToolArguments,
     normalizeToolArguments,
+    requireUnsafeCommandGate,
     validateToolArguments,
   } = await import("../lib/tool-schemas.js");
 
@@ -2925,6 +3109,48 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
       benchmarkCommand: "node bench.js",
       commitPaths: ["src"],
     },
+  );
+  const setupSessionArgs = validateToolArguments("setup_session", {
+    workingDir: "C:/repo",
+    recipeId: "external-speed",
+    catalog: "recipes.json",
+    trustCatalog: true,
+    allowUnsafeCommand: true,
+  });
+  assert.equal(setupSessionArgs.trust_catalog, true);
+  assert.deepEqual(normalizeRuntimeToolArguments("setup_session", setupSessionArgs), {
+    cwd: "C:/repo",
+    recipeId: "external-speed",
+    catalog: "recipes.json",
+    trustCatalog: true,
+    allow_unsafe_command: true,
+  });
+  const promptPlanArgs = validateToolArguments("prompt_plan", {
+    workingDir: "C:/repo",
+    prompt: "Optimize the external recipe.",
+    recipeId: "external-speed",
+    catalog: "recipes.json",
+    trustCatalog: true,
+    allowUnsafeCommand: true,
+  });
+  assert.equal(promptPlanArgs.trust_catalog, true);
+  assert.deepEqual(normalizeRuntimeToolArguments("prompt_plan", promptPlanArgs), {
+    cwd: "C:/repo",
+    prompt: "Optimize the external recipe.",
+    recipeId: "external-speed",
+    catalog: "recipes.json",
+    trustCatalog: true,
+    allow_unsafe_command: true,
+  });
+  assert.throws(
+    () => requireUnsafeCommandGate("setup_session", { catalog: "recipes.json" }),
+    /allow_unsafe_command=true/,
+  );
+  assert.doesNotThrow(() =>
+    requireUnsafeCommandGate("prompt_plan", {
+      catalog: "recipes.json",
+      allow_unsafe_command: true,
+    }),
   );
   assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
 });

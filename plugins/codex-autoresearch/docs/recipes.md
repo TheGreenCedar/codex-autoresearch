@@ -40,9 +40,10 @@ External catalogs can add local team recipes:
 
 ```bash
 node scripts/autoresearch.mjs setup-plan --cwd <project> --catalog ./recipes.json --recipe team-runtime
+node scripts/autoresearch.mjs setup --cwd <project> --catalog ./recipes.json --recipe team-runtime --trust-catalog
 ```
 
-External catalog setup guidance can materialize shell commands, so inspect the generated plan before applying it.
+External catalog setup guidance can materialize shell commands. Inspect the catalog and setup plan first, then pass `--trust-catalog` only when the source and commands are intentionally admitted. Trusted catalog provenance is stored in session config so `doctor` and `next` can block on later catalog drift.
 
 ## Good Recipe Shape
 

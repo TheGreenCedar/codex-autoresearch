@@ -86,32 +86,6 @@ export function formatDisplayTime(value: Date | string | number | null | undefin
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-export function actionLabel(action: string | null | undefined): string {
-  const labels: Record<string, string> = {
-    doctor: "Run doctor",
-    "doctor-explain": "Explain doctor",
-    "onboarding-packet": "Build handoff",
-    "recommend-next": "Recommend next",
-    "benchmark-lint": "Lint benchmark",
-    "setup-plan": "Review setup",
-    guide: "Show guide",
-    recipes: "Show recipes",
-    "gap-candidates": "Preview gaps",
-    "finalize-preview": "Preview finalization",
-    export: "Export snapshot",
-    "new-segment-dry-run": "Preview segment",
-    "log-keep": "Log keep",
-    "log-discard": "Log discard",
-    "log-crash": "Log crash",
-    "log-checks-failed": "Log failed checks",
-  };
-  if (action && labels[action]) return labels[action];
-  return String(action || "Action")
-    .split("-")
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function formatScore(value: number | null | undefined): string {
   if (!finiteMetric(value)) return "-";
   return Number(value).toFixed(2);
