@@ -10,6 +10,9 @@ const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/\-=]{12,}/gi;
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi;
 const WINDOWS_HOME = /[A-Za-z]:\\Users\\[^\\\s"'<>]+/g;
 const POSIX_HOME = /\/(?:Users|home)\/[^/\s"'<>]+/g;
+const NODE_STACK_FRAME =
+  /^([ \t]*)at\s+.*(?:\((?:file:\/\/)?(?:[A-Za-z]:\\|\/)[^)]+:\d+:\d+\)|(?:file:\/\/)?(?:[A-Za-z]:\\|\/)\S+:\d+:\d+).*$/gm;
+const PYTHON_STACK_FRAME = /^([ \t]*)File\s+["'].*["'],\s+line\s+\d+,\s+in\s+.*$/gm;
 const TOKEN = /[^\s"'<>|]+/g;
 const TRAILING_ENV_TOKEN_PUNCTUATION = new Set([")", ",", ".", ";", ":"]);
 const SENSITIVE_VALUE_KEYS = new Set([
@@ -56,7 +59,14 @@ export function redactEvidenceText(value: unknown, context: LooseObject = {}): s
   if (context.workDir) {
     text = text.split(String(context.workDir)).join("<workdir>");
   }
+  text = redactStackTraceFrames(text);
   return text;
+}
+
+function redactStackTraceFrames(text: string): string {
+  return text
+    .replace(NODE_STACK_FRAME, (_match, indent) => `${indent}at <stack-frame>`)
+    .replace(PYTHON_STACK_FRAME, (_match, indent) => `${indent}File "<stack-frame>"`);
 }
 
 function redactEnvFileTokens(text: string): string {
