@@ -77,6 +77,18 @@ Before publishing, inspect the package artifact itself. The shipped `scripts/*.m
 
 Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 
+## Skill Progression Map
+
+Use recurring PR and review evidence to choose the next hardening drill. Each drill should leave a product safeguard behind, not just a private note.
+
+| Skill track | Evidence pattern | Practice task | Validation gate |
+| --- | --- | --- | --- |
+| Security evidence hygiene | CodeQL or review findings around escaping, redaction, receipts, paths, env files, or stack traces | Add a failing leak fixture, fix the boundary, and prove dashboard/live/session payloads stay scrubbed | `node --test dist/tests/evidence-core.test.mjs` plus the dashboard redaction case in `full-product.test.mjs` |
+| Release workflow design | Failed or brittle release, tag, tarball, package, or version-surface behavior | Turn the release invariant into a workflow or product-check assertion before changing the workflow | `npm run check` and `github-actionlint` on CI, CodeQL, auto-release, and release workflows |
+| Prompt taxonomy and regression design | Natural-language goals routed to the wrong benchmark or loop type | Add prompt-plan cases for qualitative quality-gap loops and explicit measured contracts | `node --test dist/tests/full-product.test.mjs` |
+| Dashboard/operator UX contracts | Dashboard copy or controls imply live mutation, stale truth, or unclear next action | Remove the misleading affordance and test live/static mode, toolbar state, and absent action routes | `node --test dist/tests/dashboard-verification.test.mjs` plus live-server route checks |
+| Cross-surface release discipline | Docs, skill guidance, changelog, demo export, package metadata, or version surfaces drift | Update the nearest user/operator surface and add product-gate coverage when drift would be easy to repeat | `npm run check`, `git diff --check`, and demo export leak/version inspection |
+
 ## Version Surfaces
 
 For a version bump, update all version surfaces together:

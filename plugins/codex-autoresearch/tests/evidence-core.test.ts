@@ -19,6 +19,7 @@ import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
 import {
   redactCommandDisplay,
   redactEvidenceObject,
+  redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
 import { quoteForShell } from "./helpers/process.js";
@@ -222,4 +223,20 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
     redactPathDisplay("/tmp/elsewhere/report.json", "/tmp/project"),
     "<outside-workdir>",
   );
+});
+
+test("evidence redactor removes stack frames before dashboard or packet storage", () => {
+  const stack = [
+    "Error: failed while loading token=abcdefghijklmnop",
+    "    at loadSecret (C:\\Users\\Alice\\repo\\src\\secret.ts:12:34)",
+    "    at file:///home/alice/repo/src/index.mjs:5:1",
+    '  File "/Users/alice/repo/secret.py", line 9, in main',
+  ].join("\n");
+
+  const redacted = redactEvidenceText(stack, { workDir: "C:\\Users\\Alice\\repo" });
+  assert.match(redacted, /Error: failed while loading token=<redacted>/);
+  assert.equal((redacted.match(/<stack-frame>/g) || []).length, 3);
+  assert.doesNotMatch(redacted, /abcdefghijklmnop/);
+  assert.doesNotMatch(redacted, /Alice|alice/);
+  assert.doesNotMatch(redacted, /secret\.ts|index\.mjs|secret\.py/);
 });

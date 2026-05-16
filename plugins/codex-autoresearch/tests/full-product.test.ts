@@ -21,6 +21,7 @@ import {
 } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
+const repoRoot = path.resolve(pluginRoot, "..", "..");
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const runCliWithAnswers = createInteractiveCliRunner(cli, pluginRoot);
@@ -387,6 +388,44 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(frictionPayload.intent.setupDefaults.benchmarkCommand, "");
     assert.equal(frictionPayload.intent.setupDefaults.recipe, "quality-gap");
 
+    for (const qualitativePrompt of [
+      "Deepen security evidence hygiene around redaction, token handling, and stack trace leaks.",
+      "Study release readiness and the release path for version drift, CI guards, and tarball smoke confidence.",
+      "Improve dashboard UX and operator UX so the readout makes the next safe action obvious without live mutation controls.",
+    ]) {
+      const qualitativePlan = await runCli([
+        "prompt-plan",
+        "--cwd",
+        dir,
+        "--prompt",
+        qualitativePrompt,
+      ]);
+      assert.equal(qualitativePlan.code, 0, qualitativePlan.stderr);
+      const qualitativePayload = JSON.parse(qualitativePlan.stdout);
+      assert.equal(qualitativePayload.intent.loopKind, "quality-gap");
+      assert.equal(qualitativePayload.intent.metric.name, "quality_gap");
+      assert.equal(qualitativePayload.intent.inferredFrom.discoveredBenchmark, null);
+      assert.equal(qualitativePayload.intent.setupDefaults.recipe, "quality-gap");
+    }
+
+    const explicitMeasuredPlan = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      [
+        "Improve release smoke latency without changing release semantics.",
+        "Benchmark: node -e \"console.log('METRIC seconds=2')\"",
+        "Metric: seconds, lower is better",
+        "Scope: .github/workflows/release.yml",
+      ].join("\n"),
+    ]);
+    assert.equal(explicitMeasuredPlan.code, 0, explicitMeasuredPlan.stderr);
+    const explicitMeasuredPayload = JSON.parse(explicitMeasuredPlan.stdout);
+    assert.equal(explicitMeasuredPayload.intent.loopKind, "measured-optimization");
+    assert.equal(explicitMeasuredPayload.intent.metric.name, "seconds");
+    assert.match(explicitMeasuredPayload.intent.setupDefaults.benchmarkCommand, /METRIC seconds=2/);
+
     const broadPromptPlan = await runCli([
       "prompt-plan",
       "--cwd",
@@ -443,6 +482,40 @@ test("CLI setup can use recipe defaults without explicit name and metric", async
     const payload = JSON.parse(setup.stdout);
     assert.equal(payload.init.config.metricName, "rss_mb");
   });
+});
+
+test("release workflows preserve synchronized auto-release and tarball safeguards", async () => {
+  const autoRelease = await readFile(
+    path.join(repoRoot, ".github", "workflows", "auto-release.yml"),
+    "utf8",
+  );
+  const release = await readFile(
+    path.join(repoRoot, ".github", "workflows", "release.yml"),
+    "utf8",
+  );
+  const codeql = await readFile(path.join(repoRoot, ".github", "workflows", "codeql.yml"), "utf8");
+
+  assert.match(autoRelease, /branches:\s*\n\s*-\s*main/);
+  assert.match(autoRelease, /plugins\/codex-autoresearch\/package\.json/);
+  assert.match(autoRelease, /plugins\/codex-autoresearch\/package-lock\.json/);
+  assert.match(autoRelease, /plugins\/codex-autoresearch\/\.codex-plugin\/plugin\.json/);
+  assert.match(autoRelease, /CHANGELOG\.md/);
+  assert.match(autoRelease, /contents:\s*read/);
+  assert.match(autoRelease, /Version surfaces are not synchronized/);
+  assert.match(autoRelease, /uses:\s*\.\/\.github\/workflows\/release\.yml/);
+
+  assert.doesNotMatch(release, /push:\s*\n\s*tags:/);
+  assert.match(release, /os:\s*\[ubuntu-latest,\s*windows-latest,\s*macos-latest\]/);
+  assert.match(release, /npm run check/);
+  assert.match(release, /node scripts\/autoresearch\.mjs --help/);
+  assert.match(release, /Refuse existing tag or release/);
+  assert.match(release, /npm pack/);
+  assert.match(release, /tar -xzf/);
+  assert.match(release, /gh release create/);
+  assert.match(release, /--target "\$GITHUB_SHA"/);
+
+  assert.match(codeql, /pull_request:/);
+  assert.match(codeql, /branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/);
 });
 
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
@@ -967,8 +1040,16 @@ test("live server exposes health and view-model endpoints", async () => {
       assert.equal(health.ok, true);
       const html = await fetch(payload.url).then((res) => res.text());
       assert.match(html, /"deliveryMode":"live-server"/);
-      assert.doesNotMatch(html, /Live actions available/);
-      assert.doesNotMatch(html, /live-actions-panel/);
+      for (const forbidden of [
+        "Live actions available",
+        "live-actions-panel",
+        "action-receipt",
+        "actionNonce",
+        "X-Autoresearch-Action-Nonce",
+        "/actions/",
+      ]) {
+        assert.equal(html.includes(forbidden), false, `live dashboard exposed ${forbidden}`);
+      }
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
     });
@@ -984,6 +1065,7 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
       "https://user:pass@example.com/path",
       "C:\\Users\\Alice\\.env.local",
       "/home/alice/.env",
+      "Error: failed\n    at leak (C:\\Users\\Alice\\repo\\src\\secret.ts:1:2)",
     ].join(" ");
     await runCli([
       "log",
@@ -1021,6 +1103,8 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
       assert.match(jsonl, /Bearer <redacted>/);
       assert.match(jsonl, /https:\/\/<credentials>@example\.com/);
       assert.match(viewModelText, /<env-file>/);
+      assert.match(`${html}\n${jsonl}\n${viewModelText}`, /<stack-frame>/);
+      assert.doesNotMatch(`${html}\n${jsonl}\n${viewModelText}`, /secret\.ts/);
     });
   });
 });
