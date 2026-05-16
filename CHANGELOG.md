@@ -4,6 +4,20 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.6
+
+### Added
+
+- Added release-ready hardening coverage for recurring skill progression areas: evidence hygiene, release workflow invariants, prompt-plan taxonomy, dashboard read-only behavior, and cross-surface release discipline.
+- Added maintainer guidance that maps recent PR/review evidence patterns to concrete practice tasks and validation gates.
+
+### Fixed
+
+- Evidence redaction now collapses stack-trace file frames before dashboard, live-server, or packet evidence storage can expose local source paths.
+- Prompt planning now treats qualitative security hygiene, release readiness, and dashboard/operator UX requests as `quality_gap` loops unless the prompt provides an explicit measured benchmark contract.
+
+Bumped public package and plugin manifest version surfaces to `1.3.6`.
+
 ## 1.3.5
 
 ### Fixed

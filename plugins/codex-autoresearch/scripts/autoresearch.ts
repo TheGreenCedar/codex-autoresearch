@@ -909,9 +909,12 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   const latencyRatio = /\bp99\b/.test(lower) && /\bp90\b/.test(lower);
   const qualityGapIntent =
     /\bquality[_ -]?gap\b/.test(lower) ||
-    /\b(friction|smooth|manual tests?|manual-test|end to end|e2e|user experience|ai experience|skill-first)\b/.test(
+    /\b(friction|smooth|manual tests?|manual-test|end to end|e2e|user experience|ai experience|skill-first|security hygiene|evidence hygiene|release readiness|release path|operator ux|readout ux|dashboard ux)\b/.test(
       lower,
     );
+  const explicitMeasuredContract =
+    !/\bquality[_ -]?gap\b/.test(lower) &&
+    Boolean(explicit.benchmarkCommand || explicit.metricName);
   const maxIterations =
     positiveIntegerFromPrompt(prompt) ??
     positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
@@ -920,7 +923,8 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   const explicitScope = explicit.scope.length ? explicit.scope : [];
   const repoRecipe = await recommendRecipe(workDir);
   const loopKind =
-    bugs || qualityGapIntent || (productResearch && !speed && !memory)
+    !explicitMeasuredContract &&
+    (bugs || qualityGapIntent || (productResearch && !speed && !memory))
       ? "quality-gap"
       : "measured-optimization";
   const useDiscoveredBenchmark = loopKind === "measured-optimization" ? discoveredBenchmark : null;

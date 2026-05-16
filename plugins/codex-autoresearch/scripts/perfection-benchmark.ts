@@ -482,6 +482,64 @@ const checks = [
     },
   },
   {
+    id: "release-workflow-safeguards",
+    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml",
+    description:
+      "Release automation keeps version sync, branch, CodeQL, package, tarball, and duplicate-release safeguards.",
+    run: async () => {
+      const autoRelease = await readRootText(".github/workflows/auto-release.yml");
+      const release = await readRootText(".github/workflows/release.yml");
+      const codeql = await readRootText(".github/workflows/codeql.yml");
+      return includesAll(autoRelease, [
+        "branches:",
+        "- main",
+        "plugins/codex-autoresearch/package.json",
+        "plugins/codex-autoresearch/package-lock.json",
+        "plugins/codex-autoresearch/.codex-plugin/plugin.json",
+        "CHANGELOG.md",
+        "contents: read",
+        "Version surfaces are not synchronized",
+        "uses: ./.github/workflows/release.yml",
+      ]) &&
+        !/push:\s*\n\s*tags:/m.test(release) &&
+        includesAll(release, [
+          "os: [ubuntu-latest, windows-latest, macos-latest]",
+          "npm run check",
+          "node scripts/autoresearch.mjs --help",
+          "Refuse existing tag or release",
+          "npm pack",
+          "tar -xzf",
+          "gh release create",
+          '--target "$GITHUB_SHA"',
+        ]) &&
+        /pull_request:\s*\n[\s\S]*branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/m.test(codeql)
+        ? pass()
+        : fail("Release workflows are missing a required release, package, or CodeQL safeguard.");
+    },
+  },
+  {
+    id: "maintainer-skill-progression-map",
+    file: "docs/maintainers.md",
+    description:
+      "Maintainer guidance turns recurring PR findings into concrete skill drills and gates.",
+    run: async () => {
+      const maintainers = await readText("docs/maintainers.md");
+      return includesAll(maintainers, [
+        "## Skill Progression Map",
+        "Security evidence hygiene",
+        "Release workflow design",
+        "Prompt taxonomy and regression design",
+        "Dashboard/operator UX contracts",
+        "Cross-surface release discipline",
+        "Evidence pattern",
+        "Practice task",
+        "Validation gate",
+      ])
+        ? pass()
+        : fail("Maintainer docs are missing the evidence-bound skill progression map.");
+    },
+  },
+  {
     id: "session-artifacts-ignored",
     file: ".gitignore",
     description:
