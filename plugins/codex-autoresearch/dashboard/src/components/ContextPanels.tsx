@@ -178,7 +178,43 @@ export function FinalizationChecklist({ viewModel }: { viewModel: DashboardViewM
         {checklist.items.map((item) => (
           <div className={`checklist-item ${item.state}`} key={item.id || item.label}>
             <span aria-hidden="true">
-              {item.state === "done" ? "OK" : item.state === "blocked" ? "!" : "..."}
+              {item.state === "done" ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+                  <path
+                    d="M5 8l2 2 4-4"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : item.state === "blocked" ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path
+                    d="M8 1.5l6.5 12H1.5L8 1.5z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                  <line
+                    x1="8"
+                    y1="6"
+                    x2="8"
+                    y2="9.5"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="8" cy="11.5" r="0.75" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="4" cy="8" r="1.5" fill="currentColor" />
+                  <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+                  <circle cx="12" cy="8" r="1.5" fill="currentColor" />
+                </svg>
+              )}
             </span>
             <div>
               <strong>{item.label}</strong>

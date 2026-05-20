@@ -16,6 +16,9 @@ export function DecisionRail({
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
+  const commandCopy = useCopyText();
+  const command = typeof action.command === "string" ? action.command : "";
+  const showCommandCopy = mode.liveRefresh && command;
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
@@ -47,6 +50,31 @@ export function DecisionRail({
             action.detail ||
             "Add ASI next_action_hint to make the next session obvious."}
         </p>
+        {showCommandCopy ? (
+          <div className="next-command-copy" id="decision-next-command">
+            <div>
+              <span>
+                {(action as Record<string, unknown>).primaryCommand
+                  ? (((action as Record<string, unknown>).primaryCommand as Record<string, unknown>)
+                      .label as string)
+                  : "Next command"}
+              </span>
+              <code>{command}</code>
+            </div>
+            <button
+              type="button"
+              className="tool-button subtle"
+              onClick={() => commandCopy.copy(command)}
+            >
+              {commandCopy.copied ? "Copied" : "Copy"}
+            </button>
+            {commandCopy.copied ? (
+              <span className="copy-status" aria-live="polite">
+                Command copied to clipboard.
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
