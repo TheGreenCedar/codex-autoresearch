@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   LabelList,
   Line,
-  LineChart,
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
@@ -40,6 +41,10 @@ type ValueMode = "value" | "percent";
 type AxisMode = "iteration" | "timestamp";
 type ChartPointOpener = HTMLElement | SVGElement | null;
 type MetricDetailCard = { label: string; value: string; id: string };
+type SegmentedControlOption<T extends string> = readonly [T, string];
+
+const FOCUSABLE_DIALOG_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 interface TrendPanelProps {
   session: SessionSegment;
@@ -147,8 +152,18 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
           {chart.summary}
         </p>
         <ResponsiveContainer width="100%" height={350}>
-          <LineChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
-            <CartesianGrid vertical={false} stroke="#A8D8D4" strokeDasharray="6 8" />
+          <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
+            <defs>
+              <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.22} />
+                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="trendAreaGradientDark" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.38} />
+                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="6 8" />
             <XAxis
               dataKey={xKey}
               type={usesTimestampScale ? "number" : "category"}
@@ -164,7 +179,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               tickMargin={10}
               tickLine={false}
               axisLine={false}
-              tick={{ fill: "#1E8C86", fontSize: 12, fontWeight: 800 }}
+              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
             />
             <YAxis
               width={74}
@@ -176,7 +191,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               tickMargin={8}
               tickLine={false}
               axisLine={false}
-              tick={{ fill: "#1E8C86", fontSize: 12, fontWeight: 800 }}
+              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
             />
             {valueMode === "value" && chart.winZoneBounds && (
               <ReferenceArea
@@ -190,7 +205,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               <ReferenceLine
                 className="baseline-line"
                 y={baselineLine}
-                stroke="#D45233"
+                stroke="var(--coral)"
                 strokeDasharray="8 8"
                 strokeWidth={2}
               />
@@ -199,21 +214,29 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
               <ReferenceLine
                 className="best-line"
                 y={bestLine}
-                stroke="#FFD23F"
+                stroke="var(--amber-dark)"
                 strokeDasharray="4 6"
                 strokeWidth={3}
               />
             )}
             <Tooltip
               content={<ChartTooltip valueMode={valueMode} readout={readout} />}
-              cursor={{ stroke: "#3CC4BD", strokeWidth: 2, strokeDasharray: "4 6" }}
+              cursor={{ stroke: "var(--teal)", strokeWidth: 2, strokeDasharray: "4 6" }}
+            />
+            <Area
+              className="trendArea"
+              type="monotone"
+              dataKey={yKey}
+              fill="url(#trendAreaGradient)"
+              stroke="none"
+              isAnimationActive={false}
             />
             <Line
               className="linePath"
               type="monotone"
               dataKey={yKey}
               isAnimationActive={false}
-              stroke="#1E8C86"
+              stroke="var(--graph)"
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={5}
@@ -222,7 +245,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
             >
               <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
             </Line>
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
         <div className="chartRunTicks" aria-hidden="true">
           {chartData.map((item) => (
@@ -277,7 +300,7 @@ function ChartControls({
           ["value", metricDefinition.valueLabel],
           ["percent", metricDefinition.percentLabel],
         ]}
-        onChange={(nextValue) => setValueMode(nextValue as ValueMode)}
+        onChange={setValueMode}
       />
       <SegmentedControl
         label="X-axis"
@@ -286,7 +309,7 @@ function ChartControls({
           ["iteration", "Iteration"],
           ["timestamp", "Timestamp"],
         ]}
-        onChange={(nextValue) => setAxisMode(nextValue as AxisMode)}
+        onChange={setAxisMode}
       />
     </div>
   );
@@ -409,16 +432,16 @@ function toTimestampValue(value: string | number | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function SegmentedControl({
+function SegmentedControl<T extends string>({
   label,
   value,
   options,
   onChange,
 }: {
   label: string;
-  value: string;
-  options: [string, string][];
-  onChange: (value: string) => void;
+  value: T;
+  options: SegmentedControlOption<T>[];
+  onChange: (value: T) => void;
 }) {
   return (
     <div className="segmented-control">
@@ -438,6 +461,10 @@ function SegmentedControl({
       </div>
     </div>
   );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return Number.isFinite(value);
 }
 
 function ChartDot({
@@ -481,7 +508,7 @@ function ChartDot({
 }
 
 function ChartActiveDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDatum }) {
-  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !payload) return null;
+  if (!isFiniteNumber(cx) || !isFiniteNumber(cy) || !payload) return null;
   const color = STATUS_COLORS[payload.status] || STATUS_COLORS.keep;
   return (
     <circle
@@ -509,9 +536,9 @@ function ChartLabel({
   valueMode: ValueMode;
   readout: DashboardReadout;
 }) {
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !payload?.latest) return null;
+  if (!isFiniteNumber(x) || !isFiniteNumber(y) || !payload?.latest) return null;
   return (
-    <text className="chart-value-label" x={x} y={(y as number) - 18} textAnchor="middle">
+    <text className="chart-value-label" x={x} y={y - 18} textAnchor="middle">
       {formatChartAxisValue(value ?? null, valueMode, readout)}
     </text>
   );
@@ -532,19 +559,38 @@ function ChartTooltip({
   if (!active || !item) return null;
   return (
     <div className="chart-tooltip">
-      <span>
-        {item.runLabel} / {item.statusLabel}
-      </span>
+      <div className="chart-tooltip-header">
+        <span>{item.runLabel}</span>
+        <span className={`chart-tooltip-status ${item.status}`}>{item.statusLabel}</span>
+      </div>
       <strong>{formatChartAxisValue(payload?.[0]?.value ?? null, valueMode, readout)}</strong>
       <p>{item.description}</p>
-      {item.heldMetric && (
-        <p>
-          <b>Chart placement:</b> held at nearest successful metric level.
-        </p>
+
+      {(item.hypothesis || item.evidence || item.nextActionHint) && (
+        <div className="chart-tooltip-asi">
+          {item.hypothesis && (
+            <div className="chart-tooltip-asi-item">
+              <b>Hypothesis</b>
+              {item.hypothesis}
+            </div>
+          )}
+          {item.evidence && (
+            <div className="chart-tooltip-asi-item">
+              <b>Evidence</b>
+              {item.evidence}
+            </div>
+          )}
+          {item.nextActionHint && (
+            <div className="chart-tooltip-asi-item">
+              <b>Next Action</b>
+              {item.nextActionHint}
+            </div>
+          )}
+        </div>
       )}
-      {item.hypothesis && (
-        <p>
-          <b>Tried:</b> {item.hypothesis}
+      {item.heldMetric && (
+        <p style={{ marginTop: "4px", fontSize: "10px", fontStyle: "italic" }}>
+          Plotted at nearest successful metric level
         </p>
       )}
     </div>
@@ -575,11 +621,7 @@ function ExperimentModal({
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) || [],
-    ).filter((item) => !item.hasAttribute("disabled") && !item.getAttribute("aria-hidden"));
+    const focusable = getFocusableDialogElements(dialogRef.current);
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -677,6 +719,12 @@ function ExperimentModal({
   );
 }
 
+function getFocusableDialogElements(dialog: HTMLElement | null): HTMLElement[] {
+  return Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE_DIALOG_SELECTOR) || []).filter(
+    (item) => !item.hasAttribute("disabled") && !item.getAttribute("aria-hidden"),
+  );
+}
+
 function WeightedExperimentMetrics({
   readout,
   breakdown,
@@ -768,11 +816,17 @@ function MetricDetailsGrid({
   return (
     <div className="metric-details-grid">
       {metricCards.map((card) => (
-        <div className="metric-detail-card" key={card.id}>
-          <span>{card.label}</span>
-          <strong id={card.id}>{card.value}</strong>
-        </div>
+        <MetricDetailCardView card={card} key={card.id} />
       ))}
+    </div>
+  );
+}
+
+function MetricDetailCardView({ card }: { card: MetricDetailCard }) {
+  return (
+    <div className="metric-detail-card">
+      <span>{card.label}</span>
+      <strong id={card.id}>{card.value}</strong>
     </div>
   );
 }

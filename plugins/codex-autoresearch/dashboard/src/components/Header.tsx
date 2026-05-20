@@ -22,6 +22,8 @@ interface HeaderProps {
   setLiveEnabled: Dispatch<SetStateAction<boolean>>;
   refreshLiveData: () => void;
   readout: DashboardReadout;
+  theme: "light" | "dark";
+  setTheme: (theme: "light" | "dark") => void;
 }
 
 export function Header({
@@ -36,6 +38,8 @@ export function Header({
   setLiveEnabled,
   refreshLiveData,
   readout,
+  theme,
+  setTheme,
 }: HeaderProps) {
   const { copied: copiedUrl, copy: copyDashboardUrlText, status: copyUrlStatus } = useCopyText();
   const hasMultipleSegments = normalized.segments.length > 1;
@@ -89,6 +93,54 @@ export function Header({
               onClick={copyDashboardUrl}
             >
               {copiedUrl ? "Copied URL" : "Copy URL"}
+            </button>
+            <button
+              id="theme-toggle"
+              type="button"
+              className="tool-button subtle"
+              onClick={() => {
+                const nextTheme = theme === "light" ? "dark" : "light";
+                setTheme(nextTheme);
+              }}
+              aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
+              style={{ display: "inline-flex", alignItems: "center" }}
+            >
+              {theme === "light" ? (
+                <>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ marginRight: "6px" }}
+                  >
+                    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                  </svg>
+                  Dark
+                </>
+              ) : (
+                <>
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ marginRight: "6px" }}
+                  >
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                  </svg>
+                  Light
+                </>
+              )}
             </button>
           </div>
           <div className="generated-cell">

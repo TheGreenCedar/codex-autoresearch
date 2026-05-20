@@ -9,56 +9,48 @@ import { formatMetricValue } from "./formatting";
 import { finiteMetric, round } from "./metrics";
 import { metricValueForRun } from "./metric-definition";
 
+interface MeasuredRun {
+  run: SessionRun;
+  value: number;
+}
+
 export function buildChart(session: SessionSegment, readout: DashboardReadout): ChartModel {
   const definition = readout.metricDefinition;
-  const measured = readout.plottedRuns
-    .map((run) => ({ run, value: metricValueForRun(run, definition) }))
-    .filter((item) => finiteMetric(item.value));
+  const measured = measuredRuns(readout, definition);
   const crashRuns = session.runs.filter((run) => run.status === "crash");
   if (!measured.length) {
     return emptyChart(readout);
   }
-  const chartRuns = session.runs.filter(
-    (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
-  );
-  const values = measured.map((item) => item.value as number);
+  const chartRuns = chartRunsFor(session, definition);
+  const values = measured.map((item) => item.value);
   const { domain, domainSpan } = metricDomain(values, readout);
-  const xFor = (index: number) =>
-    chartRuns.length === 1 ? 500 : 52 + (index * 880) / (chartRuns.length - 1);
-  const yFor = (value: number) => 276 - ((value - domain[0]) / domainSpan) * 220;
+  const { xFor, yFor } = chartScales(chartRuns, domain, domainSpan);
   const bestRun = readout.bestRun;
   const latest = chartRuns.at(-1);
-  const points = chartRuns.map((run, index) => {
-    const heldMetric = run.status === "crash";
-    const chartMetric = heldMetric
-      ? heldCrashMetric(session.runs, run, definition)
-      : metricValueForRun(run, definition);
-    const safeMetric = finiteMetric(chartMetric) ? chartMetric : 0;
-    return {
-      run,
-      chartMetric: safeMetric,
-      heldMetric,
-      x: round(xFor(index)),
-      y: round(yFor(safeMetric)),
-      best: bestRun?.run === run.run && run.status === "keep",
-      latest: latest?.run === run.run,
-    };
+  const points = buildChartPoints({
+    allRuns: session.runs,
+    bestRun,
+    chartRuns,
+    definition,
+    latest,
+    xFor,
+    yFor,
   });
   const baselineY = finiteMetric(readout.baseline) ? round(yFor(readout.baseline)) : null;
   const bestY = finiteMetric(readout.best) ? round(yFor(readout.best)) : null;
   const improvesLower = definition.bestDirection !== "higher";
   const winZone = chartWinZone(bestY, improvesLower, domain, readout.best);
   const latestPoint = points.at(-1);
-  const summaryParts = [
-    `${chartRuns.length} plotted runs out of ${session.runs.length} logged runs`,
-    latest
-      ? `latest plotted #${latest.run} at ${formatMetricValue(latestPoint?.chartMetric ?? null, definition)}`
-      : "",
-    bestRun ? `Best #${bestRun.run} at ${formatMetricValue(readout.best, definition)}` : "",
-    crashRuns.length
-      ? `${crashRuns.length} crash run${crashRuns.length === 1 ? " is" : "s are"} plotted at the nearest successful metric level`
-      : "",
-  ].filter(Boolean);
+  const summaryParts = chartSummaryParts({
+    bestRun,
+    chartRuns,
+    crashRuns,
+    definition,
+    latest,
+    latestPoint,
+    readout,
+    session,
+  });
   return {
     points,
     linePath: points.map((point) => `${point.x},${point.y}`).join(" "),
@@ -72,6 +64,94 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     note: `${latest ? `latest plotted #${latest.run}` : "latest plotted -"}${bestRun ? ` / Best ${formatMetricValue(readout.best, definition)}` : ""}${crashRuns.length ? ` / ${crashRuns.length} crash held` : ""}`,
     summary: summaryParts.join(". "),
   };
+}
+
+function measuredRuns(
+  readout: DashboardReadout,
+  definition: WeightedMetricDefinition,
+): MeasuredRun[] {
+  return readout.plottedRuns
+    .map((run) => ({ run, value: metricValueForRun(run, definition) }))
+    .filter((item): item is MeasuredRun => finiteMetric(item.value));
+}
+
+function chartRunsFor(session: SessionSegment, definition: WeightedMetricDefinition): SessionRun[] {
+  return session.runs.filter(
+    (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
+  );
+}
+
+function chartScales(chartRuns: SessionRun[], domain: [number, number], domainSpan: number) {
+  const xFor = (index: number) =>
+    chartRuns.length === 1 ? 500 : 52 + (index * 880) / (chartRuns.length - 1);
+  const yFor = (value: number) => 276 - ((value - domain[0]) / domainSpan) * 220;
+  return { xFor, yFor };
+}
+
+function buildChartPoints({
+  allRuns,
+  bestRun,
+  chartRuns,
+  definition,
+  latest,
+  xFor,
+  yFor,
+}: {
+  allRuns: SessionRun[];
+  bestRun: SessionRun | null;
+  chartRuns: SessionRun[];
+  definition: WeightedMetricDefinition;
+  latest: SessionRun | undefined;
+  xFor: (index: number) => number;
+  yFor: (value: number) => number;
+}) {
+  return chartRuns.map((run, index) => {
+    const heldMetric = run.status === "crash";
+    const chartMetric = heldMetric
+      ? heldCrashMetric(allRuns, run, definition)
+      : metricValueForRun(run, definition);
+    const safeMetric = finiteMetric(chartMetric) ? chartMetric : 0;
+    return {
+      run,
+      chartMetric: safeMetric,
+      heldMetric,
+      x: round(xFor(index)),
+      y: round(yFor(safeMetric)),
+      best: bestRun?.run === run.run && run.status === "keep",
+      latest: latest?.run === run.run,
+    };
+  });
+}
+
+function chartSummaryParts({
+  bestRun,
+  chartRuns,
+  crashRuns,
+  definition,
+  latest,
+  latestPoint,
+  readout,
+  session,
+}: {
+  bestRun: SessionRun | null;
+  chartRuns: SessionRun[];
+  crashRuns: SessionRun[];
+  definition: WeightedMetricDefinition;
+  latest: SessionRun | undefined;
+  latestPoint: { chartMetric: number } | undefined;
+  readout: DashboardReadout;
+  session: SessionSegment;
+}): string[] {
+  return [
+    `${chartRuns.length} plotted runs out of ${session.runs.length} logged runs`,
+    latest
+      ? `latest plotted #${latest.run} at ${formatMetricValue(latestPoint?.chartMetric ?? null, definition)}`
+      : "",
+    bestRun ? `Best #${bestRun.run} at ${formatMetricValue(readout.best, definition)}` : "",
+    crashRuns.length
+      ? `${crashRuns.length} crash run${crashRuns.length === 1 ? " is" : "s are"} plotted at the nearest successful metric level`
+      : "",
+  ].filter(Boolean);
 }
 
 function emptyChart(readout: DashboardReadout): ChartModel {

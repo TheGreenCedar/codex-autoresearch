@@ -4,6 +4,21 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.3.7
+
+### Changed
+
+- Refreshed the checked-in demo dashboard export and showcase image for the current readout UI.
+- Removed completed improvement-plan docs now that their work has landed.
+
+### Fixed
+
+- Static dashboard exports no longer render live command-copy controls in the decision rail or mission-control readout.
+- Dashboard CSS no longer imports Google Fonts, keeping exported snapshots self-contained.
+- Demo export checks now pass without leaking local workstation paths or non-public export flags.
+
+Bumped public package and plugin manifest version surfaces to `1.3.7`.
+
 ## 1.3.6
 
 ### Added
