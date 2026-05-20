@@ -41,6 +41,10 @@ type ValueMode = "value" | "percent";
 type AxisMode = "iteration" | "timestamp";
 type ChartPointOpener = HTMLElement | SVGElement | null;
 type MetricDetailCard = { label: string; value: string; id: string };
+type SegmentedControlOption<T extends string> = readonly [T, string];
+
+const FOCUSABLE_DIALOG_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 interface TrendPanelProps {
   session: SessionSegment;
@@ -296,7 +300,7 @@ function ChartControls({
           ["value", metricDefinition.valueLabel],
           ["percent", metricDefinition.percentLabel],
         ]}
-        onChange={(nextValue) => setValueMode(nextValue as ValueMode)}
+        onChange={setValueMode}
       />
       <SegmentedControl
         label="X-axis"
@@ -305,7 +309,7 @@ function ChartControls({
           ["iteration", "Iteration"],
           ["timestamp", "Timestamp"],
         ]}
-        onChange={(nextValue) => setAxisMode(nextValue as AxisMode)}
+        onChange={setAxisMode}
       />
     </div>
   );
@@ -428,16 +432,16 @@ function toTimestampValue(value: string | number | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function SegmentedControl({
+function SegmentedControl<T extends string>({
   label,
   value,
   options,
   onChange,
 }: {
   label: string;
-  value: string;
-  options: [string, string][];
-  onChange: (value: string) => void;
+  value: T;
+  options: SegmentedControlOption<T>[];
+  onChange: (value: T) => void;
 }) {
   return (
     <div className="segmented-control">
@@ -457,6 +461,10 @@ function SegmentedControl({
       </div>
     </div>
   );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return Number.isFinite(value);
 }
 
 function ChartDot({
@@ -500,7 +508,7 @@ function ChartDot({
 }
 
 function ChartActiveDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDatum }) {
-  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !payload) return null;
+  if (!isFiniteNumber(cx) || !isFiniteNumber(cy) || !payload) return null;
   const color = STATUS_COLORS[payload.status] || STATUS_COLORS.keep;
   return (
     <circle
@@ -528,9 +536,9 @@ function ChartLabel({
   valueMode: ValueMode;
   readout: DashboardReadout;
 }) {
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !payload?.latest) return null;
+  if (!isFiniteNumber(x) || !isFiniteNumber(y) || !payload?.latest) return null;
   return (
-    <text className="chart-value-label" x={x} y={(y as number) - 18} textAnchor="middle">
+    <text className="chart-value-label" x={x} y={y - 18} textAnchor="middle">
       {formatChartAxisValue(value ?? null, valueMode, readout)}
     </text>
   );
@@ -613,11 +621,7 @@ function ExperimentModal({
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) || [],
-    ).filter((item) => !item.hasAttribute("disabled") && !item.getAttribute("aria-hidden"));
+    const focusable = getFocusableDialogElements(dialogRef.current);
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -715,6 +719,12 @@ function ExperimentModal({
   );
 }
 
+function getFocusableDialogElements(dialog: HTMLElement | null): HTMLElement[] {
+  return Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE_DIALOG_SELECTOR) || []).filter(
+    (item) => !item.hasAttribute("disabled") && !item.getAttribute("aria-hidden"),
+  );
+}
+
 function WeightedExperimentMetrics({
   readout,
   breakdown,
@@ -806,11 +816,17 @@ function MetricDetailsGrid({
   return (
     <div className="metric-details-grid">
       {metricCards.map((card) => (
-        <div className="metric-detail-card" key={card.id}>
-          <span>{card.label}</span>
-          <strong id={card.id}>{card.value}</strong>
-        </div>
+        <MetricDetailCardView card={card} key={card.id} />
       ))}
+    </div>
+  );
+}
+
+function MetricDetailCardView({ card }: { card: MetricDetailCard }) {
+  return (
+    <div className="metric-detail-card">
+      <span>{card.label}</span>
+      <strong id={card.id}>{card.value}</strong>
     </div>
   );
 }

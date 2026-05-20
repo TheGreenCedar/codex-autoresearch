@@ -9,6 +9,13 @@ import { resolvePackageRoot } from "./runtime-paths.js";
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
 const RECIPE_CATALOG_TIMEOUT_MS = 10_000;
+const REQUIRED_EXTERNAL_RECIPE_FIELDS = [
+  "id",
+  "title",
+  "metricName",
+  "direction",
+  "benchmarkCommand",
+] as const;
 type LooseObject = Record<string, any>;
 type RecipeCatalogProvenance = {
   source: string;
@@ -255,29 +262,51 @@ export function applyRecipeObjectDefaults(
 ): LooseObject {
   return {
     ...args,
-    recipeId: args.recipeId ?? args.recipe_id ?? args.recipe ?? defaults.recipe.id,
+    recipeId: firstDefined(args.recipeId, args.recipe_id, args.recipe, defaults.recipe.id),
     name: args.name || defaults.name,
-    metricName: args.metricName ?? args.metric_name ?? defaults.metricName,
-    metric_name: args.metric_name ?? args.metricName ?? defaults.metricName,
-    metricUnit: args.metricUnit ?? args.metric_unit ?? defaults.metricUnit,
-    metric_unit: args.metric_unit ?? args.metricUnit ?? defaults.metricUnit,
+    metricName: firstDefined(args.metricName, args.metric_name, defaults.metricName),
+    metric_name: firstDefined(args.metric_name, args.metricName, defaults.metricName),
+    metricUnit: firstDefined(args.metricUnit, args.metric_unit, defaults.metricUnit),
+    metric_unit: firstDefined(args.metric_unit, args.metricUnit, defaults.metricUnit),
     direction: args.direction || defaults.direction,
-    benchmarkCommand: args.benchmarkCommand ?? args.benchmark_command ?? defaults.benchmarkCommand,
-    benchmark_command: args.benchmark_command ?? args.benchmarkCommand ?? defaults.benchmarkCommand,
-    benchmarkPrintsMetric:
-      args.benchmarkPrintsMetric ?? args.benchmark_prints_metric ?? defaults.benchmarkPrintsMetric,
-    benchmark_prints_metric:
-      args.benchmark_prints_metric ?? args.benchmarkPrintsMetric ?? defaults.benchmarkPrintsMetric,
-    checksCommand: args.checksCommand ?? args.checks_command ?? defaults.checksCommand,
-    checks_command: args.checks_command ?? args.checksCommand ?? defaults.checksCommand,
-    filesInScope: args.filesInScope ?? args.files_in_scope ?? defaults.filesInScope,
-    files_in_scope: args.files_in_scope ?? args.filesInScope ?? defaults.filesInScope,
+    benchmarkCommand: firstDefined(
+      args.benchmarkCommand,
+      args.benchmark_command,
+      defaults.benchmarkCommand,
+    ),
+    benchmark_command: firstDefined(
+      args.benchmark_command,
+      args.benchmarkCommand,
+      defaults.benchmarkCommand,
+    ),
+    benchmarkPrintsMetric: firstDefined(
+      args.benchmarkPrintsMetric,
+      args.benchmark_prints_metric,
+      defaults.benchmarkPrintsMetric,
+    ),
+    benchmark_prints_metric: firstDefined(
+      args.benchmark_prints_metric,
+      args.benchmarkPrintsMetric,
+      defaults.benchmarkPrintsMetric,
+    ),
+    checksCommand: firstDefined(args.checksCommand, args.checks_command, defaults.checksCommand),
+    checks_command: firstDefined(args.checks_command, args.checksCommand, defaults.checksCommand),
+    filesInScope: firstDefined(args.filesInScope, args.files_in_scope, defaults.filesInScope),
+    files_in_scope: firstDefined(args.files_in_scope, args.filesInScope, defaults.filesInScope),
     constraints: args.constraints || defaults.constraints,
-    recipeCatalogProvenance:
-      args.recipeCatalogProvenance ??
-      args.recipe_catalog_provenance ??
+    recipeCatalogProvenance: firstDefined(
+      args.recipeCatalogProvenance,
+      args.recipe_catalog_provenance,
       defaults.recipeCatalogProvenance,
+    ),
   };
+}
+
+function firstDefined<T>(...values: Array<T | null | undefined>): T {
+  for (const value of values) {
+    if (value !== null && value !== undefined) return value;
+  }
+  return values.at(-1) as T;
 }
 
 export async function findRecipe(
@@ -419,13 +448,13 @@ function catalogSourceForProvenance(catalog: string, baseDir = ""): string {
 async function readBoundedCatalogFile(filePath: string) {
   const stats = await fsp.stat(filePath);
   if (stats.size > RECIPE_CATALOG_MAX_BYTES) {
-    throw new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`);
+    throw catalogTooLargeError();
   }
   return await fsp.readFile(filePath, "utf8");
 }
 
 function validateExternalRecipe(recipe: Record<string, unknown>): Recipe {
-  for (const field of ["id", "title", "metricName", "direction", "benchmarkCommand"]) {
+  for (const field of REQUIRED_EXTERNAL_RECIPE_FIELDS) {
     if (!recipe[field]) throw new Error(`Recipe is missing required field: ${field}`);
   }
   return {
@@ -437,11 +466,15 @@ function validateExternalRecipe(recipe: Record<string, unknown>): Recipe {
     benchmarkCommand: String(recipe.benchmarkCommand),
     benchmarkPrintsMetric: Boolean(recipe.benchmarkPrintsMetric),
     checksCommand: String(recipe.checksCommand || ""),
-    scope: Array.isArray(recipe.scope) ? recipe.scope.map(String) : [],
-    caveats: Array.isArray(recipe.caveats) ? recipe.caveats.map(String) : [],
-    tags: Array.isArray(recipe.tags) ? recipe.tags.map(String) : [],
+    scope: stringArrayField(recipe.scope),
+    caveats: stringArrayField(recipe.caveats),
+    tags: stringArrayField(recipe.tags),
     source: "catalog",
   };
+}
+
+function stringArrayField(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function withCatalogProvenance(
@@ -510,10 +543,8 @@ async function fetchText(url: string): Promise<string> {
           return;
         }
         const contentLength = Number(res.headers["content-length"] || 0);
-        if (Number.isFinite(contentLength) && contentLength > RECIPE_CATALOG_MAX_BYTES) {
-          fail(
-            new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`),
-          );
+        if (catalogSizeExceedsLimit(contentLength)) {
+          fail(catalogTooLargeError());
           res.destroy();
           return;
         }
@@ -522,10 +553,8 @@ async function fetchText(url: string): Promise<string> {
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
           bytes += Buffer.byteLength(chunk, "utf8");
-          if (bytes > RECIPE_CATALOG_MAX_BYTES) {
-            fail(
-              new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`),
-            );
+          if (catalogSizeExceedsLimit(bytes)) {
+            fail(catalogTooLargeError());
             res.destroy();
             return;
           }
@@ -540,4 +569,12 @@ async function fetchText(url: string): Promise<string> {
       );
     });
   });
+}
+
+function catalogSizeExceedsLimit(bytes: number): boolean {
+  return Number.isFinite(bytes) && bytes > RECIPE_CATALOG_MAX_BYTES;
+}
+
+function catalogTooLargeError(): Error {
+  return new Error(`Recipe catalog is too large; limit is ${RECIPE_CATALOG_MAX_BYTES} bytes.`);
 }

@@ -10,41 +10,50 @@ export const quoteForShell = (value) => {
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
 
+const spawnTestProcess = (command, args, cwd, stdio) =>
+  spawn(command, args, {
+    cwd,
+    windowsHide: true,
+    stdio,
+  });
+
+const captureProcessOutput = (child, onStdout) => {
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+    onStdout?.(stdout);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  return {
+    stdout: () => stdout,
+    stderr: () => stderr,
+  };
+};
+
+const resolveWithProcessResult = (child, output, resolve) => {
+  child.on("error", (error) =>
+    resolve(processResult(-1, output.stdout(), String(error.message || error))),
+  );
+  child.on("close", (code) => resolve(processResult(code, output.stdout(), output.stderr())));
+};
+
 export const runProcess = (command, args, cwd) => {
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve(processResult(-1, stdout, String(error.message || error))),
-    );
-    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
+    const child = spawnTestProcess(command, args, cwd, ["ignore", "pipe", "pipe"]);
+    const output = captureProcessOutput(child);
+    resolveWithProcessResult(child, output, resolve);
   });
 };
 
 export const runInteractiveProcess = (command, args, answers, cwd) => {
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
+    const child = spawnTestProcess(command, args, cwd, ["pipe", "pipe", "pipe"]);
     let answered = 0;
     let seenPrompts = 0;
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+    const output = captureProcessOutput(child, (stdout) => {
       const promptCount = (stdout.match(/: /g) || []).length;
       while (seenPrompts < promptCount && answered < answers.length) {
         child.stdin.write(`${answers[answered]}\n`);
@@ -53,13 +62,7 @@ export const runInteractiveProcess = (command, args, answers, cwd) => {
       }
       if (answered === answers.length && !child.stdin.destroyed) child.stdin.end();
     });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve(processResult(-1, stdout, String(error.message || error))),
-    );
-    child.on("close", (code) => resolve(processResult(code, stdout, stderr)));
+    resolveWithProcessResult(child, output, resolve);
   });
 };
 
@@ -74,25 +77,10 @@ export const createInteractiveCliRunner = (cli, defaultCwd) => {
 };
 
 export const withProcess = async (command, args, cwd, fn) => {
-  const child = spawn(command, args, {
-    cwd,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
+  const child = spawnTestProcess(command, args, cwd, ["ignore", "pipe", "pipe"]);
+  const output = captureProcessOutput(child);
   try {
-    return await fn(
-      child,
-      () => stdout,
-      () => stderr,
-    );
+    return await fn(child, output.stdout, output.stderr);
   } finally {
     child.kill();
   }
