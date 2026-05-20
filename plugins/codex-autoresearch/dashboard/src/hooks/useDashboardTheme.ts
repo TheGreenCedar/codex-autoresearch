@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type DashboardTheme = "light" | "dark";
 
 export function useDashboardTheme() {
   const [theme, setTheme] = useState<DashboardTheme>(initialDashboardTheme);
+  const setDashboardTheme = useCallback((nextTheme: DashboardTheme) => {
+    setTheme(nextTheme);
+    storeDashboardTheme(nextTheme);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -32,7 +36,7 @@ export function useDashboardTheme() {
     }
   }, []);
 
-  return { theme, setTheme };
+  return { theme, setTheme: setDashboardTheme };
 }
 
 function initialDashboardTheme(): DashboardTheme {
@@ -48,4 +52,15 @@ function initialDashboardTheme(): DashboardTheme {
     // Ignore storage and media-query errors in test environments.
   }
   return "light";
+}
+
+function storeDashboardTheme(theme: DashboardTheme): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("autoresearch-theme", theme);
+    }
+  } catch {
+    // Keep the dashboard usable when storage is blocked by browser policy.
+  }
 }

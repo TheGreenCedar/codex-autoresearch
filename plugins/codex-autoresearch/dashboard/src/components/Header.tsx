@@ -23,7 +23,7 @@ interface HeaderProps {
   refreshLiveData: () => void;
   readout: DashboardReadout;
   theme: "light" | "dark";
-  setTheme: Dispatch<SetStateAction<"light" | "dark">>;
+  setTheme: (theme: "light" | "dark") => void;
 }
 
 export function Header({
@@ -101,7 +101,6 @@ export function Header({
               onClick={() => {
                 const nextTheme = theme === "light" ? "dark" : "light";
                 setTheme(nextTheme);
-                localStorage.setItem("autoresearch-theme", nextTheme);
               }}
               aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
               style={{ display: "inline-flex", alignItems: "center" }}
