@@ -10,6 +10,7 @@ const pluginRoot = resolvePackageRoot(import.meta.url);
 const dashboardTemplatePath = path.join(pluginRoot, "assets", "template.html");
 const dashboardBuildPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js");
 const dashboardCssPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css");
+const dashboardReadyMessage = "Dashboard React app did not finish rendering.";
 
 export const dashboardConfigEntry = ({
   name,
@@ -71,10 +72,26 @@ export function createDashboardHarness() {
     if (tempBuildDir) await rm(tempBuildDir, { recursive: true, force: true });
   };
 
+  const readDashboardAssets = async () => ({
+    app: dashboardAssets?.app || (await readFile(dashboardBuildPath, "utf8")),
+    css: dashboardAssets?.css || (await readFile(dashboardCssPath, "utf8")),
+  });
+
+  const dashboardUrl = (meta, options) =>
+    options.url ||
+    (meta.deliveryMode === "live-server"
+      ? "http://127.0.0.1/"
+      : "file:///autoresearch-dashboard.html");
+
+  const getRequiredElement = (dom, id) => {
+    const element = dom.window.document.getElementById(id);
+    assert.ok(element, `Missing dashboard element: ${id}`);
+    return element;
+  };
+
   const runDashboard = async (entries, meta = {}, options = {}) => {
     const template = await readFile(dashboardTemplatePath, "utf8");
-    const app = dashboardAssets?.app || (await readFile(dashboardBuildPath, "utf8"));
-    const css = dashboardAssets?.css || (await readFile(dashboardCssPath, "utf8"));
+    const { app, css } = await readDashboardAssets();
     const html = template
       .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
         JSON.stringify(entries).replace(/</g, "\\u003c"),
@@ -85,23 +102,12 @@ export function createDashboardHarness() {
     const dom = new JSDOM(html, {
       pretendToBeVisual: true,
       runScripts: "dangerously",
-      url:
-        options.url ||
-        (meta.deliveryMode === "live-server"
-          ? "http://127.0.0.1/"
-          : "file:///autoresearch-dashboard.html"),
+      url: dashboardUrl(meta, options),
       beforeParse: options.beforeParse,
     });
     dashboardWindows.push(dom.window);
-    await waitFor(
-      () => dom.window.__AUTORESEARCH_DASHBOARD_READY__,
-      "Dashboard React app did not finish rendering.",
-    );
-    const getById = (id) => {
-      const element = dom.window.document.getElementById(id);
-      assert.ok(element, `Missing dashboard element: ${id}`);
-      return element;
-    };
+    await waitFor(() => dom.window.__AUTORESEARCH_DASHBOARD_READY__, dashboardReadyMessage);
+    const getById = (id) => getRequiredElement(dom, id);
     const queryById = (id) => dom.window.document.getElementById(id);
     return { dom, getById, queryById };
   };

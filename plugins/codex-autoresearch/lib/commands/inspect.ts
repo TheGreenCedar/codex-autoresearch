@@ -47,12 +47,13 @@ export function createInspectCommands(deps: InspectCommandDeps) {
       }
     }
     const parsedMetrics = deps.parseMetricLines(sample);
+    const parsedMetricCount = metricCount(parsedMetrics);
     const emitsPrimary = deps.finiteMetric(parsedMetrics[metricName]) != null;
     const issues: string[] = [];
     const warnings: string[] = [];
     if (!sample) {
       issues.push("No sample output, command, or default autoresearch script was available.");
-    } else if (!Object.keys(parsedMetrics).length) {
+    } else if (!parsedMetricCount) {
       issues.push("No METRIC name=value lines were parsed.");
     } else if (!emitsPrimary) {
       issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
@@ -61,13 +62,13 @@ export function createInspectCommands(deps: InspectCommandDeps) {
       issues.push(
         `Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`,
       );
-      if (commandResult.timedOut && !Object.keys(parsedMetrics).length) {
+      if (commandResult.timedOut && !parsedMetricCount) {
         warnings.push(
           "Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.",
         );
       }
     }
-    if (Object.keys(parsedMetrics).length > 20) {
+    if (parsedMetricCount > 20) {
       warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
     }
     const researchIntegrity = buildResearchIntegrity({
@@ -80,7 +81,7 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     const metricParsing = {
       ok: issues.length === 0,
       emitsPrimary,
-      parsedMetricCount: Object.keys(parsedMetrics).length,
+      parsedMetricCount,
       issues,
     };
     const diagnostics = commandDiagnostics({
@@ -141,7 +142,8 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     });
     const output = deps.metricParseSource(result) || result.fullOutput || result.output || "";
     const parsedMetrics = deps.parseMetricLines(output);
-    const timedOutBeforeMetric = result.timedOut && Object.keys(parsedMetrics).length === 0;
+    const parsedMetricCount = metricCount(parsedMetrics);
+    const timedOutBeforeMetric = result.timedOut && parsedMetricCount === 0;
     if (timedOutBeforeMetric) {
       warnings.push(
         "The inspect command timed out before any METRIC output. Use a benchmark-specific list/dry-run/artifact mode before running the full packet.",
@@ -226,16 +228,16 @@ export function createInspectCommands(deps: InspectCommandDeps) {
 function benchmarkInspectWarnings(command: string): string[] {
   const warnings: string[] = [];
   if (!command) return warnings;
-  if (/CODESTORY_PIPELINE_LIST_CASES\s*=\s*1/i.test(command)) {
-    warnings.push(
-      "This looks like the wrong CodeStory list flag seen in onboarding; use CODESTORY_EMBED_RESEARCH_LIST=1 for the current pipeline list mode.",
-    );
-  }
-  if (!/(LIST|DRY|INSPECT|SAMPLE|ARTIFACT|LIMIT|COUNT|HELP)/i.test(command)) {
-    warnings.push(
-      "Command does not advertise an obvious list/dry-run/sample bound. Confirm it will not start the full benchmark.",
-    );
-  }
+  pushWarning(
+    warnings,
+    /CODESTORY_PIPELINE_LIST_CASES\s*=\s*1/i.test(command),
+    "This looks like the wrong CodeStory list flag seen in onboarding; use CODESTORY_EMBED_RESEARCH_LIST=1 for the current pipeline list mode.",
+  );
+  pushWarning(
+    warnings,
+    !/(LIST|DRY|INSPECT|SAMPLE|ARTIFACT|LIMIT|COUNT|HELP)/i.test(command),
+    "Command does not advertise an obvious list/dry-run/sample bound. Confirm it will not start the full benchmark.",
+  );
   return warnings;
 }
 
@@ -257,21 +259,21 @@ function checksInspectWarnings(
   failedTests: string[],
 ): string[] {
   const warnings: string[] = [];
-  if (result.timedOut) {
-    warnings.push(
-      "The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.",
-    );
-  }
-  if (cargoUnexpectedArgument(output)) {
-    warnings.push(
-      "Cargo rejected the check command shape. cargo test accepts one name filter per invocation; run separate exact filters or a package target such as --lib.",
-    );
-  }
-  if (/cargo(?:\.exe)?\s+test/i.test(command) && looksLikeMultipleCargoFilters(command)) {
-    warnings.push(
-      "This cargo test command appears to include multiple name filters before --; prefer separate exact test invocations or a broader target filter.",
-    );
-  }
+  pushWarning(
+    warnings,
+    result.timedOut,
+    "The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.",
+  );
+  pushWarning(
+    warnings,
+    cargoUnexpectedArgument(output),
+    "Cargo rejected the check command shape. cargo test accepts one name filter per invocation; run separate exact filters or a package target such as --lib.",
+  );
+  pushWarning(
+    warnings,
+    /cargo(?:\.exe)?\s+test/i.test(command) && looksLikeMultipleCargoFilters(command),
+    "This cargo test command appears to include multiple name filters before --; prefer separate exact test invocations or a broader target filter.",
+  );
   if (failedTests.length > 1) {
     warnings.push(
       `${failedTests.length} tests failed. Classify touched-path failures separately from pre-existing or broad-suite failures before deciding keep/discard/checks_failed.`,
@@ -281,12 +283,20 @@ function checksInspectWarnings(
       `One test failed: ${failedTests[0]}. Confirm whether it is caused by the current packet before logging checks_failed.`,
     );
   }
-  if (result.exitCode !== 0 && !result.timedOut && failedTests.length === 0) {
-    warnings.push(
-      `The checks command exited ${result.exitCode} without a parsed failed-test list; inspect the output for setup, command, or environment failure.`,
-    );
-  }
+  pushWarning(
+    warnings,
+    result.exitCode !== 0 && !result.timedOut && failedTests.length === 0,
+    `The checks command exited ${result.exitCode} without a parsed failed-test list; inspect the output for setup, command, or environment failure.`,
+  );
   return warnings;
+}
+
+function metricCount(parsedMetrics: Record<string, number>): number {
+  return Object.keys(parsedMetrics).length;
+}
+
+function pushWarning(warnings: string[], condition: boolean, message: string): void {
+  if (condition) warnings.push(message);
 }
 
 function cargoUnexpectedArgument(output = ""): boolean {

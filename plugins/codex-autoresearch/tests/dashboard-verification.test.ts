@@ -1347,6 +1347,8 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   assert.equal(getById("live-toggle").hidden, true);
   assert.equal(queryById("live-actions-panel"), null);
   assert.equal(queryById("next-command-copy"), null);
+  assert.equal(queryById("decision-next-command"), null);
+  assert.equal(dom.window.document.querySelector(".mission-command"), null);
   dom.window.close();
 });
 

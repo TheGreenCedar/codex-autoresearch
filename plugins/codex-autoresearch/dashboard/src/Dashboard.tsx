@@ -2,10 +2,13 @@ import { useMemo } from "react";
 import type { DashboardEntry, DashboardMeta } from "./types";
 import { buildReadout, dashboardMode } from "./model";
 import { useDashboardSession } from "./hooks/useDashboardSession";
+import { useDashboardTheme } from "./hooks/useDashboardTheme";
 import { useLiveDashboard } from "./hooks/useLiveDashboard";
+import { useRunToast } from "./hooks/useRunToast";
 import { SideRail } from "./components/SideRail";
 import { Header } from "./components/Header";
 import { DecisionRail } from "./components/DecisionRail";
+import { MissionControl } from "./components/MissionControl";
 import { ScoreStrip } from "./components/ScoreStrip";
 import { TrendPanel } from "./components/TrendPanel";
 import {
@@ -44,6 +47,10 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     setViewModel,
     viewModel,
   });
+
+  const { theme, setTheme } = useDashboardTheme();
+  const { dismissToast, toast } = useRunToast(activeSegment, session.runs);
+
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
       <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
@@ -76,7 +83,11 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           setLiveEnabled={setLiveEnabled}
           refreshLiveData={refreshLiveData}
           readout={readout}
+          theme={theme}
+          setTheme={setTheme}
         />
+
+        <MissionControl viewModel={viewModel} mode={mode} />
 
         <section className="metric-layout" aria-label="Metric evidence">
           <div className="metric-primary-column">
@@ -100,6 +111,25 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           <QualityGapPanel viewModel={viewModel} />
         </section>
       </main>
+
+      {toast && (
+        <div className="toast-container" aria-live="polite">
+          <div className={`toast ${toast.type}`} key={toast.id}>
+            <div className="toast-content">
+              <div className="toast-title">{toast.title}</div>
+              <div className="toast-message">{toast.message}</div>
+            </div>
+            <button
+              type="button"
+              className="toast-close"
+              aria-label="Close notification"
+              onClick={dismissToast}
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
