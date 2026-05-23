@@ -493,6 +493,37 @@ p {
   line-height: 1.45;
 }
 
+.decision-envelope-card {
+  display: grid;
+  gap: 4px;
+  max-width: 760px;
+  margin-top: 12px;
+  border: 1px solid var(--teal);
+  border-radius: 8px;
+  background: var(--primary-bg);
+  padding: 10px 12px;
+}
+
+.decision-envelope-card span {
+  color: var(--teal-dark);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.decision-envelope-card strong {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.decision-envelope-card em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .next-command-copy {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1993,6 +2024,12 @@ p {
   background: var(--cream);
 }
 
+.status-pill.measure {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+  background: #edf7fb;
+}
+
 .best-label {
   display: block;
   margin-top: 4px;
@@ -2316,6 +2353,7 @@ p {
 }
 
 .dark-theme .next-command-copy,
+.dark-theme .decision-envelope-card,
 .dark-theme .mission-command,
 .dark-theme .evidence-chip {
   background: rgba(0, 0, 0, 0.25);
@@ -2403,6 +2441,12 @@ p {
   background: rgba(251, 197, 49, 0.15);
   color: var(--amber);
   border-color: var(--amber-dark);
+}
+
+.dark-theme .status-pill.measure {
+  background: rgba(77, 166, 255, 0.14);
+  color: #8dc5ff;
+  border-color: #4da6ff;
 }
 
 .dark-theme .status-pill.keep {

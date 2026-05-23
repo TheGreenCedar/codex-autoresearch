@@ -227,6 +227,67 @@ test("dashboard renders a generated Codex summary of history and plan", async ()
   assert.match(getById("ai-summary-source").textContent, /latest #3/);
 });
 
+test("dashboard view model and rail expose the authoritative decision envelope", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "envelope path", metricName: "seconds", metricUnit: "s" }),
+    {
+      type: "run",
+      run: 1,
+      metric: 9,
+      status: "keep",
+      description: "Baseline anchor",
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 8.8,
+      status: "measure",
+      description: "Trend-only probe",
+      asi: { evidence: "Measured variance only." },
+    },
+  ];
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "envelope path",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: entries.filter((entry) => entry.type === "run"),
+      baseline: 9,
+      best: 9,
+      confidence: 1,
+      decisionEnvelope: {
+        activeSegment: { segment: 0, runs: 2, baseline: 9, best: 9 },
+        latestPacketFreshness: {
+          fresh: false,
+          reason: "Last-run packet is stale: history changed.",
+          expectedNextRun: 2,
+          actualNextRun: 3,
+        },
+        scaffoldHealth: { ok: true, status: "ok", blockers: [] },
+        finalizationReadiness: { available: true, ready: true, nextAction: "Preview." },
+        nextAction: "Preview finalization after replacing stale packet.",
+      },
+    },
+    finalizePreview: { ready: true, nextAction: "Preview." },
+  });
+
+  assert.equal(viewModel.nextBestAction.kind, "stale-packet");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "stale-packet");
+  assert.equal(viewModel.summary.measured, 1);
+  assert.equal(viewModel.summary.failed, 0);
+  assert.match(viewModel.readout.measurementRuns[0].description, /Trend-only/);
+
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
+  assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
+  assert.match(getById("decision-envelope-summary").textContent, /1 measurement/);
+  assert.match(getById("ledger-body").textContent, /Measurement/);
+  assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
+});
+
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
   const entries = [
     {
@@ -768,9 +829,9 @@ test("dashboard view model treats closed quality gaps as completion instead of a
     },
   });
 
-  assert.equal(viewModel.nextBestAction.kind, "complete");
+  assert.equal(viewModel.nextBestAction.kind, "segment-transition");
   assert.equal(viewModel.nextBestAction.title, "Review completion state");
-  assert.match(viewModel.nextBestAction.detail, /Stop iteration/);
+  assert.match(viewModel.nextBestAction.detail, /quality round is closed/);
   assert.doesNotMatch(viewModel.nextBestAction.title, /Run the next measured hypothesis/);
   assert.equal(viewModel.nextBestAction.primaryCommand.label, "Gaps");
   assert.equal(viewModel.missionControl.activeStep, "gaps");
@@ -1153,7 +1214,114 @@ test("dashboard action rail prioritizes stale packets before normal next actions
   assert.match(rail[0].explanation.avoids, /old metric/);
 });
 
-test("dashboard action rail keeps active research ahead of ready finalization", () => {
+test("dashboard decision envelope priority ladder is stable across competing signals", () => {
+  const run = { run: 1, metric: 5, status: "keep", description: "Baseline" };
+  const baseState = {
+    config: {
+      name: "priority ladder",
+      metricName: "seconds",
+      metricUnit: "s",
+      bestDirection: "lower",
+    },
+    segment: 0,
+    current: [run],
+    baseline: 5,
+    best: 5,
+    confidence: null,
+  };
+  const lastRun = {
+    freshness: { fresh: true, reason: "Last-run packet matches the current ledger." },
+    suggestedStatus: "measure",
+  };
+  const cases = [
+    {
+      name: "stale packet outranks setup",
+      expected: "stale-packet",
+      context: {
+        guidedSetup: {
+          stage: "needs-setup",
+          nextAction: "Complete setup.",
+          lastRun: { freshness: { fresh: false, reason: "Last-run packet is stale." } },
+        },
+      },
+    },
+    {
+      name: "setup outranks fresh log decision",
+      expected: "setup",
+      context: {
+        guidedSetup: {
+          stage: "needs-setup",
+          nextAction: "Complete setup.",
+          lastRun,
+        },
+      },
+    },
+    {
+      name: "benchmark blocker outranks fresh log decision",
+      expected: "benchmark-command",
+      context: {
+        guidedSetup: {
+          stage: "needs-benchmark-command",
+          nextAction: "Add a benchmark command.",
+          lastRun,
+        },
+      },
+    },
+    {
+      name: "fresh log decision outranks segment transition",
+      expected: "log-decision",
+      context: {
+        guidedSetup: {
+          stage: "needs-log-decision",
+          lastRun,
+          state: { limit: { limitReached: true, remainingIterations: 0 } },
+        },
+      },
+    },
+    {
+      name: "segment transition outranks plateau",
+      expected: "segment-transition",
+      context: {
+        guidedSetup: {
+          stage: "limit-reached",
+          nextAction: "Start a new segment.",
+        },
+        experimentMemory: {
+          plateau: { detected: true, recommendation: "Scout a distant lane." },
+        },
+      },
+    },
+    {
+      name: "plateau outranks finalization readiness",
+      expected: "plateau",
+      context: {
+        experimentMemory: {
+          plateau: { detected: true, recommendation: "Scout a distant lane." },
+        },
+        finalizePreview: { ready: true, nextAction: "Preview finalization." },
+      },
+    },
+    {
+      name: "finalization readiness wins after active blockers",
+      expected: "finalize-preview",
+      context: {
+        finalizePreview: { ready: true, nextAction: "Preview finalization." },
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const viewModel = buildDashboardViewModel({
+      state: baseState,
+      commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+      ...item.context,
+    });
+    assert.equal(viewModel.nextBestAction.kind, item.expected, item.name);
+    assert.equal(viewModel.decisionEnvelopeSummary.kind, item.expected, item.name);
+  }
+});
+
+test("dashboard action rail treats finalization readiness as the next decision after active blockers", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -1194,8 +1362,8 @@ test("dashboard action rail keeps active research ahead of ready finalization", 
     ],
   });
 
-  assert.equal(viewModel.nextBestAction.kind, "continue");
-  assert.match(viewModel.nextBestAction.detail, /holdout scorer/);
+  assert.equal(viewModel.nextBestAction.kind, "finalize-preview");
+  assert.match(viewModel.nextBestAction.detail, /Preview finalization/);
 });
 
 test("dashboard trust builder separates read-only mode from decision blockers", () => {

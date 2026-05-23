@@ -1031,9 +1031,17 @@ test("live server exposes health and view-model endpoints", async () => {
       "Baseline",
     ]);
 
+    const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const exportPayload = JSON.parse(exported.stdout);
+    assert.equal(exportPayload.decisionEnvelopeSummary.kind, "benchmark-command");
+    assert.equal(exportPayload.decisionEnvelopeSummary.runs, 1);
+
     await withLiveServer(dir, async (payload) => {
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
       assert.equal(payload.verified, true);
+      assert.equal(payload.decisionEnvelopeSummary.kind, "benchmark-command");
+      assert.equal(payload.decisionEnvelopeSummary.runs, 1);
       assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
       assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());

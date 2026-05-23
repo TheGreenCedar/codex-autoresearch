@@ -197,8 +197,12 @@ function isSessionFile(file: string): boolean {
   const normalized = file.replace(/\\/g, "/");
   return (
     SESSION_FILES.has(normalized) ||
+    normalized.startsWith("autoresearch.") ||
+    normalized.startsWith("autoresearch-") ||
     normalized === RESEARCH_DIR ||
-    normalized.startsWith(`${RESEARCH_DIR}/`)
+    normalized.startsWith(`${RESEARCH_DIR}/`) ||
+    normalized === REPORT_DIRNAME ||
+    normalized.startsWith(`${REPORT_DIRNAME}/`)
   );
 }
 
@@ -262,6 +266,10 @@ async function changedFiles(fromRef: string, toRef: string, cwd: string): Promis
   return normalizePlanFiles(cleanLines(result.stdout), cwd);
 }
 
+function planExcludesSessionArtifacts(config: FinalizePlan): boolean {
+  return config.current_tree_coverage?.exclude_session_artifacts !== false;
+}
+
 async function pathExistsAt(ref: string, file: string, cwd: string): Promise<boolean> {
   const result = await git(["cat-file", "-e", `${ref}:${file}`], cwd, true);
   return result.code === 0;
@@ -299,6 +307,7 @@ async function applyGroupSources(group: CollectedGroup, cwd: string): Promise<vo
 async function collectGroups(config: FinalizePlan, cwd: string): Promise<CollectedGroup[]> {
   const seen = new Set<string>();
   const groups: CollectedGroup[] = [];
+  const excludeSessionArtifacts = planExcludesSessionArtifacts(config);
   for (let i = 0; i < config.groups.length; i += 1) {
     const group = config.groups[i];
     const last = await fullHash(group.last_commit, cwd);
@@ -314,13 +323,14 @@ async function collectGroups(config: FinalizePlan, cwd: string): Promise<Collect
               parent_commit: parent,
               files:
                 Array.isArray(group.files) && group.files.length
-                  ? normalizePlanFiles(group.files, cwd)
+                  ? normalizePlanFiles(group.files, cwd, excludeSessionArtifacts)
                   : await changedFiles(parent, last, cwd),
             },
           ];
     const files = normalizePlanFiles(
       sourceGroups.flatMap((source) => source.files || []),
       cwd,
+      excludeSessionArtifacts,
     );
     for (const file of files) {
       if (seen.has(file)) {
@@ -346,6 +356,7 @@ async function collectSourceGroups(
   cwd: string,
 ): Promise<CollectedSourceGroup[]> {
   const collected: CollectedSourceGroup[] = [];
+  const excludeSessionArtifacts = planExcludesSessionArtifacts(config);
   for (const source of sources) {
     const last = await fullHash(source.last_commit, cwd);
     const parent = source.parent_commit
@@ -353,7 +364,7 @@ async function collectSourceGroups(
       : await commitParent(last, config.base, cwd);
     const files =
       Array.isArray(source.files) && source.files.length
-        ? normalizePlanFiles(source.files, cwd)
+        ? normalizePlanFiles(source.files, cwd, excludeSessionArtifacts)
         : await changedFiles(parent, last, cwd);
     collected.push({ ...source, last_commit: last, parent_commit: parent, files });
   }
@@ -536,12 +547,16 @@ function quotePathspecs(files: string[]): string {
   return files.map((file) => posixQuote(file)).join(" ");
 }
 
-function normalizePlanFiles(files: unknown[], cwd: string): string[] {
+function normalizePlanFiles(
+  files: unknown[],
+  cwd: string,
+  excludeSessionArtifacts = true,
+): string[] {
   return [
     ...new Set(
       (Array.isArray(files) ? files : [])
         .map((file) => validateRepoRelativePath(file, cwd))
-        .filter((file) => !isSessionFile(file)),
+        .filter((file) => !excludeSessionArtifacts || !isSessionFile(file)),
     ),
   ].sort((a, b) => a.localeCompare(b));
 }
@@ -707,26 +722,17 @@ function renderRunwayText(groups: CollectedGroup[], results: BranchResult[]): st
 }
 
 function renderCleanupNotes(sourceBranch: string): string[] {
-  const psPaths = CLEANUP_SESSION_PATHS;
+  const cleanupTargets = [sourceBranch, ...CLEANUP_SESSION_PATHS].sort((a, b) =>
+    a.localeCompare(b),
+  );
   return [
     "",
     "## Cleanup After Merge",
     "",
-    "Do not run cleanup until the review branch merge has succeeded on trunk.",
+    "Cleanup commands are intentionally omitted from this generated summary.",
+    "Do not delete source branches or autoresearch artifacts until the review branches have been merged into trunk and that merge has been verified.",
     "",
-    "PowerShell:",
-    "",
-    "```powershell",
-    `git branch -D ${powershellQuote(sourceBranch)}`,
-    `Remove-Item -LiteralPath ${psPaths.map(powershellQuote).join(", ")} -Recurse -Force -ErrorAction SilentlyContinue`,
-    "```",
-    "",
-    "POSIX shell:",
-    "",
-    "```bash",
-    `git branch -D ${posixQuote(sourceBranch)}`,
-    `rm -rf ${psPaths.map(posixQuote).join(" ")}`,
-    "```",
+    `Cleanup targets after verified merge: ${cleanupTargets.join(", ")}`,
     "",
     `This file is generated under Git metadata (\`${REPORT_DIRNAME}\`) so it does not dirty the worktree. Remove it when no longer needed.`,
   ];
@@ -834,7 +840,12 @@ async function verifyUnion(
   }
 }
 
-async function verifyNoSessionArtifacts(createdBranches: string[], cwd: string): Promise<void> {
+async function verifyNoSessionArtifacts(
+  createdBranches: string[],
+  cwd: string,
+  excludeSessionArtifacts = true,
+): Promise<void> {
+  if (!excludeSessionArtifacts) return;
   for (const branch of createdBranches) {
     const result = await git(["diff-tree", "--no-commit-id", "--name-only", "-r", branch], cwd);
     const sessionFiles = cleanLines(result.stdout).filter(isSessionFile);
@@ -1104,7 +1115,7 @@ async function main() {
       "session artifact verification",
       "Remove autoresearch.* files from review branches, then rerun finalization.",
       async () => {
-        await verifyNoSessionArtifacts(created, cwd);
+        await verifyNoSessionArtifacts(created, cwd, planExcludesSessionArtifacts(config));
       },
     );
     await git(["switch", sourceBranch], cwd, true);
@@ -1142,6 +1153,7 @@ async function main() {
 
 function planFingerprint(plan: FinalizePlan): string {
   const stable = {
+    mode: plan.mode || "",
     source_branch: plan.source_branch || "",
     base: plan.base || "",
     trunk: plan.trunk || "",
@@ -1152,6 +1164,7 @@ function planFingerprint(plan: FinalizePlan): string {
     excluded_commits: normalizedExcludedCommits(plan),
     excluded_commit_count: plan.excluded_commit_count || 0,
     overlap_files: plan.overlap_files || [],
+    current_tree_coverage: normalizeCurrentTreeCoverage(plan.current_tree_coverage),
     groups: (plan.groups || []).map((group) => ({
       title: group.title || "",
       last_commit: group.last_commit || "",
@@ -1165,6 +1178,19 @@ function planFingerprint(plan: FinalizePlan): string {
     })),
   };
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+function normalizeCurrentTreeCoverage(coverage: LooseObject = {}) {
+  return {
+    review_unit: coverage.review_unit || "",
+    file_count: coverage.file_count || 0,
+    all_file_count: coverage.all_file_count || 0,
+    exclude_session_artifacts: Boolean(coverage.exclude_session_artifacts),
+    include_session_artifacts: Boolean(coverage.include_session_artifacts),
+    included_files: coverage.included_files || [],
+    excluded_session_artifacts: coverage.excluded_session_artifacts || [],
+    current_tree_fingerprint: coverage.current_tree_fingerprint || "",
+  };
 }
 
 function analyzeGroupOverlap(groups: PlanGroup[]): OverlapAnalysis {

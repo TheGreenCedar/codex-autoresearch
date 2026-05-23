@@ -34,7 +34,9 @@ export function buildReadout(
       ? Number(summary.best)
       : metricValueForRun(bestRun, metricDefinition);
   const latestFailure =
-    [...runs].reverse().find((run) => run.status && run.status !== "keep") || null;
+    [...runs]
+      .reverse()
+      .find((run) => ["discard", "crash", "checks_failed"].includes(String(run.status))) || null;
   const nextAction =
     viewModel.readout?.nextAction ||
     viewModel.nextBestAction?.detail ||

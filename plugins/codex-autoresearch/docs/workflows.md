@@ -17,7 +17,7 @@ flowchart TD
   G -- "Yes" --> I["serve live dashboard"]
   H --> F
   I --> J["next: run one packet"]
-  J --> K["log keep/discard/crash/checks_failed with ASI"]
+  J --> K["log keep/discard/measure/crash/checks_failed with ASI"]
   K --> L{"continuation says continue?"}
   L -- "Yes" --> J
   L -- "No" --> M["finalize-preview or report blocker"]
@@ -46,7 +46,7 @@ flowchart LR
 stateDiagram-v2
   [*] --> Inspect
   Inspect --> Packet: next
-  Packet --> Log: finite metric or metricless failure
+  Packet --> Log: keep/discard/measure or metricless failure
   Log --> Continue: log returns continuation
   Continue --> Inspect: shouldContinue
   Continue --> Segment: stale or maxed segment
@@ -74,9 +74,10 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-  A["Trust blockers"] --> B["Run chart"]
-  B --> C["Next best action"]
-  C --> D["Why safe"]
-  D --> E["Read-only handoff"]
-  E --> F["Ledger and finalization"]
+  A["Decision envelope"] --> B["Trust blockers"]
+  B --> C["Run chart"]
+  C --> D["Next best action"]
+  D --> E["Why safe"]
+  E --> F["Read-only handoff"]
+  F --> G["Ledger and finalization"]
 ```
