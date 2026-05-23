@@ -48,11 +48,13 @@ import {
   STATUS_VALUES,
   FAILURE_STATUSES,
   appendJsonl,
+  buildDecisionEnvelope,
   finiteMetric,
   currentState,
   readJsonl,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
+  isPromotionalStatus,
   promotionGradeValue,
 } from "../lib/session-core.js";
 import {
@@ -182,10 +184,10 @@ Usage:
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
-  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts]
+  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
@@ -1625,6 +1627,12 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
+  const decisionEnvelope =
+    nextPacket.decisionEnvelope ||
+    nextPacket.resumeAudit ||
+    state.decisionEnvelope ||
+    state.resumeAudit ||
+    null;
   return {
     ok: true,
     workDir,
@@ -1635,7 +1643,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "Before the first live packet, benchmark-lint or doctor --check-benchmark must prove the primary METRIC contract.",
       "Checkpoint generated session files before experiment-scoped keep commits.",
       "Run exactly one packet with next_experiment or next.",
-      "Log the packet with keep, discard, crash, or checks_failed plus ASI.",
+      "Log the packet with keep, discard, measure, crash, or checks_failed plus ASI.",
       "Read continuation before deciding whether to continue or finalize.",
     ],
     readFirst: [
@@ -1645,6 +1653,8 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "autoresearch.last-run.json when present",
     ],
     state,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
     guidedSetup: guidePacket,
     doctor: {
       ok: doctor.ok,
@@ -1694,11 +1704,27 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
   });
   const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
   const action = (viewModel.nextBestAction || {}) as LooseObject;
+  const nextAction = action.detail || viewModel.readout?.nextAction || compact.nextAction;
+  const baseEnvelope = compact.decisionEnvelope || compact.resumeAudit || null;
+  const decisionEnvelope = baseEnvelope
+    ? {
+        ...baseEnvelope,
+        finalizationReadiness: viewModel.finalizePreview
+          ? {
+              available: true,
+              ready: viewModel.finalizePreview.ready === true,
+              nextAction: viewModel.finalizePreview.nextAction || "",
+              warnings: viewModel.finalizePreview.warnings || [],
+            }
+          : baseEnvelope.finalizationReadiness,
+        nextAction,
+      }
+    : null;
   return {
     ok: true,
     workDir,
     action,
-    nextAction: action.detail || viewModel.readout?.nextAction || compact.nextAction,
+    nextAction,
     whySafe:
       action.explanation?.evidence ||
       action.utilityCopy ||
@@ -1716,6 +1742,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     nextStep:
       viewModel.guidedSetup?.nextStep || recommendedActionNextStep(action, viewModel, compact),
     compactState: boolOption(args.compact, false) ? compact : undefined,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
   };
 }
 
@@ -1777,7 +1805,7 @@ function agentReportTemplates(config: LooseObject = {}) {
   return {
     firstResponse:
       "I found the Autoresearch session, checked state/doctor, verified or restarted the live dashboard, and the next safe action is: <action>. Dashboard: <verified url or command>.",
-    progress: `Tried: <plain-English hypothesis>. Result: ${metric}=<value>, status=<pending|keep|discard|crash|checks_failed>. Meaning: <what changed versus baseline/incumbent>. Decision: <log/keep/discard>. Next: <ASI next_action_hint or continuation>.`,
+    progress: `Tried: <plain-English hypothesis>. Result: ${metric}=<value>, status=<pending|keep|discard|measure|crash|checks_failed>. Meaning: <what changed versus baseline/incumbent>. Decision: <log/keep/discard/measure>. Next: <ASI next_action_hint or continuation>.`,
     final:
       "Changed: <files/behavior>. Verified: <commands>. Autoresearch: <runs/kept/best/next>. Risks: <remaining blockers>.",
     blocked:
@@ -3441,7 +3469,6 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const enrichedState = { ...state, scaffoldHealth, researchIntegrity };
   const warnings = context.suppressEnvironmentWarnings
     ? []
     : await operatorWarningsForWorkDir(workDir);
@@ -3461,6 +3488,30 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     warnings: [error.message],
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
+  const effectiveFinalizePreview = context.suppressEnvironmentWarnings
+    ? suppressEnvironmentWarningsFromPreview(finalizePreview)
+    : finalizePreview;
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const continuation = loopContinuation(workDir, state, config, "dashboard");
+  const decisionEnvelope = buildDecisionEnvelope({
+    state,
+    nextAction: continuation.nextAction,
+    lastRunFreshness,
+    warningDetails: warnings,
+    scaffoldHealth,
+    researchIntegrity,
+    qualityGap,
+    finalization: effectiveFinalizePreview,
+  });
+  const enrichedState = {
+    ...state,
+    scaffoldHealth,
+    researchIntegrity,
+    warningDetails: warnings,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+  };
   return buildDashboardViewModel({
     state: enrichedState as any,
     settings,
@@ -3474,9 +3525,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       warnings: [error.message],
     })),
     qualityGap,
-    finalizePreview: context.suppressEnvironmentWarnings
-      ? suppressEnvironmentWarningsFromPreview(finalizePreview)
-      : finalizePreview,
+    finalizePreview: effectiveFinalizePreview,
     recipes: listBuiltInRecipes().map((recipe: any) => ({
       id: recipe.id,
       title: recipe.title,
@@ -3717,7 +3766,7 @@ async function runExperiment(args: LooseObject) {
   const checksPassedOrSkipped = checksPassed === null || checksPassed;
   const passed = benchmarkPassed && primaryPresent && checksPassedOrSkipped;
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
-  const allowedStatuses = passed ? ["keep", "discard"] : [failedStatus];
+  const allowedStatuses = passed ? ["keep", "discard", "measure"] : [failedStatus];
   const suggestedStatus = passed
     ? isBaseline || improvesPrimary
       ? "keep"
@@ -3732,7 +3781,7 @@ async function runExperiment(args: LooseObject) {
   const statusGuidance = passed
     ? safeSuggestedStatus === "keep"
       ? "Safe to consider keep because this is a baseline or a checked improvement; still review ASI before logging."
-      : "Default to discard unless the operator can justify keep with ASI and verification evidence."
+      : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
   return {
@@ -3909,7 +3958,7 @@ async function logExperiment(args: any) {
   );
   if (!status)
     throw new Error(
-      "status is required; choose keep or discard explicitly for successful packets.",
+      "status is required; choose keep, discard, or measure explicitly for successful packets.",
     );
   if (!STATUS_VALUES.has(status))
     throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
@@ -3924,7 +3973,7 @@ async function logExperiment(args: any) {
   }
   const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
   if (!FAILURE_STATUSES.has(status) && metric == null) {
-    throw new Error("metric is required for keep and discard");
+    throw new Error("metric is required for keep, discard, and measure");
   }
   if (status === "keep" && lastPacket?.run?.checks?.passed === false) {
     throw new Error(
@@ -3949,10 +3998,15 @@ async function logExperiment(args: any) {
   if (explicitCommit && !inGit) {
     throw new Error("--commit requires a Git repository so the commit can be verified.");
   }
+  if (explicitCommit && status === "measure") {
+    throw new Error(
+      "--commit is not allowed for measure logs; measure records trend evidence only.",
+    );
+  }
   let commit = "";
   if (explicitCommit) {
     commit = (await resolveCommitRef(workDir, args.commit)).slice(0, 12);
-  } else if (inGit && status !== "keep") {
+  } else if (inGit && status !== "keep" && status !== "measure") {
     commit = await shortHead(workDir);
   }
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
@@ -4006,7 +4060,7 @@ async function logExperiment(args: any) {
         gitMessage = "Git: nothing to commit.";
       }
     }
-  } else if (status !== "keep") {
+  } else if (status !== "keep" && status !== "measure") {
     revertMessage = await cleanupDiscardChanges(workDir, args, config);
   }
 
@@ -4016,7 +4070,7 @@ async function logExperiment(args: any) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
-    metricEligible: !FAILURE_STATUSES.has(status) && finiteMetric(metric) != null,
+    metricEligible: isPromotionalStatus(status) && finiteMetric(metric) != null,
     status,
     description,
     timestamp: Date.now(),
@@ -4341,7 +4395,13 @@ async function readLastRunPacket(workDir: string) {
   const legacyPath = path.join(workDir, "autoresearch.last-run.json");
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
   if (!fs.existsSync(readablePath))
-    throw new Error(`No last-run packet found for ${workDir}. Run next before using --from-last.`);
+    throw new Error(
+      [
+        `No last-run packet found for ${workDir}.`,
+        `Recovery: run ${shellQuote("node")} ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact,`,
+        `or manually log measurement evidence with log --cwd ${shellQuote(workDir)} --metric <value> --status measure --description ${shellQuote("Describe the measurement")}.`,
+      ].join(" "),
+    );
   return JSON.parse(fs.readFileSync(readablePath, "utf8"));
 }
 
@@ -4355,7 +4415,14 @@ async function lastRunPacketFingerprint(workDir: string) {
 
 async function assertFreshLastRunPacket(workDir: string, packet: any) {
   const freshness = await lastRunPacketFreshness(workDir, packet);
-  if (!freshness.fresh) throw new Error(freshness.reason);
+  if (!freshness.fresh) throw new Error(`${freshness.reason} ${lastRunRecoveryText(workDir)}`);
+}
+
+function lastRunRecoveryText(workDir: string) {
+  return [
+    `Recovery: run node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact,`,
+    `or manually log measurement evidence with log --cwd ${shellQuote(workDir)} --metric <value> --status measure --description ${shellQuote("Describe the measurement")}.`,
+  ].join(" ");
 }
 
 async function lastRunPacketFreshness(workDir: string, packet: any) {
@@ -4508,6 +4575,15 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const qualityGap = await currentQualityGapSummary(workDir);
+  const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+    ok: false,
+    ready: false,
+    warnings: [error.message],
+    nextAction: "Fix finalization preview errors before relying on review readiness.",
+  }));
   const memory = buildExperimentMemory({
     runs: state.current,
     direction: state.config.bestDirection,
@@ -4519,6 +4595,17 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       state.current.filter((run: any) => run.status === status).length,
     ]),
   );
+  const continuation = loopContinuation(workDir, state, config, "state");
+  const decisionEnvelope = buildDecisionEnvelope({
+    state,
+    nextAction: continuation.nextAction,
+    lastRunFreshness,
+    warningDetails,
+    scaffoldHealth,
+    researchIntegrity,
+    qualityGap,
+    finalization,
+  });
   const fullState = {
     ok: true,
     workDir,
@@ -4528,6 +4615,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     totalRuns: state.results.length,
     kept: statusCounts.keep,
     discarded: statusCounts.discard,
+    measured: statusCounts.measure,
     crashed: statusCounts.crash,
     checksFailed: statusCounts.checks_failed,
     baseline: state.baseline,
@@ -4550,7 +4638,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
     memory,
-    continuation: loopContinuation(workDir, state, config, "state"),
+    continuation,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
   };
   return boolOption(args.compact, false) ? compactPublicState(fullState) : fullState;
 }
@@ -4574,6 +4664,7 @@ function compactPublicState(state: LooseObject) {
     runs: state.runs,
     kept: state.kept,
     discarded: state.discarded,
+    measured: state.measured,
     baseline: state.baseline,
     best: state.best,
     developmentBest: state.development?.best ?? null,
@@ -4607,10 +4698,10 @@ function compactPublicState(state: LooseObject) {
     finalAnswerPolicy: continuation.finalAnswerPolicy || "",
     blockers: [...new Set(blockers)].slice(0, 6),
     report: {
-      happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
+      happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.measured} measured, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
       decision:
         continuation.requiresLogDecision === true
-          ? "A packet is waiting for a keep/discard/crash/checks_failed log decision."
+          ? "A packet is waiting for a keep/discard/measure/crash/checks_failed log decision."
           : state.best == null
             ? "No best metric yet."
             : `Best ${state.config?.metricName || "metric"} is ${state.best}.`,
@@ -4622,6 +4713,8 @@ function compactPublicState(state: LooseObject) {
       latestNextAction: state.memory?.latestNextAction || "",
     },
     commands: continuation.commands || state.commands || {},
+    resumeAudit: state.resumeAudit || null,
+    decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
   };
 }
 
@@ -5254,6 +5347,12 @@ function promotionStateForLoggedDecision({
     return {
       label: "invalidated",
       reasons: ["Logged as discard; metric evidence is retained but not promotable."],
+    };
+  }
+  if (status === "measure") {
+    return {
+      label: "measurement",
+      reasons: ["Logged as measure; metric evidence is trend-only and not finalizer evidence."],
     };
   }
   return {

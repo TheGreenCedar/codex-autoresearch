@@ -18,7 +18,9 @@ node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC se
 
 Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 
-`crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep` or `discard` needs a finite primary metric.
+`crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep`, `discard`, or `measure` needs a finite primary metric.
+
+Use `measure` for non-promotional evidence: baselines, no-change checks, environment probes, and diagnostics. It can inform latest/trend/baseline readouts, but it is never a keep, never a finalizer input, and never a sneaky little promotion certificate wearing a hat.
 
 `benchmark-lint` reports two layers:
 
@@ -50,7 +52,7 @@ Log from `--from-last` only while the packet is fresh against:
 - working directory
 - Git/file fingerprint
 
-If anything changed, rerun `next` before logging.
+If anything changed, rerun `next` before logging. If the data came from a raw `run` probe and you still want it in the ledger, log it explicitly with `--metric <value> --status measure`.
 
 When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result.
 

@@ -196,6 +196,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         cwd: args.cwd,
         trunk: args.trunk,
         excludeSessionArtifacts: args.excludeSessionArtifacts,
+        includeSessionArtifacts: args.includeSessionArtifacts,
       }),
     }),
     serve: async (args) => ({

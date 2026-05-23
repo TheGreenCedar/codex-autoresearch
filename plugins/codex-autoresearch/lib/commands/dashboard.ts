@@ -100,6 +100,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       workDir,
       output,
       summary: viewModel.summary,
+      decisionEnvelopeSummary: viewModel.decisionEnvelopeSummary || null,
       baseline: viewModel.summary?.baseline ?? null,
       best: viewModel.summary?.best ?? null,
       nextAction: viewModel.nextBestAction?.detail || viewModel.readout?.nextAction || "",
@@ -167,6 +168,14 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     });
     liveUrl = serveResult.url;
     const health = await verifyLiveDashboardUrl(liveUrl);
+    const responseViewModel = await deps.dashboardViewModel(workDir, config, {
+      deliveryMode: "live-server",
+      liveUrl,
+      generatedAt: new Date().toISOString(),
+      sourceCwd: workDir,
+      pluginVersion: deps.pluginVersion,
+      runtimeDrift,
+    });
     liveDashboardServers.add(serveResult.server);
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
@@ -179,6 +188,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       verified: health.ok,
       healthUrl: health.url,
       checkedAt: health.checkedAt,
+      decisionEnvelopeSummary: responseViewModel.decisionEnvelopeSummary || null,
       modeGuidance: {
         deliveryMode: "live-server",
         difference: health.ok

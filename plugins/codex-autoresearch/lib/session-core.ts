@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
-export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed"]);
+export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
 export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
+export const NON_PROMOTIONAL_STATUSES = new Set(["crash", "checks_failed", "measure"]);
 export const RESEARCH_DIR = "autoresearch.research";
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher";
@@ -70,6 +71,10 @@ export function hasFiniteMetric(run: RunRecord | null | undefined): boolean {
 
 export function isFailureStatus(status: unknown): boolean {
   return FAILURE_STATUSES.has(String(status));
+}
+
+export function isPromotionalStatus(status: unknown): boolean {
+  return !NON_PROMOTIONAL_STATUSES.has(String(status));
 }
 
 export function isBaselineEligibleMetricRun(run: RunRecord | null | undefined): boolean {
@@ -308,7 +313,7 @@ export function currentState(workDir: string): SessionState {
   const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
-  const promotionRuns = current.filter(isPromotionGradeRun);
+  const promotionRuns = current.filter((run) => run.status === "keep" && isPromotionGradeRun(run));
   return {
     config,
     segment,
@@ -319,6 +324,136 @@ export function currentState(workDir: string): SessionState {
     confidence,
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
+  };
+}
+
+function bestRunSummary(run: RunRecord | null | undefined): LooseObject | null {
+  if (!run) return null;
+  return {
+    run: run.run ?? null,
+    metric: finiteMetric(run.metric),
+    status: run.status || "",
+    segment: run.segment ?? null,
+    description: run.description || "",
+    promotionGrade: promotionGradeValue(run),
+  };
+}
+
+function warningCodes(warnings: unknown): Set<string> {
+  if (!Array.isArray(warnings)) return new Set();
+  return new Set(
+    warnings
+      .map((warning: any) =>
+        typeof warning === "object" && warning ? String(warning.code || "") : "",
+      )
+      .filter(Boolean),
+  );
+}
+
+function qualityRoundState(qualityGap: LooseObject | null | undefined): LooseObject {
+  if (!qualityGap) return { active: false, open: null, closed: null, total: null, done: null };
+  const open = finiteMetric(qualityGap.open);
+  const closed = finiteMetric(qualityGap.closed);
+  const total = finiteMetric(qualityGap.total);
+  return {
+    active: true,
+    slug: qualityGap.slug || "",
+    open,
+    closed,
+    total,
+    done: open === 0,
+  };
+}
+
+export function buildDecisionEnvelope({
+  state,
+  nextAction,
+  lastRunFreshness = null,
+  warningDetails = [],
+  scaffoldHealth = null,
+  researchIntegrity = null,
+  finalization = null,
+  qualityGap = null,
+}: LooseObject): LooseObject {
+  const current: RunRecord[] = Array.isArray(state?.current) ? state.current : [];
+  const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
+  const direction = state?.config?.bestDirection || "lower";
+  const historicalBest = bestMetricRun(
+    all.filter((run) => run.status === "keep"),
+    direction,
+  );
+  const promotionBest = bestMetricRun(
+    current.filter((run) => run.status === "keep" && isPromotionGradeRun(run)),
+    direction,
+  );
+  const codes = warningCodes(warningDetails);
+  const scaffoldBlockers = Array.isArray(scaffoldHealth?.checks)
+    ? scaffoldHealth.checks
+        .filter((check: any) => check?.severity === "blocker")
+        .map((check: any) => check.message || check.code)
+    : [];
+  return {
+    activeSegment: {
+      segment: state?.segment ?? 0,
+      runs: current.length,
+      baseline: state?.baseline ?? null,
+      best: state?.best ?? null,
+      developmentBest: state?.development?.best ?? null,
+    },
+    historicalBest: bestRunSummary(historicalBest),
+    promotionGradeBest: bestRunSummary(promotionBest),
+    latestPacketFreshness: lastRunFreshness
+      ? {
+          fresh: lastRunFreshness.fresh === true,
+          reason: lastRunFreshness.reason || "",
+          expectedNextRun: lastRunFreshness.expectedNextRun ?? null,
+          actualNextRun: lastRunFreshness.actualNextRun ?? null,
+        }
+      : {
+          fresh: null,
+          reason: "No last-run packet is pending.",
+          expectedNextRun: null,
+          actualNextRun: null,
+        },
+    benchmarkConfigDrift: {
+      drifted: codes.has("benchmark_contract_changed"),
+      warnings: Array.isArray(warningDetails)
+        ? warningDetails.filter((warning: any) => warning?.code === "benchmark_contract_changed")
+        : [],
+    },
+    dirtySourceDrift: {
+      dirty: codes.has("git_dirty"),
+      warnings: Array.isArray(warningDetails)
+        ? warningDetails.filter((warning: any) =>
+            ["git_dirty", "missing_commit_paths"].includes(String(warning?.code || "")),
+          )
+        : [],
+    },
+    qualityRound: qualityRoundState(qualityGap),
+    scaffoldHealth: scaffoldHealth
+      ? {
+          ok: scaffoldHealth.ok,
+          status: scaffoldHealth.status || "",
+          blockers: scaffoldBlockers,
+        }
+      : null,
+    researchIntegrity: researchIntegrity
+      ? {
+          ok: researchIntegrity.ok,
+          currentLabel: researchIntegrity.currentLabel || "",
+          evidenceLabels: researchIntegrity.evidenceLabels || [],
+          notPromotableBecause: researchIntegrity.notPromotableBecause || [],
+        }
+      : null,
+    finalizationReadiness: finalization
+      ? {
+          available: true,
+          ready: finalization.ready === true,
+          nextAction: finalization.nextAction || "",
+          warnings: finalization.warnings || [],
+        }
+      : { available: false, ready: null, nextAction: "", warnings: [] },
+    nextAction: nextAction || "Run doctor, then next.",
   };
 }
 

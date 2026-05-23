@@ -8,7 +8,7 @@ Use finalization when a noisy loop has useful kept commits that should become re
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-Preview is read-only. It should report readiness, blockers, overlap, dirty-tree status, and a next action.
+Preview is read-only. It should report readiness, blockers, overlap, dirty-tree status, finalization readiness, current-tree fingerprints, included/excluded files, and a next action.
 
 Preview also reports semantic safety:
 
@@ -21,15 +21,21 @@ Preview also reports semantic safety:
 
 Only `status: "keep"` entries are candidates for review branches.
 
-Discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
+Measured, discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
 
 If the branch contents are right but the commit-level kept evidence is stale, package the final branch content instead:
 
 ```bash
-node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts
+node scripts/autoresearch.mjs finalize-current-tree --cwd <project>
 ```
 
-Session artifacts are excluded by default; the flag is accepted for operators who want the command to say that out loud.
+Current-tree mode states that the current tree, not old kept commits, is the review unit. Session artifacts are excluded by default: `autoresearch.*`, `autoresearch.research/**`, dashboard exports, and generated finalization scratch files stay out of the branch.
+
+Use the escape hatch only when the reviewer explicitly wants the session files:
+
+```bash
+node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --include-session-artifacts
+```
 
 Use this for current-final-tree finalization after stale bests, contaminated evaluators, failed repeats, cache replay, reverted kept commits, or manual safety commits made outside normal keep logging. Explain why the current tree is the review unit.
 
@@ -62,9 +68,10 @@ After branch creation, verify:
 
 - branch union includes all intended kept files
 - session artifacts are excluded unless intentionally included
+- finalizer output explains which files were included, excluded, and why
 - excluded commits did not leak planned files
 - generated review summary is accurate
-- cleanup order is clear
+- cleanup targets are recorded without executable cleanup commands
 
 ## Final Report
 
@@ -76,7 +83,10 @@ Report:
 - verification commands
 - review summary path
 - remaining blockers or risk
-- merge and cleanup order
+- merge verification status
+- cleanup targets only after merge verification succeeds
+
+Do not suggest branch cleanup until merge verification has succeeded. Before that point, the summary may name cleanup targets, but it should not hand the operator a `git branch -D`, `Remove-Item`, or `rm -rf` incantation and pretend the danger has politely left the room.
 
 ---
 

@@ -27,7 +27,7 @@ METRIC seconds=12.34
 METRIC memory_mb=410
 ```
 
-The configured primary metric drives keep/discard decisions. Secondary metrics explain tradeoffs.
+The configured primary metric drives keep/discard decisions. `measure` records baseline or diagnostic evidence without promotion. Secondary metrics explain tradeoffs.
 
 ## Codex Prompt
 
@@ -98,7 +98,7 @@ Then log from the last packet:
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Baseline packet"
 ```
 
-Use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
+Use `measure` for a baseline or diagnostic, and `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
 
 ## What Good Looks Like
 

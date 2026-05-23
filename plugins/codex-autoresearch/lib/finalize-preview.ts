@@ -30,6 +30,11 @@ type CommitSummary = {
   subject: string;
   files: string[];
 };
+type CurrentTreeFileSelection = {
+  allFiles: string[];
+  excludedSessionArtifacts: string[];
+  includedFiles: string[];
+};
 type FinalTreePlan = LooseObject & {
   warnings: string[];
   base: string;
@@ -348,8 +353,12 @@ export async function finalizeCurrentTree(args: LooseObject) {
   const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
-  const excludeSessionArtifacts =
-    args.exclude_session_artifacts ?? args.excludeSessionArtifacts ?? true;
+  const includeSessionArtifacts = Boolean(
+    args.include_session_artifacts ?? args.includeSessionArtifacts ?? false,
+  );
+  const excludeSessionArtifacts = includeSessionArtifacts
+    ? false
+    : (args.exclude_session_artifacts ?? args.excludeSessionArtifacts ?? true);
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
     return withProgress(
@@ -372,9 +381,8 @@ export async function finalizeCurrentTree(args: LooseObject) {
   const base = baseResult.ok ? baseResult.stdout.trim() : "";
   const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
   const allFiles = base ? await changedFilesBetween(base, "HEAD", workDir, false) : [];
-  const files = excludeSessionArtifacts
-    ? allFiles.filter((file) => !isSessionFile(file))
-    : allFiles;
+  const fileSelection = selectCurrentTreeFiles(allFiles, Boolean(excludeSessionArtifacts));
+  const files = fileSelection.includedFiles;
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
   if (dirty)
     warnings.push("Working tree is dirty; current-tree plan requires a clean source branch.");
@@ -385,6 +393,12 @@ export async function finalizeCurrentTree(args: LooseObject) {
 
   const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
   const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
+  const currentTreeFingerprint = currentTreeFingerprintFor({
+    base,
+    finalTree,
+    excludeSessionArtifacts: Boolean(excludeSessionArtifacts),
+    fileSelection,
+  });
   const plan: LooseObject = {
     mode: "current-final-tree",
     source_branch: branch,
@@ -400,13 +414,21 @@ export async function finalizeCurrentTree(args: LooseObject) {
     overlap_files: [] as string[],
     current_tree_coverage: {
       covered: ready,
+      review_unit: "current_tree",
+      review_unit_message:
+        "Current-tree finalization packages the current branch tree, not older kept commits, as the review unit.",
       file_count: files.length,
+      all_file_count: fileSelection.allFiles.length,
       exclude_session_artifacts: Boolean(excludeSessionArtifacts),
+      include_session_artifacts: includeSessionArtifacts,
+      included_files: files,
+      excluded_session_artifacts: fileSelection.excludedSessionArtifacts,
+      current_tree_fingerprint: currentTreeFingerprint,
     },
     groups: [
       {
         title: `Current final tree for ${branch || "autoresearch"}`,
-        body: "Packages the current non-session branch diff as the review unit when commit-level kept evidence is stale or incomplete.",
+        body: "Packages the current branch tree as the review unit, not older kept commits, when commit-level kept evidence is stale or incomplete.",
         last_commit: finalTree,
         slug: "current-final-tree",
         files,
@@ -417,8 +439,10 @@ export async function finalizeCurrentTree(args: LooseObject) {
     ...plan,
     plan_fingerprint: planFingerprint(plan),
   };
-  await fsp.mkdir(path.dirname(planOutput), { recursive: true });
-  await fsp.writeFile(planOutput, `${JSON.stringify(planWithFingerprint, null, 2)}\n`, "utf8");
+  if (ready) {
+    await fsp.mkdir(path.dirname(planOutput), { recursive: true });
+    await fsp.writeFile(planOutput, `${JSON.stringify(planWithFingerprint, null, 2)}\n`, "utf8");
+  }
   return withProgress(
     {
       ok: true,
@@ -429,13 +453,27 @@ export async function finalizeCurrentTree(args: LooseObject) {
       finalTree,
       ready,
       files,
-      planOutput,
-      planFingerprint: planWithFingerprint.plan_fingerprint,
+      includedFiles: files,
+      excludedFiles: fileSelection.excludedSessionArtifacts,
+      allFiles: fileSelection.allFiles,
+      planOutput: ready ? planOutput : "",
+      planFingerprint: ready ? planWithFingerprint.plan_fingerprint : "",
+      currentTreeFingerprint,
+      reviewUnit: {
+        mode: "current_tree",
+        message:
+          "Current-tree finalization packages the current branch tree, not older kept commits, as the review unit.",
+      },
       currentTreeCoverage: {
         covered: ready,
         files,
+        includedFiles: files,
+        excludedFiles: fileSelection.excludedSessionArtifacts,
         fileCount: files.length,
+        allFileCount: fileSelection.allFiles.length,
         excludeSessionArtifacts: Boolean(excludeSessionArtifacts),
+        includeSessionArtifacts,
+        currentTreeFingerprint,
       },
       warnings,
       nextAction: ready
@@ -445,6 +483,47 @@ export async function finalizeCurrentTree(args: LooseObject) {
     startedAt,
     ready ? "completed" : "blocked",
   );
+}
+
+function selectCurrentTreeFiles(
+  allFiles: string[],
+  excludeSessionArtifacts: boolean,
+): CurrentTreeFileSelection {
+  const excludedSessionArtifacts = excludeSessionArtifacts
+    ? allFiles.filter((file) => isSessionFile(file))
+    : [];
+  const includedFiles = excludeSessionArtifacts
+    ? allFiles.filter((file) => !isSessionFile(file))
+    : [...allFiles];
+  return {
+    allFiles: [...allFiles],
+    excludedSessionArtifacts,
+    includedFiles,
+  };
+}
+
+function currentTreeFingerprintFor({
+  base,
+  finalTree,
+  excludeSessionArtifacts,
+  fileSelection,
+}: {
+  base: string;
+  excludeSessionArtifacts: boolean;
+  fileSelection: CurrentTreeFileSelection;
+  finalTree: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        base,
+        finalTree,
+        excludeSessionArtifacts,
+        includedFiles: fileSelection.includedFiles,
+        excludedSessionArtifacts: fileSelection.excludedSessionArtifacts,
+      }),
+    )
+    .digest("hex");
 }
 
 async function defaultPlanOutput(workDir: string, branch: string): Promise<string> {
@@ -683,6 +762,7 @@ function normalizedExcludedCommits(plan: LooseObject) {
 
 function planFingerprint(plan: LooseObject): string {
   const stable = {
+    mode: plan.mode || "",
     source_branch: plan.source_branch || "",
     base: plan.base || "",
     trunk: plan.trunk || "",
@@ -693,6 +773,7 @@ function planFingerprint(plan: LooseObject): string {
     excluded_commits: normalizedExcludedCommits(plan),
     excluded_commit_count: plan.excluded_commit_count || 0,
     overlap_files: plan.overlap_files || [],
+    current_tree_coverage: normalizeCurrentTreeCoverage(plan.current_tree_coverage),
     groups: (plan.groups || []).map((group: LooseObject) => ({
       title: group.title || "",
       last_commit: group.last_commit || "",
@@ -708,12 +789,27 @@ function planFingerprint(plan: LooseObject): string {
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
+function normalizeCurrentTreeCoverage(coverage: LooseObject = {}) {
+  return {
+    review_unit: coverage.review_unit || "",
+    file_count: coverage.file_count || 0,
+    all_file_count: coverage.all_file_count || 0,
+    exclude_session_artifacts: Boolean(coverage.exclude_session_artifacts),
+    include_session_artifacts: Boolean(coverage.include_session_artifacts),
+    included_files: coverage.included_files || [],
+    excluded_session_artifacts: coverage.excluded_session_artifacts || [],
+    current_tree_fingerprint: coverage.current_tree_fingerprint || "",
+  };
+}
+
 function isSessionFile(file: string): boolean {
   const normalized = file.replace(/\\/g, "/");
   return (
     normalized.startsWith("autoresearch.") ||
     normalized.startsWith("autoresearch-") ||
-    normalized.startsWith("autoresearch.research/")
+    normalized.startsWith("autoresearch.research/") ||
+    normalized === "autoresearch-finalize" ||
+    normalized.startsWith("autoresearch-finalize/")
   );
 }
 

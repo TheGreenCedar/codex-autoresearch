@@ -19,7 +19,7 @@ Target -> Onboard -> Setup -> Doctor -> Dashboard -> Packet -> Log -> Continue o
 
 AX, the AI experience:
 
-- Start by getting machine-readable context from the CLI: `onboarding-packet`, then `recommend-next`, `state`, `guide`, or `doctor`.
+- Start by getting machine-readable context from the CLI: `onboarding-packet`, then `recommend-next`, `state`, `guide`, or `doctor`. Read `decisionEnvelope` / `resumeAudit` first when present.
 - Prefer CLI JSON and durable session files for read-only truth: `autoresearch.jsonl`, `autoresearch.last-run.json`, `autoresearch.research/<slug>/quality-gaps.md`, dashboard view-model output, and `finalize-preview`.
 - When the user gives a broad natural-language goal without a benchmark contract, run `prompt-plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
@@ -33,7 +33,7 @@ UX, the user experience:
 - Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
 - At session start and resume, run `guide`, start/reuse the live dashboard with `serve`, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
-- Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/crash/checks decision, the next move, blockers, dashboard URL, and verification.
+- Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, dashboard URL, and verification.
 
 ## Documentation Awareness
 
@@ -54,7 +54,7 @@ The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the so
 2. Check Git status and work around unrelated dirty files.
 3. If this repo is the target, use the repo-local plugin. From the wrapper root, call `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`; the package root is `plugins/codex-autoresearch`.
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
-5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
+5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
 6. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
 7. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
 8. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
@@ -85,9 +85,12 @@ node scripts/autoresearch.mjs serve --cwd <project>
 After `next`, log the packet. After `log`, read the returned continuation object.
 
 - Use `log --from-last` instead of retyping parsed metrics.
+- Only `next` writes a reusable last-run packet. `run` remains a raw benchmark probe for quick checks and is not loggable with `--from-last`.
+- If `log --from-last` reports no loggable packet or a stale packet, recover with `next --cwd <project>` or record a manual measurement with `log --cwd <project> --metric <value> --status measure --description "<what was measured>"`.
 - Read the last-run `packetEvidence` before logging: packet id, command identity, timeout, exit status, output tails, metrics, artifacts, checks, and freshness fingerprint.
 - Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
-- `keep` and ordinary `discard` require a finite primary metric.
+- `keep`, ordinary `discard`, and `measure` require a finite primary metric.
+- Use `measure` for non-promotional evidence such as baselines, no-change checks, environment probes, and diagnostic measurements. It updates trend/latest/baseline readouts, but it never stages, commits, reverts, counts as `keep`, or becomes finalizer evidence.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - Treat parsed metrics and promotion readiness separately. New keeps default to `exploratory`; discards are `invalidated`; crashes and failed checks are `blocked`; only repeat, holdout, breadth, or explicit promotion metadata should make evidence promotable.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
@@ -109,13 +112,15 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next` before logging.
+- The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness before naming `nextAction`.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
 - Read `researchIntegrity` before claiming a best. `dev_best`, `pending_repeat`, `invalidated`, `historical`, and `blocked` labels explain why a metric can be interesting without being promotable.
 - Treat perfect quality-like metrics as suspicious until repeat, freshness, breadth, holdout, and promotion metadata are present.
 - If doctor reports benchmark drift, treat the old best as historical evidence, not current runtime proof.
-- If the session is maxed, stale, or intentionally changing phase, use `new-segment --cwd <project> --dry-run` first; confirmed segment creation appends to `autoresearch.jsonl`.
+- If the session is maxed, stale, repeatedly shelving the same score, or intentionally changing phase, use `new-segment --cwd <project> --dry-run` first; confirmed segment creation appends to `autoresearch.jsonl`.
+- Treat iteration/tool caps as segment-transition required, not goal completion. Use `new-segment --cwd <project> --yes --reason "<reason>"` only after the dry run makes sense.
 - If the benchmark contract is being promoted, use `promote-gate --cwd <project> --reason "<why>" --dry-run` so the new segment records the gate, sample size, and measurement reason.
 - If `commitPaths` are missing or stale, repair them before relying on keep commits. `log keep` should fail before `git add` when paths are missing.
 
@@ -140,11 +145,12 @@ Prefer the served dashboard:
 
 Read dashboard evidence in this order:
 
-1. Metric trend: baseline, best, latest, confidence, weighted formula when present.
-2. Codex brief and session memory: what happened, what matters, plateau, lanes, novelty, repeated families.
-3. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
-4. Ledger and ASI: what was kept, rejected, crashed, or blocked by checks.
-5. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
+1. Decision envelope summary: packet freshness, blockers, segment transition, plateau, finalization readiness, and the one authoritative next action.
+2. Metric trend: baseline, best, latest, measurement points, confidence, weighted formula when present.
+3. Codex brief and session memory: what happened, what matters, plateau, lanes, novelty, repeated families.
+4. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
+5. Ledger and ASI: what was kept, measured, rejected, crashed, or blocked by checks.
+6. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
 
 Use the CLI for setup, packet runs, logging, gap review, export, `finalize-preview`, and finalization preview. The dashboard should support judgment; it should not become the workflow driver.
 
@@ -161,7 +167,7 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 7. Log implementation or rejection with ASI.
 8. Start a fresh round before claiming there are no more high-impact gaps.
 
-`quality_gap=0` only means the accepted checklist for the current round is closed. In plain text: quality_gap=0 only means this round's accepted checklist is done; it does not prove discovery is complete.
+`quality_gap=0` only means the accepted checklist for the current round is closed. In plain text: quality_gap=0 only means this round's accepted checklist is done; it does not prove discovery is complete. Read `qualityRound.closed`, `freshRoundSuggested`, and plateau reason fields before deciding whether to start another research round or segment.
 
 ## Finalize
 
@@ -176,9 +182,11 @@ Use finalization when noisy loop history has useful kept commits.
 7. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
 8. Report created review branches, files, metric improvement, verification, and remaining risk.
 
-Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain why current-tree packaging is being used.
+Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project>` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain that the current tree, not old kept commits, is the review unit.
 
-Runway order: preview, approve, create review branches, verify, merge into trunk, cleanup.
+Current-tree finalization excludes `autoresearch.*`, `autoresearch.research/**`, dashboard exports, and generated finalization scratch files by default. Use `--include-session-artifacts` only when the reviewer explicitly wants those session files in the branch, and say why.
+
+Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup. Do not suggest branch cleanup until merge verification has succeeded.
 
 ## Integrations
 
@@ -192,6 +200,15 @@ Do not make hooks required for core behavior. Treat Codex hooks as experimental 
 - On Windows, assume hooks are not a dependable default.
 - Good future reminders: `SessionStart` can surface `onboarding-packet`; `PostToolUse` can notice shell output containing `METRIC`; `Stop` can warn about unlogged last-run packets.
 - Hooks must not replace CLI validation, dashboard guards, packet freshness, or Git safety.
+
+## Subagent Handoffs
+
+When Codex uses subagents to work on Autoresearch itself, keep the lanes boring and accountable:
+
+- Each lane states scope, evidence source, decision, handoff artifact, and tests.
+- No nested subagents. Do not nest subagents inside subagents.
+- Do not run overlapping write lanes. Split by ownership first, then merge through one parent context.
+- Reviewers should check the decision-envelope contract, packet freshness, dashboard read-only behavior, finalization artifact policy, and docs/changelog sync before the pass is called done.
 
 ## Verification
 

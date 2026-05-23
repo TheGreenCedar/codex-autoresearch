@@ -4,6 +4,26 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.4.0
+
+### Added
+
+- Added the reusable resume-audit / decision-envelope readout across compact next-action, state, onboarding, dashboard, export, and served-dashboard summaries so resumed loops expose one authoritative next decision.
+- Added `status: "measure"` for baseline, no-change, and diagnostic evidence that updates trend readouts without staging, committing, reverting, counting as `keep`, or becoming finalizer evidence.
+- Added finalization reporting for current-tree included/excluded files, current-tree fingerprints, and session-artifact exclusions, plus an explicit `--include-session-artifacts` escape hatch.
+
+### Changed
+
+- `recommend-next --compact` and dashboard summaries now prioritize stale packets, setup blockers, fresh log decisions, segment transitions, plateau escape, and finalization readiness before suggesting another packet.
+- `run` remains a raw benchmark probe; only `next` writes the reusable last-run packet used by `log --from-last`, and stale/no-packet errors now print exact recovery commands.
+- Current-tree finalization now excludes `autoresearch.*`, `autoresearch.research/**`, dashboard exports, and finalization scratch files by default, and finalizer summaries avoid cleanup commands until merge verification succeeds.
+
+### Fixed
+
+- Quality-gap and plateau readouts now keep `quality_gap=0` round-local, expose fresh-round suggestions, and steer repeated exact-score shelves toward scout, constraint-removal, or new-segment work.
+
+Bumped public package and plugin manifest version surfaces to `1.4.0`.
+
 ## 1.3.7
 
 ### Changed

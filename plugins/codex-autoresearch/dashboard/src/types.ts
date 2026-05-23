@@ -1,6 +1,6 @@
 export type MetricMode = "raw" | "weighted_cost";
 export type MetricDirection = "lower" | "higher";
-export type RunStatus = "keep" | "discard" | "crash" | "checks_failed";
+export type RunStatus = "keep" | "discard" | "crash" | "checks_failed" | "measure";
 
 export interface MetricWeights {
   time: number;
@@ -117,6 +117,59 @@ export interface NextBestAction {
   tone?: string;
   explanation?: Record<string, string>;
   evidenceChips?: EvidenceChip[];
+  [key: string]: unknown;
+}
+
+export interface DecisionEnvelopeModel {
+  activeSegment?: {
+    segment?: number;
+    runs?: number;
+    baseline?: number | null;
+    best?: number | null;
+    developmentBest?: number | null;
+    [key: string]: unknown;
+  };
+  historicalBest?: Record<string, unknown> | null;
+  promotionGradeBest?: Record<string, unknown> | null;
+  latestPacketFreshness?: {
+    fresh?: boolean | null;
+    reason?: string;
+    expectedNextRun?: number | null;
+    actualNextRun?: number | null;
+    [key: string]: unknown;
+  };
+  benchmarkConfigDrift?: Record<string, unknown>;
+  dirtySourceDrift?: Record<string, unknown>;
+  qualityRound?: Record<string, unknown>;
+  scaffoldHealth?: {
+    ok?: boolean;
+    status?: string;
+    blockers?: unknown[];
+    [key: string]: unknown;
+  } | null;
+  researchIntegrity?: Record<string, unknown> | null;
+  finalizationReadiness?: {
+    available?: boolean;
+    ready?: boolean | null;
+    nextAction?: string;
+    warnings?: unknown[];
+    [key: string]: unknown;
+  };
+  nextAction?: string;
+  [key: string]: unknown;
+}
+
+export interface DecisionEnvelopeSummary {
+  kind?: string;
+  priority?: string;
+  title?: string;
+  detail?: string;
+  source?: string;
+  fresh?: boolean | null;
+  segment?: number | null;
+  runs?: number | null;
+  measurementRuns?: number;
+  finalizationReady?: boolean | null;
   [key: string]: unknown;
 }
 
@@ -249,6 +302,8 @@ export interface AiSummaryModel {
 
 export interface DashboardViewModel {
   summary?: DashboardSummary;
+  decisionEnvelope?: DecisionEnvelopeModel | null;
+  decisionEnvelopeSummary?: DecisionEnvelopeSummary;
   nextBestAction?: NextBestAction;
   missionControl?: MissionControlModel;
   experimentMemory?: ExperimentMemoryModel;

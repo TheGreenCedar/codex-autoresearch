@@ -380,6 +380,59 @@ const checks = [
     },
   },
   {
+    id: "friction-elimination-contracts",
+    file: "skills/codex-autoresearch/SKILL.md, docs/operate.md, docs/finish.md, scripts/autoresearch.mjs, lib/session-core.ts, lib/dashboard-view-model.ts, tests/*.ts",
+    description:
+      "Resume, measurement, quality-round, finalization, and subagent guardrails are documented, implemented, and tested.",
+    run: async () => {
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const operate = await readText("docs/operate.md");
+      const finish = await readText("docs/finish.md");
+      const cli = await readText("scripts/autoresearch.ts");
+      const core = await readText("lib/session-core.ts");
+      const dashboard = await readText("lib/dashboard-view-model.ts");
+      const schemas = await readText("lib/tool-schemas.ts");
+      const finalizer = await readText("scripts/finalize-autoresearch.ts");
+      const cliTests = await readText("tests/autoresearch-cli.test.ts");
+      const dashboardTests = await readText("tests/dashboard-verification.test.ts");
+      const finalizerTests = await readText("tests/finalize-report.test.ts");
+      const combined = [
+        skill,
+        operate,
+        finish,
+        cli,
+        core,
+        dashboard,
+        schemas,
+        finalizer,
+        cliTests,
+        dashboardTests,
+        finalizerTests,
+      ].join("\n");
+      return includesAll(combined, [
+        "decisionEnvelope",
+        "resumeAudit",
+        "Only `next` writes a reusable last-run packet",
+        "`run` remains a raw benchmark probe",
+        "STATUS_VALUES",
+        '"measure"',
+        "--status measure",
+        "non-promotional evidence",
+        "freshRoundSuggested",
+        "quality_gap=0 only means",
+        "--include-session-artifacts",
+        "Session artifacts are excluded by default",
+        "Do not suggest branch cleanup until merge verification has succeeded",
+        "No nested subagents",
+        "overlapping write lanes",
+      ])
+        ? pass()
+        : fail(
+            "Friction-elimination contracts are missing across docs, CLI/session core, dashboard, finalizer, or regression tests.",
+          );
+    },
+  },
+  {
     id: "research-cli",
     file: "scripts/autoresearch.mjs, lib/tool-schemas.ts",
     description:
@@ -720,7 +773,7 @@ const checks = [
       return includesAll(`${cli}\n${tests}`, [
         "deleteLastRunPacket",
         "assertFreshLastRunPacket",
-        "status is required; choose keep or discard explicitly",
+        "status is required; choose keep, discard, or measure explicitly",
         "stale last-run packets are rejected",
       ])
         ? pass()
