@@ -16,6 +16,8 @@ For broad new requests, start with `prompt-plan`, then `onboarding-packet`, `rec
 
 CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
 
+Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
+
 Read existing files before editing:
 
 - `autoresearch.md`
@@ -33,10 +35,12 @@ node scripts/autoresearch.mjs serve --cwd <project>
 
 Use it for:
 
+- decision-envelope summary and one next action
 - next safe action and why it is safe
 - trust blockers
 - best kept change and recent failure
 - metric trajectory
+- measurement points that are trend evidence, not promotion evidence
 - setup, gap, packet, log, and finalize readiness
 - strategy lanes and plateau guidance
 - copyable report and AI handoff packet
@@ -59,10 +63,20 @@ node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --de
 node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
 
+`next` is the packet-producing command. `run` is a raw benchmark probe; use it for quick diagnostics, but do not expect `log --from-last` to reuse it.
+
+If `log --from-last` says there is no loggable packet or the packet is stale, recover with one of the commands it prints:
+
+```bash
+node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs log --cwd <project> --metric <value> --status measure --description "Diagnostic measurement"
+```
+
 Statuses:
 
 - `keep`: finite metric and a change worth preserving.
 - `discard`: finite metric but not worth keeping.
+- `measure`: finite metric for baselines, no-change checks, or diagnostics. It updates trend/latest/baseline readouts, but never stages, commits, reverts, counts as a keep, or becomes finalizer evidence.
 - `crash`: benchmark failed before usable metric evidence.
 - `checks_failed`: metric exists but correctness checks failed.
 
@@ -110,6 +124,8 @@ The scratchpad lives under `autoresearch.research/<slug>/`:
 
 `quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete. It means this pile is done. There may be another pile. There is usually another pile.
 
+The state/dashboard readout also exposes `qualityRound.closed`, `freshRoundSuggested`, and plateau reasons. A closed round means decide whether to scout the next round, remove a constraint, or start a new segment; it is not a universal victory bell.
+
 ## Fresh Segment
 
 When a session is maxed, stale, or deliberately entering a new phase:
@@ -120,6 +136,8 @@ node scripts/autoresearch.mjs new-segment --cwd <project> --reason "fresh phase"
 ```
 
 This appends a new config segment to `autoresearch.jsonl` and preserves old history.
+
+Repeated exact-score shelves, max-iteration/tool-cap states, benchmark/config drift, or a quality round that needs fresh discovery should recommend scout/constraint-removal/new-segment work before another near-neighbor tweak.
 
 ---
 

@@ -1,12 +1,13 @@
 import type { RunStatus } from "./types";
 
-export const STATUS_VALUES: RunStatus[] = ["keep", "discard", "crash", "checks_failed"];
+export const STATUS_VALUES: RunStatus[] = ["keep", "discard", "crash", "checks_failed", "measure"];
 
 export const STATUS_LABELS = {
   keep: "Keep",
   discard: "Rejected",
   crash: "Crash",
   checks_failed: "Checks failed",
+  measure: "Measurement",
 };
 
 export const TONES = {
@@ -14,6 +15,7 @@ export const TONES = {
   discard: "bad",
   crash: "bad",
   checks_failed: "warn",
+  measure: "info",
 };
 
 export const LEDGER_ROW_HEIGHT = 82;

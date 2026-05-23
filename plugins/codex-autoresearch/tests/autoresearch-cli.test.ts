@@ -163,7 +163,7 @@ test("run returns explicit keep/discard decision options instead of a fake statu
     assert.equal(payload.ok, true);
     assert.equal(payload.logHint.status, null);
     assert.equal(payload.logHint.needsDecision, true);
-    assert.deepEqual(payload.logHint.allowedStatuses, ["keep", "discard"]);
+    assert.deepEqual(payload.logHint.allowedStatuses, ["keep", "discard", "measure"]);
   });
 });
 
@@ -1225,7 +1225,7 @@ test("successful last-run packets require explicit status and suggest discard fo
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.suggestedStatus, "discard");
-    assert.deepEqual(packet.decision.allowedStatuses, ["keep", "discard"]);
+    assert.deepEqual(packet.decision.allowedStatuses, ["keep", "discard", "measure"]);
 
     const missingStatus = await runCli([
       "log",
@@ -1293,6 +1293,8 @@ test("stale last-run packets are rejected when history advances", async () => {
     ]);
     assert.notEqual(stale.code, 0);
     assert.match(stale.stderr, /Last-run packet is stale/);
+    assert.match(stale.stderr, /next --cwd/);
+    assert.match(stale.stderr, /--status measure/);
   });
 });
 
@@ -1705,6 +1707,125 @@ test("metricless failure logs do not become baseline or best", async () => {
   });
 });
 
+test("measure logs metric evidence without keep/finalizer eligibility or git mutation", async () => {
+  await withTempDir("measure-log-git-safe", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "test@example.com"]);
+    await git(dir, ["config", "user.name", "Test User"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    const headBefore = await git(dir, ["rev-parse", "HEAD"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "measure", "--metric-name", "seconds"]);
+    await writeFile(path.join(dir, "tracked.txt"), "after\n");
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1.23",
+      "--status",
+      "measure",
+      "--description",
+      "Record observation only",
+      "--asi",
+      JSON.stringify({ promotionGrade: true, evidence: "diagnostic measurement only" }),
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+    assert.equal(payload.experiment.status, "measure");
+    assert.equal(payload.experiment.metricEligible, false);
+    assert.equal(payload.experiment.promotion.label, "measurement");
+    assert.equal(payload.experiment.commit, "");
+    assert.equal(payload.git, "Git: no commit created.");
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), headBefore);
+    assert.match(await git(dir, ["status", "--short"]), /M tracked\.txt/);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.kept, 0);
+    assert.equal(statePayload.measured, 1);
+    assert.equal(statePayload.baseline, 1.23);
+    assert.equal(statePayload.best, null);
+    assert.equal(statePayload.promotion.count, 0);
+    assert.equal(statePayload.promotion.baseline, null);
+    assert.equal(statePayload.development.latest.status, "measure");
+    assert.equal(statePayload.development.latest.metric, 1.23);
+
+    const explicitCommit = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1.24",
+      "--status",
+      "measure",
+      "--description",
+      "Invalid commit provenance",
+      "--commit",
+      "HEAD",
+    ]);
+    assert.notEqual(explicitCommit.code, 0);
+    assert.match(explicitCommit.stderr, /--commit is not allowed for measure logs/);
+  });
+});
+
+test("from-last errors name next and manual measure recovery commands", async () => {
+  await withTempDir("from-last-recovery", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "recovery", "--metric-name", "seconds"]);
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "No packet",
+    ]);
+    assert.notEqual(log.code, 0);
+    assert.match(log.stderr, /No last-run packet found/);
+    assert.match(log.stderr, /next --cwd/);
+    assert.match(log.stderr, /--status measure/);
+  });
+});
+
+test("compact state, recommend-next, and onboarding-packet surface decision envelopes", async () => {
+  await withTempDir("decision-envelope", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "envelope", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+    const nextPayload = JSON.parse(next.stdout);
+    assert.ok(nextPayload.decision.allowedStatuses.includes("measure"));
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.decisionEnvelope.activeSegment.segment, 0);
+    assert.equal(statePayload.resumeAudit.latestPacketFreshness.fresh, true);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(typeof statePayload.decisionEnvelope.nextAction, "string");
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
+    assert.equal(recommendPayload.decisionEnvelope.nextAction, recommendPayload.nextAction);
+
+    const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
+    assert.equal(onboarding.code, 0, onboarding.stderr);
+    const onboardingPayload = JSON.parse(onboarding.stdout);
+    assert.equal(onboardingPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
+    assert.equal(onboardingPayload.resumeAudit.activeSegment.runs, 0);
+  });
+});
+
 test("legacy failed sentinel metrics do not suppress next-run baseline guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "legacy sentinel", "--metric-name", "seconds"]);
@@ -1805,11 +1926,11 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
   });
 });
 
-test("keep and discard still require finite metrics", async () => {
+test("keep, discard, and measure still require finite metrics", async () => {
   await withTempDir("metric-required", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "metric required", "--metric-name", "seconds"]);
 
-    for (const status of ["keep", "discard"]) {
+    for (const status of ["keep", "discard", "measure"]) {
       const result = await runCli([
         "log",
         "--cwd",
@@ -2351,6 +2472,30 @@ test("doctor and dashboard stay quiet about empty commit paths until keep loggin
     assert.ok(
       !exportPayload.viewModel.warnings.some(
         (warning) => warning.code === "empty_commit_paths_in_git_repo",
+      ),
+    );
+  });
+});
+
+test("dashboard export decision envelope carries dirty source drift", async () => {
+  await withTempDir("dashboard-dirty-envelope", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "dirty dashboard", "--metric-name", "seconds"]);
+    await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
+
+    const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const payload = JSON.parse(exported.stdout);
+    assert.equal(payload.viewModel.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.ok(
+      payload.viewModel.decisionEnvelope.dirtySourceDrift.warnings.some(
+        (warning) => warning.code === "git_dirty",
       ),
     );
   });
@@ -3342,7 +3487,7 @@ test("next command runs preflight and benchmark as one decision packet", async (
     assert.equal(payload.run.progress.stages[0].stage, "benchmark");
     assert.equal(payload.run.progress.stages[0].status, "completed");
     assert.match(payload.run.progress.latestOutputTail, /METRIC seconds=2/);
-    assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard"]);
+    assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard", "measure"]);
     assert.equal(payload.decision.suggestedStatus, "keep");
     assert.equal(payload.decision.safeSuggestedStatus, "keep");
     assert.match(payload.decision.statusGuidance, /Safe to consider keep/);

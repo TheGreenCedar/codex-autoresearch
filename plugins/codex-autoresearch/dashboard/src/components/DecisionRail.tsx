@@ -13,6 +13,7 @@ export function DecisionRail({
   mode: DashboardMode;
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
+  const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
@@ -45,6 +46,25 @@ export function DecisionRail({
         <h2 id="next-action-title">
           {readout.nextAction ? "Next action" : action.title || "Choose next hypothesis"}
         </h2>
+        <div className="decision-envelope-card" id="decision-envelope-summary">
+          <span>Decision envelope</span>
+          <strong>{String(envelope.title || action.title || "Next action")}</strong>
+          <em>
+            {[
+              envelope.kind ? `source: ${envelope.kind}` : "",
+              envelope.fresh === false
+                ? "stale packet"
+                : envelope.fresh === true
+                  ? "fresh packet"
+                  : "",
+              typeof envelope.measurementRuns === "number"
+                ? `${envelope.measurementRuns} measurement${envelope.measurementRuns === 1 ? "" : "s"}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" / ")}
+          </em>
+        </div>
         <p id="next-action-detail" className="next-action-text">
           {readout.nextAction ||
             action.detail ||
@@ -196,7 +216,7 @@ function evidenceChipsFor(
       };
     })
     .filter((item) => item.value);
-  if (chips.length) return chips.slice(0, 4);
+  if (chips.length) return chips.slice(0, 5);
   const explanation = action.explanation || {};
   return [
     explanation.evidence && { label: "Evidence", value: explanation.evidence, tone: "good" },

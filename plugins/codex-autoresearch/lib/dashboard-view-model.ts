@@ -1,4 +1,4 @@
-import { STATUS_VALUES, finiteMetric } from "./session-core.js";
+import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
@@ -49,8 +49,29 @@ export function buildDashboardViewModel(context: DashboardContext) {
   const failures = current.filter((run) =>
     ["discard", "crash", "checks_failed"].includes(String(run.status)),
   );
+  const measurements = current.filter((run) => run.status === "measure");
   const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
   const latestFailure = failures.at(-1) || null;
+  const decisionEnvelope = normalizeDecisionEnvelope({
+    state,
+    settings,
+    guidedSetup,
+    setupPlan,
+    finalizePreview,
+    qualityGap,
+    scaffoldHealth,
+    researchIntegrity,
+    warnings,
+  });
+  const decisionEnvelopeSummary = summarizeDecisionEnvelope({
+    envelope: decisionEnvelope,
+    current,
+    measurements,
+    guidedSetup,
+    setupPlan,
+    finalizePreview,
+    experimentMemory,
+  });
   const trustContext = buildTrustState({
     state,
     settings,
@@ -78,6 +99,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     bestKept,
     latestFailure,
     nextAction,
+    decisionEnvelopeSummary,
     setupPlan,
     guidedSetup,
     qualityGap,
@@ -126,6 +148,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
     current,
     bestKept,
     latestFailure,
+    measurements,
+    decisionEnvelopeSummary,
     researchTruth,
     researchIntegrity,
     trustState: trustContext.trustState,
@@ -165,6 +189,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
   return {
     setup: setupPlan,
     guidedSetup,
+    decisionEnvelope,
+    decisionEnvelopeSummary,
     scaffoldHealth,
     researchIntegrity,
     lastRun: guidedSetup?.lastRun || null,
@@ -199,6 +225,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
       segment: state.segment,
       runs: current.length,
       kept: kept.length,
+      measured: measurements.length,
       failed: failures.length,
       baseline: state.baseline,
       best: state.best,
@@ -217,6 +244,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     readout: {
       bestKept: bestKept ? compactRun(bestKept) : null,
       latestFailure: latestFailure ? compactRun(latestFailure) : null,
+      measurementRuns: measurements.map((run) => compactRun(run)),
       nextAction: actionRail[0]?.detail || nextAction,
       confidenceText:
         state.confidence == null
@@ -268,6 +296,177 @@ function normalizeDashboardSettings(
       settings.sourceCwd || settings.workDir || settings.cwd || state?.workDir || state?.cwd,
     ),
   };
+}
+
+function normalizeDecisionEnvelope({
+  state,
+  settings = {},
+  guidedSetup = null,
+  setupPlan = null,
+  finalizePreview = null,
+  qualityGap = null,
+  scaffoldHealth = null,
+  researchIntegrity = null,
+  warnings = [],
+}: LooseObject) {
+  const supplied = firstRecord(
+    state?.decisionEnvelope,
+    state?.resumeAudit,
+    settings.decisionEnvelope,
+    settings.resumeAudit,
+  );
+  if (Object.keys(supplied).length) return supplied;
+
+  const current = Array.isArray(state?.current) ? state.current : [];
+  const lastRun = guidedSetup?.lastRun || null;
+  const freshness = lastRun?.freshness || null;
+  return buildDecisionEnvelope({
+    state: { ...state, current },
+    nextAction:
+      guidedSetup?.nextStep?.nextAction?.reason ||
+      guidedSetup?.nextAction ||
+      setupPlan?.nextStep?.nextAction?.reason ||
+      "Run doctor, then next.",
+    lastRunFreshness: freshness,
+    warningDetails: warnings,
+    scaffoldHealth,
+    researchIntegrity,
+    finalization: finalizePreview,
+    qualityGap,
+  });
+}
+
+function summarizeDecisionEnvelope({
+  envelope,
+  current = [],
+  measurements = [],
+  guidedSetup = null,
+  setupPlan = null,
+  finalizePreview = null,
+  experimentMemory = null,
+}: LooseObject) {
+  const freshness = envelope?.latestPacketFreshness || {};
+  const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
+  const setupBlockers = [
+    ...scaffoldBlockers,
+    ...stringList(setupPlan?.missing),
+    ...stringList(setupPlan?.missingEssentials),
+  ];
+  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
+  const limitReached =
+    limit.limitReached === true ||
+    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
+  const finalization = envelope?.finalizationReadiness || {};
+  const qualityRound = envelope?.qualityRound || {};
+
+  let summary = {
+    kind: "continue",
+    priority: "Next",
+    title: "Run the next measured hypothesis",
+    detail: cleanText(envelope?.nextAction) || "Use the latest ASI hint as the next loop input.",
+    source: "decision-envelope",
+    fresh: freshness.fresh ?? null,
+    segment: envelope?.activeSegment?.segment ?? null,
+    runs: envelope?.activeSegment?.runs ?? current.length,
+    measurementRuns: measurements.length,
+    finalizationReady: finalization.ready ?? null,
+  };
+
+  if (freshness.fresh === false) {
+    summary = {
+      ...summary,
+      kind: "stale-packet",
+      priority: "Critical",
+      title: "Replace the stale packet",
+      detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
+      source: "packet",
+    };
+  } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
+    summary = {
+      ...summary,
+      kind: "setup",
+      priority: "Critical",
+      title: "Complete setup",
+      detail:
+        setupBlockers[0] ||
+        guidedSetup?.nextAction ||
+        "Repair setup blockers before trusting another packet.",
+      source: "setup",
+    };
+  } else if (guidedSetup?.stage === "needs-benchmark-command") {
+    summary = {
+      ...summary,
+      kind: "benchmark-command",
+      priority: "Critical",
+      title: "Add a benchmark command",
+      detail:
+        guidedSetup?.nextAction ||
+        "This session has logged metrics, but next has no default benchmark script to run.",
+      source: "setup",
+    };
+  } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
+    const suggested =
+      guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
+    summary = {
+      ...summary,
+      kind: "log-decision",
+      priority: "Critical",
+      title: "Log the last packet",
+      detail: suggested
+        ? `Record the last packet as ${suggested}, then run a new packet.`
+        : "Record the fresh last-run packet before starting another packet.",
+      source: "packet",
+    };
+  } else if (limitReached || guidedSetup?.stage === "limit-reached" || qualityRound.done === true) {
+    summary = {
+      ...summary,
+      kind: "segment-transition",
+      priority: "Transition",
+      title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
+      detail:
+        guidedSetup?.nextAction ||
+        (qualityRound.done === true
+          ? "The active quality round is closed; refresh gaps or preview finalization."
+          : "The active segment reached its limit; extend the limit or start a new segment."),
+      source: "segment",
+    };
+  } else if (experimentMemory?.plateau?.detected) {
+    summary = {
+      ...summary,
+      kind: "plateau",
+      priority: "Critical",
+      title: "Break the plateau",
+      detail:
+        experimentMemory?.diversityGuidance?.nextActionHint ||
+        experimentMemory?.plateau?.recommendation ||
+        "Recent runs are clustering without a new best.",
+      source: "plateau",
+    };
+  } else if (finalization.ready === true || finalizePreview?.ready === true) {
+    summary = {
+      ...summary,
+      kind: "finalize-preview",
+      priority: "Review",
+      title: "Preview finalization",
+      detail:
+        finalization.nextAction ||
+        finalizePreview?.nextAction ||
+        "Inspect the branch packet before creating review branches.",
+      source: "finalize",
+    };
+  } else if (!current.length) {
+    summary = {
+      ...summary,
+      kind: "baseline",
+      priority: "Start",
+      title: "Capture the baseline",
+      detail:
+        guidedSetup?.nextAction || "Run the first measured packet so future changes have a floor.",
+      source: "baseline",
+    };
+  }
+
+  return summary;
 }
 
 const UNKNOWN = "unknown";
@@ -461,6 +660,8 @@ export function buildEvidenceChips({
   current = [],
   bestKept = null,
   latestFailure = null,
+  measurements = [],
+  decisionEnvelopeSummary = null,
   researchTruth,
   researchIntegrity = null,
   trustState,
@@ -486,6 +687,20 @@ export function buildEvidenceChips({
               : "Readout",
       tone: trustState.mode === "live-server" || trustState.mode === "live" ? "good" : "neutral",
       detail: "Runtime diagnostics are preserved for Codex handoff when relevant.",
+    }),
+    evidenceChip({
+      label: "Decision",
+      value: decisionEnvelopeSummary?.title || "Next action",
+      tone:
+        decisionEnvelopeSummary?.kind === "stale-packet" ||
+        decisionEnvelopeSummary?.kind === "setup"
+          ? "warn"
+          : decisionEnvelopeSummary?.kind === "finalize-preview"
+            ? "good"
+            : "info",
+      detail:
+        decisionEnvelopeSummary?.detail ||
+        "Authoritative decision envelope drives the dashboard readout.",
     }),
     evidenceChip({
       label: "Baseline",
@@ -516,10 +731,25 @@ export function buildEvidenceChips({
     evidenceChip({
       label: "Latest",
       value: latest ? `#${latest.run} ${latest.status || "run"}` : NO_DATA,
-      tone: latest?.status === "keep" ? "good" : latest?.status ? "warn" : "neutral",
+      tone:
+        latest?.status === "keep"
+          ? "good"
+          : latest?.status === "measure"
+            ? "info"
+            : latest?.status
+              ? "warn"
+              : "neutral",
       detail: latest
         ? `${formatChipMetric(latest.metric, unit)}. ${latest.description || "No description"}.`
         : "No logged runs yet.",
+    }),
+    evidenceChip({
+      label: "Measurements",
+      value: measurements.length ? String(measurements.length) : NO_DATA,
+      tone: measurements.length ? "info" : "neutral",
+      detail: measurements.length
+        ? "Measure status counts as trend evidence, not kept or finalizer evidence."
+        : "No trend-only measurement runs in this segment.",
     }),
     evidenceChip({
       label: "Research truth",
@@ -1069,6 +1299,7 @@ export function buildActionRail({
   bestKept,
   latestFailure,
   nextAction,
+  decisionEnvelopeSummary = null,
   setupPlan,
   guidedSetup,
   qualityGap,
@@ -1096,7 +1327,13 @@ export function buildActionRail({
   });
 
   let primary;
-  if (guidedSetup?.stage === "needs-setup") {
+  if (decisionEnvelopeSummary?.kind && decisionEnvelopeSummary.kind !== "continue") {
+    primary = actionFromDecisionEnvelope(decisionEnvelopeSummary, {
+      guidedSetup,
+      setupPlan,
+      commandMap,
+    });
+  } else if (guidedSetup?.stage === "needs-setup") {
     primary = actionItem({
       kind: "setup",
       priority: "Critical",
@@ -1310,6 +1547,90 @@ export function buildActionRail({
   ].filter(Boolean);
 
   return [primary, ...secondary].slice(0, 4);
+}
+
+function actionFromDecisionEnvelope(
+  summary: LooseObject,
+  {
+    guidedSetup = null,
+    setupPlan = null,
+    commandMap,
+  }: { guidedSetup?: LooseObject | null; setupPlan?: LooseObject | null; commandMap: CommandMap },
+) {
+  const kind = cleanText(summary.kind) || "continue";
+  const stalePacketCommand =
+    guidedSetup?.commands?.replaceLast ||
+    (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
+  const commandByKind: Record<string, string> = {
+    "stale-packet":
+      stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
+    setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
+    "benchmark-command": guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
+    "log-decision":
+      guidedSetup?.commands?.logLast ||
+      commandMap.get("keep last") ||
+      commandMap.get("discard last") ||
+      "",
+    "segment-transition":
+      commandMap.get("new segment") ||
+      commandMap.get("gap candidates") ||
+      commandMap.get("finalize preview") ||
+      "",
+    plateau: commandMap.get("next run") || "",
+    "finalize-preview": commandMap.get("finalize preview") || "",
+    baseline: guidedSetup?.commands?.baseline || commandMap.get("next run") || "",
+  };
+  const labelByKind: Record<string, string> = {
+    "stale-packet": stalePacketCommand ? "Next" : "Setup",
+    setup: "Setup",
+    "benchmark-command": "Setup",
+    "log-decision": "Log",
+    "segment-transition": commandMap.get("gap candidates") ? "Gaps" : "Review",
+    plateau: "Next",
+    "finalize-preview": "Preview",
+    baseline: "Next",
+  };
+  const safeActionByKind: Record<string, string> = {
+    "stale-packet": stalePacketCommand ? "" : "setup-plan",
+    setup: "setup-plan",
+    "benchmark-command": "setup-plan",
+    "segment-transition": "new-segment",
+    "finalize-preview": "finalize-preview",
+    baseline: "next",
+  };
+  return actionItem({
+    kind,
+    priority: cleanText(summary.priority) || "Next",
+    title: cleanText(summary.title) || "Next action",
+    detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
+    utilityCopy: decisionEnvelopeUtility(kind),
+    safeAction: safeActionByKind[kind] || "",
+    command: commandByKind[kind] || commandMap.get("next run") || "",
+    commandLabel: labelByKind[kind] || "Next",
+    tone:
+      kind === "finalize-preview"
+        ? "good"
+        : ["stale-packet", "setup", "benchmark-command", "log-decision", "plateau"].includes(kind)
+          ? "warn"
+          : "focus",
+    source: cleanText(summary.source) || "decision-envelope",
+  });
+}
+
+function decisionEnvelopeUtility(kind: string): string {
+  if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
+  if (kind === "setup") return "Setup blockers come before trustworthy metrics.";
+  if (kind === "benchmark-command")
+    return "A repeatable benchmark command comes before more segment work.";
+  if (kind === "log-decision")
+    return "A fresh packet decision should be logged before another run.";
+  if (kind === "segment-transition")
+    return "Segment or limit state should be resolved before more tuning.";
+  if (kind === "plateau") return "Plateau evidence should redirect the next hypothesis.";
+  if (kind === "finalize-preview")
+    return "Finalization is ready after higher-priority loop checks.";
+  if (kind === "baseline") return "Establish the benchmark floor before tuning.";
+  return "Decision envelope is the authoritative next-action source.";
 }
 
 export function buildMissionControl({
@@ -1752,6 +2073,14 @@ function unique<T>(items: T[]): T[] {
 function recordValue(value: unknown): LooseObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
+}
+
+function firstRecord(...values: unknown[]): LooseObject {
+  for (const value of values) {
+    const record = recordValue(value);
+    if (Object.keys(record).length) return record;
+  }
+  return {};
 }
 
 function buildPortfolio(memory: LooseObject | null, direction: Direction) {

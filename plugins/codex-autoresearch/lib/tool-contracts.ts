@@ -138,10 +138,11 @@ const CONTRACTS = {
     ]),
   },
   log_experiment: {
-    purpose: "Record a keep/discard/crash/checks_failed decision.",
+    purpose: "Record a keep/discard/measure/crash/checks_failed decision.",
     whenToUse: "Use after next_experiment, preferably with from_last.",
     contrast: "Use next_experiment before this to create a decision packet.",
-    safety: "Can commit kept changes or revert scoped discarded changes.",
+    safety:
+      "Can commit kept changes or revert scoped discarded changes; measure only appends trend evidence.",
     outputSchema: basicOutputSchema(["ok", "workDir", "experiment", "continuation"]),
   },
   read_state: {

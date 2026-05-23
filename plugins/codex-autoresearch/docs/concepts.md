@@ -4,7 +4,7 @@ Quick definitions for terms used across the docs. Each links to the page where t
 
 ## Packet
 
-One measured experiment cycle: make a change, run the benchmark, observe the metric, decide keep or discard. A packet is the atomic unit of progress in an autoresearch loop. See [Operate](operate.md#packet-loop).
+One measured experiment cycle: make a change, run the benchmark, observe the metric, decide keep, discard, measure, crash, or checks_failed. A packet is the atomic unit of progress in an autoresearch loop. See [Operate](operate.md#packet-loop).
 
 ## ASI
 
