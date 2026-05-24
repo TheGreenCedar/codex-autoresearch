@@ -7,14 +7,21 @@ Autoresearch has one product surface and a CLI execution path. The rule of thumb
 ```mermaid
 flowchart TD
   U["Human in Codex"] --> S["codex-autoresearch skill"]
+  Goal["Codex Goal mode"] --> S
   A["Future AI / resumed context"] --> S
   S --> CLI["CLI commands"]
+  CLI --> GoalBridge["codex-goal-brief"]
   CLI --> H["cli-handlers"]
+  GoalBridge --> Files
   H --> Core["session, runner, recipes, dashboard view-model"]
   Core --> Files["autoresearch.md / jsonl / config / ideas / research"]
   Core --> Dash["Live readout server"]
   Dash --> Browser["Human-readable readout"]
 ```
+
+## Codex Goal Boundary
+
+`codex-goal-brief` is a bridge, not a second goal engine. Codex owns thread-level Goal lifecycle, pause/resume/clear controls, token accounting, and `update_goal`. Autoresearch owns benchmark contracts, packet evidence, ASI, dashboard/state readouts, and Git safety. The bridge turns Autoresearch state into a Goal objective draft and completion audit so a parent Codex thread can use Goal mode without reading private Codex state or pretending the plugin controls it.
 
 ## Trust Boundary
 

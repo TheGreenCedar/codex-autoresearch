@@ -27,6 +27,7 @@ AX, the AI experience:
 - Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.
 - ASI means the structured memory attached to a run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk metadata.
+- When Codex Goal mode is available and explicitly requested, use `get_goal` to inspect parent thread state, then run `codex-goal-brief --cwd <project>` with any imported Goal fields. Treat the bridge as evidence/advice only: Codex owns thread goals; Autoresearch owns benchmark/session truth.
 
 UX, the user experience:
 
@@ -72,6 +73,7 @@ CLI fallback from `plugins/codex-autoresearch`:
 node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<user request>"
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
+node scripts/autoresearch.mjs codex-goal-brief --cwd <project>
 node scripts/autoresearch.mjs setup-plan --cwd <project>
 node scripts/autoresearch.mjs benchmark-inspect --cwd <project>
 node scripts/autoresearch.mjs checks-inspect --cwd <project> --command "<checks command>"
@@ -99,6 +101,7 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - Use `--command-file <path>` plus `--packet-env-file <path>` for Windows/PowerShell packets that would otherwise need fragile inline quoting.
 - If correctness checks fail, run `checks-inspect` before deciding. Fix malformed command shapes first, then separate touched-path failures from broad-suite, pre-existing, or environment failures.
 - Stop only when the user interrupts, the limit is reached, benchmark/checks are blocked, cleanup would be unsafe, a fresh segment is needed, or the goal is genuinely exhausted.
+- If a parent Codex Goal is active, do not call `update_goal(status="complete")` until `codex-goal-brief` has a real `completionEvidence` / `completionConfirmed` audit or the operator has explicitly accepted the evidence. Limit reached, `quality_gap=0`, and local bests are review signals, not automatic completion.
 
 CLI fallback:
 
