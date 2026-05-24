@@ -80,6 +80,22 @@ const CONTRACTS = {
     safety: "Read-only.",
     outputSchema: basicOutputSchema(["ok", "workDir", "action", "whySafe", "nextStep", "commands"]),
   },
+  codex_goal_bridge: {
+    purpose: "Bridge Autoresearch state into Codex Goal objective and completion-audit language.",
+    whenToUse:
+      "Use when the operator explicitly wants Codex Goal mode or an active Codex Goal needs an Autoresearch evidence audit.",
+    contrast:
+      "Use recommend_next for ordinary Autoresearch continuation without Goal-mode framing.",
+    safety: "Read-only; does not read or mutate Codex private goal state.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "boundary",
+      "objectiveDraft",
+      "completionAudit",
+      "commands",
+    ]),
+  },
   list_recipes: {
     purpose: "List or recommend built-in and catalog benchmark recipes.",
     whenToUse: "Use when choosing or explaining a benchmark starting point.",
@@ -295,6 +311,7 @@ const READ_ONLY_TOOLS = new Set([
   "prompt_plan",
   "onboarding_packet",
   "recommend_next",
+  "codex_goal_bridge",
   "list_recipes",
   "read_state",
   "measure_quality_gap",

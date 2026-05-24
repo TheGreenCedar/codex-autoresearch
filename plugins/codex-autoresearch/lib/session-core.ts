@@ -20,6 +20,7 @@ type RunRecord = LooseObject & {
 };
 type StateConfig = LooseObject & {
   name: string | null;
+  goal: string;
   metricName: string;
   metricUnit: string;
   bestDirection: Direction;
@@ -286,6 +287,7 @@ export function currentState(workDir: string): SessionState {
   const entries = readJsonl(workDir);
   let config: StateConfig = {
     name: null,
+    goal: "",
     metricName: "metric",
     metricUnit: "",
     bestDirection: "lower",
@@ -297,6 +299,7 @@ export function currentState(workDir: string): SessionState {
       if (results.length > 0) segment += 1;
       config = {
         name: entry.name || config.name,
+        goal: entry.goal ?? config.goal ?? "",
         metricName: entry.metricName || config.metricName,
         metricUnit: entry.metricUnit ?? config.metricUnit,
         bestDirection: entry.bestDirection === "higher" ? "higher" : "lower",
@@ -445,6 +448,13 @@ export function buildDecisionEnvelope({
           notPromotableBecause: researchIntegrity.notPromotableBecause || [],
         }
       : null,
+    goalAdvice: buildGoalAdvice({
+      finalization,
+      qualityGap,
+      scaffoldBlockers,
+      state,
+      warningDetails,
+    }),
     finalizationReadiness: finalization
       ? {
           available: true,
@@ -454,6 +464,53 @@ export function buildDecisionEnvelope({
         }
       : { available: false, ready: null, nextAction: "", warnings: [] },
     nextAction: nextAction || "Run doctor, then next.",
+  };
+}
+
+function buildGoalAdvice({
+  finalization,
+  qualityGap,
+  scaffoldBlockers,
+  state,
+  warningDetails,
+}: LooseObject): LooseObject {
+  const goal = String(state?.config?.goal || "").trim();
+  if (!goal) {
+    return {
+      present: false,
+      objective: "",
+      advice: "none",
+      reason: "No durable Autoresearch goal is recorded in the active config.",
+    };
+  }
+  const warningMessages = Array.isArray(warningDetails)
+    ? warningDetails.map((warning: any) => warning?.message || warning?.code).filter(Boolean)
+    : [];
+  const qualityRound = qualityRoundState(qualityGap);
+  const blockers = [...(scaffoldBlockers || []), ...warningMessages].filter(Boolean);
+  let advice = "continue";
+  let reason =
+    "Continue from the decision envelope next action and require evidence before completion.";
+  if (blockers.length) {
+    advice = "consider_blocked";
+    reason = "Resolve blockers before treating the goal as progressing or complete.";
+  } else if (finalization?.ready === true) {
+    advice = "review_completion";
+    reason =
+      "Finalization preview is ready; review whether the goal's acceptance criteria are truly satisfied.";
+  } else if (qualityRound.active && qualityRound.done === true) {
+    advice = "review_completion";
+    reason =
+      "The current quality-gap round is closed; decide whether the recorded goal needs another round before completion.";
+  }
+  return {
+    present: true,
+    objective: goal,
+    advice,
+    reason,
+    blockers: blockers.slice(0, 8),
+    completionPolicy:
+      "Never treat iteration, tool, or token budget exhaustion as goal completion. Mark complete only after evidence satisfies the goal objective.",
   };
 }
 

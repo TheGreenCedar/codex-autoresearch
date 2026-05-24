@@ -175,8 +175,9 @@ Usage:
   node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
+  node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--metric-unit <unit>] [--direction lower|higher]
+  node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
@@ -1745,6 +1746,251 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
+}
+
+async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = await publicState({ cwd: workDir, compact: false });
+  const compact = compactPublicState(state);
+  const commands = continuationCommands(workDir);
+  const importedGoal = importedCodexGoal(args);
+  const objectiveDraft = codexGoalObjectiveDraft(state, importedGoal);
+  const completionAudit = codexGoalCompletionAudit({
+    args,
+    compact,
+    importedGoal,
+    state,
+  });
+  return {
+    ok: true,
+    kind: "codex-autoresearch-goal-bridge",
+    workDir,
+    boundary: {
+      codexOwns:
+        "Thread-level Goal lifecycle, pause/resume/clear controls, token accounting, and update_goal completion.",
+      autoresearchOwns:
+        "Benchmark contract, packet ledger, ASI, dashboard/readout truth, Git safety, and evidence-based completion audit.",
+      unsupported:
+        "This command does not read or mutate Codex private state. Pass get_goal output in explicitly when available.",
+    },
+    importedCodexGoal: importedGoal,
+    objectiveDraft,
+    objectiveLength: objectiveDraft.length,
+    completionAudit,
+    commands: {
+      codexSlashGoal: `/goal ${objectiveDraft}`,
+      explicitGoalToolPrompt: [
+        "Create a goal for this thread using the goal tool, not as prose.",
+        "",
+        "Objective:",
+        objectiveDraft,
+        "",
+        "After creating it, call get_goal. If no active goal exists, stop and report GOAL_NOT_CREATED.",
+      ].join("\n"),
+      autoresearchState: commands.state,
+      autoresearchRecommendNext: commands.recommendNext,
+      autoresearchNext: commands.next,
+    },
+    session: {
+      name: state.config?.name || "Autoresearch",
+      metric: state.config?.metricName || "metric",
+      direction: state.config?.bestDirection || "lower",
+      runs: state.runs,
+      best: state.best,
+      limit: state.limit,
+      nextAction: compact.nextAction,
+      decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+    },
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      maxIterations: state.limit?.maxIterations ?? null,
+    },
+  };
+}
+
+function importedCodexGoal(args: LooseObject): LooseObject | null {
+  const objective = args.codexGoalObjective || args.codex_goal_objective;
+  const status = args.codexGoalStatus || args.codex_goal_status;
+  const hasGoal =
+    objective != null ||
+    status != null ||
+    args.codexGoalTokenBudget != null ||
+    args.codex_goal_token_budget != null ||
+    args.codexGoalTokensUsed != null ||
+    args.codex_goal_tokens_used != null ||
+    args.codexGoalTimeUsedSeconds != null ||
+    args.codex_goal_time_used_seconds != null;
+  if (!hasGoal) return null;
+  const normalizedStatus = normalizeCodexGoalStatus(status);
+  return {
+    objective: objective == null ? "" : String(objective),
+    status: normalizedStatus,
+    tokenBudget: nonNegativeIntegerOption(
+      args.codexGoalTokenBudget ?? args.codex_goal_token_budget,
+      null,
+      "codex_goal_token_budget",
+    ),
+    tokensUsed: nonNegativeIntegerOption(
+      args.codexGoalTokensUsed ?? args.codex_goal_tokens_used,
+      null,
+      "codex_goal_tokens_used",
+    ),
+    timeUsedSeconds: nonNegativeIntegerOption(
+      args.codexGoalTimeUsedSeconds ?? args.codex_goal_time_used_seconds,
+      null,
+      "codex_goal_time_used_seconds",
+    ),
+  };
+}
+
+function normalizeCodexGoalStatus(value: unknown): string {
+  if (value == null || value === "") return "unknown";
+  const normalized = String(value).toLowerCase();
+  if (!["active", "paused", "budget_limited", "complete", "unknown"].includes(normalized)) {
+    throw new Error(
+      `codex_goal_status must be one of active, paused, budget_limited, complete. Got ${value}`,
+    );
+  }
+  return normalized;
+}
+
+function codexGoalObjectiveDraft(state: LooseObject, importedGoal: LooseObject | null): string {
+  const config = state.config || {};
+  const metric = config.metricName || "metric";
+  const direction = config.bestDirection === "higher" ? "higher" : "lower";
+  const durableGoal = String(config.goal || "").trim();
+  const sessionName = config.name || "Autoresearch";
+  const sessionObjective = durableGoal || sessionName;
+  const sessionNameContext = durableGoal && config.name ? ` Session name: ${config.name}.` : "";
+  const existingObjective = importedGoal?.objective
+    ? `Existing Codex Goal: ${importedGoal.objective}. `
+    : "";
+  const text = [
+    existingObjective,
+    `Use Codex Autoresearch for ${sessionObjective}.${sessionNameContext}`,
+    `Improve or complete the loop using the durable benchmark contract: every trusted packet must emit METRIC ${metric}=value, and ${direction} is better.`,
+    "Keep the Autoresearch ledger authoritative: run bounded packets, log each decision with ASI, preserve scoped Git safety, and use the dashboard/state decision envelope for the next action.",
+    "Do not mark the Codex Goal complete because a packet limit or token budget was reached; complete it only after an evidence audit shows the requested outcome, checks, and unresolved-risk review are satisfied.",
+  ].join(" ");
+  return truncateGoalObjective(text);
+}
+
+function truncateGoalObjective(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 4000) return normalized;
+  return `${normalized.slice(0, 3960).replace(/\s+\S*$/, "")} ... See autoresearch.md and state --compact for details.`;
+}
+
+function codexGoalCompletionAudit({
+  args,
+  compact,
+  importedGoal,
+  state,
+}: LooseObject): LooseObject {
+  const completionEvidence = String(
+    args.completionEvidence || args.completion_evidence || "",
+  ).trim();
+  const completionConfirmed = boolOption(
+    args.completionConfirmed ?? args.completion_confirmed,
+    false,
+  );
+  const evidenceBlockers = [
+    ...(Array.isArray(compact.blockers) ? compact.blockers : []),
+    ...(Array.isArray(state.researchIntegrity?.notPromotableBecause)
+      ? state.researchIntegrity.notPromotableBecause
+      : []),
+    ...(Array.isArray(state.decisionEnvelope?.researchIntegrity?.notPromotableBecause)
+      ? state.decisionEnvelope.researchIntegrity.notPromotableBecause
+      : []),
+  ].filter(Boolean);
+  const blockers = [...new Set(evidenceBlockers.map((blocker) => String(blocker)))];
+  const limitReached = compact.limitReached === true;
+  const finalizationReady = state.decisionEnvelope?.finalizationReadiness?.ready === true;
+  const qualityRound = state.decisionEnvelope?.qualityRound || {};
+  const completionRequested = completionConfirmed && Boolean(completionEvidence);
+  const importedGoalCompletable = importedGoal?.status === "active";
+  const hasMeasuredEvidence =
+    Number(state.runs) > 0 &&
+    (state.best != null || state.development?.best != null || state.promotion?.best != null);
+  const hasLocalCompletionEvidence =
+    hasMeasuredEvidence || finalizationReady || (qualityRound.active && qualityRound.done === true);
+  let status = "active";
+  if (importedGoal?.status === "budget_limited" || limitReached) {
+    status = "budget_limited";
+  } else if (compact.requiresLogDecision) {
+    status = "pending_log_decision";
+  } else if (blockers.length) {
+    status = "blocked";
+  } else if (completionRequested && !importedGoal) {
+    status = "no_codex_goal_imported";
+  } else if (completionRequested && !importedGoalCompletable) {
+    status = "codex_goal_not_active";
+  } else if (completionRequested && hasLocalCompletionEvidence) {
+    status = "complete";
+  } else if (completionRequested) {
+    status = "completion_evidence_insufficient";
+  } else if (!state.runs) {
+    status = "not_started";
+  } else if (qualityRound.active && qualityRound.done === true) {
+    status = "quality_round_closed";
+  } else if (finalizationReady) {
+    status = "ready_for_review";
+  }
+  return {
+    status,
+    canMarkCodexGoalComplete: status === "complete" && importedGoalCompletable,
+    completionEvidence: completionEvidence || null,
+    evidenceRequired:
+      "Before calling update_goal(status=complete), cite the benchmark result, checks, artifacts or docs changed, unresolved risks, and why the original objective is satisfied.",
+    budgetPolicy:
+      "Budget or iteration exhaustion is a stop signal, not success. Extend, start a new segment, or report the blocker instead of marking complete.",
+    importedCodexStatus: importedGoal?.status || "none",
+    localEvidence: {
+      runs: state.runs,
+      best: state.best,
+      developmentBest: state.development?.best ?? null,
+      promotionBest: state.promotion?.best ?? null,
+      metric: state.config?.metricName || "metric",
+      direction: state.config?.bestDirection || "lower",
+      finalizationReady,
+      qualityRound,
+      limitReached,
+      hasLocalCompletionEvidence,
+      blockers,
+      nextAction: compact.nextAction,
+    },
+    recommendedCodexAction: recommendedCodexGoalAction(status, importedGoal),
+  };
+}
+
+function recommendedCodexGoalAction(status: string, importedGoal: LooseObject | null): string {
+  if (status === "complete") {
+    return "If a Codex Goal is active, call update_goal with status=complete and report the completion evidence.";
+  }
+  if (!importedGoal) {
+    return "Create a Codex Goal only when the operator explicitly asks for Goal mode; otherwise continue with Autoresearch state alone.";
+  }
+  if (status === "codex_goal_not_active") {
+    return importedGoal.status === "complete"
+      ? "The imported Codex Goal is already complete; do not call update_goal again from this audit."
+      : "Do not mark complete. Resume or verify an active Codex Goal before using this audit for update_goal.";
+  }
+  if (importedGoal.status === "paused") {
+    return "Resume or edit the Codex Goal in the Codex surface, then continue from Autoresearch recommend-next.";
+  }
+  if (status === "budget_limited") {
+    return "Do not mark complete. Report budget or iteration exhaustion and ask whether to extend, start a new segment, or stop.";
+  }
+  if (status === "pending_log_decision") {
+    return "Log the pending Autoresearch packet before continuing the Codex Goal.";
+  }
+  if (status === "blocked") {
+    return "Resolve the listed blocker before treating the Codex Goal as progressing or complete; continue experiments only from Autoresearch recommend-next evidence.";
+  }
+  if (status === "completion_evidence_insufficient") {
+    return "Do not mark complete. Add local Autoresearch evidence such as a promotion-grade logged metric, ready finalization preview, or explicitly reviewed closed quality round before completion.";
+  }
+  return "Continue toward the active Codex Goal using Autoresearch next-action evidence.";
 }
 
 function recommendedActionNextStep(
@@ -3345,6 +3591,7 @@ async function setupResearchSession(args: any) {
     init = await initExperiment({
       cwd: workDir,
       name: args.name || `Deep research: ${goal}`,
+      goal,
       metricName: "quality_gap",
       metricUnit: "gaps",
       direction: "lower",
@@ -3682,6 +3929,7 @@ async function initExperiment(args: LooseObject) {
   const entry = {
     type: "config",
     name: args.name,
+    goal: args.goal || "",
     metricName,
     metricUnit: args.metric_unit ?? args.metricUnit ?? "",
     bestDirection: direction,
@@ -4658,6 +4906,7 @@ function compactPublicState(state: LooseObject) {
     ok: state.ok,
     workDir: state.workDir,
     name: state.config?.name || "Autoresearch",
+    goal: state.config?.goal || "",
     metric: state.config?.metricName || "metric",
     direction: state.config?.bestDirection || "lower",
     segment: state.segment,
@@ -4697,6 +4946,7 @@ function compactPublicState(state: LooseObject) {
     afterLogAction: continuation.afterLogAction || "",
     finalAnswerPolicy: continuation.finalAnswerPolicy || "",
     blockers: [...new Set(blockers)].slice(0, 6),
+    goalAdvice: state.decisionEnvelope?.goalAdvice || state.resumeAudit?.goalAdvice || null,
     report: {
       happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.measured} measured, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
       decision:
@@ -4729,6 +4979,7 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
       command: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
     },
     { label: "Recommend next", command: `node ${script} recommend-next --cwd ${cwd} --compact` },
+    { label: "Codex Goal brief", command: `node ${script} codex-goal-brief --cwd ${cwd}` },
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     {
       label: "Doctor",
@@ -4902,6 +5153,7 @@ function continuationCommands(workDir: string) {
     extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
     onboardingPacket: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
     recommendNext: `node ${script} recommend-next --cwd ${cwd} --compact`,
+    codexGoalBrief: `node ${script} codex-goal-brief --cwd ${cwd}`,
     benchmarkInspect: `node ${script} benchmark-inspect --cwd ${cwd}`,
     benchmarkLint: `node ${script} benchmark-lint --cwd ${cwd}`,
     checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
@@ -5551,6 +5803,7 @@ async function main() {
     buildDriftReport,
     buildDashboardViewModel,
     clearSession,
+    codexGoalBrief,
     configureSession,
     dashboardCommands,
     dashboardHtml,
