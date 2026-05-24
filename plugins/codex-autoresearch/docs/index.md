@@ -19,3 +19,4 @@ The root `README.md` is the front door. These pages are the workshop behind it: 
 Reference pages:
 
 - [Maintainers](maintainers.md)
+- [Codex Goal bridge spec](specs/codex-goal-bridge/blueprint.md)

@@ -25,6 +25,7 @@ const TOOL_REGISTRY = [
   { name: "prompt_plan", cliCommand: "prompt-plan", actionPolicy: "read" },
   { name: "onboarding_packet", cliCommand: "onboarding-packet", actionPolicy: "read" },
   { name: "recommend_next", cliCommand: "recommend-next", actionPolicy: "read" },
+  { name: "codex_goal_bridge", cliCommand: "codex-goal-brief", actionPolicy: "read" },
   { name: "list_recipes", cliCommand: "recipes", actionPolicy: "read" },
   { name: "setup_session", cliCommand: "setup", actionPolicy: "state_mutation" },
   { name: "setup_research_session", cliCommand: "research-setup", actionPolicy: "state_mutation" },

@@ -130,6 +130,18 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         compact: args.compact,
       }),
     }),
+    "codex-goal-brief": async (args) => ({
+      result: await deps.codexGoalBrief({
+        cwd: args.cwd,
+        codexGoalObjective: args.codexGoalObjective,
+        codexGoalStatus: args.codexGoalStatus,
+        codexGoalTokenBudget: args.codexGoalTokenBudget,
+        codexGoalTokensUsed: args.codexGoalTokensUsed,
+        codexGoalTimeUsedSeconds: args.codexGoalTimeUsedSeconds,
+        completionEvidence: args.completionEvidence,
+        completionConfirmed: args.completionConfirmed,
+      }),
+    }),
     recipes: async (args) => ({
       result: await deps.recipeCommand(args._[1] || "list", args),
     }),
@@ -213,6 +225,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.initExperiment({
         cwd: args.cwd,
         name: args.name,
+        goal: args.goal,
         metricName: args.metricName,
         metricUnit: args.metricUnit,
         direction: args.direction,

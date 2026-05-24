@@ -4,6 +4,14 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Added
+
+- Added `codex-goal-brief` / `codex_goal_bridge`, a read-only Codex Goal bridge that turns Autoresearch state into a Goal objective draft, completion audit, and explicit ownership boundary.
+- Added durable `goal` state in config/readouts plus `goalAdvice` in the decision envelope so resumed loops keep the objective visible without relying on chat memory.
+- Added a traceable Codex Goal bridge spec under `plugins/codex-autoresearch/docs/specs/codex-goal-bridge/`.
+
 ## 1.4.0
 
 ### Added

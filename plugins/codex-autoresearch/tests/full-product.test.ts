@@ -201,7 +201,17 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
 
 test("delight commands provide compact state, onboarding, linting, hooks, and new segments", async () => {
   await withTempDir("delight-commands", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "Delight loop", "--metric-name", "score"]);
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "Delight loop",
+      "--goal",
+      "Improve score with evidence",
+      "--metric-name",
+      "score",
+    ]);
     await runCli([
       "log",
       "--cwd",
@@ -220,8 +230,54 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
     assert.equal(compactPayload.metric, "score");
+    assert.equal(compactPayload.goal, "Improve score with evidence");
+    assert.equal(compactPayload.goalAdvice.advice, "continue");
     assert.equal(compactPayload.runs, 1);
     assert.equal(compactPayload.commands.newSegmentDryRun.includes("new-segment"), true);
+
+    const goalBrief = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      dir,
+      "--codex-goal-status",
+      "active",
+    ]);
+    assert.equal(goalBrief.code, 0, goalBrief.stderr);
+    const goalPayload = JSON.parse(goalBrief.stdout);
+    assert.equal(goalPayload.kind, "codex-autoresearch-goal-bridge");
+    assert.match(goalPayload.objectiveDraft, /Improve score with evidence/);
+    assert.match(goalPayload.objectiveDraft, /METRIC score=value/);
+    assert.equal(goalPayload.importedCodexGoal.status, "active");
+    assert.equal(goalPayload.completionAudit.canMarkCodexGoalComplete, false);
+    assert.match(goalPayload.commands.explicitGoalToolPrompt, /using the goal tool/);
+
+    const noEvidenceDir = path.join(dir, "no-evidence");
+    await mkdir(noEvidenceDir, { recursive: true });
+    await runCli([
+      "init",
+      "--cwd",
+      noEvidenceDir,
+      "--name",
+      "No evidence loop",
+      "--goal",
+      "Do not complete without evidence",
+      "--metric-name",
+      "score",
+    ]);
+    const prematureCompletion = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      noEvidenceDir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Looks done",
+    ]);
+    assert.equal(prematureCompletion.code, 0, prematureCompletion.stderr);
+    const prematurePayload = JSON.parse(prematureCompletion.stdout);
+    assert.equal(prematurePayload.completionAudit.canMarkCodexGoalComplete, false);
+    assert.notEqual(prematurePayload.completionAudit.status, "complete");
 
     const lint = await runCli([
       "benchmark-lint",

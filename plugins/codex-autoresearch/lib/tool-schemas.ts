@@ -117,6 +117,28 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "codex_goal_bridge",
+    description:
+      "Return a Codex Goal objective draft and evidence audit from Autoresearch state without mutating Codex Goal state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        codex_goal_objective: { type: "string" },
+        codex_goal_status: {
+          type: "string",
+          enum: ["active", "paused", "budget_limited", "complete", "unknown"],
+        },
+        codex_goal_token_budget: { type: "integer" },
+        codex_goal_tokens_used: { type: "integer" },
+        codex_goal_time_used_seconds: { type: "integer" },
+        completion_evidence: { type: "string" },
+        completion_confirmed: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "list_recipes",
     description: "List or recommend built-in and optional catalog benchmark recipes.",
     inputSchema: {
@@ -223,6 +245,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         name: { type: "string" },
+        goal: { type: "string" },
         metric_name: { type: "string" },
         metric_unit: { type: "string" },
         direction: { type: "string", enum: ["lower", "higher"] },
@@ -531,6 +554,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   "prompt-plan": "prompt_plan",
   "onboarding-packet": "onboarding_packet",
   "recommend-next": "recommend_next",
+  "codex-goal-brief": "codex_goal_bridge",
   recipes: "list_recipes",
   "research-setup": "setup_research_session",
   config: "configure_session",
@@ -566,7 +590,14 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   checks_command: "checksCommand",
   checks_policy: "checksPolicy",
   checks_timeout_seconds: "checksTimeoutSeconds",
+  codex_goal_objective: "codexGoalObjective",
+  codex_goal_status: "codexGoalStatus",
+  codex_goal_time_used_seconds: "codexGoalTimeUsedSeconds",
+  codex_goal_token_budget: "codexGoalTokenBudget",
+  codex_goal_tokens_used: "codexGoalTokensUsed",
   command_file: "commandFile",
+  completion_confirmed: "completionConfirmed",
+  completion_evidence: "completionEvidence",
   commit_paths: "commitPaths",
   create_checks: "createChecks",
   dashboard_refresh_seconds: "dashboardRefreshSeconds",
