@@ -251,6 +251,25 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(goalPayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.match(goalPayload.commands.explicitGoalToolPrompt, /using the goal tool/);
 
+    const devOnlyCompletion = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      dir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "One kept dev metric",
+    ]);
+    assert.equal(devOnlyCompletion.code, 0, devOnlyCompletion.stderr);
+    const devOnlyPayload = JSON.parse(devOnlyCompletion.stdout);
+    assert.equal(devOnlyPayload.completionAudit.canMarkCodexGoalComplete, false);
+    assert.equal(devOnlyPayload.completionAudit.status, "blocked");
+    assert.match(
+      devOnlyPayload.completionAudit.localEvidence.blockers.join("\n"),
+      /development-only|not promotable/i,
+    );
+
     const noEvidenceDir = path.join(dir, "no-evidence");
     await mkdir(noEvidenceDir, { recursive: true });
     await runCli([
@@ -278,6 +297,67 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     const prematurePayload = JSON.parse(prematureCompletion.stdout);
     assert.equal(prematurePayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.notEqual(prematurePayload.completionAudit.status, "complete");
+
+    const promotionDir = path.join(dir, "promotion-evidence");
+    await mkdir(promotionDir, { recursive: true });
+    await runCli([
+      "init",
+      "--cwd",
+      promotionDir,
+      "--name",
+      "Promotion evidence loop",
+      "--goal",
+      "Complete only against an imported Codex Goal",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(
+      path.join(promotionDir, "autoresearch.config.json"),
+      `${JSON.stringify({ holdoutCommand: "echo holdout" }, null, 2)}\n`,
+      "utf8",
+    );
+    await runCli([
+      "log",
+      "--cwd",
+      promotionDir,
+      "--metric",
+      "0.8",
+      "--status",
+      "keep",
+      "--description",
+      "Promotion-grade result",
+      "--metrics",
+      JSON.stringify({ promotionGrade: true }),
+    ]);
+    const unimportedCompletion = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      promotionDir,
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Promotion-grade result satisfies the objective",
+    ]);
+    assert.equal(unimportedCompletion.code, 0, unimportedCompletion.stderr);
+    const unimportedPayload = JSON.parse(unimportedCompletion.stdout);
+    assert.equal(unimportedPayload.completionAudit.status, "no_codex_goal_imported");
+    assert.equal(unimportedPayload.completionAudit.canMarkCodexGoalComplete, false);
+
+    const importedCompletion = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      promotionDir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Promotion-grade result satisfies the objective",
+    ]);
+    assert.equal(importedCompletion.code, 0, importedCompletion.stderr);
+    const importedPayload = JSON.parse(importedCompletion.stdout);
+    assert.equal(importedPayload.completionAudit.status, "complete");
+    assert.equal(importedPayload.completionAudit.canMarkCodexGoalComplete, true);
 
     const lint = await runCli([
       "benchmark-lint",

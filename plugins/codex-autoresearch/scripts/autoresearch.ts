@@ -1893,11 +1893,21 @@ function codexGoalCompletionAudit({
     args.completionConfirmed ?? args.completion_confirmed,
     false,
   );
-  const blockers = Array.isArray(compact.blockers) ? compact.blockers.filter(Boolean) : [];
+  const evidenceBlockers = [
+    ...(Array.isArray(compact.blockers) ? compact.blockers : []),
+    ...(Array.isArray(state.researchIntegrity?.notPromotableBecause)
+      ? state.researchIntegrity.notPromotableBecause
+      : []),
+    ...(Array.isArray(state.decisionEnvelope?.researchIntegrity?.notPromotableBecause)
+      ? state.decisionEnvelope.researchIntegrity.notPromotableBecause
+      : []),
+  ].filter(Boolean);
+  const blockers = [...new Set(evidenceBlockers.map((blocker) => String(blocker)))];
   const limitReached = compact.limitReached === true;
   const finalizationReady = state.decisionEnvelope?.finalizationReadiness?.ready === true;
   const qualityRound = state.decisionEnvelope?.qualityRound || {};
   const completionRequested = completionConfirmed && Boolean(completionEvidence);
+  const importedGoalCompletable = importedGoal?.status === "active";
   const hasMeasuredEvidence =
     Number(state.runs) > 0 &&
     (state.best != null || state.development?.best != null || state.promotion?.best != null);
@@ -1910,6 +1920,10 @@ function codexGoalCompletionAudit({
     status = "pending_log_decision";
   } else if (blockers.length) {
     status = "blocked";
+  } else if (completionRequested && !importedGoal) {
+    status = "no_codex_goal_imported";
+  } else if (completionRequested && !importedGoalCompletable) {
+    status = "codex_goal_not_active";
   } else if (completionRequested && hasLocalCompletionEvidence) {
     status = "complete";
   } else if (completionRequested) {
@@ -1923,7 +1937,7 @@ function codexGoalCompletionAudit({
   }
   return {
     status,
-    canMarkCodexGoalComplete: status === "complete",
+    canMarkCodexGoalComplete: status === "complete" && importedGoalCompletable,
     completionEvidence: completionEvidence || null,
     evidenceRequired:
       "Before calling update_goal(status=complete), cite the benchmark result, checks, artifacts or docs changed, unresolved risks, and why the original objective is satisfied.",
@@ -1955,6 +1969,11 @@ function recommendedCodexGoalAction(status: string, importedGoal: LooseObject | 
   if (!importedGoal) {
     return "Create a Codex Goal only when the operator explicitly asks for Goal mode; otherwise continue with Autoresearch state alone.";
   }
+  if (status === "codex_goal_not_active") {
+    return importedGoal.status === "complete"
+      ? "The imported Codex Goal is already complete; do not call update_goal again from this audit."
+      : "Do not mark complete. Resume or verify an active Codex Goal before using this audit for update_goal.";
+  }
   if (importedGoal.status === "paused") {
     return "Resume or edit the Codex Goal in the Codex surface, then continue from Autoresearch recommend-next.";
   }
@@ -1965,10 +1984,10 @@ function recommendedCodexGoalAction(status: string, importedGoal: LooseObject | 
     return "Log the pending Autoresearch packet before continuing the Codex Goal.";
   }
   if (status === "blocked") {
-    return "Resolve the listed blocker before continuing or completing the Codex Goal.";
+    return "Resolve the listed blocker before treating the Codex Goal as progressing or complete; continue experiments only from Autoresearch recommend-next evidence.";
   }
   if (status === "completion_evidence_insufficient") {
-    return "Do not mark complete. Add local Autoresearch evidence such as a logged metric, ready finalization preview, or closed quality round before completion.";
+    return "Do not mark complete. Add local Autoresearch evidence such as a promotion-grade logged metric, ready finalization preview, or explicitly reviewed closed quality round before completion.";
   }
   return "Continue toward the active Codex Goal using Autoresearch next-action evidence.";
 }
