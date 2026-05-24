@@ -32,6 +32,12 @@ const git = async (cwd, args) => {
 
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch-full", name, fn);
 
+const readGoalBrief = async (dir: string, args: string[] = []) => {
+  const result = await runCli(["codex-goal-brief", "--cwd", dir, ...args]);
+  assert.equal(result.code, 0, result.stderr);
+  return JSON.parse(result.stdout);
+};
+
 const withLiveServer = (dir, fn) => {
   return withProcess(
     process.execPath,
@@ -235,15 +241,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(compactPayload.runs, 1);
     assert.equal(compactPayload.commands.newSegmentDryRun.includes("new-segment"), true);
 
-    const goalBrief = await runCli([
-      "codex-goal-brief",
-      "--cwd",
-      dir,
-      "--codex-goal-status",
-      "active",
-    ]);
-    assert.equal(goalBrief.code, 0, goalBrief.stderr);
-    const goalPayload = JSON.parse(goalBrief.stdout);
+    const goalPayload = await readGoalBrief(dir, ["--codex-goal-status", "active"]);
     assert.equal(goalPayload.kind, "codex-autoresearch-goal-bridge");
     assert.match(goalPayload.objectiveDraft, /Improve score with evidence/);
     assert.match(goalPayload.objectiveDraft, /METRIC score=value/);
@@ -251,18 +249,13 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(goalPayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.match(goalPayload.commands.explicitGoalToolPrompt, /using the goal tool/);
 
-    const devOnlyCompletion = await runCli([
-      "codex-goal-brief",
-      "--cwd",
-      dir,
+    const devOnlyPayload = await readGoalBrief(dir, [
       "--codex-goal-status",
       "active",
       "--completion-confirmed",
       "--completion-evidence",
       "One kept dev metric",
     ]);
-    assert.equal(devOnlyCompletion.code, 0, devOnlyCompletion.stderr);
-    const devOnlyPayload = JSON.parse(devOnlyCompletion.stdout);
     assert.equal(devOnlyPayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.equal(devOnlyPayload.completionAudit.status, "blocked");
     assert.match(
@@ -283,18 +276,13 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       "--metric-name",
       "score",
     ]);
-    const prematureCompletion = await runCli([
-      "codex-goal-brief",
-      "--cwd",
-      noEvidenceDir,
+    const prematurePayload = await readGoalBrief(noEvidenceDir, [
       "--codex-goal-status",
       "active",
       "--completion-confirmed",
       "--completion-evidence",
       "Looks done",
     ]);
-    assert.equal(prematureCompletion.code, 0, prematureCompletion.stderr);
-    const prematurePayload = JSON.parse(prematureCompletion.stdout);
     assert.equal(prematurePayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.notEqual(prematurePayload.completionAudit.status, "complete");
 
@@ -331,31 +319,21 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       "--metrics",
       JSON.stringify({ promotionGrade: true }),
     ]);
-    const unimportedCompletion = await runCli([
-      "codex-goal-brief",
-      "--cwd",
-      promotionDir,
+    const unimportedPayload = await readGoalBrief(promotionDir, [
       "--completion-confirmed",
       "--completion-evidence",
       "Promotion-grade result satisfies the objective",
     ]);
-    assert.equal(unimportedCompletion.code, 0, unimportedCompletion.stderr);
-    const unimportedPayload = JSON.parse(unimportedCompletion.stdout);
     assert.equal(unimportedPayload.completionAudit.status, "no_codex_goal_imported");
     assert.equal(unimportedPayload.completionAudit.canMarkCodexGoalComplete, false);
 
-    const importedCompletion = await runCli([
-      "codex-goal-brief",
-      "--cwd",
-      promotionDir,
+    const importedPayload = await readGoalBrief(promotionDir, [
       "--codex-goal-status",
       "active",
       "--completion-confirmed",
       "--completion-evidence",
       "Promotion-grade result satisfies the objective",
     ]);
-    assert.equal(importedCompletion.code, 0, importedCompletion.stderr);
-    const importedPayload = JSON.parse(importedCompletion.stdout);
     assert.equal(importedPayload.completionAudit.status, "complete");
     assert.equal(importedPayload.completionAudit.canMarkCodexGoalComplete, true);
 

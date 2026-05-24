@@ -1752,6 +1752,7 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = await publicState({ cwd: workDir, compact: false });
   const compact = compactPublicState(state);
+  const commands = continuationCommands(workDir);
   const importedGoal = importedCodexGoal(args);
   const objectiveDraft = codexGoalObjectiveDraft(state, importedGoal);
   const completionAudit = codexGoalCompletionAudit({
@@ -1786,9 +1787,9 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
         "",
         "After creating it, call get_goal. If no active goal exists, stop and report GOAL_NOT_CREATED.",
       ].join("\n"),
-      autoresearchState: continuationCommands(workDir).state,
-      autoresearchRecommendNext: continuationCommands(workDir).recommendNext,
-      autoresearchNext: continuationCommands(workDir).next,
+      autoresearchState: commands.state,
+      autoresearchRecommendNext: commands.recommendNext,
+      autoresearchNext: commands.next,
     },
     session: {
       name: state.config?.name || "Autoresearch",
