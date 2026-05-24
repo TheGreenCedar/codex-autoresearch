@@ -171,7 +171,6 @@ Finalization should:
 * [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
 * [Hooks](plugins/codex-autoresearch/docs/hooks.md)
-* [Codex Goal bridge spec](plugins/codex-autoresearch/docs/specs/codex-goal-bridge/blueprint.md)
 * [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
 
 The active package lives under:
