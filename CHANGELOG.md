@@ -18,6 +18,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - `state --compact`, `recommend-next --compact`, and dashboard data now share canonical next-action priorities for workflow friction, stale progress, partial-result review, context distillation, quality gaps, plateau pivots, finalization, and next packets.
+- Dashboard segment navigation now uses a keyboardable segment strip, and metric panels show metric construction, selected-run evidence, no-trend states, secondary metrics, and missing-formula warnings without repeating the right-rail totals.
 - Bumped public package and plugin manifest version surfaces to `1.4.1`.
 
 ## 1.4.0
@@ -259,7 +260,6 @@ Bumped public package, plugin manifest, CLI server, and MCP server version surfa
 - Added dogfood health gates to the product check: a portable `quality_gap` session must pass, and local self-session artifacts block release-style verification when stale commit paths, benchmark drift, or maxed sessions are present.
 
 Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.5`.
-
 
 ## 1.1.0
 

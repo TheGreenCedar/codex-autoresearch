@@ -408,6 +408,8 @@ export interface WeightedMetricDefinition {
   memoryKey: string;
   formulaInline: string;
   formulaDetails: string;
+  formulaSource: string;
+  formulaConfigured: boolean;
   fallbackNote: string;
   baselineMetric: number | null;
   baselineTime: number | null;
@@ -429,8 +431,10 @@ export interface RunMetricBreakdown {
 
 export interface DashboardReadout {
   baseline: number | null;
+  baselineRun: SessionRun | null;
   best: number | null;
   bestRun: SessionRun | null;
+  latestPlottedRun: SessionRun | null;
   latestFailure: SessionRun | null;
   nextAction: string;
   confidence: number | null;

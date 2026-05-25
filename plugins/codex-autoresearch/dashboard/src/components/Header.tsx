@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import type { KeyboardEvent } from "react";
 import type {
   DashboardMeta,
   DashboardMode,
@@ -173,29 +174,145 @@ export function Header({
               <strong id="live-detail">{attentionStatus.detail}</strong>
             </p>
           ) : null}
-          <span id="segment-select-wrap" hidden={!hasMultipleSegments} className="segment-control">
-            <label htmlFor="segment-select">Segment</label>
-            <select
-              id="segment-select"
-              value={activeSegment}
-              onChange={(event) => setActiveSegment(Number(event.target.value))}
-            >
-              {normalized.segments.map((item) => (
-                <option key={item.segment} value={item.segment}>
-                  {`Segment ${item.segment + 1} - ${item.config.name || "Autoresearch"} (${item.runs.length} runs)`}
-                </option>
-              ))}
-            </select>
-          </span>
           {hasMultipleSegments ? (
-            <p id="segment-note" className="segment-note">
-              {`Showing segment ${activeSegment + 1} of ${normalized.segments.length}`}
-            </p>
+            <SegmentNavigator
+              activeSegment={activeSegment}
+              normalized={normalized}
+              setActiveSegment={setActiveSegment}
+            />
           ) : null}
         </div>
       ) : null}
     </header>
   );
+}
+
+function SegmentNavigator({
+  activeSegment,
+  normalized,
+  setActiveSegment,
+}: {
+  activeSegment: number;
+  normalized: NormalizedEntries;
+  setActiveSegment: (segment: number) => void;
+}) {
+  const active = normalized.segments.find((item) => item.segment === activeSegment);
+  const activeTitle = segmentTitle(active);
+  const selectedIndex = normalized.segments.findIndex((item) => item.segment === activeSegment);
+  const selectSegment = (segment: number) => {
+    setActiveSegment(segment);
+    window.setTimeout(() => {
+      document.getElementById(segmentButtonId(segment))?.focus();
+    }, 0);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const max = normalized.segments.length - 1;
+    const current = selectedIndex < 0 ? 0 : selectedIndex;
+    const nextIndex =
+      event.key === "ArrowRight"
+        ? Math.min(current + 1, max)
+        : event.key === "ArrowLeft"
+          ? Math.max(current - 1, 0)
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? max
+              : -1;
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    selectSegment(normalized.segments[nextIndex].segment);
+  };
+  return (
+    <div className="segment-navigator" id="segment-navigator">
+      <span className="segment-navigator-label" id="segment-navigator-label">
+        Segments
+      </span>
+      <div
+        className="segment-tablist"
+        role="tablist"
+        aria-labelledby="segment-navigator-label"
+        onKeyDown={onKeyDown}
+      >
+        {normalized.segments.map((item) => {
+          const title = segmentTitle(item);
+          const selected = item.segment === activeSegment;
+          return (
+            <button
+              id={segmentButtonId(item.segment)}
+              key={item.segment}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls="segment-panel"
+              className={selected ? "segment-tab active" : "segment-tab"}
+              title={title}
+              onClick={() => selectSegment(item.segment)}
+            >
+              <span className="segment-tab-title">
+                <strong>{`S${item.segment + 1}`}</strong>
+                <span>{truncateTitle(title, 48)}</span>
+              </span>
+              <span className="segment-tab-meta">
+                {segmentRunText(item)} / {segmentKeptText(item)}
+              </span>
+              <span className={`segment-tab-status ${segmentStatus(item, normalized)}`}>
+                {segmentStatusLabel(item, normalized)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p
+        id="segment-panel"
+        className="segment-note"
+        role="tabpanel"
+        aria-labelledby={segmentButtonId(active?.segment ?? activeSegment)}
+        aria-live="polite"
+        tabIndex={0}
+      >
+        {active
+          ? `Showing segment ${active.segment + 1} of ${normalized.segments.length}: ${activeTitle}. ${segmentRunText(active)}, ${segmentKeptText(active)}.`
+          : `Showing segment ${activeSegment + 1} of ${normalized.segments.length}.`}
+      </p>
+    </div>
+  );
+}
+
+function segmentButtonId(segment: number) {
+  return `segment-tab-${segment}`;
+}
+
+function segmentTitle(segment: SessionSegment | undefined) {
+  return segment?.config.name || "Autoresearch";
+}
+
+function truncateTitle(value: string, max: number) {
+  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}...` : value;
+}
+
+function segmentRunText(segment: SessionSegment) {
+  return `${segment.runs.length} run${segment.runs.length === 1 ? "" : "s"}`;
+}
+
+function segmentKeptText(segment: SessionSegment) {
+  const kept = segment.runs.filter((run) => run.status === "keep").length;
+  return `${kept} kept`;
+}
+
+function segmentStatus(segment: SessionSegment, normalized: NormalizedEntries) {
+  const latest = segment.runs.at(-1);
+  if (!latest) return "empty";
+  if (latest.status === "crash" || latest.status === "checks_failed") return "blocked";
+  if (segment.segment === normalized.latestSegment) return "active";
+  return "complete";
+}
+
+function segmentStatusLabel(segment: SessionSegment, normalized: NormalizedEntries) {
+  const status = segmentStatus(segment, normalized);
+  if (status === "blocked") return "blocked";
+  if (status === "active") return "active";
+  if (status === "empty") return "empty";
+  return "complete";
 }
 
 function statusFor(liveStatus: { title?: string; detail?: string }, mode: DashboardMode) {

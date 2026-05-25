@@ -71,7 +71,12 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
   assert.equal(metricDetails.open, false);
-  assert.match(getById("metric-detail-primary").textContent, /4\.8/);
+  assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
+  assert.equal(getById("metric-construction-status").textContent, "Formula missing");
+  assert.match(getById("metric-construction-formula").textContent, /Formula not configured/);
+  assert.match(getById("metric-construction-formula").textContent, /METRIC seconds=<number>/);
+  assert.match(getById("metric-fallback-note").textContent, /Metric metadata is incomplete/);
+  assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
 });
 
 test("dashboard ledger and truth meter do not coerce unknown evidence to zero", async () => {
@@ -375,7 +380,7 @@ test("dashboard holds crash runs at the nearest successful metric level", async 
   const note = getById("chart-note").textContent;
   const summary = getById("trend-chart-summary").textContent;
 
-  assert.match(note, /latest plotted/);
+  assert.match(note, /Trend ready: 3 finite metric runs/);
   assert.match(note, /1 crash held/);
   assert.match(summary, /4 plotted runs out of 4 logged runs/);
   assert.match(summary, /1 crash run is plotted at the nearest successful metric level/);
@@ -406,7 +411,8 @@ test("dashboard does not label raw score metrics as baseline time", async () => 
   const { queryById, getById } = await runDashboard(entries, emptyCommandMeta());
 
   assert.equal(queryById("metric-detail-baseline-time"), null);
-  assert.equal(getById("metric-detail-baseline-value").textContent, "873608.88points");
+  assert.equal(queryById("metric-detail-baseline-value"), null);
+  assert.match(getById("metric-construction-inputs").textContent, /primary: pipeline_score/);
   assert.match(getById("metric-detail-primary").textContent || "", /873608.88points/);
 });
 
@@ -575,9 +581,47 @@ test("dashboard does not let held crash metrics become best evidence", async () 
 
   assert.equal(getById("best-value").textContent, "95s");
   assert.equal(getById("improvement-value").textContent, "+5.0%");
-  assert.match(note, /Best 95s/);
+  assert.match(note, /Trend ready: 2 finite metric runs/);
   assert.doesNotMatch(note, /Best 0s/);
   assert.match(summary, /Best #3 at 95s/);
+});
+
+test("dashboard explains one-run metric evidence instead of generic formula copy", async () => {
+  const entries = [
+    dashboardConfigEntry({
+      name: "one run quality",
+      metricName: "quality_gap",
+      metricUnit: "gaps",
+    }),
+    {
+      type: "run",
+      run: 34,
+      metric: 7,
+      status: "keep",
+      description: "Only packet in segment",
+      metrics: { quality_total: 12, quality_closed: 5 },
+      asi: {
+        hypothesis: "Close accepted quality gaps.",
+        evidence: "Seven gaps remain after the packet.",
+        next_action_hint: "Run the next quality gap packet.",
+      },
+      confidence: 1,
+    },
+  ];
+
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
+
+  assert.match(getById("chart-note").textContent, /No trend yet/);
+  assert.match(getById("trend-chart-summary").textContent, /No trend or comparison exists yet/);
+  assert.equal(getById("metric-construction-status").textContent, "Formula missing");
+  assert.match(getById("metric-construction-formula").textContent, /METRIC quality_gap=<number>/);
+  assert.match(getById("metric-construction-inputs").textContent, /quality_total/);
+  assert.match(getById("metric-construction-inputs").textContent, /quality_closed/);
+  assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
+  assert.match(getById("metric-detail-primary-value").textContent, /METRIC quality_gap=7gaps/);
+  assert.match(getById("metric-detail-secondary").textContent, /quality_total = 12/);
+  assert.match(getById("metric-detail-secondary").textContent, /quality_closed = 5/);
+  assert.match(getById("metric-detail-warnings").textContent, /No configured formula explains/);
 });
 
 test("stale last-run handling remains visible in dashboard guidance", async () => {
@@ -1976,7 +2020,7 @@ test("dashboard readout uses the selected segment baseline", async () => {
     { type: "run", run: 2, metric: 90, status: "keep", description: "Second best", confidence: 2 },
   ];
 
-  const { getById, dom } = await runDashboard(entries, {
+  const { getById, queryById, dom } = await runDashboard(entries, {
     deliveryMode: "static-export",
     liveActionsAvailable: false,
     viewModel: {
@@ -1985,14 +2029,48 @@ test("dashboard readout uses the selected segment baseline", async () => {
   });
 
   assert.equal(getById("baseline-value").textContent, "100s");
-  const select = getById("segment-select");
-  select.value = "0";
-  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(queryById("segment-select"), null);
+  const tab = getById("segment-tab-0") as HTMLButtonElement;
+  assert.equal(tab.getAttribute("role"), "tab");
+  assert.match(tab.textContent || "", /S1/);
+  tab.click();
   await waitFor(
     () => getById("baseline-value").textContent === "10s",
     "Selected segment baseline did not update.",
   );
   assert.equal(getById("best-value").textContent, "8s");
+  assert.match(getById("segment-panel").textContent, /first segment/);
+  assert.equal(getById("segment-panel").getAttribute("role"), "tabpanel");
+  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-0");
+  tab.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+  await waitFor(
+    () => getById("baseline-value").textContent === "100s",
+    "Keyboard segment selection did not update.",
+  );
+  assert.equal(getById("segment-tab-1").getAttribute("aria-selected"), "true");
+  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-1");
+  getById("segment-tab-1").dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
+  );
+  await waitFor(
+    () => getById("baseline-value").textContent === "10s",
+    "Home segment shortcut did not update.",
+  );
+  getById("segment-tab-0").dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "End" }),
+  );
+  await waitFor(
+    () => getById("baseline-value").textContent === "100s",
+    "End segment shortcut did not update.",
+  );
+  getById("segment-tab-1").dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
+  );
+  await waitFor(
+    () => getById("baseline-value").textContent === "10s",
+    "ArrowLeft segment shortcut did not update.",
+  );
+  assert.equal(getById("segment-tab-0").getAttribute("aria-selected"), "true");
   dom.window.close();
 });
 
