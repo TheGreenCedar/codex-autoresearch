@@ -10,9 +10,15 @@ This project uses a root-only changelog because the root README is the public do
 
 - Added `codex-goal-brief` / `codex_goal_bridge`, a read-only Codex Goal bridge that turns Autoresearch state into a Goal objective draft, completion audit, and explicit ownership boundary.
 - Added durable `goal` state in config/readouts plus `goalAdvice` in the decision envelope so resumed loops keep the objective visible without relying on chat memory.
+- Added `session-forensics` / `session_forensics`, a safe import path for long Codex session JSONL that writes bounded session digests, quality-gap candidates, decision notes, and evidence-index claims into `autoresearch.research/<slug>/`.
+- Added shared decision thresholds, safe research-slug path guards, and canonical `context-distillation` next-action guidance for sessions that exceed compaction, token, tool-call, polling, or output-budget limits.
+- Added packet progress/economics readouts, workflow-friction signals, and experiment-memory exhaustion/shelf detection to the shared decision envelope.
+- Added `partial-results` / `partial_results` so crashed or timed-out packets can expose artifact rows and record selected rows as diagnostic `measure` evidence with evidence-index provenance.
 
 ### Changed
 
+- `state --compact`, `recommend-next --compact`, and dashboard data now share canonical next-action priorities for workflow friction, stale progress, partial-result review, context distillation, quality gaps, plateau pivots, finalization, and next packets.
+- Dashboard segment navigation now uses a keyboardable segment strip, and metric panels show metric construction, selected-run evidence, no-trend states, secondary metrics, and missing-formula warnings without repeating the right-rail totals.
 - Bumped public package and plugin manifest version surfaces to `1.4.1`.
 
 ## 1.4.0
@@ -254,7 +260,6 @@ Bumped public package, plugin manifest, CLI server, and MCP server version surfa
 - Added dogfood health gates to the product check: a portable `quality_gap` session must pass, and local self-session artifacts block release-style verification when stale commit paths, benchmark drift, or maxed sessions are present.
 
 Bumped public package, plugin manifest, CLI server, and MCP server version surfaces to `1.1.5`.
-
 
 ## 1.1.0
 

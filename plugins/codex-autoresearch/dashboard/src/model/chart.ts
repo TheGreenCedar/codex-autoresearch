@@ -61,7 +61,7 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     domain,
     winZone: winZone.zone,
     winZoneBounds: winZone.bounds,
-    note: `${latest ? `latest plotted #${latest.run}` : "latest plotted -"}${bestRun ? ` / Best ${formatMetricValue(readout.best, definition)}` : ""}${crashRuns.length ? ` / ${crashRuns.length} crash held` : ""}`,
+    note: chartNote({ chartRuns, crashRuns }),
     summary: summaryParts.join(". "),
   };
 }
@@ -142,6 +142,14 @@ function chartSummaryParts({
   readout: DashboardReadout;
   session: SessionSegment;
 }): string[] {
+  const finiteMetricRuns = chartRuns.filter((run) => run.status !== "crash").length;
+  if (finiteMetricRuns === 1) {
+    return [
+      "No trend or comparison exists yet",
+      "This segment has 1 finite metric run, so the chart only shows the current point",
+      "Log another measured run to compare movement",
+    ];
+  }
   return [
     `${chartRuns.length} plotted runs out of ${session.runs.length} logged runs`,
     latest
@@ -152,6 +160,12 @@ function chartSummaryParts({
       ? `${crashRuns.length} crash run${crashRuns.length === 1 ? " is" : "s are"} plotted at the nearest successful metric level`
       : "",
   ].filter(Boolean);
+}
+
+function chartNote({ chartRuns, crashRuns }: { chartRuns: SessionRun[]; crashRuns: SessionRun[] }) {
+  const finiteMetricRuns = chartRuns.filter((run) => run.status !== "crash").length;
+  if (finiteMetricRuns === 1) return "No trend yet: 1 finite metric run.";
+  return `Trend ready: ${finiteMetricRuns} finite metric runs${crashRuns.length ? `; ${crashRuns.length} crash held at nearest metric` : ""}.`;
 }
 
 function emptyChart(readout: DashboardReadout): ChartModel {

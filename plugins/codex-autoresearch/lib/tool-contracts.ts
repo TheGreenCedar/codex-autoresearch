@@ -82,10 +82,8 @@ const CONTRACTS = {
   },
   codex_goal_bridge: {
     purpose: "Bridge Autoresearch state into Codex Goal objective and completion-audit language.",
-    whenToUse:
-      "Use when the operator explicitly wants Codex Goal mode or an active Codex Goal needs an Autoresearch evidence audit.",
-    contrast:
-      "Use recommend_next for ordinary Autoresearch continuation without Goal-mode framing.",
+    whenToUse: "Use for Codex Goal handoff or completion-audit evidence.",
+    contrast: "Use recommend_next for ordinary continuation.",
     safety: "Read-only; does not read or mutate Codex private goal state.",
     outputSchema: basicOutputSchema([
       "ok",
@@ -94,6 +92,23 @@ const CONTRACTS = {
       "objectiveDraft",
       "completionAudit",
       "commands",
+    ]),
+  },
+  session_forensics: {
+    purpose: "Parse Codex rollout JSONL into bounded session and waste signals.",
+    whenToUse: "Use to import a long Codex session before more Autoresearch packets.",
+    contrast: "Use read_state for the current Autoresearch ledger only.",
+    safety: "Dry-run is read-only; apply writes only validated research capsule files.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "dryRun",
+      "wrote",
+      "outputDir",
+      "plannedFiles",
+      "counts",
+      "workflowWaste",
+      "nextAction",
     ]),
   },
   list_recipes: {
@@ -151,6 +166,22 @@ const CONTRACTS = {
       "decision",
       "packetEvidence",
       "continuation",
+    ]),
+  },
+  partial_results: {
+    purpose: "Inspect or record diagnostic rows from a crashed or timed-out packet artifact.",
+    whenToUse:
+      "Use before rerunning an expensive failed packet when last-run artifacts may contain completed rows.",
+    contrast: "Use log_experiment for ordinary keep/discard/crash decisions.",
+    safety:
+      "Read-only unless record is supplied; recording appends measure-only diagnostic evidence and clears the last-run packet.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "candidates",
+      "skippedArtifacts",
+      "experiment",
+      "evidenceClaim",
     ]),
   },
   log_experiment: {

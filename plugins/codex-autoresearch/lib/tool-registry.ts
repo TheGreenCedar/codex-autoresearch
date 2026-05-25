@@ -26,6 +26,7 @@ const TOOL_REGISTRY = [
   { name: "onboarding_packet", cliCommand: "onboarding-packet", actionPolicy: "read" },
   { name: "recommend_next", cliCommand: "recommend-next", actionPolicy: "read" },
   { name: "codex_goal_bridge", cliCommand: "codex-goal-brief", actionPolicy: "read" },
+  { name: "session_forensics", cliCommand: "session-forensics", actionPolicy: "read" },
   { name: "list_recipes", cliCommand: "recipes", actionPolicy: "read" },
   { name: "setup_session", cliCommand: "setup", actionPolicy: "state_mutation" },
   { name: "setup_research_session", cliCommand: "research-setup", actionPolicy: "state_mutation" },
@@ -33,6 +34,7 @@ const TOOL_REGISTRY = [
   { name: "init_experiment", cliCommand: "init", actionPolicy: "state_mutation" },
   { name: "run_experiment", cliCommand: "run", actionPolicy: "process_start" },
   { name: "next_experiment", cliCommand: "next", actionPolicy: "process_start" },
+  { name: "partial_results", cliCommand: "partial-results", actionPolicy: "artifact_write" },
   { name: "log_experiment", cliCommand: "log", actionPolicy: "git_mutation" },
   { name: "read_state", cliCommand: "state", actionPolicy: "read" },
   { name: "measure_quality_gap", cliCommand: "quality-gap", actionPolicy: "read" },
@@ -74,6 +76,10 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
   if (name === "gap_candidates" && (args.apply || args.apply === "true")) {
     return "state_mutation";
   }
+  if (name === "session_forensics" && (args.apply || args.apply === "true")) {
+    return "artifact_write";
+  }
+  if (name === "partial_results" && args.record) return "artifact_write";
   if (name === "guided_setup" && (args.start_dashboard || args.startDashboard)) {
     return "process_start";
   }

@@ -7,10 +7,12 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
+import { writeContextCapsule } from "../lib/context-capsule.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
+import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import {
   redactCommandDisplay,
   redactEvidenceObject,
@@ -18,10 +20,15 @@ import {
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
+import { mergeEvidenceClaims } from "../lib/evidence-index.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
+import {
+  buildPartialResultEvidenceClaim,
+  discoverPartialResultCandidates,
+} from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import {
   gapCandidates as buildGapCandidates,
@@ -38,12 +45,19 @@ import {
   revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
+import { parseSessionForensics } from "../lib/session-forensics.js";
 import {
   parseMetricLines,
   runProcess as runBoundedProcess,
   runShell,
   tailText,
 } from "../lib/runner.js";
+import {
+  createProgressSnapshot,
+  progressSnapshotFromRun,
+  staleProgressReason,
+  updateProgressSnapshot,
+} from "../lib/runner-progress.js";
 import {
   STATUS_VALUES,
   FAILURE_STATUSES,
@@ -62,6 +76,7 @@ import {
   buildScaffoldHealth,
   commandDiagnostics,
 } from "../lib/truth-signals.js";
+import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 
@@ -176,10 +191,12 @@ Usage:
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
   node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
+  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
   node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
+  node scripts/autoresearch.mjs partial-results --cwd <project> [--from-last|--artifact <path>] [--record <candidate-id>] [--research-slug <slug>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
@@ -1704,8 +1721,23 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     pluginVersion: PLUGIN_VERSION,
   });
   const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
-  const action = (viewModel.nextBestAction || {}) as LooseObject;
-  const nextAction = action.detail || viewModel.readout?.nextAction || compact.nextAction;
+  const canonicalNextAction =
+    compact.canonicalNextAction ||
+    compact.decisionEnvelope?.canonicalNextAction ||
+    compact.resumeAudit?.canonicalNextAction ||
+    null;
+  const action = canonicalNextAction
+    ? canonicalActionForRecommendNext(
+        canonicalNextAction,
+        viewModel.nextBestAction,
+        compact.commands,
+      )
+    : ((viewModel.nextBestAction || {}) as LooseObject);
+  const nextAction =
+    canonicalNextAction?.reason ||
+    action.detail ||
+    viewModel.readout?.nextAction ||
+    compact.nextAction;
   const baseEnvelope = compact.decisionEnvelope || compact.resumeAudit || null;
   const decisionEnvelope = baseEnvelope
     ? {
@@ -1719,6 +1751,13 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
             }
           : baseEnvelope.finalizationReadiness,
         nextAction,
+        canonicalNextAction: action.kind
+          ? {
+              ...baseEnvelope.canonicalNextAction,
+              ...canonicalNextAction,
+              command: action.command || canonicalNextAction?.command || "",
+            }
+          : baseEnvelope.canonicalNextAction,
       }
     : null;
   return {
@@ -1745,6 +1784,112 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     compactState: boolOption(args.compact, false) ? compact : undefined,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
+  };
+}
+
+function canonicalActionForRecommendNext(
+  canonical: LooseObject,
+  existing: unknown,
+  commands: unknown,
+): LooseObject {
+  const base = existing && typeof existing === "object" ? (existing as LooseObject) : {};
+  const command = canonical.command || commandForCanonicalKind(canonical.kind, commands);
+  return {
+    ...base,
+    kind: canonical.kind || base.kind || "next-packet",
+    priority: String(canonical.priority ?? base.priority ?? "Next"),
+    title: canonicalTitle(canonical.kind, base.title),
+    detail: canonical.reason || base.detail || "",
+    utilityCopy: base.utilityCopy || "Decision envelope is the authoritative next-action source.",
+    safeAction: base.safeAction || String(canonical.kind || ""),
+    command,
+    primaryCommand: command ? { label: "Run", command } : base.primaryCommand || null,
+    source: "decision-envelope",
+  };
+}
+
+function canonicalTitle(kind: unknown, fallback: unknown): string {
+  const text = String(kind || "");
+  const titles: Record<string, string> = {
+    "safety-blocker": "Resolve the safety blocker",
+    "benchmark-mismatch": "Repair the benchmark mismatch",
+    "workflow-friction": "Remove workflow friction",
+    "stale-packet": "Replace the stale packet",
+    "partial-salvage": "Review partial results",
+    "context-distillation": "Refresh context",
+    "quality-gap": "Close accepted quality gaps",
+    "plateau-pivot": "Pivot before repeating the plateau",
+    finalization: "Preview finalization",
+    "next-packet": "Run the next measured packet",
+  };
+  return titles[text] || String(fallback || "Next action");
+}
+
+async function sessionForensics(args: LooseObject): Promise<LooseObject> {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const apply = boolOption(args.apply, false);
+  const dryRun = boolOption(args.dryRun, !apply);
+  const sessionJsonl = String(args.sessionJsonl || "");
+  const researchSlug = String(args.researchSlug || "");
+  const parsed = await parseSessionForensics({
+    sessionJsonl,
+    allowSnippets: boolOption(args.allowSnippets, false),
+    maxSnippets: positiveIntegerOption(args.maxSnippets, 8, "--max-snippets") ?? 8,
+    maxSnippetChars: positiveIntegerOption(args.maxSnippetChars, 320, "--max-snippet-chars") ?? 320,
+  });
+  if (!parsed.ok) {
+    return {
+      ...parsed,
+      wrote: false,
+    };
+  }
+  const capsule = await writeContextCapsule({
+    cwd: workDir,
+    researchSlug,
+    summary: parsed,
+    apply: apply && !dryRun,
+  });
+  const contextSignal = parsed.productSignals.find(
+    (signal: any) => signal.kind === "context_distillation_required",
+  );
+  const canonicalNextAction = contextSignal
+    ? {
+        kind: "context-distillation",
+        priority: 6,
+        reason: contextSignal.message,
+        command: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${shellQuote(workDir)} --session-jsonl ${shellQuote(sessionJsonl)} --research-slug ${shellQuote(researchSlug)} --apply`,
+        triggeredBy: ["sessionForensics"],
+      }
+    : {
+        kind: "next-packet",
+        priority: 10,
+        reason: "Review imported signals, then continue with the safest next Autoresearch action.",
+        command: "",
+        triggeredBy: ["sessionForensics"],
+      };
+  return {
+    ok: true,
+    workDir,
+    dryRun: capsule.dryRun,
+    wrote: !capsule.dryRun,
+    outputDir: capsule.outputDir,
+    plannedFiles: capsule.files,
+    sourcePath: parsed.sourcePath,
+    timeWindow: parsed.timeWindow,
+    counts: parsed.counts,
+    responseCounts: parsed.responseCounts,
+    toolCounts: parsed.toolCounts,
+    commandClasses: parsed.commandClasses,
+    compactions: parsed.compactions,
+    goal: parsed.goal,
+    userCorrections: parsed.userCorrections,
+    productSignals: parsed.productSignals,
+    workflowWaste: parsed.workflowWaste,
+    blockers: parsed.blockers,
+    snippets: parsed.snippets,
+    evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
+    canonicalNextAction,
+    nextAction: canonicalNextAction.reason,
   };
 }
 
@@ -3711,6 +3856,20 @@ function dashboardSettings(config: any, extra: LooseObject = {}) {
   };
 }
 
+function decisionSetupState(guided: any, plan: any) {
+  const blockers = [...listOption(plan?.missing), ...listOption(plan?.missingEssentials)];
+  if (!guided?.stage && blockers.length === 0) return null;
+  return {
+    stage: guided?.stage || "",
+    blockers,
+    nextAction:
+      guided?.nextStep?.nextAction?.reason ||
+      guided?.nextAction ||
+      plan?.nextStep?.nextAction?.reason ||
+      "",
+  };
+}
+
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
   const qualityGap = await currentQualityGapSummary(workDir);
   const state = currentState(workDir);
@@ -3739,50 +3898,87 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     ? suppressEnvironmentWarningsFromPreview(finalizePreview)
     : finalizePreview;
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const continuation = loopContinuation(workDir, state, config, "dashboard");
-  const decisionEnvelope = buildDecisionEnvelope({
-    state,
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails: warnings,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization: effectiveFinalizePreview,
+  const setupPlanResult = await setupPlan({ cwd: workDir }).catch((error: any) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
+  const guidedSetupResult = await guidedSetup({ cwd: workDir }).catch((error: any) => ({
+    ok: false,
+    warnings: [error.message],
+  }));
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings,
   });
+  const stateWithQualityGap = { ...state, qualityGap };
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails: warnings,
+    recipes: recipeSummaries,
+  });
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
+  const commands = dashboardCommands(workDir, qualityGap);
+  const guidedCommands = (guidedSetupResult as LooseObject).commands || {};
+  const canonicalCommandHints = {
+    ...commandLookupObject(commands),
+    replaceLast: guidedCommands.replaceLast || "",
+    logLast: guidedCommands.logLast || "",
+    setup: guidedCommands.setup || "",
+  };
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: { ...state, limit: iterationLimitInfo(state, config) },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails: warnings,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization: effectiveFinalizePreview,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction,
+      experimentMemory: memory,
+      setupState: decisionSetupState(guidedSetupResult, setupPlanResult),
+    }),
+    canonicalCommandHints,
+  );
   const enrichedState = {
     ...state,
     scaffoldHealth,
     researchIntegrity,
     warningDetails: warnings,
+    experimentEconomics,
+    partialResults,
+    workflowFriction,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
   return buildDashboardViewModel({
     state: enrichedState as any,
     settings,
-    commands: dashboardCommands(workDir, qualityGap),
-    setupPlan: await setupPlan({ cwd: workDir }).catch((error: any) => ({
-      ok: false,
-      warnings: [error.message],
-    })),
-    guidedSetup: await guidedSetup({ cwd: workDir }).catch((error: any) => ({
-      ok: false,
-      warnings: [error.message],
-    })),
+    commands,
+    setupPlan: setupPlanResult,
+    guidedSetup: guidedSetupResult,
     qualityGap,
     finalizePreview: effectiveFinalizePreview,
-    recipes: listBuiltInRecipes().map((recipe: any) => ({
-      id: recipe.id,
-      title: recipe.title,
-      tags: recipe.tags || [],
-    })),
-    experimentMemory: buildExperimentMemory({
-      runs: state.current,
-      direction: state.config.bestDirection,
-      settings,
-    }),
+    recipes: recipeSummaries,
+    experimentMemory: memory,
     drift,
     warnings,
   });
@@ -3958,8 +4154,31 @@ async function runExperiment(args: LooseObject) {
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  let progressSnapshot = createProgressSnapshot({
+    packetId: `packet-${state.results.length + 1}-active`,
+    command,
+    startedAt: new Date().toISOString(),
+    timeoutSeconds,
+    artifactRoot: ".",
+  });
+  await writeActiveProgressSnapshot(workDir, progressSnapshot);
+  const updateProgress = ({ observedAt, output }: { observedAt: string; output: string }) => {
+    progressSnapshot = updateProgressSnapshot(progressSnapshot, { output, observedAt });
+    progressSnapshot = {
+      ...progressSnapshot,
+      staleProgressReason: staleProgressReason(progressSnapshot, {
+        now: observedAt,
+        staleAfterSeconds: numberOption(
+          config.staleProgressSeconds ?? config.progressStaleSeconds,
+          300,
+        ),
+      }),
+    };
+    void writeActiveProgressSnapshot(workDir, progressSnapshot);
+  };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
+    onProgress: updateProgress,
     retainMetricNames: [state.config.metricName],
   });
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
@@ -4003,7 +4222,7 @@ async function runExperiment(args: LooseObject) {
         args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
         DEFAULT_CHECKS_TIMEOUT_SECONDS,
       ),
-      { env: commandInput.env },
+      { env: commandInput.env, onProgress: updateProgress },
     );
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
@@ -4047,8 +4266,13 @@ async function runExperiment(args: LooseObject) {
       separatorCommand: commandInput.separatorCommand,
       result: benchmark,
     }),
+    startedAt: benchmark.startedAt,
+    finishedAt: benchmark.finishedAt,
+    lastOutputAt: benchmark.lastOutputAt,
+    progressSnapshot,
     exitCode: benchmark.exitCode,
-    timedOut: benchmark.timedOut,
+    timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
+    timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
     artifacts,
@@ -4558,6 +4782,13 @@ async function resolveLastRunPath(workDir: string) {
   return path.join(workDir, "autoresearch.last-run.json");
 }
 
+async function resolveProgressPath(workDir: string) {
+  if (await insideGitRepo(workDir)) {
+    return await gitPrivatePath(workDir, "autoresearch/progress.json");
+  }
+  return path.join(workDir, "autoresearch.progress.json");
+}
+
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -4567,6 +4798,39 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
     "utf8",
   );
   return target;
+}
+
+async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
+  const target = await resolveProgressPath(workDir);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  return target;
+}
+
+async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
+  const target = await resolveProgressPath(workDir);
+  if (!fs.existsSync(target)) return null;
+  try {
+    const snapshot = JSON.parse(fs.readFileSync(target, "utf8"));
+    if (!snapshot || typeof snapshot !== "object" || snapshot.exitState !== "running") {
+      return snapshot || null;
+    }
+    return {
+      ...snapshot,
+      staleProgressReason: staleProgressReason(snapshot, {
+        staleAfterSeconds: numberOption(
+          config.staleProgressSeconds ?? config.progressStaleSeconds,
+          300,
+        ),
+      }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function deleteActiveProgressSnapshot(workDir: string) {
+  await fsp.rm(await resolveProgressPath(workDir), { force: true }).catch(() => {});
 }
 
 function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
@@ -4817,6 +5081,211 @@ async function deleteLastRunPacket(workDir: string) {
   }
 }
 
+async function discoverLastRunPartialResults(
+  workDir: string,
+  state: LooseObject,
+  lastRun: LooseObject | null,
+) {
+  if (!lastRun || !partialResultEligiblePacket(lastRun)) {
+    return { candidates: [], skippedArtifacts: [] };
+  }
+  return await discoverPartialResultCandidates({
+    workDir,
+    primaryMetricName: state.config?.metricName || "metric",
+    lastRunPacket: lastRun,
+  }).catch((error: any) => ({
+    candidates: [],
+    skippedArtifacts: [
+      {
+        artifactName: "last-run",
+        artifactPath: lastRun?.lastRunPath || "",
+        reason: error.message || String(error),
+      },
+    ],
+  }));
+}
+
+function partialResultEligiblePacket(packet: LooseObject | null): boolean {
+  if (!packet) return false;
+  const run = packet.run || {};
+  const packetEvidence = packet.packetEvidence || {};
+  if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
+  const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
+  return exitCode != null && exitCode !== 0;
+}
+
+async function partialResultsCommand(args: LooseObject) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const artifact = args.artifact ? String(args.artifact) : "";
+  const recordId = args.record ? String(args.record).trim() : "";
+  const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
+  const lastRun = fromLast || recordId ? await readLastRunPacket(workDir) : null;
+  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun);
+  const lastRunPacket =
+    lastRun ||
+    partialResultPacketFromArtifact({
+      artifact,
+      commandHash: args.command_hash ?? args.commandHash,
+      state,
+      workDir,
+    });
+  const discovery = await discoverPartialResultCandidates({
+    workDir,
+    primaryMetricName: state.config?.metricName || "metric",
+    lastRunPacket,
+  });
+  if (!recordId) {
+    return {
+      ok: true,
+      workDir,
+      source: lastRun ? "last-run" : "artifact",
+      candidates: discovery.candidates,
+      skippedArtifacts: discovery.skippedArtifacts,
+      nextAction: discovery.candidates.length
+        ? "Review a candidate, then record it as diagnostic measure evidence with --record <candidate-id>."
+        : "No partial-result candidates were found.",
+    };
+  }
+  if (!lastRun) {
+    throw new Error(
+      "--record requires a fresh last-run packet so salvaged evidence links to its source packet.",
+    );
+  }
+  const candidate = discovery.candidates.find((item: any) => item.id === recordId);
+  if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
+  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args });
+}
+
+function partialResultPacketFromArtifact({
+  artifact,
+  commandHash,
+  state,
+  workDir,
+}: LooseObject): LooseObject {
+  if (!artifact) throw new Error("--artifact is required unless --from-last is used.");
+  const artifactPath = path.isAbsolute(artifact) ? path.resolve(artifact) : artifact;
+  return {
+    ok: false,
+    workDir,
+    history: {
+      segment: state.segment,
+      config: lastRunConfigSnapshot(state.config),
+      nextRun: state.results.length + 1,
+    },
+    packetEvidence: {
+      packetId: `artifact-${createHash("sha256").update(String(artifactPath)).digest("hex").slice(0, 12)}`,
+      metricName: state.config?.metricName || "metric",
+      commandIdentity: {
+        commandHash: commandHash ? String(commandHash) : "",
+      },
+      artifacts: [
+        {
+          name: path.basename(String(artifactPath)) || "partial-result",
+          path: String(artifactPath),
+          exists: true,
+          quarantined: false,
+        },
+      ],
+    },
+  };
+}
+
+async function recordPartialResultCandidate({
+  workDir,
+  state,
+  lastRun,
+  candidate,
+  args,
+}: LooseObject) {
+  const metricName = candidate.metricName || state.config?.metricName || "metric";
+  const metric = finiteMetric(candidate.metricValue);
+  if (metric == null) {
+    throw new Error(
+      `partial result candidate ${candidate.id} has no finite metric and must stay manual-review only.`,
+    );
+  }
+  const sourcePacketId = lastRun?.packetEvidence?.packetId || "";
+  const researchSlug = researchSlugFromArgs({
+    slug: args.research_slug ?? args.researchSlug ?? "partial-results",
+  });
+  const evidenceClaim = buildPartialResultEvidenceClaim(candidate);
+  const evidenceIndex = await mergeEvidenceClaims(workDir, researchSlug, [evidenceClaim]);
+  const experiment: LooseObject = {
+    run: state.results.length + 1,
+    commit: "",
+    metric,
+    metrics: {
+      [metricName]: metric,
+    },
+    metricEligible: false,
+    status: "measure",
+    description:
+      args.description ||
+      `Diagnostic partial result from ${candidate.artifactName} row ${candidate.rowIndex}.`,
+    timestamp: Date.now(),
+    segment: state.segment,
+    confidence: null,
+    promotion: {
+      label: "measurement",
+      reasons: ["Recorded from a partial-result salvage candidate; diagnostic measure only."],
+    },
+    asi: {
+      hypothesis: "Recover diagnostic evidence from a partial benchmark artifact.",
+      evidence: `${metricName}=${metric} from ${candidate.artifactPath} row ${candidate.rowIndex}.`,
+      rollback_reason:
+        "Source packet crashed or timed out, so this evidence cannot be treated as promotion-grade.",
+      next_action_hint:
+        "Use this diagnostic row to choose the next packet; rerun fresh before promotion.",
+      partial_result: {
+        candidateId: candidate.id,
+        status: candidate.status,
+        reason: candidate.reason,
+        sourcePacketId,
+        artifactName: candidate.artifactName,
+        artifactPath: candidate.artifactPath,
+        rowIndex: candidate.rowIndex,
+        provenance: candidate.provenance,
+        evidenceClaimId: evidenceClaim.id,
+        researchSlug,
+      },
+      promotionGrade: false,
+    },
+    artifacts: {
+      [candidate.artifactName]: candidate.artifactPath,
+    },
+    partialResult: {
+      candidateId: candidate.id,
+      sourcePacketId,
+      evidenceClaimId: evidenceClaim.id,
+      researchSlug,
+      validationStatus: candidate.status,
+    },
+  };
+  experiment.confidence = computeConfidence(
+    [...state.current, experiment],
+    state.config?.bestDirection || "lower",
+  );
+  appendJsonl(workDir, experiment);
+  await deleteLastRunPacket(workDir);
+  const stateAfter = currentState(workDir);
+  return {
+    ok: true,
+    workDir,
+    experiment,
+    evidenceClaim,
+    evidenceIndex: {
+      slug: researchSlug,
+      claims: evidenceIndex.claims.length,
+    },
+    lastRunCleared: true,
+    baseline: stateAfter.baseline,
+    best: stateAfter.best,
+    confidence: stateAfter.confidence,
+    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
+  };
+}
+
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
@@ -4824,6 +5293,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const qualityGap = await currentQualityGapSummary(workDir);
   const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
@@ -4837,6 +5307,24 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     direction: state.config.bestDirection,
     settings: dashboardSettings(config),
   });
+  const stateWithQualityGap = { ...state, qualityGap };
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails,
+    recipes: recipeSummaries,
+  });
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
       status,
@@ -4844,16 +5332,23 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     ]),
   );
   const continuation = loopContinuation(workDir, state, config, "state");
-  const decisionEnvelope = buildDecisionEnvelope({
-    state,
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization,
-  });
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: { ...state, limit: iterationLimitInfo(state, config) },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction,
+      experimentMemory: memory,
+    }),
+    continuation.commands,
+  );
   const fullState = {
     ok: true,
     workDir,
@@ -4886,6 +5381,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
     memory,
+    experimentEconomics,
+    partialResults,
+    workflowFriction,
     continuation,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
@@ -4896,6 +5394,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
 function compactPublicState(state: LooseObject) {
   const limit = state.limit || {};
   const continuation = state.continuation || {};
+  const canonicalNextAction =
+    state.decisionEnvelope?.canonicalNextAction || state.resumeAudit?.canonicalNextAction || null;
   const blockers = [
     ...(Array.isArray(state.warningDetails)
       ? state.warningDetails.map((warning: any) => warning.message || warning.code)
@@ -4938,7 +5438,7 @@ function compactPublicState(state: LooseObject) {
       : null,
     limitReached: Boolean(limit.limitReached),
     remainingIterations: limit.remainingIterations ?? null,
-    nextAction: continuation.nextAction || "Run doctor, then next.",
+    nextAction: canonicalNextAction?.reason || continuation.nextAction || "Run doctor, then next.",
     shouldContinue: continuation.shouldContinue === true,
     forbidFinalAnswer: continuation.forbidFinalAnswer === true,
     activeBudget: continuation.activeBudget === true,
@@ -4961,10 +5461,41 @@ function compactPublicState(state: LooseObject) {
       plateau: state.memory?.plateau?.detected === true,
       suggestedLane: state.memory?.summary?.suggestedLane || "",
       latestNextAction: state.memory?.latestNextAction || "",
+      exhaustedFamilies: Array.isArray(state.memory?.exhaustedFamilies)
+        ? state.memory.exhaustedFamilies.slice(0, 3)
+        : [],
+      metricShelves: Array.isArray(state.memory?.metricShelves)
+        ? state.memory.metricShelves.slice(0, 3)
+        : [],
     },
+    experimentEconomics: state.experimentEconomics
+      ? {
+          runtimeClass: state.experimentEconomics.runtimeClass,
+          expectedRuntimeSeconds: state.experimentEconomics.expectedRuntimeSeconds ?? null,
+          baselineFreshness: state.experimentEconomics.baselineFreshness,
+          freshRunRequired: state.experimentEconomics.freshRunRequired === true,
+          freshRunReason: state.experimentEconomics.freshRunReason || "",
+          warnings: Array.isArray(state.experimentEconomics.warnings)
+            ? state.experimentEconomics.warnings.slice(0, 3)
+            : [],
+          progress: state.experimentEconomics.progress || null,
+        }
+      : null,
+    partialResults: {
+      candidates: Array.isArray(state.partialResults?.candidates)
+        ? state.partialResults.candidates.slice(0, 5)
+        : [],
+      skippedArtifacts: Array.isArray(state.partialResults?.skippedArtifacts)
+        ? state.partialResults.skippedArtifacts.slice(0, 5)
+        : [],
+    },
+    workflowFriction: Array.isArray(state.workflowFriction)
+      ? state.workflowFriction.slice(0, 5)
+      : [],
     commands: continuation.commands || state.commands || {},
     resumeAudit: state.resumeAudit || null,
     decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+    canonicalNextAction,
   };
 }
 
@@ -4995,6 +5526,10 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
     {
       label: "Discard last",
       command: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    },
+    {
+      label: "Partial results",
+      command: `node ${script} partial-results --cwd ${cwd} --from-last`,
     },
     {
       label: "Gap candidates",
@@ -5148,6 +5683,8 @@ function continuationCommands(workDir: string) {
     nextFull: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
+    gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(currentQualityGapSlug(workDir) || "research")}`,
     liveDashboard: `node ${script} serve --cwd ${cwd}`,
     exportDashboard: `node ${script} export --cwd ${cwd}`,
     extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
@@ -5161,6 +5698,59 @@ function continuationCommands(workDir: string) {
     promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
     finalizeCurrentTree: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
   };
+}
+
+function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
+  const action = envelope?.canonicalNextAction;
+  if (!action) return envelope;
+  const command = action.command || commandForCanonicalKind(action.kind, commands);
+  return {
+    ...envelope,
+    canonicalNextAction: {
+      ...action,
+      command,
+    },
+  };
+}
+
+function commandForCanonicalKind(kind: unknown, commands: unknown): string {
+  const lookup = commandLookupObject(commands);
+  switch (String(kind || "")) {
+    case "safety-blocker":
+    case "workflow-friction":
+      return lookup.doctorExplain || lookup.doctor || lookup.state || "";
+    case "benchmark-mismatch":
+      return lookup.benchmarkLint || lookup.doctorExplain || lookup.doctor || "";
+    case "stale-packet":
+      return lookup.replaceLast || lookup.next || lookup.nextRun || "";
+    case "partial-salvage":
+      return lookup.partialResults || "";
+    case "context-distillation":
+      return "";
+    case "quality-gap":
+      return lookup.gapCandidates || "";
+    case "plateau-pivot":
+    case "next-packet":
+      return lookup.next || lookup.nextRun || "";
+    case "finalization":
+      return lookup.finalizePreview || lookup.finalizeCurrentTree || "";
+    default:
+      return lookup.next || lookup.nextRun || "";
+  }
+}
+
+function commandLookupObject(commands: unknown): LooseObject {
+  if (Array.isArray(commands)) {
+    const result: LooseObject = {};
+    for (const item of commands) {
+      const label = String(item?.label || "")
+        .replace(/\s+([a-z])/g, (_match, char) => String(char).toUpperCase())
+        .replace(/^[A-Z]/, (char) => char.toLowerCase());
+      if (label) result[label] = item.command || "";
+    }
+    return result;
+  }
+  return commands && typeof commands === "object" ? (commands as LooseObject) : {};
 }
 
 function currentQualityGapSlug(workDir: string) {
@@ -5511,8 +6101,10 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
   const fingerprint = createHash("sha256")
     .update(JSON.stringify(packetSource), "utf8")
     .digest("hex");
+  const artifacts = artifactList(run.artifacts, run.workDir);
+  const packetId = `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`;
   return {
-    packetId: `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`,
+    packetId,
     cwd: redactPathDisplay(run.workDir, run.workDir),
     commandIdentity: {
       command: redactCommandDisplay(run.command || "", { workDir: run.workDir }),
@@ -5532,8 +6124,9 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     stderrTail: "",
     metrics: run.parsedMetrics || {},
     primaryMetric: run.parsedPrimary ?? null,
-    artifacts: artifactList(run.artifacts, run.workDir),
+    artifacts,
     artifactWarnings: run.artifactWarnings || [],
+    progressSnapshot: progressSnapshotFromRun({ packetId, run, artifacts }),
     checks: run.checks
       ? {
           command: redactCommandDisplay(run.checks.command || "", { workDir: run.workDir }),
@@ -5715,6 +6308,7 @@ async function nextExperiment(args: any) {
     }),
   };
   await writeLastRunPacket(run.workDir, packet, lastRunFile);
+  await deleteActiveProgressSnapshot(run.workDir);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
 }
 
@@ -5825,12 +6419,14 @@ async function main() {
     nextExperiment,
     onboardingPacket,
     parseJsonOption,
+    partialResultsCommand,
     pluginRoot: PLUGIN_ROOT,
     pluginVersion: PLUGIN_VERSION,
     promoteGate,
     promptPlan,
     publicState,
     recommendNext,
+    sessionForensics,
     readJsonl,
     recipeCommand,
     resolveWorkDir,

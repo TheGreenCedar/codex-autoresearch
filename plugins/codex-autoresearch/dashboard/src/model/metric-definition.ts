@@ -31,7 +31,7 @@ export function resolveMetricDefinition(session: SessionSegment): WeightedMetric
   const mode = requestedMode === "weighted_cost" && !fallbackNote ? "weighted_cost" : "raw";
   const metricName =
     mode === "weighted_cost" ? "Weighted cost" : session.config.metricName || "metric";
-  const formulaText = configuredFormula(session.config);
+  const formula = configuredFormula(session.config);
   return {
     requestedMode,
     mode,
@@ -43,9 +43,11 @@ export function resolveMetricDefinition(session: SessionSegment): WeightedMetric
     weights: normalizedWeights,
     memoryKey,
     formulaInline:
-      mode === "weighted_cost" ? "score = 0.7 * time_score + 0.3 * memory_score" : formulaText,
-    formulaDetails: formulaText,
-    fallbackNote,
+      mode === "weighted_cost" ? "score = 0.7 * time_score + 0.3 * memory_score" : formula.inline,
+    formulaDetails: formula.details,
+    formulaSource: formula.source,
+    formulaConfigured: formula.configured,
+    fallbackNote: fallbackNote || formula.warning,
     baselineMetric: mode === "weighted_cost" && !fallbackNote ? 1 : (baselineRun?.metric ?? null),
     baselineTime,
     baselineMemory,
@@ -148,15 +150,29 @@ function normalizedWeightsFor(config: SessionConfig) {
   };
 }
 
-function configuredFormula(config: SessionConfig): string {
+function configuredFormula(config: SessionConfig) {
   const configured =
     config.metricDefinition?.formulaText ||
     config.formulaText ||
     config.metricFormula ||
     config.metric_formula;
-  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  if (typeof configured === "string" && configured.trim()) {
+    return {
+      inline: configured.trim(),
+      details: configured.trim(),
+      source: "configured formula",
+      configured: true,
+      warning: "",
+    };
+  }
   const metricName = config.metricName || "metric";
-  return `${metricName} = primary benchmark value emitted as METRIC ${metricName}=<number>; ${config.bestDirection === "higher" ? "higher is better" : "lower is better"}.`;
+  return {
+    inline: `${metricName} from logged METRIC values`,
+    details: `Using primary metric ${metricName} from logged run values.`,
+    source: "logged metric fallback",
+    configured: false,
+    warning: `Metric metadata is incomplete: no formula text configured; using primary metric ${metricName} from logged run values.`,
+  };
 }
 
 function metricValueFromRun(run: SessionRun | null | undefined, key: string): number | null {

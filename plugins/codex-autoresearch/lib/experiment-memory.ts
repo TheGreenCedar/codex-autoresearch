@@ -1,4 +1,5 @@
 import { finiteMetric } from "./session-core.js";
+import { resolveDecisionThresholds } from "./decision-thresholds.js";
 
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher" | string;
@@ -22,6 +23,8 @@ type FamilySummary = LooseObject & {
   bestRun: LooseObject | null;
   bestKeptRun: LooseObject | null;
   exhausted?: boolean;
+  failedRuns?: number[];
+  requiredPrecondition?: string;
 };
 
 const FAILURE_STATUSES = new Set(["discard", "crash", "checks_failed"]);
@@ -49,6 +52,13 @@ function isRejectedStatus(status: unknown): boolean {
   return FAILURE_STATUSES.has(String(status));
 }
 
+function isRejectedOrRegressedRun(run: LooseObject): boolean {
+  return (
+    isRejectedStatus(run.status) ||
+    Boolean(run.asi?.regression || run.regression || run.promotion?.label === "invalidated")
+  );
+}
+
 function nextActionHintFromAsi(asi: LooseObject): string {
   return asi.next_action_hint || asi.nextAction || asi.next_action || "";
 }
@@ -66,8 +76,23 @@ function compactMemoryRun(run: MemoryRun, asi = getAsi(run)) {
   };
 }
 
+function missingAsiFields(run: MemoryRun, asi = getAsi(run)): string[] {
+  const missing = [];
+  if (!asi.hypothesis) missing.push("hypothesis");
+  if (!asi.evidence) missing.push("evidence");
+  if (
+    !isKeepStatus(run.status) &&
+    !asi.next_action_hint &&
+    !asi.nextAction &&
+    !asi.rollback_reason
+  ) {
+    missing.push("next_action_hint_or_rollback_reason");
+  }
+  return missing;
+}
+
 function isMissingAsiMemory(run: MemoryRun, asi = getAsi(run)): boolean {
-  return !asi.evidence && !asi.rollback_reason && (isKeepStatus(run.status) || !asi.hypothesis);
+  return missingAsiFields(run, asi).length > 0;
 }
 
 export function buildExperimentMemory({
@@ -75,10 +100,12 @@ export function buildExperimentMemory({
   direction = "lower",
   settings = {},
 }: LooseObject = {}) {
+  const thresholds = resolveDecisionThresholds(settings);
   const kept: LooseObject[] = [];
   const rejected: LooseObject[] = [];
   const nextActions: LooseObject[] = [];
   const missingAsiRuns: number[] = [];
+  const missingAsiDetails: LooseObject[] = [];
   const enriched: MemoryRun[] = runs.map((run: LooseObject) => ({
     ...run,
     family: familyForRun(run),
@@ -93,6 +120,12 @@ export function buildExperimentMemory({
     }
     if (isMissingAsiMemory(run, asi)) {
       missingAsiRuns.push(run.run);
+      missingAsiDetails.push({
+        run: run.run,
+        status: run.status,
+        missingFields: missingAsiFields(run, asi),
+        risk: "Sparse ASI increases the chance that future packets repeat rejected work.",
+      });
     }
     if (isKeepStatus(run.status)) {
       kept.push(compact);
@@ -104,13 +137,31 @@ export function buildExperimentMemory({
     }
   }
 
-  const families = summarizeFamilies(enriched, direction);
-  const plateau = detectPlateau({ runs: enriched, families, direction });
+  const families = summarizeFamilies(enriched, direction, thresholds);
+  const metricShelves = detectMetricShelves(enriched, thresholds);
+  const plateau = detectPlateau({ runs: enriched, families, direction, metricShelves });
   const novelty = noveltySummary(enriched);
   const warnings = [];
   if (runs.length && missingAsiRuns.length) {
-    warnings.push(`Runs missing ASI memory fields: ${missingAsiRuns.slice(-5).join(", ")}.`);
+    warnings.push(
+      `Runs missing ASI memory fields: ${missingAsiRuns.slice(-5).join(", ")}; future packets may repeat work.`,
+    );
   }
+  const exhaustedFamilies = families
+    .filter((family) => family.exhausted)
+    .map((family) => ({
+      family: family.label,
+      key: family.key,
+      runs: family.failedRuns || [],
+      reason:
+        family.reason ||
+        `${family.label} has repeated rejected, crashed, checks-failed, or regressed runs without a kept improvement.`,
+      requiredPrecondition:
+        family.requiredPrecondition ||
+        "Change a precondition, input corpus, benchmark contract, or implementation lane before retrying.",
+    }));
+  for (const family of exhaustedFamilies.slice(0, 2)) warnings.push(family.reason);
+  for (const shelf of metricShelves.slice(0, 2)) warnings.push(shelf.reason);
   if (plateau.detected) warnings.push(plateau.reason);
   const latestNextAction = nextActions.at(-1)?.nextActionHint || "";
   const lanePortfolio = buildLanePortfolio({
@@ -137,7 +188,10 @@ export function buildExperimentMemory({
     latestNextAction,
     families,
     plateau,
+    metricShelves,
+    exhaustedFamilies,
     novelty,
+    missingAsiDetails,
     lanePortfolio,
     diversityGuidance,
     summary: {
@@ -146,6 +200,8 @@ export function buildExperimentMemory({
       missingAsi: missingAsiRuns.length,
       families: families.length,
       plateau: plateau.detected,
+      exhaustedFamilies: exhaustedFamilies.length,
+      metricShelves: metricShelves.length,
       suggestedLane: diversityGuidance?.id || "",
     },
   };
@@ -156,6 +212,18 @@ export function detectRepeatedHypothesis({ proposed = "", memory = {} }: LooseOb
   if (!key) return null;
   const candidates = [...(memory.rejected || []), ...(memory.kept || [])];
   const proposedFamily = canonicalFamilyKey(proposed);
+  const exhausted = (memory.exhaustedFamilies || []).find((family: LooseObject) =>
+    familyKeyMatches(proposedFamily, canonicalFamilyKey(family.key || family.family || "")),
+  );
+  if (exhausted) {
+    return {
+      matchedRun: exhausted.runs?.at(-1) ?? null,
+      status: "exhausted",
+      family: exhausted.family,
+      reason: exhausted.reason,
+      requiredPrecondition: exhausted.requiredPrecondition,
+    };
+  }
   for (const item of candidates) {
     const previous = normalizeHypothesis(item.hypothesis || item.description);
     const previousFamily = canonicalFamilyKey(item.family || item.hypothesis || item.description);
@@ -199,8 +267,13 @@ function familyKeyMatches(proposedFamily: string, previousFamily: string): boole
   );
 }
 
-function summarizeFamilies(runs: MemoryRun[], direction: Direction): FamilySummary[] {
+function summarizeFamilies(
+  runs: MemoryRun[],
+  direction: Direction,
+  thresholds: ReturnType<typeof resolveDecisionThresholds>,
+): FamilySummary[] {
   const map = new Map<string, FamilySummary>();
+  const familyRuns = new Map<string, MemoryRun[]>();
   for (const run of runs) {
     const key = run.family.key;
     if (!map.has(key)) {
@@ -216,13 +289,14 @@ function summarizeFamilies(runs: MemoryRun[], direction: Direction): FamilySumma
         statuses: {},
       });
     }
+    familyRuns.set(key, [...(familyRuns.get(key) || []), run]);
     const family = map.get(key)!;
     const status = run.status || "unknown";
     family.runs += 1;
     family.latestRun = compactFamilyRun(run);
     family.statuses[status] = (family.statuses[status] || 0) + 1;
     if (isKeepStatus(status)) family.kept += 1;
-    if (isRejectedStatus(status)) family.rejected += 1;
+    if (isRejectedOrRegressedRun(run)) family.rejected += 1;
     const metric = finiteMetric(run.metric);
     const bestMetric = finiteMetric(family.bestRun?.metric);
     const bestKeptMetric = finiteMetric(family.bestKeptRun?.metric);
@@ -237,10 +311,25 @@ function summarizeFamilies(runs: MemoryRun[], direction: Direction): FamilySumma
       family.bestKeptRun = compactFamilyRun(run);
     }
   }
-  const summarized = [...map.values()].map((family) => ({
-    ...family,
-    exhausted: family.runs >= 3 && family.rejected >= Math.max(2, family.kept + 1),
-  }));
+  const summarized = [...map.values()].map((family) => {
+    const runsForFamily = familyRuns.get(family.key) || [];
+    const lastKeepIndex = findLastIndex(runsForFamily, (run) => isKeepStatus(run.status));
+    const sinceKeep = runsForFamily.slice(lastKeepIndex + 1);
+    const failedRuns = sinceKeep.filter(isRejectedOrRegressedRun).map((run) => run.run);
+    const exhausted = failedRuns.length >= thresholds.rejectedOrRegressedRunsInFamily;
+    return {
+      ...family,
+      rejected: Math.max(family.rejected, failedRuns.length),
+      failedRuns,
+      exhausted,
+      reason: exhausted
+        ? `${family.label} is exhausted: ${failedRuns.length} recent rejected, crashed, checks-failed, or regressed run(s) since the last keep.`
+        : "",
+      requiredPrecondition: exhausted
+        ? "Change a precondition, input corpus, benchmark contract, or implementation lane before retrying this family."
+        : "",
+    };
+  });
   const sorted = summarized.sort(
     (a, b) => b.runs - a.runs || (b.latestRun?.run || 0) - (a.latestRun?.run || 0),
   );
@@ -256,10 +345,12 @@ function detectPlateau({
   runs,
   families,
   direction,
+  metricShelves = [],
 }: {
   runs: MemoryRun[];
   families: FamilySummary[];
   direction: Direction;
+  metricShelves?: LooseObject[];
 }): LooseObject {
   const finiteRuns = runs.filter(hasNumericMetricForPlateau);
   const keptFinite = finiteRuns.filter((run) => isKeepStatus(run.status));
@@ -276,7 +367,7 @@ function detectPlateau({
     best &&
     runs.length >= 5 &&
     runsSinceBest >= 4 &&
-    (repeatedFamilyRuns >= 3 || recentFailures >= 3),
+    (repeatedFamilyRuns >= 3 || recentFailures >= 3 || metricShelves.length > 0),
   );
   return {
     detected,
@@ -286,13 +377,53 @@ function detectPlateau({
     recentFailures,
     repeatedFamilyRuns,
     repeatedFamily: repeatedFamily ? repeatedFamily.label : "",
+    metricShelves,
     reason: detected
-      ? `Plateau risk: ${runsSinceBest} runs since the best keep, with ${repeatedFamilyRuns} recent run(s) in ${repeatedFamily?.label || "one family"}.`
+      ? `Plateau risk: ${runsSinceBest} runs since the best keep, with ${repeatedFamilyRuns} recent run(s) in ${repeatedFamily?.label || "one family"}${metricShelves.length ? ` and shelf ${metricShelves[0].value}` : ""}.`
       : "",
     recommendation: detected
       ? "Force a distant scout or constraint-removal lane before another near-neighbor tweak."
       : "Continue balancing incumbent confirmation with fresh scouts.",
   };
+}
+
+function detectMetricShelves(
+  runs: MemoryRun[],
+  thresholds: ReturnType<typeof resolveDecisionThresholds>,
+): LooseObject[] {
+  const buckets: Array<{ value: number; runs: number[] }> = [];
+  for (const run of runs) {
+    const metric = finiteMetric(run.metric);
+    if (metric == null) continue;
+    const bucket = buckets.find((item) =>
+      sameShelf(item.value, metric, thresholds.shelfRelativeEpsilon),
+    );
+    if (bucket) {
+      bucket.runs.push(run.run);
+    } else {
+      buckets.push({ value: metric, runs: [run.run] });
+    }
+  }
+  return buckets
+    .filter((bucket) => bucket.runs.length >= thresholds.rejectedOrRegressedRunsInFamily)
+    .map((bucket) => ({
+      value: bucket.value,
+      runs: bucket.runs,
+      reason: `${bucket.runs.length} runs are clustered on metric shelf ${bucket.value}; change a precondition before repeating this lane.`,
+    }));
+}
+
+function sameShelf(left: number, right: number, epsilon: number): boolean {
+  if (Number.isInteger(left) && Number.isInteger(right)) return left === right;
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) / scale <= epsilon;
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
 }
 
 function hasNumericMetricForPlateau(run: MemoryRun): boolean {

@@ -24,10 +24,12 @@ AX, the AI experience:
 - When the user gives a broad natural-language goal without a benchmark contract, run `prompt-plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
 - Use the CLI as the deterministic execution surface.
-- Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
+- Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, evidence indexes, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.
+- Before rerunning an expensive crashed or timed-out packet, inspect `partial-results --from-last`; record a selected row only as diagnostic `measure` evidence with `partial-results --record <candidate-id>`.
 - ASI means the structured memory attached to a run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk metadata.
 - When Codex Goal mode is available and explicitly requested, use `get_goal` to inspect parent thread state, then run `codex-goal-brief --cwd <project>` with any imported Goal fields. Treat the bridge as evidence/advice only: Codex owns thread goals; Autoresearch owns benchmark/session truth.
+- When a prior Codex session JSONL is the best evidence source, run `session-forensics --dry-run` first, then `--apply` only to write a bounded context capsule under `autoresearch.research/<slug>/`. Keep raw snippets disabled unless the operator explicitly needs them; imported claims should reference evidence ids instead of persisting raw transcript bodies.
 
 UX, the user experience:
 
@@ -80,6 +82,8 @@ node scripts/autoresearch.mjs checks-inspect --cwd <project> --command "<checks 
 node scripts/autoresearch.mjs guide --cwd <project>
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 node scripts/autoresearch.mjs serve --cwd <project>
+node scripts/autoresearch.mjs partial-results --cwd <project> --from-last
+node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run
 ```
 
 ## Active Loop Contract
@@ -89,6 +93,7 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - Use `log --from-last` instead of retyping parsed metrics.
 - Only `next` writes a reusable last-run packet. `run` remains a raw benchmark probe for quick checks and is not loggable with `--from-last`.
 - If `log --from-last` reports no loggable packet or a stale packet, recover with `next --cwd <project>` or record a manual measurement with `log --cwd <project> --metric <value> --status measure --description "<what was measured>"`.
+- If the last packet crashed or timed out after writing artifacts, run `partial-results --cwd <project> --from-last` before rerunning. Only `partial-results --record <candidate-id>` may turn a selected row into diagnostic `measure` evidence; it must not become promotion-grade evidence.
 - Read the last-run `packetEvidence` before logging: packet id, command identity, timeout, exit status, output tails, metrics, artifacts, checks, and freshness fingerprint.
 - Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
 - `keep`, ordinary `discard`, and `measure` require a finite primary metric.
@@ -115,7 +120,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next` before logging.
-- The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness before naming `nextAction`.
+- The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, progress/economics, partial-result candidates, workflow friction, benchmark/config drift, dirty source drift, quality round, experiment memory, and finalization readiness before naming `nextAction`.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
