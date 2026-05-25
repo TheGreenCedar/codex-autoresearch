@@ -25,6 +25,15 @@ Read existing files before editing:
 - `autoresearch.ideas.md`
 - `autoresearch.research/<slug>/` for research loops
 
+When the best evidence lives in a previous Codex session JSONL, import only a bounded capsule:
+
+```bash
+node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run
+node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --apply
+```
+
+The command writes `session-digest.md`, `decisions.jsonl`, `quality-gaps.md`, and `evidence-index.json` under `autoresearch.research/<slug>/`. Leave snippets off by default so transcript bodies do not become durable session state.
+
 ## Dashboard
 
 Serve the live local readout:

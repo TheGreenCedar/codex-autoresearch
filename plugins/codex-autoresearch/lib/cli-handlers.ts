@@ -142,6 +142,18 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         completionConfirmed: args.completionConfirmed,
       }),
     }),
+    "session-forensics": async (args) => ({
+      result: await deps.sessionForensics({
+        cwd: args.cwd,
+        sessionJsonl: args.sessionJsonl,
+        researchSlug: args.researchSlug,
+        dryRun: args.dryRun,
+        apply: args.apply,
+        allowSnippets: args.allowSnippets,
+        maxSnippets: args.maxSnippets,
+        maxSnippetChars: args.maxSnippetChars,
+      }),
+    }),
     recipes: async (args) => ({
       result: await deps.recipeCommand(args._[1] || "list", args),
     }),

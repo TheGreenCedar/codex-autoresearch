@@ -10,6 +10,8 @@ This project uses a root-only changelog because the root README is the public do
 
 - Added `codex-goal-brief` / `codex_goal_bridge`, a read-only Codex Goal bridge that turns Autoresearch state into a Goal objective draft, completion audit, and explicit ownership boundary.
 - Added durable `goal` state in config/readouts plus `goalAdvice` in the decision envelope so resumed loops keep the objective visible without relying on chat memory.
+- Added `session-forensics` / `session_forensics`, a safe import path for long Codex session JSONL that writes bounded session digests, quality-gap candidates, decision notes, and evidence-index claims into `autoresearch.research/<slug>/`.
+- Added shared decision thresholds, safe research-slug path guards, and canonical `context-distillation` next-action guidance for sessions that exceed compaction, token, tool-call, polling, or output-budget limits.
 
 ### Changed
 

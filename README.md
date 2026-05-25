@@ -86,12 +86,13 @@ Codex Autoresearch helps Codex:
 1. identify the target repo or child package
 2. check for an existing session
 3. preserve the goal as machine-readable session state
-4. return a shared next-step contract with stage, reason, CLI command, safety, and missing essentials
-5. verify the benchmark contract
-6. run a measured packet with command identity, output tails, metrics, artifacts, checks, and a freshness fingerprint
-7. log the result as `keep`, `discard`, `crash`, or `checks_failed`
-8. preserve ASI, packet fingerprints, promotion labels, and metrics in durable files
-9. continue safely or preview finalization into reviewable branches
+4. import bounded forensics from long Codex sessions into durable research notes when context loss becomes the bottleneck
+5. return a shared next-step contract with stage, reason, CLI command, safety, and missing essentials
+6. verify the benchmark contract
+7. run a measured packet with command identity, output tails, metrics, artifacts, checks, and a freshness fingerprint
+8. log the result as `keep`, `discard`, `crash`, or `checks_failed`
+9. preserve ASI, packet fingerprints, promotion labels, and metrics in durable files
+10. continue safely or preview finalization into reviewable branches
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state. That boundary matters; otherwise everything starts wearing a fake mustache and calling itself done.
 

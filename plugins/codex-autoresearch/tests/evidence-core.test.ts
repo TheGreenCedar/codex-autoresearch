@@ -22,6 +22,23 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
+import {
+  DEFAULT_DECISION_THRESHOLDS,
+  resolveDecisionThresholds,
+} from "../lib/decision-thresholds.js";
+import {
+  compactEvidenceSummaries,
+  evidenceClaim,
+  mergeEvidenceClaims,
+  readEvidenceIndex,
+  validateClaimReferences,
+} from "../lib/evidence-index.js";
+import {
+  assertInsideResearchRoot,
+  resolveSafeResearchPath,
+  validateResearchSlug,
+} from "../lib/research-path-guard.js";
+import { parseSessionForensics } from "../lib/session-forensics.js";
 import { quoteForShell } from "./helpers/process.js";
 
 const withTempDir = async (name, fn) => {
@@ -239,4 +256,144 @@ test("evidence redactor removes stack frames before dashboard or packet storage"
   assert.doesNotMatch(redacted, /abcdefghijklmnop/);
   assert.doesNotMatch(redacted, /Alice|alice/);
   assert.doesNotMatch(redacted, /secret\.ts|index\.mjs|secret\.py/);
+});
+
+test("decision thresholds use conservative defaults with safe overrides", () => {
+  assert.equal(DEFAULT_DECISION_THRESHOLDS.compactions, 3);
+  assert.equal(DEFAULT_DECISION_THRESHOLDS.outputCommandTokenBudget, 20_000);
+  const resolved = resolveDecisionThresholds({
+    decisionThresholds: {
+      compactions: 5,
+      outputCommandTokenBudget: 10_000,
+      repeatedCommandHeadCount: -1,
+    },
+  });
+  assert.equal(resolved.compactions, 5);
+  assert.equal(resolved.outputCommandTokenBudget, 10_000);
+  assert.equal(
+    resolved.repeatedCommandHeadCount,
+    DEFAULT_DECISION_THRESHOLDS.repeatedCommandHeadCount,
+  );
+});
+
+test("research path guard rejects unsafe slugs and out-of-root paths", async () => {
+  await withTempDir("research-path-guard", async (dir) => {
+    assert.equal(validateResearchSlug("session-019e"), "session-019e");
+    for (const slug of ["../x", "x/y", "x\\y", "CON", ".hidden", ""]) {
+      assert.throws(() => validateResearchSlug(slug));
+    }
+
+    const safe = await resolveSafeResearchPath(dir, "session-019e");
+    assert.equal(path.basename(safe.outputDir), "session-019e");
+    await assertInsideResearchRoot(safe.root, path.join(safe.outputDir, "session-digest.md"));
+    await assert.rejects(
+      () => assertInsideResearchRoot(safe.root, path.join(dir, "outside.md")),
+      /escapes/,
+    );
+  });
+});
+
+test("evidence index uses deterministic ids, merges claims, and validates references", async () => {
+  await withTempDir("evidence-index", async (dir) => {
+    const claim = evidenceClaim({
+      claim: "Session import observed repeated polling.",
+      source: "rollout.jsonl",
+      evidenceType: "session",
+      freshness: "current",
+      confidence: "medium",
+      promotionRelevance: "diagnostic",
+    });
+    const index = await mergeEvidenceClaims(dir, "session-019e", [claim]);
+    assert.equal(index.schemaVersion, 1);
+    assert.equal(index.claims.length, 1);
+    assert.equal(index.claims[0].id, claim.id);
+
+    const reread = await readEvidenceIndex(dir, "session-019e");
+    assert.deepEqual(reread, index);
+    assert.deepEqual(validateClaimReferences(`[evidence:${claim.id}]`, index), []);
+    assert.deepEqual(validateClaimReferences("[evidence:ev-aaaaaaaaaaaa]", index), [
+      "ev-aaaaaaaaaaaa",
+    ]);
+    assert.deepEqual(compactEvidenceSummaries(index), [
+      {
+        id: claim.id,
+        claim: claim.claim,
+        evidenceType: "session",
+        confidence: "medium",
+        promotionRelevance: "diagnostic",
+      },
+    ]);
+  });
+});
+
+test("session forensics parses bounded signals without raw body persistence", async () => {
+  await withTempDir("session-forensics", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    const noisyOutput = [
+      "Chunk ID: abc",
+      "Wall time: 0.1 seconds",
+      "Process exited with code 1",
+      "Original token count: 25000",
+      "Output:",
+      "api_key=sk-test-1234567890abcdef",
+      "Total output lines: 600",
+    ].join("\n");
+    const entries = [
+      { timestamp: "2026-05-25T00:00:00.000Z", type: "session_meta", payload: { id: "s1" } },
+      {
+        timestamp: "2026-05-25T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Actually the metric details tell me nothing." }],
+        },
+      },
+      {
+        timestamp: "2026-05-25T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: "git status --short" }),
+        },
+      },
+      {
+        timestamp: "2026-05-25T00:00:03.000Z",
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "call1", output: noisyOutput },
+      },
+      { timestamp: "2026-05-25T00:00:04.000Z", type: "compacted", payload: {} },
+    ];
+    await writeFile(sessionPath, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+
+    const result = await parseSessionForensics({
+      sessionJsonl: sessionPath,
+      allowSnippets: true,
+      maxSnippets: 3,
+      thresholds: { compactions: 1, repeatedCommandHeadCount: 1 },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.compactions, 1);
+    assert.equal(result.toolCounts.exec_command, 1);
+    assert.equal(result.commandClasses["git status --short"], 1);
+    assert.equal(
+      result.productSignals.some((signal) => signal.kind === "dashboard_ux_feedback"),
+      true,
+    );
+    assert.equal(
+      result.productSignals.some((signal) => signal.kind === "context_distillation_required"),
+      true,
+    );
+    assert.equal(
+      result.workflowWaste.some((signal) => signal.kind === "output_budget_exceeded"),
+      true,
+    );
+    assert.equal(
+      result.workflowWaste.some((signal) => signal.kind === "verification_churn"),
+      true,
+    );
+    assert.equal(JSON.stringify(result).includes("sk-test"), false);
+  });
 });

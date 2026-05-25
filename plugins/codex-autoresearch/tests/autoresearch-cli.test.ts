@@ -151,6 +151,91 @@ test("quality-gap counts checked and unchecked research gaps", async () => {
   });
 });
 
+test("session-forensics supports dry-run and safe apply capsule writes", async () => {
+  await withTempDir("session-forensics-cli", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Segments UX is not the best." }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({ cmd: "git status --short" }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:02.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call1",
+            output:
+              "Chunk ID: abc\nProcess exited with code 0\nOriginal token count: 25000\nTotal output lines: 600\nOutput:\ntoken=abcdefghijklmnop",
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const dryRun = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "session-019e",
+      "--dry-run",
+    ]);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    const dryPayload = JSON.parse(dryRun.stdout);
+    assert.equal(dryPayload.ok, true);
+    assert.equal(dryPayload.dryRun, true);
+    assert.equal(dryPayload.wrote, false);
+    assert.equal(dryPayload.plannedFiles.length, 4);
+    await assert.rejects(() =>
+      access(path.join(dir, "autoresearch.research", "session-019e", "session-digest.md")),
+    );
+
+    const applied = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "session-019e",
+      "--apply",
+    ]);
+    assert.equal(applied.code, 0, applied.stderr);
+    const applyPayload = JSON.parse(applied.stdout);
+    assert.equal(applyPayload.wrote, true);
+    assert.equal(applyPayload.evidenceClaims > 0, true);
+
+    const researchRoot = path.join(dir, "autoresearch.research", "session-019e");
+    const digest = await readFile(path.join(researchRoot, "session-digest.md"), "utf8");
+    const gaps = await readFile(path.join(researchRoot, "quality-gaps.md"), "utf8");
+    const evidence = JSON.parse(
+      await readFile(path.join(researchRoot, "evidence-index.json"), "utf8"),
+    );
+    assert.match(digest, /Session Forensics Import/);
+    assert.match(gaps, /\[evidence:ev-/);
+    assert.equal(evidence.schemaVersion, 1);
+    assert.equal(JSON.stringify(evidence).includes("abcdefghijklmnop"), false);
+  });
+});
+
 test("run returns explicit keep/discard decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "decision hint", "--metric-name", "seconds"]);

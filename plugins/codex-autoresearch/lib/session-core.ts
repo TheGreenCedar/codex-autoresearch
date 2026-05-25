@@ -377,6 +377,7 @@ export function buildDecisionEnvelope({
   researchIntegrity = null,
   finalization = null,
   qualityGap = null,
+  contextDistillation = null,
 }: LooseObject): LooseObject {
   const current: RunRecord[] = Array.isArray(state?.current) ? state.current : [];
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
@@ -395,7 +396,7 @@ export function buildDecisionEnvelope({
         .filter((check: any) => check?.severity === "blocker")
         .map((check: any) => check.message || check.code)
     : [];
-  return {
+  const envelope = {
     activeSegment: {
       segment: state?.segment ?? 0,
       runs: current.length,
@@ -464,6 +465,81 @@ export function buildDecisionEnvelope({
         }
       : { available: false, ready: null, nextAction: "", warnings: [] },
     nextAction: nextAction || "Run doctor, then next.",
+  };
+  return {
+    ...envelope,
+    canonicalNextAction: canonicalNextActionForEnvelope({
+      ...envelope,
+      contextDistillation,
+      nextAction: nextAction || "Run doctor, then next.",
+    }),
+  };
+}
+
+function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
+  const scaffoldBlockers = envelope.scaffoldHealth?.blockers || [];
+  if (Array.isArray(scaffoldBlockers) && scaffoldBlockers.length > 0) {
+    return {
+      kind: "safety-blocker",
+      priority: 1,
+      reason: String(scaffoldBlockers[0] || "Resolve scaffold blockers."),
+      command: "",
+      triggeredBy: ["scaffoldHealth"],
+    };
+  }
+  if (envelope.dirtySourceDrift?.dirty === true) {
+    return {
+      kind: "workflow-friction",
+      priority: 2,
+      reason: "Review dirty source drift before another packet.",
+      command: "",
+      triggeredBy: ["dirtySourceDrift"],
+    };
+  }
+  if (envelope.latestPacketFreshness?.fresh === false) {
+    return {
+      kind: "stale-packet",
+      priority: 4,
+      reason: envelope.latestPacketFreshness.reason || "Last-run packet is stale.",
+      command: "",
+      triggeredBy: ["latestPacketFreshness"],
+    };
+  }
+  if (envelope.contextDistillation?.required === true) {
+    return {
+      kind: "context-distillation",
+      priority: 6,
+      reason:
+        envelope.contextDistillation.reason ||
+        "Refresh a context capsule before running another packet.",
+      command: envelope.contextDistillation.command || "",
+      triggeredBy: envelope.contextDistillation.triggeredBy || ["contextDistillation"],
+    };
+  }
+  if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {
+    return {
+      kind: "quality-gap",
+      priority: 7,
+      reason: `${envelope.qualityRound.open ?? "Open"} accepted quality gaps remain.`,
+      command: "",
+      triggeredBy: ["qualityRound"],
+    };
+  }
+  if (envelope.finalizationReadiness?.ready === true) {
+    return {
+      kind: "finalization",
+      priority: 9,
+      reason: envelope.finalizationReadiness.nextAction || "Finalize reviewable kept work.",
+      command: "",
+      triggeredBy: ["finalizationReadiness"],
+    };
+  }
+  return {
+    kind: "next-packet",
+    priority: 10,
+    reason: envelope.nextAction || "Run the next measured packet.",
+    command: "",
+    triggeredBy: ["continuation"],
   };
 }
 
