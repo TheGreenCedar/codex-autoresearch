@@ -31,6 +31,7 @@ export interface ShellRunOptions {
   maxFullOutputBytes?: number;
   maxMetricOutputBytes?: number;
   maxOutputBytes?: number;
+  onProgress?: (event: { observedAt: string; output: string }) => void;
   retainMetricNames?: string[];
 }
 
@@ -38,14 +39,17 @@ export interface ShellRunResult {
   command: string;
   durationSeconds: number;
   exitCode: number | null;
+  finishedAt: string;
   fullOutput: string;
   fullOutputTruncated: boolean;
+  lastOutputAt: string | null;
   metricOutput: string;
   metricOutputTruncated: boolean;
   output: string;
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
   retainedMetricOutput: string;
+  startedAt: string;
   timedOut: boolean;
 }
 
@@ -57,8 +61,11 @@ export interface ProcessRunResult {
   durationMs: number;
   durationSeconds: number;
   exitCode: number | null;
+  finishedAt: string;
+  lastOutputAt: string | null;
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
+  startedAt: string;
   stderr: string;
   stderrTruncated: boolean;
   stdout: string;
@@ -176,6 +183,7 @@ export async function runShell(
   options: ShellRunOptions = {},
 ): Promise<ShellRunResult> {
   const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   return await new Promise<ShellRunResult>((resolve) => {
     const child = spawn(command, {
       cwd,
@@ -197,6 +205,7 @@ export async function runShell(
     let outputTruncated = false;
     let fullOutputTruncated = false;
     let metricOutputTruncated = false;
+    let lastOutputAt: string | null = null;
     let timedOut = false;
     const metricCollector = createMetricCollector();
     const maxOutputBytes = positiveByteLimit(options.maxOutputBytes, OUTPUT_CAPTURE_BYTES);
@@ -234,6 +243,8 @@ export async function runShell(
       }
     };
     const appendOutput = (text: string) => {
+      lastOutputAt = new Date().toISOString();
+      options.onProgress?.({ observedAt: lastOutputAt, output: text });
       metricCollector.append(text);
       appendMetricLines(text);
       const boundedFullOutput = appendBoundedOutput(fullOutput, text, maxFullOutputBytes);
@@ -266,6 +277,9 @@ export async function runShell(
         exitCode: null,
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
+        startedAt: startedAtIso,
+        finishedAt: new Date().toISOString(),
+        lastOutputAt,
         output: errorText,
         fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
         metricOutput,
@@ -285,6 +299,9 @@ export async function runShell(
         exitCode: code,
         timedOut,
         durationSeconds: (Date.now() - startedAt) / 1000,
+        startedAt: startedAtIso,
+        finishedAt: new Date().toISOString(),
+        lastOutputAt,
         output,
         fullOutput,
         metricOutput,
@@ -308,6 +325,7 @@ export async function runProcess(
   }: ProcessRunOptions = {},
 ): Promise<ProcessRunResult> {
   const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   const argv = Array.isArray(args) ? args.map(String) : [];
   const commandDisplay = [command, ...argv].map(shellDisplayPart).join(" ");
   return await new Promise<ProcessRunResult>((resolve) => {
@@ -321,9 +339,11 @@ export async function runProcess(
     let stderr = "";
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let lastOutputAt: string | null = null;
     let timedOut = false;
     const metricCollector = createMetricCollector();
     const appendOutput = (target: "stdout" | "stderr", text: string) => {
+      lastOutputAt = new Date().toISOString();
       metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
       let truncated = target === "stdout" ? stdoutTruncated : stderrTruncated;
@@ -363,6 +383,8 @@ export async function runProcess(
           stderrTruncated,
           timedOut,
           startedAt,
+          startedAtIso,
+          lastOutputAt,
           parsedMetrics: metricCollector.finish(),
         }),
       );
@@ -379,6 +401,8 @@ export async function runProcess(
           stderrTruncated,
           timedOut,
           startedAt,
+          startedAtIso,
+          lastOutputAt,
           parsedMetrics: metricCollector.finish(),
         }),
       );
@@ -407,12 +431,16 @@ function processResult({
   stderrTruncated,
   timedOut,
   startedAt,
+  startedAtIso,
+  lastOutputAt,
   parsedMetrics = Object.create(null),
 }: {
   commandDisplay: string;
   exitCode: number | null;
+  lastOutputAt?: string | null;
   parsedMetrics?: Record<string, number>;
   startedAt: number;
+  startedAtIso?: string;
   stderr: string;
   stderrTruncated: boolean;
   stdout: string;
@@ -430,6 +458,9 @@ function processResult({
     combinedOutput: `${stdout || ""}${stderr ? `${stdout ? "\n" : ""}${stderr}` : ""}`,
     timedOut,
     durationSeconds,
+    startedAt: startedAtIso || new Date(startedAt).toISOString(),
+    finishedAt: new Date().toISOString(),
+    lastOutputAt: lastOutputAt || null,
     durationMs: Math.round(durationSeconds * 1000),
     outputTruncated: Boolean(stdoutTruncated || stderrTruncated),
     stdoutTruncated,

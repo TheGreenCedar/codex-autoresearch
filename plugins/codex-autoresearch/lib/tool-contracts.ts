@@ -168,6 +168,22 @@ const CONTRACTS = {
       "continuation",
     ]),
   },
+  partial_results: {
+    purpose: "Inspect or record diagnostic rows from a crashed or timed-out packet artifact.",
+    whenToUse:
+      "Use before rerunning an expensive failed packet when last-run artifacts may contain completed rows.",
+    contrast: "Use log_experiment for ordinary keep/discard/crash decisions.",
+    safety:
+      "Read-only unless record is supplied; recording appends measure-only diagnostic evidence and clears the last-run packet.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "candidates",
+      "skippedArtifacts",
+      "experiment",
+      "evidenceClaim",
+    ]),
+  },
   log_experiment: {
     purpose: "Record a keep/discard/measure/crash/checks_failed decision.",
     whenToUse: "Use after next_experiment, preferably with from_last.",

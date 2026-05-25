@@ -74,6 +74,15 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 `next` is the packet-producing command. `run` is a raw benchmark probe; use it for quick diagnostics, but do not expect `log --from-last` to reuse it.
 
+If a packet crashes or times out after writing artifact rows, inspect partial results before spending another expensive rerun:
+
+```bash
+node scripts/autoresearch.mjs partial-results --cwd <project> --from-last
+node scripts/autoresearch.mjs partial-results --cwd <project> --record <candidate-id>
+```
+
+Recorded partial results are diagnostic `measure` evidence only. They link the source packet, artifact row, metric provenance, validation status, and evidence-index claim, but they are never promotion-grade evidence.
+
 If `log --from-last` says there is no loggable packet or the packet is stale, recover with one of the commands it prints:
 
 ```bash
