@@ -51,6 +51,50 @@ test("repeated hypothesis detection catches near-family repeats", () => {
   assert.match(repeat.reason, /already logged/);
 });
 
+test("experiment memory exposes exhausted families, shelves, and sparse ASI risk", () => {
+  const memory = buildExperimentMemory({
+    direction: "lower",
+    runs: [
+      kept(1, 10, "stable baseline", {
+        family: "cache-size",
+        hypothesis: "baseline cache size",
+        evidence: "seconds=10",
+      }),
+      rejected(2, 11, "cache size r1", { family: "cache-size" }),
+      rejected(3, 11.0001, "cache size r2", { family: "cache-size" }),
+      {
+        run: 4,
+        metric: 11.0002,
+        description: "cache size r3",
+        status: "crash",
+        asi: { family: "cache-size" },
+      },
+    ],
+    settings: {
+      decisionThresholds: {
+        rejectedOrRegressedRunsInFamily: 3,
+        shelfRelativeEpsilon: 0.001,
+      },
+    },
+  });
+
+  assert.equal(memory.exhaustedFamilies.length, 1);
+  assert.equal(memory.exhaustedFamilies[0].family, "cache-size");
+  assert.deepEqual(memory.exhaustedFamilies[0].runs, [2, 3, 4]);
+  assert.equal(memory.metricShelves.length > 0, true);
+  assert.equal(
+    memory.missingAsiDetails.some((item) => item.run === 2),
+    true,
+  );
+
+  const repeat = detectRepeatedHypothesis({
+    proposed: "cache-size retry with same precondition",
+    memory,
+  });
+  assert.equal(repeat.status, "exhausted");
+  assert.match(repeat.requiredPrecondition, /Change a precondition/);
+});
+
 test("incumbent guidance prefers kept families over latest rejected families", () => {
   const memory = buildExperimentMemory({
     direction: "lower",
@@ -78,6 +122,8 @@ test("incumbent guidance omits placeholder lanes when there are no kept families
     runs: [
       rejected(1, 12, "Bad family regresses", {
         family: "bad",
+        hypothesis: "bad family",
+        evidence: "seconds=12",
         rollback_reason: "regressed",
         next_action_hint: "avoid bad path",
       }),

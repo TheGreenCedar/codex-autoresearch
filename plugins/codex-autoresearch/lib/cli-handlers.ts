@@ -272,6 +272,17 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         checksPolicy: args.checksPolicy,
       }),
     }),
+    "partial-results": async (args) => ({
+      result: await deps.partialResultsCommand({
+        cwd: args.cwd,
+        fromLast: args.fromLast,
+        artifact: args.artifact,
+        record: args.record,
+        researchSlug: args.researchSlug,
+        commandHash: args.commandHash,
+        description: args.description,
+      }),
+    }),
     log: async (args) => ({
       result: await deps.logExperiment({
         cwd: args.cwd,

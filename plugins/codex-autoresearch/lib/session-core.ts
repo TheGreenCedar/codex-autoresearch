@@ -378,6 +378,12 @@ export function buildDecisionEnvelope({
   finalization = null,
   qualityGap = null,
   contextDistillation = null,
+  experimentEconomics = null,
+  salvageCandidates = [],
+  workflowFriction = [],
+  experimentMemory = null,
+  segmentTransition = null,
+  setupState = null,
 }: LooseObject): LooseObject {
   const current: RunRecord[] = Array.isArray(state?.current) ? state.current : [];
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
@@ -391,6 +397,13 @@ export function buildDecisionEnvelope({
     direction,
   );
   const codes = warningCodes(warningDetails);
+  const limit = state?.limit || {};
+  const limitReached =
+    limit.limitReached === true ||
+    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
+  const qualityRound = qualityRoundState(qualityGap);
+  const segmentTransitionRequired =
+    segmentTransition?.required === true || limitReached || qualityRound.done === true;
   const scaffoldBlockers = Array.isArray(scaffoldHealth?.checks)
     ? scaffoldHealth.checks
         .filter((check: any) => check?.severity === "blocker")
@@ -433,7 +446,7 @@ export function buildDecisionEnvelope({
           )
         : [],
     },
-    qualityRound: qualityRoundState(qualityGap),
+    qualityRound,
     scaffoldHealth: scaffoldHealth
       ? {
           ok: scaffoldHealth.ok,
@@ -464,6 +477,38 @@ export function buildDecisionEnvelope({
           warnings: finalization.warnings || [],
         }
       : { available: false, ready: null, nextAction: "", warnings: [] },
+    experimentEconomics,
+    salvageCandidates: Array.isArray(salvageCandidates) ? salvageCandidates : [],
+    workflowFriction: Array.isArray(workflowFriction) ? workflowFriction : [],
+    experimentMemory: experimentMemory
+      ? {
+          plateau: experimentMemory.plateau || null,
+          exhaustedFamilies: experimentMemory.exhaustedFamilies || [],
+          metricShelves: experimentMemory.metricShelves || [],
+          missingAsiDetails: experimentMemory.missingAsiDetails || [],
+        }
+      : null,
+    setupState: setupState
+      ? {
+          stage: setupState.stage || "",
+          blockers: Array.isArray(setupState.blockers) ? setupState.blockers : [],
+          nextAction: setupState.nextAction || "",
+        }
+      : null,
+    segmentTransition: segmentTransitionRequired
+      ? {
+          required: true,
+          nextAction:
+            segmentTransition?.nextAction ||
+            segmentTransition?.reason ||
+            (qualityRound.done === true
+              ? "The active quality round is closed; refresh gaps or preview finalization."
+              : "The active segment reached its limit; extend the limit or start a new segment."),
+          triggeredBy:
+            segmentTransition?.triggeredBy ||
+            (qualityRound.done === true ? ["qualityRound"] : ["limit"]),
+        }
+      : null,
     nextAction: nextAction || "Run doctor, then next.",
   };
   return {
@@ -496,11 +541,116 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["dirtySourceDrift"],
     };
   }
+  const timeoutMismatch = firstEconomicsWarning(
+    envelope.experimentEconomics,
+    "outer_timeout_shorter_than_inner",
+  );
+  if (timeoutMismatch) {
+    return {
+      kind: "benchmark-mismatch",
+      priority: 2,
+      reason: timeoutMismatch.recommendation || timeoutMismatch.message,
+      command: "",
+      triggeredBy: ["experimentEconomics", timeoutMismatch.code],
+    };
+  }
+  const workflowBlocker = firstWorkflowFriction(envelope.workflowFriction, "blocker");
+  if (workflowBlocker) {
+    return {
+      kind: "workflow-friction",
+      priority: 2,
+      reason: workflowBlocker.suggestedAction?.reason || workflowBlocker.reason,
+      command: workflowBlocker.suggestedAction?.command || "",
+      triggeredBy: workflowBlocker.suggestedAction?.triggeredBy || [workflowBlocker.kind],
+    };
+  }
+  const workflowWarning = firstWorkflowFriction(envelope.workflowFriction, "warning");
+  if (workflowWarning) {
+    return {
+      kind: "workflow-friction",
+      priority: 3,
+      reason: workflowWarning.suggestedAction?.reason || workflowWarning.reason,
+      command: workflowWarning.suggestedAction?.command || "",
+      triggeredBy: workflowWarning.suggestedAction?.triggeredBy || [workflowWarning.kind],
+    };
+  }
+  const repeatedSmallProbe = firstEconomicsWarning(
+    envelope.experimentEconomics,
+    "repeated_small_probe",
+  );
+  if (repeatedSmallProbe) {
+    return {
+      kind: "workflow-friction",
+      priority: 3,
+      reason: repeatedSmallProbe.recommendation || repeatedSmallProbe.message,
+      command: "",
+      triggeredBy: ["experimentEconomics", repeatedSmallProbe.code],
+    };
+  }
   if (envelope.latestPacketFreshness?.fresh === false) {
     return {
       kind: "stale-packet",
       priority: 4,
       reason: envelope.latestPacketFreshness.reason || "Last-run packet is stale.",
+      command: "",
+      triggeredBy: ["latestPacketFreshness"],
+    };
+  }
+  if (
+    envelope.experimentEconomics?.warnings?.some(
+      (warning: any) => warning.code === "stale_progress",
+    )
+  ) {
+    return {
+      kind: "stale-packet",
+      priority: 4,
+      reason:
+        envelope.experimentEconomics.warnings.find(
+          (warning: any) => warning.code === "stale_progress",
+        )?.recommendation || "Inspect stale packet progress before continuing.",
+      command: "",
+      triggeredBy: ["experimentEconomics", "progress"],
+    };
+  }
+  const setupBlockers = Array.isArray(envelope.setupState?.blockers)
+    ? envelope.setupState.blockers
+    : [];
+  if (setupBlockers.length || envelope.setupState?.stage === "needs-setup") {
+    return {
+      kind: "setup",
+      priority: 4,
+      reason:
+        setupBlockers[0] ||
+        envelope.setupState?.nextAction ||
+        "Complete setup blockers before trusting another packet.",
+      command: "",
+      triggeredBy: ["setup"],
+    };
+  }
+  if (envelope.setupState?.stage === "needs-benchmark-command") {
+    return {
+      kind: "benchmark-command",
+      priority: 4,
+      reason: envelope.setupState?.nextAction || "Add a repeatable benchmark command.",
+      command: "",
+      triggeredBy: ["setup", "benchmarkCommand"],
+    };
+  }
+  const salvage = firstDiagnosticSalvage(envelope.salvageCandidates);
+  if (salvage) {
+    return {
+      kind: "partial-salvage",
+      priority: 5,
+      reason: `Review partial result ${salvage.id} before rerunning an expensive packet.`,
+      command: "",
+      triggeredBy: ["partialResults"],
+    };
+  }
+  if (envelope.latestPacketFreshness?.fresh === true) {
+    return {
+      kind: "log-decision",
+      priority: 5,
+      reason: "Record the fresh last-run packet before starting another packet.",
       command: "",
       triggeredBy: ["latestPacketFreshness"],
     };
@@ -516,6 +666,22 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: envelope.contextDistillation.triggeredBy || ["contextDistillation"],
     };
   }
+  if (envelope.segmentTransition?.required === true) {
+    return {
+      kind: "segment-transition",
+      priority: 7,
+      title: Array.isArray(envelope.segmentTransition.triggeredBy)
+        ? envelope.segmentTransition.triggeredBy.includes("qualityRound")
+          ? "Review completion state"
+          : "Start a new segment"
+        : "Start a new segment",
+      reason:
+        envelope.segmentTransition.nextAction ||
+        "Resolve the active segment transition before continuing.",
+      command: "",
+      triggeredBy: envelope.segmentTransition.triggeredBy || ["segmentTransition"],
+    };
+  }
   if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {
     return {
       kind: "quality-gap",
@@ -523,6 +689,21 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       reason: `${envelope.qualityRound.open ?? "Open"} accepted quality gaps remain.`,
       command: "",
       triggeredBy: ["qualityRound"],
+    };
+  }
+  const exhausted = envelope.experimentMemory?.exhaustedFamilies?.[0];
+  const shelf = envelope.experimentMemory?.metricShelves?.[0];
+  if (envelope.experimentMemory?.plateau?.detected || exhausted || shelf) {
+    return {
+      kind: "plateau-pivot",
+      priority: 8,
+      reason:
+        exhausted?.requiredPrecondition ||
+        shelf?.reason ||
+        envelope.experimentMemory?.plateau?.recommendation ||
+        "Pivot before repeating the same experiment family.",
+      command: "",
+      triggeredBy: exhausted ? ["experimentMemory", "exhaustedFamily"] : ["experimentMemory"],
     };
   }
   if (envelope.finalizationReadiness?.ready === true) {
@@ -541,6 +722,26 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
     command: "",
     triggeredBy: ["continuation"],
   };
+}
+
+function firstEconomicsWarning(economics: any, code: string): any | null {
+  return Array.isArray(economics?.warnings)
+    ? economics.warnings.find((warning: any) => warning?.code === code) || null
+    : null;
+}
+
+function firstWorkflowFriction(signals: any[], severity: string): any | null {
+  return Array.isArray(signals)
+    ? signals.find((signal) => signal?.severity === severity) || null
+    : null;
+}
+
+function firstDiagnosticSalvage(candidates: any[]): any | null {
+  return Array.isArray(candidates)
+    ? candidates.find((candidate) =>
+        ["scored", "manual_review", "diagnostic"].includes(String(candidate?.status || "")),
+      ) || null
+    : null;
 }
 
 function buildGoalAdvice({

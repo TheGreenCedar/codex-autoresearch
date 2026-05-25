@@ -61,6 +61,12 @@ export function buildDashboardViewModel(context: DashboardContext) {
     qualityGap,
     scaffoldHealth,
     researchIntegrity,
+    experimentEconomics: state.experimentEconomics || null,
+    salvageCandidates: (state.partialResults as LooseObject)?.candidates || [],
+    workflowFriction: state.workflowFriction || [],
+    experimentMemory,
+    segmentTransition: segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }),
+    setupState: setupStateFromDashboardInput({ guidedSetup, setupPlan }),
     warnings,
   });
   const decisionEnvelopeSummary = summarizeDecisionEnvelope({
@@ -191,6 +197,12 @@ export function buildDashboardViewModel(context: DashboardContext) {
     guidedSetup,
     decisionEnvelope,
     decisionEnvelopeSummary,
+    experimentEconomics: state.experimentEconomics || decisionEnvelope?.experimentEconomics || null,
+    partialResults: state.partialResults || {
+      candidates: decisionEnvelope?.salvageCandidates || [],
+      skippedArtifacts: [],
+    },
+    workflowFriction: state.workflowFriction || decisionEnvelope?.workflowFriction || [],
     scaffoldHealth,
     researchIntegrity,
     lastRun: guidedSetup?.lastRun || null,
@@ -307,6 +319,12 @@ function normalizeDecisionEnvelope({
   qualityGap = null,
   scaffoldHealth = null,
   researchIntegrity = null,
+  experimentEconomics = null,
+  salvageCandidates = [],
+  workflowFriction = [],
+  experimentMemory = null,
+  segmentTransition = null,
+  setupState = null,
   warnings = [],
 }: LooseObject) {
   const supplied = firstRecord(
@@ -333,7 +351,48 @@ function normalizeDecisionEnvelope({
     researchIntegrity,
     finalization: finalizePreview,
     qualityGap,
+    experimentEconomics,
+    salvageCandidates,
+    workflowFriction,
+    experimentMemory,
+    segmentTransition,
+    setupState,
   });
+}
+
+function setupStateFromDashboardInput({ guidedSetup, setupPlan }: LooseObject) {
+  const blockers = [...stringList(setupPlan?.missing), ...stringList(setupPlan?.missingEssentials)];
+  if (!guidedSetup?.stage && blockers.length === 0) return null;
+  return {
+    stage: cleanText(guidedSetup?.stage),
+    blockers,
+    nextAction:
+      cleanText(guidedSetup?.nextAction) || cleanText(setupPlan?.nextStep?.nextAction?.reason),
+  };
+}
+
+function segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }: LooseObject) {
+  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || state?.limit || {};
+  const limitReached =
+    limit.limitReached === true ||
+    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
+  if (limitReached || guidedSetup?.stage === "limit-reached") {
+    return {
+      required: true,
+      nextAction:
+        cleanText(guidedSetup?.nextAction) ||
+        "The active segment reached its limit; extend the limit or start a new segment.",
+      triggeredBy: ["limit"],
+    };
+  }
+  if (qualityGap?.done === true) {
+    return {
+      required: true,
+      nextAction: "The active quality round is closed; refresh gaps or preview finalization.",
+      triggeredBy: ["qualityRound"],
+    };
+  }
+  return null;
 }
 
 function summarizeDecisionEnvelope({
@@ -358,6 +417,12 @@ function summarizeDecisionEnvelope({
     (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
   const finalization = envelope?.finalizationReadiness || {};
   const qualityRound = envelope?.qualityRound || {};
+  const canonicalSummary = summaryFromCanonicalNextAction(envelope?.canonicalNextAction, {
+    current,
+    measurements,
+    envelope,
+  });
+  if (canonicalSummary && canonicalSummary.kind !== "next-packet") return canonicalSummary;
 
   let summary = {
     kind: "continue",
@@ -467,6 +532,61 @@ function summarizeDecisionEnvelope({
   }
 
   return summary;
+}
+
+function summaryFromCanonicalNextAction(
+  action: unknown,
+  { current, measurements, envelope }: LooseObject,
+) {
+  if (!action || typeof action !== "object") return null;
+  const canonical = action as LooseObject;
+  const kind = cleanText(canonical.kind);
+  if (!kind) return null;
+  return {
+    kind,
+    priority: canonicalPriorityLabel(canonical.priority),
+    title: cleanText(canonical.title) || canonicalTitle(kind),
+    detail:
+      cleanText(canonical.reason) || cleanText(envelope?.nextAction) || "Review before continuing.",
+    command: cleanText(canonical.command),
+    source: "decision-envelope",
+    fresh: envelope?.latestPacketFreshness?.fresh ?? null,
+    segment: envelope?.activeSegment?.segment ?? null,
+    runs: envelope?.activeSegment?.runs ?? current.length,
+    measurementRuns: measurements.length,
+    finalizationReady: envelope?.finalizationReadiness?.ready ?? null,
+    canonical: true,
+  };
+}
+
+function canonicalPriorityLabel(value: unknown): string {
+  const priority = Number(value);
+  if (!Number.isFinite(priority)) return cleanText(value) || "Next";
+  if (priority <= 2) return "Critical";
+  if (priority <= 5) return "Review";
+  if (priority <= 8) return "Pivot";
+  if (priority === 9) return "Review";
+  return "Next";
+}
+
+function canonicalTitle(kind: string): string {
+  const titles: Record<string, string> = {
+    "safety-blocker": "Resolve the safety blocker",
+    "benchmark-mismatch": "Repair the benchmark mismatch",
+    "workflow-friction": "Remove workflow friction",
+    "stale-packet": "Replace the stale packet",
+    setup: "Complete setup",
+    "benchmark-command": "Add a benchmark command",
+    "partial-salvage": "Review partial results",
+    "log-decision": "Log the last packet",
+    "context-distillation": "Refresh context",
+    "segment-transition": "Start a new segment",
+    "quality-gap": "Close accepted quality gaps",
+    "plateau-pivot": "Pivot before repeating the plateau",
+    finalization: "Preview finalization",
+    "next-packet": "Run the next measured hypothesis",
+  };
+  return titles[kind] || "Next action";
 }
 
 const UNKNOWN = "unknown";
@@ -1562,8 +1682,17 @@ function actionFromDecisionEnvelope(
     guidedSetup?.commands?.replaceLast ||
     (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
   const commandByKind: Record<string, string> = {
+    "safety-blocker": commandMap.get("doctor") || "",
+    "workflow-friction": commandMap.get("doctor") || "",
+    "benchmark-mismatch": commandMap.get("benchmark lint") || commandMap.get("doctor") || "",
     "stale-packet":
       stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
+    "partial-salvage": commandMap.get("partial results") || "",
+    "context-distillation": cleanText(summary.command) || "",
+    "quality-gap": commandMap.get("gap candidates") || "",
+    "plateau-pivot": commandMap.get("next run") || "",
+    finalization: commandMap.get("finalize preview") || "",
+    "next-packet": commandMap.get("next run") || "",
     setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
     "benchmark-command": guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
     "log-decision":
@@ -1581,7 +1710,16 @@ function actionFromDecisionEnvelope(
     baseline: guidedSetup?.commands?.baseline || commandMap.get("next run") || "",
   };
   const labelByKind: Record<string, string> = {
+    "safety-blocker": "Doctor",
+    "workflow-friction": "Doctor",
+    "benchmark-mismatch": "Lint",
     "stale-packet": stalePacketCommand ? "Next" : "Setup",
+    "partial-salvage": "Partial",
+    "context-distillation": "Context",
+    "quality-gap": "Gaps",
+    "plateau-pivot": "Next",
+    finalization: "Preview",
+    "next-packet": "Next",
     setup: "Setup",
     "benchmark-command": "Setup",
     "log-decision": "Log",
@@ -1591,7 +1729,16 @@ function actionFromDecisionEnvelope(
     baseline: "Next",
   };
   const safeActionByKind: Record<string, string> = {
+    "safety-blocker": "doctor",
+    "workflow-friction": "doctor",
+    "benchmark-mismatch": "benchmark-lint",
     "stale-packet": stalePacketCommand ? "" : "setup-plan",
+    "partial-salvage": "partial-results",
+    "context-distillation": "session-forensics",
+    "quality-gap": "gap-candidates",
+    "plateau-pivot": "next",
+    finalization: "finalize-preview",
+    "next-packet": "next",
     setup: "setup-plan",
     "benchmark-command": "setup-plan",
     "segment-transition": "new-segment",
@@ -1605,20 +1752,43 @@ function actionFromDecisionEnvelope(
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
     utilityCopy: decisionEnvelopeUtility(kind),
     safeAction: safeActionByKind[kind] || "",
-    command: commandByKind[kind] || commandMap.get("next run") || "",
+    command: cleanText(summary.command) || commandByKind[kind] || commandMap.get("next run") || "",
     commandLabel: labelByKind[kind] || "Next",
-    tone:
-      kind === "finalize-preview"
-        ? "good"
-        : ["stale-packet", "setup", "benchmark-command", "log-decision", "plateau"].includes(kind)
-          ? "warn"
-          : "focus",
+    tone: ["finalize-preview", "finalization"].includes(kind)
+      ? "good"
+      : [
+            "safety-blocker",
+            "benchmark-mismatch",
+            "workflow-friction",
+            "stale-packet",
+            "setup",
+            "benchmark-command",
+            "log-decision",
+            "plateau",
+            "plateau-pivot",
+          ].includes(kind)
+        ? "warn"
+        : "focus",
     source: cleanText(summary.source) || "decision-envelope",
   });
 }
 
 function decisionEnvelopeUtility(kind: string): string {
+  if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
+  if (kind === "workflow-friction")
+    return "Workflow friction should be removed before spending another packet.";
+  if (kind === "benchmark-mismatch")
+    return "Benchmark timeout and command-shape mismatches come before reruns.";
   if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
+  if (kind === "partial-salvage")
+    return "Review completed artifact rows before rerunning an expensive failed packet.";
+  if (kind === "context-distillation")
+    return "Refresh bounded context before context loss repeats the same work.";
+  if (kind === "quality-gap")
+    return "Accepted quality gaps should drive the next implementation step.";
+  if (kind === "plateau-pivot") return "Plateau evidence should redirect the next hypothesis.";
+  if (kind === "finalization") return "Finalization is ready after higher-priority loop checks.";
+  if (kind === "next-packet") return "The next packet should produce metric evidence and ASI.";
   if (kind === "setup") return "Setup blockers come before trustworthy metrics.";
   if (kind === "benchmark-command")
     return "A repeatable benchmark command comes before more segment work.";

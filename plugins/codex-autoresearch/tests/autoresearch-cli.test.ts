@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -50,6 +51,127 @@ test("run reports missing primary metric as a failed experiment", async () => {
     assert.match(payload.metricError, /seconds/);
     assert.equal(payload.logHint.status, "crash");
     assert.deepEqual(payload.logHint.allowedStatuses, ["crash"]);
+  });
+});
+
+test("partial-results records diagnostic measure evidence from a failed packet artifact", async () => {
+  await withTempDir("partial-results-record", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "partial salvage", "--metric-name", "seconds"]);
+    const script = path.join(dir, "partial-packet.mjs");
+    await writeFile(
+      script,
+      [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "mkdirSync('out', { recursive: true });",
+        "writeFileSync('out/rows.json', JSON.stringify({ schemaVersion: 1, metricName: 'seconds', formulaVersion: 'v1', rows: [{ seconds: 4.2, rawBody: 'must not persist' }] }));",
+        "console.log('ARTIFACT rows=out/rows.json');",
+        "process.exit(1);",
+      ].join("\n"),
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const packetPayload = JSON.parse(packet.stdout);
+
+    const list = await runCli(["partial-results", "--cwd", dir, "--from-last"]);
+    assert.equal(list.code, 0, list.stderr);
+    const listPayload = JSON.parse(list.stdout);
+    assert.equal(listPayload.candidates.length, 1);
+    assert.equal(listPayload.candidates[0].status, "scored");
+    assert.equal(listPayload.candidates[0].metricValue, 4.2);
+    assert.equal(JSON.stringify(listPayload).includes("must not persist"), false);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.canonicalNextAction.kind, "partial-salvage");
+    assert.equal(statePayload.nextAction, statePayload.canonicalNextAction.reason);
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.action.kind, "partial-salvage");
+    assert.equal(recommendPayload.nextAction, statePayload.canonicalNextAction.reason);
+    assert.equal(
+      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
+      statePayload.canonicalNextAction.kind,
+    );
+
+    const record = await runCli([
+      "partial-results",
+      "--cwd",
+      dir,
+      "--record",
+      listPayload.candidates[0].id,
+    ]);
+    assert.equal(record.code, 0, record.stderr);
+    const recordPayload = JSON.parse(record.stdout);
+    assert.equal(recordPayload.experiment.status, "measure");
+    assert.equal(recordPayload.experiment.metricEligible, false);
+    assert.equal(recordPayload.experiment.partialResult.validationStatus, "scored");
+    assert.equal(recordPayload.evidenceClaim.promotionRelevance, "diagnostic");
+
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.match(ledger, /"status":"measure"/);
+    assert.match(ledger, /"partialResult"/);
+    await assert.rejects(access(packetPayload.lastRunPath));
+    const evidenceIndex = await readFile(
+      path.join(dir, "autoresearch.research", "partial-results", "evidence-index.json"),
+      "utf8",
+    );
+    assert.match(evidenceIndex, /benchmark-artifact/);
+  });
+});
+
+test("state surfaces active runner progress while next is still executing", async () => {
+  await withTempDir("active-progress", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "active progress", "--metric-name", "seconds"]);
+    const script = path.join(dir, "slow-packet.mjs");
+    await writeFile(
+      script,
+      ["setTimeout(() => {", "  console.log('METRIC seconds=1');", "}, 1500);"].join("\n"),
+    );
+
+    const child = spawn(process.execPath, [
+      cli,
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+    ]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    let progress = null;
+    const started = Date.now();
+    while (Date.now() - started < 5000) {
+      const state = await runCli(["state", "--cwd", dir, "--compact"]);
+      assert.equal(state.code, 0, state.stderr);
+      const payload = JSON.parse(state.stdout);
+      progress = payload.experimentEconomics?.progress || null;
+      if (progress?.exitState === "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(progress?.exitState, "running");
+    assert.match(progress?.packetId || "", /active/);
+
+    const exitCode = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(exitCode, 0, stderr);
+    const packetPayload = JSON.parse(stdout);
+    assert.equal(packetPayload.packetEvidence.progressSnapshot.exitState, "completed");
   });
 });
 

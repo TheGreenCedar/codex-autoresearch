@@ -34,6 +34,7 @@ const TOOL_REGISTRY = [
   { name: "init_experiment", cliCommand: "init", actionPolicy: "state_mutation" },
   { name: "run_experiment", cliCommand: "run", actionPolicy: "process_start" },
   { name: "next_experiment", cliCommand: "next", actionPolicy: "process_start" },
+  { name: "partial_results", cliCommand: "partial-results", actionPolicy: "artifact_write" },
   { name: "log_experiment", cliCommand: "log", actionPolicy: "git_mutation" },
   { name: "read_state", cliCommand: "state", actionPolicy: "read" },
   { name: "measure_quality_gap", cliCommand: "quality-gap", actionPolicy: "read" },
@@ -78,6 +79,7 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
   if (name === "session_forensics" && (args.apply || args.apply === "true")) {
     return "artifact_write";
   }
+  if (name === "partial_results" && args.record) return "artifact_write";
   if (name === "guided_setup" && (args.start_dashboard || args.startDashboard)) {
     return "process_start";
   }

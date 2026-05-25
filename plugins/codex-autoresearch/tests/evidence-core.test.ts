@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
   appendJsonl,
+  buildDecisionEnvelope,
   buildLastRunFreshnessSnapshot,
   currentState,
   finiteMetric,
@@ -26,6 +27,7 @@ import {
   DEFAULT_DECISION_THRESHOLDS,
   resolveDecisionThresholds,
 } from "../lib/decision-thresholds.js";
+import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import {
   compactEvidenceSummaries,
   evidenceClaim,
@@ -34,11 +36,21 @@ import {
   validateClaimReferences,
 } from "../lib/evidence-index.js";
 import {
+  buildPartialResultEvidenceClaim,
+  discoverPartialResultCandidates,
+} from "../lib/partial-results.js";
+import {
+  createProgressSnapshot,
+  progressSnapshotFromRun,
+  staleProgressReason,
+} from "../lib/runner-progress.js";
+import {
   assertInsideResearchRoot,
   resolveSafeResearchPath,
   validateResearchSlug,
 } from "../lib/research-path-guard.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
+import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { quoteForShell } from "./helpers/process.js";
 
 const withTempDir = async (name, fn) => {
@@ -324,6 +336,308 @@ test("evidence index uses deterministic ids, merges claims, and validates refere
       },
     ]);
   });
+});
+
+test("partial result salvager scores complete artifact rows as diagnostic candidates", async () => {
+  await withTempDir("partial-result-scored", async (dir) => {
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(
+      path.join(dir, "out", "results.json"),
+      JSON.stringify(
+        {
+          rows: [{ label: "candidate-a", seconds: 1.25, rawBody: "do-not-copy-this-body" }],
+          schemaVersion: 1,
+          metricName: "seconds",
+          formulaVersion: "v1",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const discovery = await discoverPartialResultCandidates({
+      workDir: dir,
+      lastRunPacket: {
+        packetEvidence: {
+          commandIdentity: { commandHash: "hash-123" },
+          artifacts: [
+            {
+              name: "results",
+              path: "out/results.json",
+              exists: true,
+              quarantined: false,
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(discovery.skippedArtifacts.length, 0);
+    assert.equal(discovery.candidates.length, 1);
+    assert.match(discovery.candidates[0].id, /^partial-[a-f0-9]{12}$/);
+    assert.equal(discovery.candidates[0].artifactName, "results");
+    assert.equal(discovery.candidates[0].artifactPath, "out/results.json");
+    assert.equal(discovery.candidates[0].rowIndex, 0);
+    assert.equal(discovery.candidates[0].status, "scored");
+    assert.equal(discovery.candidates[0].metricName, "seconds");
+    assert.equal(discovery.candidates[0].metricValue, 1.25);
+    assert.equal(discovery.candidates[0].provenance.diagnosticOnly, true);
+    assert.equal(JSON.stringify(discovery.candidates[0]).includes("do-not-copy-this-body"), false);
+
+    const claim = buildPartialResultEvidenceClaim(discovery.candidates[0]);
+    assert.equal(claim.evidenceType, "benchmark-artifact");
+    assert.equal(claim.promotionRelevance, "diagnostic");
+    assert.match(claim.source, /^out\/results\.json#row-0$/);
+  });
+});
+
+test("partial result salvager sends incomplete rows to manual review", async () => {
+  await withTempDir("partial-result-manual", async (dir) => {
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(path.join(dir, "out", "array-results.json"), '[{"seconds":2.5}]\n', "utf8");
+    await writeFile(
+      path.join(dir, "out", "missing-metric.json"),
+      JSON.stringify({
+        rows: [{ label: "candidate-b" }],
+        schemaVersion: 1,
+        metricName: "seconds",
+        formulaVersion: "v1",
+      }),
+      "utf8",
+    );
+
+    const discovery = await discoverPartialResultCandidates({
+      workDir: dir,
+      primaryMetricName: "seconds",
+      lastRunPacket: {
+        packetEvidence: {
+          commandIdentity: { commandHash: "hash-123" },
+          artifacts: [
+            {
+              name: "array-results",
+              path: "out/array-results.json",
+              exists: true,
+              quarantined: false,
+            },
+            {
+              name: "missing-metric",
+              path: "out/missing-metric.json",
+              exists: true,
+              quarantined: false,
+            },
+          ],
+        },
+      },
+    });
+
+    assert.equal(discovery.candidates.length, 2);
+    const byName = new Map(
+      discovery.candidates.map((candidate) => [candidate.artifactName, candidate]),
+    );
+    const missingVersions = byName.get("array-results");
+    const missingMetric = byName.get("missing-metric");
+
+    assert.equal(missingVersions?.status, "manual_review");
+    assert.equal(missingVersions?.metricValue, 2.5);
+    assert.match(missingVersions?.reason || "", /schema version missing/);
+    assert.match(missingVersions?.reason || "", /formula version missing/);
+
+    assert.equal(missingMetric?.status, "manual_review");
+    assert.equal(missingMetric?.metricValue, null);
+    assert.match(missingMetric?.reason || "", /finite primary metric missing/);
+  });
+});
+
+test("partial result salvager rejects path escapes and does not persist raw artifact bodies", async () => {
+  await withTempDir("partial-result-path-escape", async (dir) => {
+    const outsidePath = path.join(path.dirname(dir), `${path.basename(dir)}-outside-results.json`);
+    await writeFile(
+      outsidePath,
+      JSON.stringify({
+        rows: [{ seconds: 9, rawBody: "outside-raw-body-must-not-leak" }],
+        schemaVersion: 1,
+        metricName: "seconds",
+        formulaVersion: "v1",
+      }),
+      "utf8",
+    );
+    try {
+      const discovery = await discoverPartialResultCandidates({
+        workDir: dir,
+        lastRunPacket: {
+          packetEvidence: {
+            commandIdentity: { commandHash: "hash-123" },
+            artifacts: [
+              {
+                name: "outside-results",
+                path: outsidePath,
+                exists: true,
+                quarantined: false,
+              },
+            ],
+          },
+        },
+      });
+
+      assert.equal(discovery.candidates.length, 0);
+      assert.equal(discovery.skippedArtifacts.length, 1);
+      assert.equal(discovery.skippedArtifacts[0].artifactName, "outside-results");
+      assert.equal(discovery.skippedArtifacts[0].artifactPath, "<outside-workdir>");
+      assert.equal(discovery.skippedArtifacts[0].reason, "artifact_path_outside_workdir");
+      assert.equal(JSON.stringify(discovery).includes("outside-raw-body-must-not-leak"), false);
+    } finally {
+      await rm(outsidePath, { force: true });
+    }
+  });
+});
+
+test("runner progress and experiment economics expose timeout and stale-progress costs", () => {
+  const progress = progressSnapshotFromRun({
+    packetId: "packet-1",
+    run: {
+      command: "npm test -- --runInBand",
+      workDir: "project",
+      startedAt: "2026-05-25T10:00:00.000Z",
+      lastOutputAt: "2026-05-25T10:05:00.000Z",
+      finishedAt: "2026-05-25T10:10:00.000Z",
+      timeoutSeconds: 30,
+      timedOut: true,
+      exitCode: null,
+    },
+    artifacts: [{ name: "rows", path: "out/rows.json" }],
+  });
+
+  assert.equal(progress.packetId, "packet-1");
+  assert.equal(progress.commandClass, "npm test --");
+  assert.equal(progress.timeoutPhase, "benchmark");
+  assert.equal(progress.exitState, "timed_out");
+  assert.equal(progress.latestArtifactRow, "rows=out/rows.json");
+
+  const running = createProgressSnapshot({
+    packetId: "packet-2",
+    command: "node bench.mjs --timeout 120",
+    startedAt: "2026-05-25T10:00:00.000Z",
+    timeoutSeconds: 60,
+  });
+  assert.match(
+    staleProgressReason(running, {
+      now: "2026-05-25T10:10:00.000Z",
+      staleAfterSeconds: 300,
+    }),
+    /No packet output/,
+  );
+
+  const economics = analyzeExperimentEconomics({
+    state: {
+      baseline: 10,
+      config: { bestDirection: "lower" },
+      current: [
+        { run: 1, status: "discard", durationSeconds: 900 },
+        { run: 2, status: "crash", durationSeconds: 950 },
+        { run: 3, status: "checks_failed", durationSeconds: 925 },
+        { run: 4, status: "discard", durationSeconds: 940 },
+      ],
+    },
+    lastRun: {
+      run: { durationSeconds: 900 },
+      packetEvidence: {
+        timeoutSeconds: 60,
+        commandIdentity: { command: "node bench.mjs --timeout-seconds 120" },
+      },
+    },
+    progress: {
+      ...running,
+      staleProgressReason: "No packet output or artifact progress for 600s.",
+    },
+  });
+
+  const warningCodes = economics.warnings.map((warning) => warning.code);
+  assert.equal(economics.runtimeClass, "long");
+  assert.equal(warningCodes.includes("outer_timeout_shorter_than_inner"), true);
+  assert.equal(warningCodes.includes("repeated_small_probe"), true);
+  assert.equal(warningCodes.includes("stale_progress"), true);
+  assert.equal(economics.freshRunRequired, true);
+
+  assert.equal(
+    buildDecisionEnvelope({
+      state: { current: [] },
+      experimentEconomics: economics,
+    }).canonicalNextAction.kind,
+    "benchmark-mismatch",
+  );
+
+  const smallProbeEconomics = analyzeExperimentEconomics({
+    state: {
+      baseline: 10,
+      config: { bestDirection: "lower" },
+      current: [
+        { run: 1, status: "discard", durationSeconds: 900 },
+        { run: 2, status: "crash", durationSeconds: 950 },
+        { run: 3, status: "checks_failed", durationSeconds: 925 },
+        { run: 4, status: "discard", durationSeconds: 940 },
+      ],
+    },
+    lastRun: { run: { durationSeconds: 900 }, packetEvidence: { timeoutSeconds: 1200 } },
+  });
+  assert.equal(
+    buildDecisionEnvelope({
+      state: { current: [] },
+      experimentEconomics: smallProbeEconomics,
+    }).canonicalNextAction.kind,
+    "workflow-friction",
+  );
+});
+
+test("workflow friction uses forensics, churn, dirty tree, recipes, and quality_gap wording", () => {
+  const signals = analyzeWorkflowFriction({
+    state: {
+      config: {
+        metricName: "quality_gap",
+        recipeId: "missing-recipe",
+        commitPaths: ["src/a.ts"],
+      },
+      qualityGap: { open: 2 },
+      current: [
+        { run: 1, command: "npm test -- --runInBand" },
+        { run: 2, command: "npm test -- --runInBand" },
+        { run: 3, command: "npm test -- --runInBand" },
+      ],
+    },
+    forensics: {
+      workflowWaste: [
+        {
+          kind: "output_budget_exceeded",
+          message: "Large command output.",
+          size: { tokens: 25000, lines: 900 },
+        },
+      ],
+    },
+    warningDetails: [{ code: "git_dirty", message: "Git worktree is dirty." }],
+    recipes: [{ id: "known-recipe" }],
+    thresholds: { repeatedCommandHeadCount: 3 },
+  });
+  const byKind = new Map(signals.map((signal) => [signal.kind, signal]));
+
+  assert.equal(byKind.get("output_budget_exceeded")?.severity, "warning");
+  assert.equal(byKind.get("verification_churn")?.count, 3);
+  assert.equal(byKind.get("dirty_tree_recovery")?.severity, "blocker");
+  assert.deepEqual(byKind.get("dirty_tree_recovery")?.affectedFiles, ["src/a.ts"]);
+  assert.match(byKind.get("unknown_recipe")?.reason || "", /missing-recipe/);
+  assert.match(byKind.get("quality_gap_wording")?.reason || "", /accepted quality-gap/);
+
+  const quietSignals = analyzeWorkflowFriction({
+    lastRun: {
+      packetEvidence: {
+        stdoutTail: "x".repeat(700),
+        commandIdentity: { command: "node bench.mjs" },
+      },
+    },
+  });
+  assert.equal(
+    quietSignals.some((signal) => signal.kind === "output_budget_exceeded"),
+    false,
+  );
 });
 
 test("session forensics parses bounded signals without raw body persistence", async () => {

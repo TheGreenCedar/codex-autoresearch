@@ -315,6 +315,24 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "partial_results",
+    description:
+      "Inspect or record diagnostic-only partial-result rows from a crashed or timed-out last-run artifact.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        from_last: { type: "boolean" },
+        artifact: { type: "string" },
+        record: { type: "string" },
+        research_slug: { type: "string" },
+        command_hash: { type: "string" },
+        description: { type: "string" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "log_experiment",
     description:
       "Append an experiment result, keep/commit or discard/revert changes, then return whether the active loop should immediately continue.",
@@ -586,6 +604,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   init: "init_experiment",
   run: "run_experiment",
   next: "next_experiment",
+  "partial-results": "partial_results",
   log: "log_experiment",
   state: "read_state",
   doctor: "doctor_session",

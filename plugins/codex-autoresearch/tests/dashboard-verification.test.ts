@@ -1293,7 +1293,7 @@ test("dashboard decision envelope priority ladder is stable across competing sig
     },
     {
       name: "plateau outranks finalization readiness",
-      expected: "plateau",
+      expected: "plateau-pivot",
       context: {
         experimentMemory: {
           plateau: { detected: true, recommendation: "Scout a distant lane." },
@@ -1303,7 +1303,7 @@ test("dashboard decision envelope priority ladder is stable across competing sig
     },
     {
       name: "finalization readiness wins after active blockers",
-      expected: "finalize-preview",
+      expected: "finalization",
       context: {
         finalizePreview: { ready: true, nextAction: "Preview finalization." },
       },
@@ -1362,7 +1362,7 @@ test("dashboard action rail treats finalization readiness as the next decision a
     ],
   });
 
-  assert.equal(viewModel.nextBestAction.kind, "finalize-preview");
+  assert.equal(viewModel.nextBestAction.kind, "finalization");
   assert.match(viewModel.nextBestAction.detail, /Preview finalization/);
 });
 
