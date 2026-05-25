@@ -24,10 +24,11 @@ AX, the AI experience:
 - When the user gives a broad natural-language goal without a benchmark contract, run `prompt-plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
 - Use the CLI as the deterministic execution surface.
-- Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, dashboard state, and commits.
+- Keep loop truth in durable files, not chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.research/<slug>/`, evidence indexes, dashboard state, and commits.
 - Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.
 - ASI means the structured memory attached to a run: hypothesis, evidence, rollback reason, next action hint, and optional lane/family/risk metadata.
 - When Codex Goal mode is available and explicitly requested, use `get_goal` to inspect parent thread state, then run `codex-goal-brief --cwd <project>` with any imported Goal fields. Treat the bridge as evidence/advice only: Codex owns thread goals; Autoresearch owns benchmark/session truth.
+- When a prior Codex session JSONL is the best evidence source, run `session-forensics --dry-run` first, then `--apply` only to write a bounded context capsule under `autoresearch.research/<slug>/`. Keep raw snippets disabled unless the operator explicitly needs them; imported claims should reference evidence ids instead of persisting raw transcript bodies.
 
 UX, the user experience:
 
@@ -80,6 +81,7 @@ node scripts/autoresearch.mjs checks-inspect --cwd <project> --command "<checks 
 node scripts/autoresearch.mjs guide --cwd <project>
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 node scripts/autoresearch.mjs serve --cwd <project>
+node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run
 ```
 
 ## Active Loop Contract

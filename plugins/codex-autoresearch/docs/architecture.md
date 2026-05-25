@@ -11,10 +11,12 @@ flowchart TD
   A["Future AI / resumed context"] --> S
   S --> CLI["CLI commands"]
   CLI --> GoalBridge["codex-goal-brief"]
+  CLI --> Forensics["session-forensics"]
   CLI --> H["cli-handlers"]
   GoalBridge --> Files
+  Forensics --> Files
   H --> Core["session, runner, recipes, dashboard view-model"]
-  Core --> Files["autoresearch.md / jsonl / config / ideas / research"]
+  Core --> Files["autoresearch.md / jsonl / config / ideas / research / evidence index"]
   Core --> Dash["Live readout server"]
   Dash --> Browser["Human-readable readout"]
 ```

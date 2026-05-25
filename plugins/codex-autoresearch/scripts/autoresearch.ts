@@ -7,6 +7,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
+import { writeContextCapsule } from "../lib/context-capsule.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
@@ -38,6 +39,7 @@ import {
   revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
+import { parseSessionForensics } from "../lib/session-forensics.js";
 import {
   parseMetricLines,
   runProcess as runBoundedProcess,
@@ -176,6 +178,7 @@ Usage:
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
   node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
+  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
@@ -1745,6 +1748,74 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     compactState: boolOption(args.compact, false) ? compact : undefined,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
+  };
+}
+
+async function sessionForensics(args: LooseObject): Promise<LooseObject> {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const apply = boolOption(args.apply, false);
+  const dryRun = boolOption(args.dryRun, !apply);
+  const sessionJsonl = String(args.sessionJsonl || "");
+  const researchSlug = String(args.researchSlug || "");
+  const parsed = await parseSessionForensics({
+    sessionJsonl,
+    allowSnippets: boolOption(args.allowSnippets, false),
+    maxSnippets: positiveIntegerOption(args.maxSnippets, 8, "--max-snippets") ?? 8,
+    maxSnippetChars: positiveIntegerOption(args.maxSnippetChars, 320, "--max-snippet-chars") ?? 320,
+  });
+  if (!parsed.ok) {
+    return {
+      ...parsed,
+      wrote: false,
+    };
+  }
+  const capsule = await writeContextCapsule({
+    cwd: workDir,
+    researchSlug,
+    summary: parsed,
+    apply: apply && !dryRun,
+  });
+  const contextSignal = parsed.productSignals.find(
+    (signal: any) => signal.kind === "context_distillation_required",
+  );
+  const canonicalNextAction = contextSignal
+    ? {
+        kind: "context-distillation",
+        priority: 6,
+        reason: contextSignal.message,
+        command: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${shellQuote(workDir)} --session-jsonl ${shellQuote(sessionJsonl)} --research-slug ${shellQuote(researchSlug)} --apply`,
+        triggeredBy: ["sessionForensics"],
+      }
+    : {
+        kind: "next-packet",
+        priority: 10,
+        reason: "Review imported signals, then continue with the safest next Autoresearch action.",
+        command: "",
+        triggeredBy: ["sessionForensics"],
+      };
+  return {
+    ok: true,
+    workDir,
+    dryRun: capsule.dryRun,
+    wrote: !capsule.dryRun,
+    outputDir: capsule.outputDir,
+    plannedFiles: capsule.files,
+    sourcePath: parsed.sourcePath,
+    timeWindow: parsed.timeWindow,
+    counts: parsed.counts,
+    responseCounts: parsed.responseCounts,
+    toolCounts: parsed.toolCounts,
+    commandClasses: parsed.commandClasses,
+    compactions: parsed.compactions,
+    goal: parsed.goal,
+    userCorrections: parsed.userCorrections,
+    productSignals: parsed.productSignals,
+    workflowWaste: parsed.workflowWaste,
+    blockers: parsed.blockers,
+    snippets: parsed.snippets,
+    evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
+    canonicalNextAction,
+    nextAction: canonicalNextAction.reason,
   };
 }
 
@@ -4965,6 +5036,8 @@ function compactPublicState(state: LooseObject) {
     commands: continuation.commands || state.commands || {},
     resumeAudit: state.resumeAudit || null,
     decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+    canonicalNextAction:
+      state.decisionEnvelope?.canonicalNextAction || state.resumeAudit?.canonicalNextAction || null,
   };
 }
 
@@ -5831,6 +5904,7 @@ async function main() {
     promptPlan,
     publicState,
     recommendNext,
+    sessionForensics,
     readJsonl,
     recipeCommand,
     resolveWorkDir,

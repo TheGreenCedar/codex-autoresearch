@@ -139,6 +139,25 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "session_forensics",
+    description:
+      "Parse a Codex rollout JSONL into bounded session counts, waste signals, and optional safe context-capsule artifacts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        session_jsonl: { type: "string" },
+        research_slug: { type: "string" },
+        dry_run: { type: "boolean" },
+        apply: { type: "boolean" },
+        allow_snippets: { type: "boolean" },
+        max_snippets: { type: "integer" },
+        max_snippet_chars: { type: "integer" },
+      },
+      required: ["working_dir", "session_jsonl", "research_slug"],
+    },
+  },
+  {
     name: "list_recipes",
     description: "List or recommend built-in and optional catalog benchmark recipes.",
     inputSchema: {
@@ -555,6 +574,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   "onboarding-packet": "onboarding_packet",
   "recommend-next": "recommend_next",
   "codex-goal-brief": "codex_goal_bridge",
+  "session-forensics": "session_forensics",
   recipes: "list_recipes",
   "research-setup": "setup_research_session",
   config: "configure_session",
@@ -582,6 +602,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
   allow_dirty_revert: "allowDirtyRevert",
+  allow_snippets: "allowSnippets",
   autonomy_mode: "autonomyMode",
   benchmark_command: "benchmarkCommand",
   benchmark_prints_metric: "benchmarkPrintsMetric",
@@ -611,6 +632,8 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   json_full: "jsonFull",
   keep_policy: "keepPolicy",
   max_iterations: "maxIterations",
+  max_snippet_chars: "maxSnippetChars",
+  max_snippets: "maxSnippets",
   metric_name: "metricName",
   metric_unit: "metricUnit",
   model_command: "modelCommand",
@@ -620,6 +643,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   query_count: "queryCount",
   recipe_id: "recipeId",
   research_slug: "researchSlug",
+  session_jsonl: "sessionJsonl",
   revert_paths: "revertPaths",
   secondary_metrics: "secondaryMetrics",
   skip_init: "skipInit",
