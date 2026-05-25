@@ -660,15 +660,24 @@ const checks = [
     id: "dashboard-semantic-labels",
     file: "assets/template.html, dashboard/src/main.tsx",
     description:
-      "The dashboard uses real labels for form controls and avoids decorative label tags.",
+      "The dashboard uses semantic labels/tabs for controls and avoids decorative label tags.",
     run: async () => {
       const template = await readDashboardSurface();
       const labelCount = (template.match(/<label\b/g) || []).length;
+      const hasSegmentTabs = includesAll(template, [
+        "segment-tablist",
+        'role="tablist"',
+        'role="tab"',
+        "aria-selected",
+        "segment-navigator-label",
+      ]);
       if (
-        labelCount >= 1 &&
-        (template.includes('<label for="segment-select">') ||
+        (hasSegmentTabs ||
+          template.includes('<label for="segment-select">') ||
           template.includes('htmlFor="segment-select"') ||
           template.includes("htmlFor:`segment-select`")) &&
+        template.includes('role="group"') &&
+        template.includes("aria-label={label}") &&
         template.includes("score-label") &&
         template.includes("readout-label") &&
         !template.includes("log-decision-panel") &&
@@ -677,7 +686,7 @@ const checks = [
         return pass();
       }
       return fail(
-        `Expected segment and log form labels without decorative label tags; found ${labelCount}.`,
+        `Expected segment tabs/control labels without decorative label tags; found ${labelCount}.`,
       );
     },
   },

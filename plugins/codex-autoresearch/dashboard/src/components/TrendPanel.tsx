@@ -25,7 +25,6 @@ import {
   formatImprovement,
   formatMetric,
   formatMetricValue,
-  formatPercentOfBaseline,
   improvementPercent,
 } from "../model";
 import type { ChartModel, DashboardReadout, RunMetricBreakdown, SessionSegment } from "../types";
@@ -40,7 +39,7 @@ const STATUS_COLORS: Record<string, string> = {
 type ValueMode = "value" | "percent";
 type AxisMode = "iteration" | "timestamp";
 type ChartPointOpener = HTMLElement | SVGElement | null;
-type MetricDetailCard = { label: string; value: string; id: string };
+type MetricConstructionItem = { label: string; value: string; detail: string; id: string };
 type SegmentedControlOption<T extends string> = readonly [T, string];
 
 const FOCUSABLE_DIALOG_SELECTOR =
@@ -125,10 +124,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       </div>
 
       <div className="metric-summary-row">
-        <p className="metric-formula" id="metric-formula">
-          <strong>Metric formula</strong>
-          <span>{readout.metricDefinition.formulaInline}</span>
-        </p>
+        <MetricConstruction readout={readout} session={session} />
         <div className="chart-legend" aria-label="Status legend">
           {STATUS_VALUES.map((status) => (
             <span key={status}>
@@ -328,6 +324,116 @@ function ChartDataList({ chartData }: { chartData: ChartDatum[] }) {
       ))}
     </ul>
   );
+}
+
+function MetricConstruction({
+  readout,
+  session,
+}: {
+  readout: DashboardReadout;
+  session: SessionSegment;
+}) {
+  const items = metricConstructionItems(readout, session);
+  const status = metricConstructionStatus(readout);
+  return (
+    <section
+      className="metric-construction"
+      id="metric-construction"
+      aria-label="Metric construction"
+    >
+      <div className="metric-construction-head">
+        <span>Metric construction</span>
+        <strong id="metric-construction-status">{status}</strong>
+      </div>
+      <dl className="metric-construction-grid">
+        {items.map((item) => (
+          <div className="metric-construction-card" key={item.id}>
+            <dt>{item.label}</dt>
+            <dd id={item.id}>
+              <strong>{item.value}</strong>
+              <small>{item.detail}</small>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function metricConstructionStatus(readout: DashboardReadout): string {
+  if (readout.metricDefinition.mode === "weighted_cost") return "Weighted formula";
+  return readout.metricDefinition.formulaConfigured ? "Configured formula" : "Formula missing";
+}
+
+function metricConstructionItems(
+  readout: DashboardReadout,
+  session: SessionSegment,
+): MetricConstructionItem[] {
+  const definition = readout.metricDefinition;
+  const metricName = definition.metricName;
+  const secondaryKeys = secondaryMetricKeysForSession(session, metricName);
+  if (definition.mode === "weighted_cost") {
+    return [
+      {
+        id: "metric-construction-formula",
+        label: "Formula",
+        value: definition.formulaInline,
+        detail: `time_score = primary metric / baseline; memory_score = ${definition.memoryKey} / baseline.`,
+      },
+      {
+        id: "metric-construction-components",
+        label: "Components",
+        value: `primary metric + ${definition.memoryKey}`,
+        detail: `Weights are normalized to time ${definition.weights.time} and memory ${definition.weights.memory}.`,
+      },
+      {
+        id: "metric-construction-direction",
+        label: "Decision rule",
+        value: directionLabel(definition.bestDirection),
+        detail: "Lower weighted score means the combined time and memory cost improved.",
+      },
+    ];
+  }
+  return [
+    {
+      id: "metric-construction-formula",
+      label: definition.formulaConfigured ? "Formula" : "Formula status",
+      value: definition.formulaConfigured ? definition.formulaInline : "Formula not configured",
+      detail: definition.formulaConfigured
+        ? `Source: ${definition.formulaSource}.`
+        : `Chart reads the benchmark's primary output only: METRIC ${metricName}=<number>.`,
+    },
+    {
+      id: "metric-construction-inputs",
+      label: "Inputs detected",
+      value: secondaryKeys.length
+        ? `primary: ${metricName}; secondary: ${secondaryKeys.join(", ")}`
+        : `primary: ${metricName}`,
+      detail: secondaryKeys.length
+        ? "Secondary metrics are evidence only unless the configured formula references them."
+        : "No secondary METRIC fields were logged in this segment.",
+    },
+    {
+      id: "metric-construction-direction",
+      label: "Decision rule",
+      value: directionLabel(definition.bestDirection),
+      detail: "Autoresearch compares finite primary values inside the selected segment.",
+    },
+  ];
+}
+
+function secondaryMetricKeysForSession(session: SessionSegment, metricName: string): string[] {
+  const keys = new Set<string>();
+  for (const run of session.runs) {
+    for (const [key, value] of Object.entries(run.metrics || {})) {
+      if (key !== metricName && isFiniteNumber(value)) keys.add(key);
+    }
+  }
+  return Array.from(keys).sort();
+}
+
+function directionLabel(direction: string): string {
+  return direction === "higher" ? "Higher is better" : "Lower is better";
 }
 
 function buildTrendChartState({
@@ -768,8 +874,8 @@ function MetricDetails({
           <span className="eyebrow">Metric details</span>
           <strong id="metric-details-title">
             {readout.metricDefinition.mode === "weighted_cost"
-              ? "Weighted score breakdown"
-              : "Primary metric breakdown"}
+              ? "Selected score evidence"
+              : "Selected run evidence"}
           </strong>
         </span>
         <span className="panel-note" id="metric-details-selected">
@@ -778,91 +884,29 @@ function MetricDetails({
       </summary>
       <div className="metric-details-body">
         <p className="metric-details-copy" id="metric-details-copy">
-          {readout.metricDefinition.formulaDetails}
+          {metricDetailsCopy(readout, point)}
         </p>
         {readout.metricDefinition.fallbackNote && (
           <p className="form-error metric-fallback-note" id="metric-fallback-note">
             {readout.metricDefinition.fallbackNote}
           </p>
         )}
-        <MetricDetailsGrid readout={readout} breakdown={breakdown} />
+        <MetricEvidenceList readout={readout} point={point} breakdown={breakdown} />
         <MetricBreakdownList readout={readout} breakdown={breakdown} />
       </div>
     </details>
   );
 }
 
-function MetricDetailsGrid({
-  readout,
-  breakdown,
-}: {
-  readout: DashboardReadout;
-  breakdown?: RunMetricBreakdown;
-}) {
-  const baselineCards = buildBaselineMetricCards(readout);
-  const metricCards = [
-    ...baselineCards,
-    {
-      label: readout.metricDefinition.valueLabel,
-      value: formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition),
-      id: "metric-detail-score",
-    },
-    {
-      label: readout.metricDefinition.percentLabel,
-      value: formatMetricDetailPercent(readout, breakdown),
-      id: "metric-detail-percent",
-    },
-  ];
-  return (
-    <div className="metric-details-grid">
-      {metricCards.map((card) => (
-        <MetricDetailCardView card={card} key={card.id} />
-      ))}
-    </div>
-  );
-}
-
-function MetricDetailCardView({ card }: { card: MetricDetailCard }) {
-  return (
-    <div className="metric-detail-card">
-      <span>{card.label}</span>
-      <strong id={card.id}>{card.value}</strong>
-    </div>
-  );
-}
-
-function buildBaselineMetricCards(readout: DashboardReadout): MetricDetailCard[] {
-  if (readout.metricDefinition.mode === "weighted_cost") {
-    return [
-      {
-        label: "Baseline time",
-        value: formatMetric(readout.metricDefinition.baselineTime, "s"),
-        id: "metric-detail-baseline-time",
-      },
-      {
-        label: "Baseline memory",
-        value: formatMemoryValue(readout.metricDefinition.baselineMemory),
-        id: "metric-detail-baseline-memory",
-      },
-    ];
+function metricDetailsCopy(readout: DashboardReadout, point: ChartDatum | null) {
+  const selected = point ? `Selected run #${point.runNumber} is ${point.statusLabel}. ` : "";
+  if (
+    !readout.metricDefinition.formulaConfigured &&
+    readout.metricDefinition.mode !== "weighted_cost"
+  ) {
+    return `${selected}No configured formula explains how ${readout.metricDefinition.metricName} is calculated; this view can only show the primary benchmark output and the secondary metrics that were logged beside it.`;
   }
-  return [
-    {
-      label: `Baseline ${readout.metricDefinition.valueLabel.toLowerCase()}`,
-      value: formatMetricValue(readout.baseline, readout.metricDefinition),
-      id: "metric-detail-baseline-value",
-    },
-  ];
-}
-
-function formatMetricDetailPercent(
-  readout: DashboardReadout,
-  breakdown?: RunMetricBreakdown,
-): string {
-  if (readout.metricDefinition.mode === "weighted_cost") {
-    return formatPercentOfBaseline(breakdown?.chartPercentValue ?? null);
-  }
-  return formatImprovement(breakdown?.improvement ?? null);
+  return `${selected}Benchmark output and supporting evidence for the plotted point.`;
 }
 
 function MetricBreakdownList({
@@ -876,6 +920,102 @@ function MetricBreakdownList({
     return <WeightedMetricBreakdownList readout={readout} breakdown={breakdown} />;
   }
   return <PrimaryMetricBreakdownList readout={readout} breakdown={breakdown} />;
+}
+
+function MetricEvidenceList({
+  readout,
+  point,
+  breakdown,
+}: {
+  readout: DashboardReadout;
+  point: ChartDatum | null;
+  breakdown?: RunMetricBreakdown;
+}) {
+  const secondary = secondaryMetricEntries(point, readout);
+  const warnings = metricEvidenceWarnings(readout, point, secondary);
+  return (
+    <dl className="metric-evidence-list">
+      <div>
+        <dt>Benchmark output</dt>
+        <dd id="metric-detail-primary-value">{primaryMetricExpression(readout, breakdown)}</dd>
+      </div>
+      <div>
+        <dt>Selected run</dt>
+        <dd>{point ? `Run #${point.runNumber} / ${point.statusLabel}` : "No run selected"}</dd>
+      </div>
+      <div>
+        <dt>Secondary output</dt>
+        <dd id="metric-detail-secondary">
+          {secondary.length
+            ? secondary.map(([key, value]) => `${key} = ${formatMetric(value, "")}`).join(", ")
+            : "No secondary metrics"}
+        </dd>
+      </div>
+      {point?.hypothesis && (
+        <div>
+          <dt>Hypothesis</dt>
+          <dd>{point.hypothesis}</dd>
+        </div>
+      )}
+      {point?.evidence && (
+        <div>
+          <dt>Evidence</dt>
+          <dd>{point.evidence}</dd>
+        </div>
+      )}
+      {point?.rollbackReason && (
+        <div>
+          <dt>Rollback</dt>
+          <dd>{point.rollbackReason}</dd>
+        </div>
+      )}
+      {point?.nextActionHint && (
+        <div>
+          <dt>Next action</dt>
+          <dd>{point.nextActionHint}</dd>
+        </div>
+      )}
+      {warnings.length ? (
+        <div>
+          <dt>Warnings</dt>
+          <dd id="metric-detail-warnings">{warnings.join(" ")}</dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function primaryMetricExpression(
+  readout: DashboardReadout,
+  breakdown?: RunMetricBreakdown,
+): string {
+  const value = formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition);
+  return `METRIC ${readout.metricDefinition.metricName}=${value}`;
+}
+
+function secondaryMetricEntries(
+  point: ChartDatum | null,
+  readout: DashboardReadout,
+): Array<[string, number]> {
+  if (!point?.breakdown?.run.metrics) return [];
+  return Object.entries(point.breakdown.run.metrics)
+    .filter(([key, value]) => key !== readout.metricDefinition.metricName && isFiniteNumber(value))
+    .map(([key, value]) => [key, Number(value)]);
+}
+
+function metricEvidenceWarnings(
+  readout: DashboardReadout,
+  point: ChartDatum | null,
+  secondary: Array<[string, number]>,
+) {
+  return [
+    readout.metricDefinition.formulaConfigured
+      ? ""
+      : `No configured formula explains how ${readout.metricDefinition.metricName} is calculated.`,
+    readout.baselineRun ? "" : "No baseline run.",
+    secondary.length ? "" : "No secondary metrics.",
+    point?.heldMetric ? "Chart value is held at nearest successful metric." : "",
+  ].filter(Boolean);
 }
 
 function WeightedMetricBreakdownList({
@@ -924,14 +1064,16 @@ function PrimaryMetricBreakdownList({
   return (
     <dl className="metric-detail-list">
       <div>
-        <dt>Primary metric</dt>
-        <dd id="metric-detail-primary">
-          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-        </dd>
+        <dt>Plotted expression</dt>
+        <dd id="metric-detail-primary">{primaryMetricExpression(readout, breakdown)}</dd>
       </div>
       <div>
-        <dt>Improvement</dt>
-        <dd id="metric-detail-improvement">{formatImprovement(breakdown?.improvement ?? null)}</dd>
+        <dt>Formula source</dt>
+        <dd id="metric-detail-formula-source">{readout.metricDefinition.formulaSource}</dd>
+      </div>
+      <div>
+        <dt>Formula detail</dt>
+        <dd id="metric-detail-formula">{readout.metricDefinition.formulaDetails}</dd>
       </div>
     </dl>
   );

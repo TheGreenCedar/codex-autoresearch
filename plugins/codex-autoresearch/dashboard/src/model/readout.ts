@@ -33,6 +33,7 @@ export function buildReadout(
     allowSummaryMetrics && finiteMetric(summary?.best)
       ? Number(summary.best)
       : metricValueForRun(bestRun, metricDefinition);
+  const latestPlottedRun = evidence.at(-1) || null;
   const latestFailure =
     [...runs]
       .reverse()
@@ -48,8 +49,10 @@ export function buildReadout(
     "";
   return {
     baseline,
+    baselineRun,
     best,
     bestRun,
+    latestPlottedRun,
     latestFailure,
     nextAction,
     confidence: summary?.confidence ?? runs.at(-1)?.confidence ?? null,
