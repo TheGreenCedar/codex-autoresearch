@@ -65,7 +65,9 @@ import {
   buildDecisionEnvelope,
   finiteMetric,
   currentState,
+  listOption,
   readJsonl,
+  safeSlug,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
   isPromotionalStatus,
@@ -334,25 +336,6 @@ function enumOption<T extends string>(
     throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
   }
   return normalized as T;
-}
-
-function listOption(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean);
-  if (value == null || value === "") return [];
-  return String(value)
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function safeSlug(value: unknown, fallback = "research"): string {
-  const slug = String(value || fallback)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64)
-    .replace(/-+$/g, "");
-  return slug || fallback;
 }
 
 function shellQuote(value: unknown): string {
