@@ -770,6 +770,63 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
     ]);
     assert.equal(logged.code, 0, logged.stderr);
     assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
+    assert.equal(statePayload.evidenceRegistry.counts.rejected, 1);
+  });
+});
+
+test("accepted logged artifacts become current evidence in state registry", async () => {
+  await withTempDir("accepted-artifact-registry", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "accepted artifact registry",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
+    await writeFile(
+      path.join(dir, "packet-runner.mjs"),
+      "console.log('METRIC score=7');\nconsole.log('ARTIFACT manifest=out/manifest.json');\n",
+      "utf8",
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} packet-runner.mjs`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep accepted artifact evidence",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 1);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts[0].name, "manifest");
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts[0].evidenceStatus, "accepted");
+    assert.equal(statePayload.evidenceRegistry.counts.accepted, 2);
   });
 });
 

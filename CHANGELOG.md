@@ -12,6 +12,7 @@ This project uses a root-only changelog because the root README is the public do
 - Added `--metrics-file` for `log` so PowerShell and Windows sessions can record structured metric metadata without brittle inline JSON quoting.
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
 - Added watchdog, process-hygiene, and finalization-pressure dashboard readouts so long quiet windows, stale snapshots, runtime provenance, and accumulating kept work become visible before the loop sleepwalks into more packets.
+- Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
 
 ### Changed
 
@@ -23,6 +24,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Fixed
 
+- Replaced the broken README dashboard screenshot with a fresh demo dashboard capture.
 - Moved dashboard metric-construction details into a visible Metric Details section below the chart so formula, inputs, and decision-rule evidence stay visible without taking chart space.
 - Corrected the release notes to describe the full 1.5 session release train instead of only the final simplifier PR.
 

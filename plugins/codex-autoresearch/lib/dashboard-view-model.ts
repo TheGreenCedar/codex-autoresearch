@@ -1,5 +1,6 @@
 import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
+import { buildEvidenceRegistry } from "./evidence-registry.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -1150,31 +1151,24 @@ function buildEvidenceReadout({
 }
 
 function buildEvidenceLedger(current: RunLike[] = []) {
-  const counts = current.reduce((acc: LooseObject, run) => {
-    const status =
-      String((run as LooseObject).evidenceStatus || "") ||
-      (run.status === "keep" ? "accepted" : run.status === "measure" ? "provisional" : "rejected");
-    acc[status] = (acc[status] || 0) + 1;
-    return acc;
-  }, {});
-  const latest = [...current]
+  const registry = buildEvidenceRegistry({ runs: current });
+  const latest = [...registry.audit]
     .reverse()
-    .map((run) => ({
-      run: run.run,
-      status: run.status,
-      evidenceStatus:
-        (run as LooseObject).evidenceStatus ||
-        (run.status === "keep"
-          ? "accepted"
-          : run.status === "measure"
-            ? "provisional"
-            : "rejected"),
-      description: run.description || "",
+    .map((entry) => ({
+      run: entry.run,
+      status: entry.status,
+      kind: entry.kind,
+      name: entry.name || "",
+      path: entry.path || "",
+      evidenceStatus: entry.evidenceStatus,
+      current: entry.current,
+      description: entry.description || "",
     }))
     .slice(0, 5);
   return {
-    counts,
+    counts: registry.counts,
     latest,
+    acceptedCurrent: registry.acceptedCurrent.length,
     rule: "Accepted evidence can promote; rejected and quarantined evidence stays visible but does not drive promotion.",
   };
 }

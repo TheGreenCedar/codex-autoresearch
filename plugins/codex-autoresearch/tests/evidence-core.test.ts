@@ -35,6 +35,7 @@ import {
   readEvidenceIndex,
   validateClaimReferences,
 } from "../lib/evidence-index.js";
+import { artifactEvidenceList, buildEvidenceRegistry } from "../lib/evidence-registry.js";
 import {
   buildPartialResultEvidenceClaim,
   discoverPartialResultCandidates,
@@ -335,6 +336,79 @@ test("evidence index uses deterministic ids, merges claims, and validates refere
         promotionRelevance: "diagnostic",
       },
     ]);
+  });
+});
+
+test("evidence registry keeps rejected and provisional runs out of accepted current evidence", async () => {
+  await withTempDir("evidence-registry-runs", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "registry", metricName: "score" });
+    appendJsonl(dir, {
+      run: 1,
+      metric: 10,
+      status: "keep",
+      evidenceStatus: "rejected",
+      description: "Rejected keep must remain audit only.",
+    });
+    appendJsonl(dir, {
+      run: 2,
+      metric: 8,
+      status: "measure",
+      description: "Provisional diagnostic measurement.",
+    });
+    appendJsonl(dir, {
+      run: 3,
+      metric: 6,
+      status: "keep",
+      evidenceStatus: "accepted",
+      description: "Accepted current result.",
+    });
+
+    const state = currentState(dir);
+    assert.equal(state.best, 6);
+    assert.equal(state.evidenceRegistry.counts.accepted, 1);
+    assert.equal(state.evidenceRegistry.counts.provisional, 1);
+    assert.equal(state.evidenceRegistry.counts.rejected, 1);
+    assert.deepEqual(
+      state.evidenceRegistry.currentRuns.map((run) => run.run),
+      [3],
+    );
+    assert.deepEqual(
+      state.evidenceRegistry.acceptedCurrent.map((entry) => entry.id),
+      ["run-3"],
+    );
+    assert.deepEqual(
+      state.evidenceRegistry.audit.map((entry) => entry.id),
+      ["run-1", "run-2", "run-3"],
+    );
+  });
+});
+
+test("evidence registry rejects quarantined artifacts and accepts current artifact evidence", async () => {
+  await withTempDir("evidence-registry-artifacts", async (dir) => {
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(path.join(dir, "out", "accepted.json"), "{}\n", "utf8");
+
+    const accepted = artifactEvidenceList({ manifest: "out/accepted.json" }, dir, "accepted");
+    const quarantined = artifactEvidenceList({ outside: "<outside-workdir>" }, dir, "accepted");
+    const registry = buildEvidenceRegistry({
+      runs: [
+        {
+          run: 1,
+          status: "keep",
+          evidenceStatus: "accepted",
+          artifactEvidence: [...accepted, ...quarantined],
+        },
+      ],
+    });
+
+    assert.equal(registry.currentArtifacts.length, 1);
+    assert.equal(registry.currentArtifacts[0].name, "manifest");
+    assert.equal(registry.currentArtifacts[0].evidenceStatus, "accepted");
+    assert.equal(registry.currentArtifacts[0].current, true);
+    const outside = registry.audit.find((entry) => entry.name === "outside");
+    assert.equal(outside?.evidenceStatus, "rejected");
+    assert.equal(outside?.current, false);
+    assert.equal(outside?.quarantined, true);
   });
 });
 

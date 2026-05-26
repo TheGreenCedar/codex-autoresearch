@@ -19,6 +19,7 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
+import { artifactEvidenceList, artifactList } from "../lib/evidence-registry.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { mergeEvidenceClaims } from "../lib/evidence-index.js";
 import {
@@ -5442,6 +5443,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     best: state.best,
     development: state.development,
     promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
@@ -5497,6 +5499,17 @@ function compactPublicState(state: LooseObject) {
     best: state.best,
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
+    evidenceRegistry: state.evidenceRegistry
+      ? {
+          counts: state.evidenceRegistry.counts,
+          acceptedCurrent: Array.isArray(state.evidenceRegistry.acceptedCurrent)
+            ? state.evidenceRegistry.acceptedCurrent.length
+            : 0,
+          currentArtifacts: Array.isArray(state.evidenceRegistry.currentArtifacts)
+            ? state.evidenceRegistry.currentArtifacts.slice(0, 5)
+            : [],
+        }
+      : null,
     evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
     scaffoldHealth: state.scaffoldHealth
       ? {
@@ -6374,46 +6387,6 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
       : null,
     freshnessFingerprint: fingerprint,
   };
-}
-
-function artifactList(artifacts: LooseObject = {}, workDir = "") {
-  return Object.entries(artifacts || {}).map(([name, artifactPath]) => {
-    const quarantined = String(artifactPath || "") === "<outside-workdir>";
-    return {
-      name,
-      path: quarantined
-        ? "<outside-workdir>"
-        : redactPathDisplay(String(artifactPath || ""), workDir),
-      exists: quarantined ? false : artifactExists(String(artifactPath || ""), workDir),
-      quarantined,
-      warning: quarantined ? "Artifact path is outside the working directory." : "",
-    };
-  });
-}
-
-function artifactEvidenceList(
-  artifacts: LooseObject = {},
-  workDir = "",
-  evidenceStatus = "provisional",
-) {
-  return artifactList(artifacts, workDir).map((artifact: LooseObject) => ({
-    ...artifact,
-    evidenceStatus: artifact.quarantined ? "rejected" : evidenceStatus,
-    promotable: !artifact.quarantined && evidenceStatus === "accepted",
-    promotionRelevance: artifact.quarantined
-      ? "blocked_external_artifact"
-      : evidenceStatus === "accepted"
-        ? "supporting"
-        : "context",
-  }));
-}
-
-function artifactExists(artifactPath: string, workDir: string) {
-  if (!artifactPath) return false;
-  const resolved = path.isAbsolute(artifactPath)
-    ? artifactPath
-    : path.resolve(workDir || process.cwd(), artifactPath);
-  return fs.existsSync(resolved);
 }
 
 function promotionStateForLoggedDecision({
