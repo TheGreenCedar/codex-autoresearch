@@ -403,6 +403,49 @@ test("state and dashboard math keep zero-valued metrics visible", async () => {
   });
 });
 
+test("log accepts metrics from a JSON file for PowerShell-safe logging", async () => {
+  await withTempDir("metrics-file", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "metrics file", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "metrics.json"),
+      JSON.stringify(
+        {
+          promotionGrade: true,
+          queryCount: 12,
+          evidenceLabel: 'holdout "quoted" path',
+          windowsPath: "C:\\tmp\\artifact.json",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "File-backed metrics",
+      "--metrics-file",
+      "metrics.json",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+
+    assert.equal(payload.experiment.metrics.promotionGrade, true);
+    assert.equal(payload.experiment.metrics.queryCount, 12);
+    assert.equal(payload.experiment.metrics.evidenceLabel, 'holdout "quoted" path');
+    assert.equal(payload.experiment.metrics.windowsPath, "C:\\tmp\\artifact.json");
+    assert.equal(payload.experiment.evidenceStatus, "accepted");
+    assert.equal(payload.experiment.promotion.label, "promotion_eligible");
+  });
+});
+
 test("state supports negative metrics when lower is better", async () => {
   await withTempDir("negative-metric", async (dir) => {
     await runCli([
@@ -882,6 +925,52 @@ test("state separates development best from promotion-grade best", async () => {
   });
 });
 
+test("research-fanout records generic parallel lanes without creating a bespoke metric", async () => {
+  await withTempDir("research-fanout", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "fanout", "--metric-name", "quality_gap"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "measure",
+      "--description",
+      "Baseline measurement",
+      "--asi",
+      JSON.stringify({
+        hypothesis: "Measure current research gaps",
+        lane: "benchmark-contract",
+        next_action_hint: "Scout benchmark validity before editing.",
+      }),
+    ]);
+
+    const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    assert.equal(fanout.code, 0, fanout.stderr);
+    const plan = JSON.parse(fanout.stdout);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.dryRun, false);
+    assert.ok(plan.parallelLanes.length > 0);
+    assert.match(plan.fanoutPlan.metric.contract, /configured benchmark METRIC output/);
+    assert.equal(plan.parallelLanes[0].evidenceStatus, "provisional");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.ok(payload.parallelLanes.length > 0);
+    assert.equal(payload.fanoutPlan.status, "planned");
+    assert.equal(payload.metric, "quality_gap");
+
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const exportPayload = JSON.parse(exportResult.stdout);
+    assert.ok(exportPayload.viewModel.parallelLanes.length > 0);
+    assert.equal(exportPayload.viewModel.fanoutPlan.status, "planned");
+    assert.equal(exportPayload.viewModel.evidenceLedger.counts.provisional, 1);
+  });
+});
+
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
     await runCli([
@@ -1181,6 +1270,64 @@ test("benchmark contract changes block the next packet until a new segment", asy
   });
 });
 
+test("new segment does not treat its own ledger append as dirty source drift", async () => {
+  await withTempDir("segment-self-dirty", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await runCli(["init", "--cwd", dir, "--name", "segment", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "measure",
+      "--description",
+      "Initial segment measurement",
+    ]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial session"]);
+
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "fresh metric phase",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.segment, 1);
+    assert.equal(payload.decisionEnvelope.dirtySourceDrift.dirty, false);
+    assert.ok(
+      payload.warningDetails.every((warning) => warning.code !== "git_dirty"),
+      "session-only dirtiness should not be reported as source drift",
+    );
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.doesNotMatch(doctorPayload.warnings.join("\n"), /Git worktree is dirty/);
+    assert.ok(
+      doctorPayload.warningDetails.every((warning) => warning.code !== "git_dirty"),
+      "doctor should use the same session-only dirtiness filter as state",
+    );
+
+    await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
+    const dirty = await runCli(["state", "--cwd", dir]);
+    assert.equal(dirty.code, 0, dirty.stderr);
+    const dirtyPayload = JSON.parse(dirty.stdout);
+    assert.equal(dirtyPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.ok(dirtyPayload.warningDetails.some((warning) => warning.code === "git_dirty"));
+  });
+});
+
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
@@ -1215,7 +1362,9 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
     const doc = dom.window.document;
     const rendered = doc.body.innerHTML;
 
-    assert.ok(doc.getElementById("segment-select"));
+    assert.ok(doc.getElementById("segment-navigator"));
+    assert.ok(doc.getElementById("segment-tab-0"));
+    assert.ok(doc.getElementById("segment-tab-1"));
     assert.ok(doc.getElementById("live-toggle"));
     assert.doesNotMatch(dashboard, /id="command-grid"/);
     assert.match(doc.body.textContent, /Run log/);
@@ -3357,9 +3506,11 @@ test("tool schemas expose guidance and output contracts", async () => {
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
+  const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
 
   assert.ok(guided);
+  assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
   assert.match(guided.description, /first-run or resume action packet/);
@@ -3376,6 +3527,8 @@ test("tool schemas expose guidance and output contracts", async () => {
     "Read-only by default; starts a local dashboard only when start_dashboard=true.",
   );
   assert.equal(guided.annotations.readOnlyHint, false);
+  assert.equal(researchFanout.annotations.readOnlyHint, true);
+  assert.equal(researchFanout.annotations.openWorldHint, false);
   assert.equal(guided.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
@@ -3408,8 +3561,10 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(richDoctor.annotations.readOnlyHint, false);
   assert.equal(richDoctor.annotations.openWorldHint, true);
   assert.equal(cliCommandForTool("next_experiment"), "next");
+  assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
   assert.equal(toolMutates("next_experiment"), true);
+  assert.equal(toolMutates("research_fanout"), false);
   assert.equal(toolMutates("read_state"), false);
 });
 

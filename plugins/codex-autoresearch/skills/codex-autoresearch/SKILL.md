@@ -95,12 +95,14 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - If `log --from-last` reports no loggable packet or a stale packet, recover with `next --cwd <project>` or record a manual measurement with `log --cwd <project> --metric <value> --status measure --description "<what was measured>"`.
 - If the last packet crashed or timed out after writing artifacts, run `partial-results --cwd <project> --from-last` before rerunning. Only `partial-results --record <candidate-id>` may turn a selected row into diagnostic `measure` evidence; it must not become promotion-grade evidence.
 - Read the last-run `packetEvidence` before logging: packet id, command identity, timeout, exit status, output tails, metrics, artifacts, checks, and freshness fingerprint.
-- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
+- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` and `--metrics-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
 - `keep`, ordinary `discard`, and `measure` require a finite primary metric.
+- Use `--evidence-status accepted|rejected|provisional|superseded` only when the default status label would hide the actual evidence role. Do not make rejected or quarantined artifacts promotable.
 - Use `measure` for non-promotional evidence such as baselines, no-change checks, environment probes, and diagnostic measurements. It updates trend/latest/baseline readouts, but it never stages, commits, reverts, counts as `keep`, or becomes finalizer evidence.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - Treat parsed metrics and promotion readiness separately. New keeps default to `exploratory`; discards are `invalidated`; crashes and failed checks are `blocked`; only repeat, holdout, breadth, or explicit promotion metadata should make evidence promotable.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
+- If the loop is serially burning time, run `research-fanout --cwd <project> --dry-run` to create a generic parallel lane plan. Dispatch read-only scout lanes first; only implementation lanes should edit, and they need a worktree or explicit owned write scope.
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer. A finite active budget counts: do not stop at a report while iterations remain and there is no blocker.
 - Prefer `next --compact` for live-loop reporting; the full decision packet stays in `lastRunPath` for `log --from-last` and audit.
 - Use `--command-file <path>` plus `--packet-env-file <path>` for Windows/PowerShell packets that would otherwise need fragile inline quoting.

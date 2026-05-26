@@ -133,6 +133,7 @@ const RESEARCH_DIR = "autoresearch.research";
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
+const EVIDENCE_STATUSES = new Set(["accepted", "rejected", "provisional", "superseded"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
@@ -201,13 +202,14 @@ Usage:
   node scripts/autoresearch.mjs partial-results --cwd <project> [--from-last|--artifact <path>] [--record <candidate-id>] [--research-slug <slug>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
@@ -336,6 +338,21 @@ function enumOption<T extends string>(
     throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
   }
   return normalized as T;
+}
+
+function defaultEvidenceStatusForDecision(status: string) {
+  if (status === "keep") return "accepted";
+  if (status === "measure") return "provisional";
+  return "rejected";
+}
+
+function evidenceStatusOption(value: unknown, status: string) {
+  return enumOption(
+    value,
+    EVIDENCE_STATUSES,
+    defaultEvidenceStatusForDecision(status),
+    "--evidence-status",
+  );
 }
 
 function shellQuote(value: unknown): string {
@@ -2962,11 +2979,45 @@ async function hasStagedChanges(cwd: string) {
   return result.code === 1;
 }
 
-async function isGitClean(cwd: string) {
-  if (!(await insideGitRepo(cwd))) return null;
-  const result = await git(["status", "--porcelain"], cwd);
-  if (result.code !== 0) return false;
-  return result.stdout.trim() === "";
+async function gitDirtyPathDetails(cwd: string) {
+  if (!(await insideGitRepo(cwd))) return [];
+  const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
+  if (result.code !== 0) return [];
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const status = line.slice(0, 2);
+      const rawPath = line.slice(3).trim();
+      const normalizedPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").pop() || rawPath
+        : rawPath;
+      return {
+        status,
+        path: normalizeGitStatusPath(normalizedPath),
+        raw: line,
+      };
+    })
+    .filter((entry) => entry.path);
+}
+
+function normalizeGitStatusPath(value: string) {
+  const trimmed = String(value || "").trim();
+  const unquoted =
+    trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+  return unquoted.replace(/\\\\/g, "/").replace(/\\/g, "/");
+}
+
+function isAutoresearchOwnedDirtyPath(relativePath: string) {
+  const normalized = normalizeGitStatusPath(relativePath);
+  return (
+    SESSION_FILES.includes(normalized) ||
+    normalized === "autoresearch-dashboard.html" ||
+    normalized.startsWith(`${RESEARCH_DIR}/`) ||
+    normalized.startsWith("target/autoresearch/") ||
+    normalized.startsWith(".autoresearch-cache/")
+  );
 }
 
 function emptyCommitPathsWarning() {
@@ -3897,6 +3948,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     direction: state.config.bestDirection,
     settings,
   });
+  const fanoutPlan = latestResearchFanoutPlan(workDir);
+  const parallelLanes = buildParallelLanes({ memory, fanoutPlan, config });
   const stateWithQualityGap = { ...state, qualityGap };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -3946,6 +3999,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     scaffoldHealth,
     researchIntegrity,
     warningDetails: warnings,
+    fanoutPlan,
+    parallelLanes,
     experimentEconomics,
     partialResults,
     workflowFriction,
@@ -3972,14 +4027,30 @@ async function operatorWarningsForWorkDir(workDir: string) {
   const config = readConfig(workDir);
   const state = currentState(workDir);
   const warnings = [];
-  if (inGit && (await isGitClean(workDir)) === false) {
-    warnings.push({
-      code: "git_dirty",
-      severity: "warning",
-      message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
-      action:
-        "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
-    });
+  if (inGit) {
+    const dirtyPaths = await gitDirtyPathDetails(workDir);
+    const sourceDirtyPaths = dirtyPaths.filter(
+      (entry: any) => !isAutoresearchOwnedDirtyPath(entry.path),
+    );
+    if (sourceDirtyPaths.length > 0) {
+      warnings.push({
+        code: "git_dirty",
+        severity: "warning",
+        message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
+        action:
+          "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
+        paths: sourceDirtyPaths.map((entry: any) => entry.path).slice(0, 12),
+      });
+    } else if (dirtyPaths.length > 0) {
+      warnings.push({
+        code: "autoresearch_session_dirty",
+        severity: "info",
+        message:
+          "Only Autoresearch session artifacts are dirty; source drift checks will not block the next action.",
+        action: "Continue the loop, then include or exclude session artifacts during finalization.",
+        paths: dirtyPaths.map((entry: any) => entry.path).slice(0, 12),
+      });
+    }
   }
   const missingCommitPaths = [];
   for (const item of listOption(config.commitPaths || config.commit_paths)) {
@@ -4437,7 +4508,12 @@ async function logExperiment(args: any) {
   }
   const description = args.description || lastPacket?.run?.description || "";
   if (!description) throw new Error("description is required");
-  const metrics = args.metrics ?? lastPacket?.decision?.metrics ?? {};
+  const metricsFilePath = args.metrics_file ?? args.metricsFile;
+  if (metricsFilePath && args.metrics != null) {
+    throw new Error("Use either --metrics or --metrics-file, not both.");
+  }
+  const metricsFromFile = await parseJsonFileOption(metricsFilePath, workDir, "--metrics-file");
+  const metrics = metricsFromFile ?? args.metrics ?? lastPacket?.decision?.metrics ?? {};
   const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
   const asiFilePath = args.asi_file ?? args.asiFile;
   if (asiFilePath && args.asi != null) {
@@ -4445,6 +4521,9 @@ async function logExperiment(args: any) {
   }
   const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, "--asi-file");
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
+  const evidenceStatus =
+    evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
+    defaultEvidenceStatusForDecision(status);
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
@@ -4527,6 +4606,7 @@ async function logExperiment(args: any) {
     metrics,
     metricEligible: isPromotionalStatus(status) && finiteMetric(metric) != null,
     status,
+    evidenceStatus,
     description,
     timestamp: Date.now(),
     segment: stateBefore.segment,
@@ -4542,7 +4622,10 @@ async function logExperiment(args: any) {
     packetPromotion: lastPacket?.decision?.promotion,
   });
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
-  if (artifacts && Object.keys(artifacts).length > 0) experiment.artifacts = artifacts;
+  if (artifacts && Object.keys(artifacts).length > 0) {
+    experiment.artifacts = artifacts;
+    experiment.artifactEvidence = artifactEvidenceList(artifacts, workDir, evidenceStatus);
+  }
   const benchmarkContract =
     lastPacket?.history?.benchmarkContract ||
     (await benchmarkContractSnapshot(workDir, {
@@ -5290,6 +5373,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     direction: state.config.bestDirection,
     settings: dashboardSettings(config),
   });
+  const fanoutPlan = latestResearchFanoutPlan(workDir);
+  const parallelLanes = buildParallelLanes({ memory, fanoutPlan, config });
   const stateWithQualityGap = { ...state, qualityGap };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -5363,6 +5448,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     commands: dashboardCommands(workDir),
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
+    fanoutPlan,
+    parallelLanes,
     memory,
     experimentEconomics,
     partialResults,
@@ -5428,6 +5515,22 @@ function compactPublicState(state: LooseObject) {
     requiresLogDecision: continuation.requiresLogDecision === true,
     afterLogAction: continuation.afterLogAction || "",
     finalAnswerPolicy: continuation.finalAnswerPolicy || "",
+    parallelLanes: Array.isArray(state.parallelLanes)
+      ? state.parallelLanes.slice(0, 6).map((lane: any) => ({
+          id: lane.id,
+          title: lane.title || lane.label,
+          mode: lane.mode,
+          evidenceStatus: lane.evidenceStatus,
+          nextActionHint: lane.nextActionHint,
+        }))
+      : [],
+    fanoutPlan: state.fanoutPlan
+      ? {
+          id: state.fanoutPlan.id,
+          status: state.fanoutPlan.status,
+          nextAction: state.fanoutPlan.nextAction,
+        }
+      : null,
     blockers: [...new Set(blockers)].slice(0, 6),
     goalAdvice: state.decisionEnvelope?.goalAdvice || state.resumeAudit?.goalAdvice || null,
     report: {
@@ -5657,6 +5760,151 @@ function loopContinuation(
   };
 }
 
+function latestResearchFanoutPlan(workDir: string) {
+  return (
+    [...readJsonl(workDir)]
+      .reverse()
+      .find((entry: any) => entry?.type === "research_fanout" && entry.fanoutPlan)?.fanoutPlan ||
+    null
+  );
+}
+
+function buildParallelLanes({
+  memory,
+  fanoutPlan = null,
+  config = {},
+}: {
+  memory: LooseObject;
+  fanoutPlan?: LooseObject | null;
+  config?: LooseObject;
+}) {
+  const planned = Array.isArray(fanoutPlan?.lanes) ? fanoutPlan.lanes : [];
+  if (planned.length > 0) return planned;
+  const memoryLanes = Array.isArray(memory?.lanePortfolio) ? memory.lanePortfolio : [];
+  const lanes = memoryLanes.map((lane: LooseObject, index: number) =>
+    normalizeParallelLane(lane, index, config),
+  );
+  if (lanes.length > 0) return lanes;
+  return defaultParallelLaneSeeds(config).map((lane, index) =>
+    normalizeParallelLane(lane, index, config),
+  );
+}
+
+function defaultParallelLaneSeeds(config: LooseObject) {
+  const metricName = config.metricName || "primary metric";
+  return [
+    {
+      id: "read-only-scout",
+      label: "Read-only scout",
+      priority: "high",
+      nextActionHint: `Find one evidence-backed hypothesis that could move ${metricName}.`,
+    },
+    {
+      id: "benchmark-contract",
+      label: "Benchmark contract",
+      priority: "high",
+      nextActionHint:
+        "Check whether the benchmark, parsed metric, and checks still measure the intended outcome.",
+    },
+    {
+      id: "implementation-candidate",
+      label: "Implementation candidate",
+      priority: "medium",
+      nextActionHint:
+        "Prepare one isolated edit lane only after a scout produces a concrete hypothesis.",
+    },
+    {
+      id: "promotion-readiness",
+      label: "Promotion readiness",
+      priority: "medium",
+      nextActionHint:
+        "Identify repeat, holdout, or finalization evidence still needed before a keep can promote.",
+    },
+  ];
+}
+
+function normalizeParallelLane(lane: LooseObject, index: number, config: LooseObject) {
+  const rawId = lane.id || lane.label || lane.title || `lane-${index + 1}`;
+  const id = safeSlug(String(rawId)) || `lane-${index + 1}`;
+  const label = lane.label || lane.title || `Lane ${index + 1}`;
+  const readOnly =
+    !/implementation|edit|candidate|worktree/i.test(String(id)) &&
+    !/implementation|edit|candidate|worktree/i.test(String(label));
+  return {
+    id,
+    title: label,
+    label,
+    status: lane.status || "planned",
+    priority: lane.priority || (index === 0 ? "high" : "medium"),
+    mode: readOnly ? "read_only_scout" : "isolated_worktree",
+    isolation: readOnly
+      ? "read-only; do not edit files"
+      : "use a separate worktree or owned file set",
+    evidenceStatus: lane.evidenceStatus || "provisional",
+    owner: lane.owner || "subagent",
+    writeScope: readOnly ? [] : listOption(config.commitPaths || config.commit_paths),
+    reason: lane.reason || lane.evidence || "Parallel lane planned from current session memory.",
+    nextActionHint:
+      lane.nextActionHint ||
+      lane.recommendation ||
+      "Return a concise hypothesis, evidence, and next measured action.",
+  };
+}
+
+async function researchFanout(args: LooseObject) {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
+  const laneLimit = Math.min(
+    positiveIntegerOption(args.lanes ?? args.laneCount, 6, "--lanes") || 6,
+    12,
+  );
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
+  const lanes = buildParallelLanes({ memory, config }).slice(0, laneLimit);
+  const plan = {
+    id: `fanout-${Date.now()}`,
+    status: dryRun ? "preview" : "planned",
+    createdAt: new Date().toISOString(),
+    segment: state.segment,
+    runs: state.current.length,
+    metric: {
+      name: state.config.metricName || config.metricName || "metric",
+      direction: state.config.bestDirection || config.bestDirection || "lower",
+      contract:
+        "Use the configured benchmark METRIC output as the primary decision value; derive composite meaning in project benchmark code, not by adding one-off Autoresearch metrics.",
+    },
+    lanes,
+    dispatchPolicy: {
+      defaultMode: "read_only_scout",
+      implementationIsolation:
+        "Implementation lanes must use a separate worktree or explicit write scope before editing.",
+      mergeRule:
+        "Only accepted evidence from logged keep or promotion-grade measurement may drive finalization.",
+    },
+    nextAction:
+      "Dispatch the read-only scout lanes in parallel, compare evidence, then choose one isolated implementation lane for the next measured packet.",
+  };
+  if (!dryRun) {
+    appendJsonl(workDir, {
+      type: "research_fanout",
+      timestamp: Date.now(),
+      segment: state.segment,
+      fanoutPlan: plan,
+    });
+  }
+  return {
+    ok: true,
+    workDir,
+    dryRun,
+    fanoutPlan: plan,
+    parallelLanes: lanes,
+  };
+}
+
 function continuationCommands(workDir: string) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
@@ -5758,14 +6006,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const warnings = [];
   const warningDetails = [];
   const inGit = await insideGitRepo(workDir);
-  const clean = await isGitClean(workDir);
 
   if (!state.config.metricName) issues.push("No primary metric is configured.");
   if (state.runs === 0)
     warnings.push("No runs are logged yet. Run a baseline before experimenting.");
   warnings.push(...(state.memory?.warnings || []));
-  if (inGit && clean === false)
-    warnings.push("Git worktree is dirty; review unrelated changes before logging a keep result.");
   if (!inGit)
     warnings.push(
       "Working directory is not a Git repository; keep commits and discard reverts are unavailable.",
@@ -5878,7 +6123,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     state,
     git: {
       inside: inGit,
-      clean,
+      clean: state.decisionEnvelope?.dirtySourceDrift?.dirty === true ? false : true,
     },
     benchmark,
     drift,
@@ -6135,6 +6380,23 @@ function artifactList(artifacts: LooseObject = {}, workDir = "") {
       warning: quarantined ? "Artifact path is outside the working directory." : "",
     };
   });
+}
+
+function artifactEvidenceList(
+  artifacts: LooseObject = {},
+  workDir = "",
+  evidenceStatus = "provisional",
+) {
+  return artifactList(artifacts, workDir).map((artifact: LooseObject) => ({
+    ...artifact,
+    evidenceStatus: artifact.quarantined ? "rejected" : evidenceStatus,
+    promotable: !artifact.quarantined && evidenceStatus === "accepted",
+    promotionRelevance: artifact.quarantined
+      ? "blocked_external_artifact"
+      : evidenceStatus === "accepted"
+        ? "supporting"
+        : "context",
+  }));
 }
 
 function artifactExists(artifactPath: string, workDir: string) {
@@ -6412,6 +6674,7 @@ async function main() {
     sessionForensics,
     readJsonl,
     recipeCommand,
+    researchFanout,
     resolveWorkDir,
     runExperiment,
     serveDashboard,

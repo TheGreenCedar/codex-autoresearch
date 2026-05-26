@@ -178,6 +178,15 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         skipInit: args.skipInit,
       }),
     }),
+    "research-fanout": async (args) => ({
+      result: await deps.researchFanout({
+        cwd: args.cwd,
+        lanes: args.lanes,
+        laneCount: args.laneCount,
+        dryRun: args.dryRun,
+        yes: args.yes,
+      }),
+    }),
     config: async (args) => ({
       result: await deps.configureSession({
         cwd: args.cwd,
@@ -290,9 +299,11 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         metric: args.metric,
         status: args.status,
         description: args.description,
-        metrics: deps.parseJsonOption(args.metrics, null),
+        metrics: args.metricsFile ? args.metrics : deps.parseJsonOption(args.metrics, null),
+        metricsFile: args.metricsFile,
         asi: deps.parseJsonOption(args.asi, null),
         asiFile: args.asiFile,
+        evidenceStatus: args.evidenceStatus,
         commitPaths: args.commitPaths,
         revertPaths: args.revertPaths,
         allowAddAll: args.allowAddAll,

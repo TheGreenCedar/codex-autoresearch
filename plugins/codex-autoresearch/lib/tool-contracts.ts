@@ -132,6 +132,14 @@ const CONTRACTS = {
     safety: "Writes research scratchpad and session artifacts.",
     outputSchema: basicOutputSchema(["ok", "workDir", "slug", "qualityGap"]),
   },
+  research_fanout: {
+    purpose: "Plan bounded parallel research lanes from current session memory.",
+    whenToUse: "Use when the loop is spending too long serially exploring one hypothesis path.",
+    contrast:
+      "Use next_experiment to run a measured packet after a lane has produced a concrete hypothesis.",
+    safety: "Read-only by default; --yes appends only a fanout plan to the Autoresearch ledger.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "fanoutPlan", "parallelLanes"]),
+  },
   configure_session: {
     purpose: "Update runtime settings such as autonomy mode, policies, paths, and limits.",
     whenToUse: "Use to tune an existing session without recreating it.",
@@ -344,6 +352,7 @@ const READ_ONLY_TOOLS = new Set([
   "recommend_next",
   "codex_goal_bridge",
   "list_recipes",
+  "research_fanout",
   "read_state",
   "measure_quality_gap",
   "finalize_preview",

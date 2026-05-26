@@ -100,7 +100,15 @@ export function CodexBrief({
 
 export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel }) {
   const memory = viewModel.experimentMemory || {};
-  const lanes = Array.isArray(memory.lanePortfolio) ? memory.lanePortfolio.slice(0, 4) : [];
+  const lanes = (
+    Array.isArray(viewModel.parallelLanes) && viewModel.parallelLanes.length
+      ? viewModel.parallelLanes
+      : Array.isArray(memory.lanePortfolio)
+        ? memory.lanePortfolio
+        : []
+  ).slice(0, 6);
+  const fanoutStatus =
+    typeof viewModel.fanoutPlan?.status === "string" ? viewModel.fanoutPlan.status : "";
   return (
     <section
       className="panel memory-panel"
@@ -114,7 +122,7 @@ export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel })
           <h2>Experiment portfolio</h2>
         </div>
         <span className="panel-note">
-          {memory.plateau?.detected ? "Plateau detected" : "No plateau"}
+          {fanoutStatus || (memory.plateau?.detected ? "Plateau detected" : "No plateau")}
         </span>
       </div>
       <div className="memory-list">
@@ -122,7 +130,11 @@ export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel })
           lanes.map((lane) => (
             <div className="memory-lane" key={lane.id || lane.title}>
               <strong>{lane.title || lane.id || "Lane"}</strong>
-              <span>{lane.status || "tracking"}</span>
+              <span>
+                {[lane.status || "tracking", lane.mode, lane.evidenceStatus]
+                  .filter(Boolean)
+                  .join(" / ")}
+              </span>
               <p>
                 {lane.nextActionHint ||
                   lane.recommendation ||

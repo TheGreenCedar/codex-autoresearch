@@ -165,6 +165,12 @@ export function buildDashboardViewModel(context: DashboardContext) {
     kept,
     finalizePreview,
   });
+  const parallelLanes = Array.isArray(state.parallelLanes)
+    ? state.parallelLanes
+    : Array.isArray(experimentMemory?.lanePortfolio)
+      ? experimentMemory.lanePortfolio
+      : [];
+  const evidenceLedger = buildEvidenceLedger(current);
   const evidenceReadout = buildEvidenceReadout({
     researchIntegrity,
     researchTruth,
@@ -210,10 +216,13 @@ export function buildDashboardViewModel(context: DashboardContext) {
     finalizePreview,
     recipes,
     experimentMemory,
+    fanoutPlan: state.fanoutPlan || null,
+    parallelLanes,
     portfolio,
     trustState: trustContext.trustState,
     researchTruth,
     evidenceChips,
+    evidenceLedger,
     evidenceReadout,
     proofGaps,
     finalizationChecklist,
@@ -935,6 +944,36 @@ function buildEvidenceReadout({
     title: labelText(normalized),
     promotable: normalized === "promotion_eligible",
     reasons,
+  };
+}
+
+function buildEvidenceLedger(current: RunLike[] = []) {
+  const counts = current.reduce((acc: LooseObject, run) => {
+    const status =
+      String((run as LooseObject).evidenceStatus || "") ||
+      (run.status === "keep" ? "accepted" : run.status === "measure" ? "provisional" : "rejected");
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+  const latest = [...current]
+    .reverse()
+    .map((run) => ({
+      run: run.run,
+      status: run.status,
+      evidenceStatus:
+        (run as LooseObject).evidenceStatus ||
+        (run.status === "keep"
+          ? "accepted"
+          : run.status === "measure"
+            ? "provisional"
+            : "rejected"),
+      description: run.description || "",
+    }))
+    .slice(0, 5);
+  return {
+    counts,
+    latest,
+    rule: "Accepted evidence can promote; rejected and quarantined evidence stays visible but does not drive promotion.",
   };
 }
 
