@@ -4,12 +4,35 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## 1.5.0
+## 1.5.1
+
+### Fixed
+
+- Moved dashboard metric-construction details into a visible Metric Details section below the chart so formula, inputs, and decision-rule evidence stay visible without taking chart space.
+- Corrected the release notes to describe the full 1.5 session release train instead of only the final simplifier PR.
 
 ### Changed
 
-- Bumped public package and plugin manifest version surfaces to `1.5.0`.
+- Bumped public package, lockfile, plugin manifest, demo export, and runtime drift surfaces to `1.5.1`.
+
+## 1.5.0
+
+### Added
+
+- Added `codex-goal-brief` / `codex_goal_bridge`, durable goal state, and `goalAdvice` so resumed loops keep the Codex-facing objective and completion boundary visible without relying on chat memory.
+- Added `session-forensics` / `session_forensics` for long Codex session imports, writing bounded context capsules, quality-gap candidates, decision notes, and evidence-index claims into `autoresearch.research/<slug>/`.
+- Added shared decision thresholds, safe research-slug path guards, evidence index helpers, and canonical `context-distillation` next-action guidance for sessions hitting compaction, token, tool-call, polling, or output-budget limits.
+- Added active runner progress snapshots, experiment-economics warnings, workflow-friction signals, and experiment-memory exhaustion/shelf detection so wasted packets and stale progress become explicit next-action blockers.
+- Added `partial-results` / `partial_results` so crashed or timed-out packets can expose artifact rows and record selected rows as diagnostic `measure` evidence with provenance.
+
+### Changed
+
+- `state --compact`, `recommend-next --compact`, dashboard data, setup, stale packet handling, quality gaps, partial-result review, finalization, and plateau pivots now route through one canonical next-action surface.
+- Dashboard segment navigation now uses a keyboardable segment strip instead of the long dropdown, with controlled tabpanel summaries for long multi-segment sessions.
+- Dashboard metric readouts now show metric construction, detected inputs, decision rule, selected-run evidence, no-trend states, secondary metrics, and missing-formula warnings instead of repeating right-rail totals.
+- Refreshed dashboard build assets, demo export, showcase screenshot, docs, skill guidance, command contracts, and regression coverage for the current operator workflow.
 - Simplified the CLI by reusing shared session option helpers instead of maintaining duplicate local copies.
+- Bumped public package, lockfile, plugin manifest, demo export, and runtime drift surfaces to `1.5.0`.
 
 ## 1.4.1
 
