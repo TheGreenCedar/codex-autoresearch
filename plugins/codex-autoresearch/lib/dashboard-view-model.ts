@@ -885,7 +885,13 @@ export function buildProcessHygiene({
       : null;
   const warnings = [];
   if (mode === "static-export" && exportAgeHours != null && exportAgeHours >= staleExportHours) {
-    warnings.push(`Static export is ${exportAgeHours}h old; serve a live dashboard before acting.`);
+    warnings.push(
+      "Static export is a snapshot and cannot prove current runtime freshness; serve a live dashboard before acting.",
+    );
+  } else if (mode === "static-export") {
+    warnings.push(
+      "Static export is a snapshot and cannot prove current runtime freshness; serve a live dashboard before acting.",
+    );
   }
   if (activeServerCount != null && activeServerCount > 1) {
     warnings.push(
@@ -1978,6 +1984,11 @@ function actionFromDecisionEnvelope(
     "context-distillation": cleanText(summary.command) || "",
     "quality-gap": commandMap.get("gap candidates") || "",
     "plateau-pivot": commandMap.get("next run") || "",
+    watchdog:
+      commandMap.get("finalize preview") ||
+      commandMap.get("serve dashboard") ||
+      commandMap.get("doctor") ||
+      "",
     finalization: commandMap.get("finalize preview") || "",
     "next-packet": commandMap.get("next run") || "",
     setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
@@ -2005,6 +2016,7 @@ function actionFromDecisionEnvelope(
     "context-distillation": "Context",
     "quality-gap": "Gaps",
     "plateau-pivot": "Next",
+    watchdog: commandMap.get("finalize preview") ? "Preview" : "Inspect",
     finalization: "Preview",
     "next-packet": "Next",
     setup: "Setup",
@@ -2024,6 +2036,7 @@ function actionFromDecisionEnvelope(
     "context-distillation": "session-forensics",
     "quality-gap": "gap-candidates",
     "plateau-pivot": "next",
+    watchdog: commandMap.get("finalize preview") ? "finalize-preview" : "inspect",
     finalization: "finalize-preview",
     "next-packet": "next",
     setup: "setup-plan",
@@ -2039,7 +2052,10 @@ function actionFromDecisionEnvelope(
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
     utilityCopy: decisionEnvelopeUtility(kind),
     safeAction: safeActionByKind[kind] || "",
-    command: cleanText(summary.command) || commandByKind[kind] || commandMap.get("next run") || "",
+    command:
+      cleanText(summary.command) ||
+      commandByKind[kind] ||
+      (kind === "watchdog" ? "" : commandMap.get("next run") || ""),
     commandLabel: labelByKind[kind] || "Next",
     tone: ["finalize-preview", "finalization"].includes(kind)
       ? "good"
@@ -2051,6 +2067,7 @@ function actionFromDecisionEnvelope(
             "setup",
             "benchmark-command",
             "log-decision",
+            "watchdog",
             "plateau",
             "plateau-pivot",
           ].includes(kind)
