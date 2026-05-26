@@ -123,6 +123,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next` before logging.
 - The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, progress/economics, partial-result candidates, workflow friction, benchmark/config drift, dirty source drift, quality round, experiment memory, and finalization readiness before naming `nextAction`.
+- Read `watchdog` in the resume audit/dashboard before continuing a long run. A stale watchdog means no metric movement, logged decision, kept commit, or completed lane has appeared inside the configured quiet window; inspect the process, finalize kept work, or rescope instead of spending another packet by reflex.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
@@ -161,6 +162,7 @@ Read dashboard evidence in this order:
 4. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
 5. Ledger and ASI: what was kept, measured, rejected, crashed, or blocked by checks.
 6. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
+7. Process hygiene: active cwd, plugin version, live/export mode, stale snapshot hints, duplicate-server hints when the current serve process can know them, and explicit "unavailable" labels when it cannot.
 
 Use the CLI for setup, packet runs, logging, gap review, export, `finalize-preview`, and finalization preview. The dashboard should support judgment; it should not become the workflow driver.
 
@@ -187,10 +189,11 @@ Use finalization when noisy loop history has useful kept commits.
 2. Keep only `status: "keep"` evidence.
 3. Treat previews and plans as read-only.
 4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
-5. Ask before creating branches unless the user already approved finalization.
-6. Run the finalizer from the autoresearch source branch.
-7. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
-8. Report created review branches, files, metric improvement, verification, and remaining risk.
+5. Treat finalization pressure as a stop-and-review signal when kept runs, preview warnings, missing commit metadata, or watchdog pressure accumulate.
+6. Ask before creating branches unless the user already approved finalization.
+7. Run the finalizer from the autoresearch source branch.
+8. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
+9. Report created review branches, files, metric improvement, verification, and remaining risk.
 
 Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project>` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain that the current tree, not old kept commits, is the review unit.
 

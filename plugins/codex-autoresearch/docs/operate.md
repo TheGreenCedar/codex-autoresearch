@@ -18,6 +18,8 @@ CLI commands return structured content; prefer `--json-full`, `--compact`, or th
 
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
 
+The resume contract also carries a watchdog summary. By default it treats an eight-hour quiet window as suspicious when there has been no metric movement, no logged decision, no kept commit, and no completed lane. Tune it with `watchdogNoProgressHours` or `watchdogNoProgressSeconds` in config when a project has a different overnight rhythm. If it fires, do not just feed the machine another packet. Inspect the process, finalize kept work, or rescope the segment.
+
 Read existing files before editing:
 
 - `autoresearch.md`
@@ -47,6 +49,7 @@ Use it for:
 - decision-envelope summary and one next action
 - next safe action and why it is safe
 - trust blockers
+- watchdog and process-hygiene readouts for quiet windows, active cwd, plugin version, stale snapshots, and server-detection limits
 - best kept change and recent failure
 - metric trajectory
 - measurement points that are trend evidence, not promotion evidence
@@ -61,6 +64,8 @@ node scripts/autoresearch.mjs export --cwd <project>
 ```
 
 If you need fresh state, serve a fresh dashboard. Do not treat an old `file://` export as runtime truth. Use the CLI for setup, packet runs, logging, gap review, export, and finalization.
+
+The process-hygiene panel reports what the snapshot can actually know. It can show active cwd, plugin version, live URL metadata, runtime drift, export age, and dashboard servers started by this process. It cannot enumerate random old localhost servers outside the current process, so that gap is labeled instead of faked.
 
 ## Packet Loop
 
@@ -175,6 +180,10 @@ node scripts/autoresearch.mjs new-segment --cwd <project> --reason "fresh phase"
 This appends a new config segment to `autoresearch.jsonl` and preserves old history.
 
 Repeated exact-score shelves, max-iteration/tool-cap states, benchmark/config drift, or a quality round that needs fresh discovery should recommend scout/constraint-removal/new-segment work before another near-neighbor tweak.
+
+## Finalization Pressure
+
+Kept commits are not a points system. They are review backlog. When kept runs, missing commit metadata, finalization warnings, or watchdog pressure stack up, the dashboard marks finalization pressure and pushes `finalize-preview` or rescoping ahead of more packets. That does not create branches by itself. It is a shove toward review while the evidence is still warm.
 
 ---
 

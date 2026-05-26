@@ -326,6 +326,9 @@ export interface DashboardViewModel {
         [key: string]: unknown;
       }
     | ChecklistItemModel[];
+  finalizationPressure?: Record<string, unknown>;
+  watchdogSummary?: Record<string, unknown>;
+  processHygiene?: Record<string, unknown>;
   finalizePreview?: FinalizePreviewModel;
   trustState?: TrustStateModel;
   trust?: TrustStateModel;
