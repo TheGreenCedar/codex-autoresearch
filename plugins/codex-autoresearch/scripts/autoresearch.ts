@@ -203,6 +203,7 @@ Usage:
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]
+  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
@@ -5784,10 +5785,14 @@ function buildParallelLanes({
   const lanes = memoryLanes.map((lane: LooseObject, index: number) =>
     normalizeParallelLane(lane, index, config),
   );
-  if (lanes.length > 0) return lanes;
-  return defaultParallelLaneSeeds(config).map((lane, index) =>
-    normalizeParallelLane(lane, index, config),
-  );
+  const existingIds = new Set(lanes.map((lane) => lane.id));
+  for (const seed of defaultParallelLaneSeeds(config)) {
+    const normalized = normalizeParallelLane(seed, lanes.length, config);
+    if (existingIds.has(normalized.id)) continue;
+    lanes.push(normalized);
+    existingIds.add(normalized.id);
+  }
+  return lanes;
 }
 
 function defaultParallelLaneSeeds(config: LooseObject) {
@@ -5851,6 +5856,61 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
   };
 }
 
+function latestLaneResults(workDir: string) {
+  return readJsonl(workDir).filter((entry: any) => entry?.type === "lane_result");
+}
+
+function normalizeLaneMode(value: unknown, fallback: string) {
+  const raw = String(value || fallback || "read_only_scout")
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (["read_only", "readonly", "scout", "read_only_scout"].includes(raw)) return "read_only_scout";
+  if (["implementation", "isolated_worktree", "mutating"].includes(raw)) return "implementation";
+  throw new Error("--mode must be read_only_scout or implementation.");
+}
+
+function commandLooksMutating(command: string) {
+  return (
+    /(^|[\s;&|])(git\s+(add|am|apply|checkout|clean|commit|merge|mv|rebase|reset|restore|rm|switch)|npm\s+(install|i)|pnpm\s+(add|install)|yarn\s+(add|install)|rm\s+|del\s+|erase\s+|remove-item|set-content|out-file|new-item|move-item|copy-item|apply_patch)(\s|$)/i.test(
+      command,
+    ) || /(^|[^<])>>?[^&]/.test(command)
+  );
+}
+
+async function gitStatusPorcelain(cwd: string) {
+  if (!(await insideGitRepo(cwd).catch(() => false))) return null;
+  const result = await git(["status", "--porcelain"], cwd);
+  return result.code === 0 ? result.stdout : null;
+}
+
+function synthesizeLaneDecision({
+  workDir,
+  laneResults,
+  fallbackLane,
+}: {
+  workDir: string;
+  laneResults: LooseObject[];
+  fallbackLane?: LooseObject | null;
+}) {
+  const completed = laneResults
+    .filter((entry) => entry?.result?.status === "completed")
+    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  const selected = completed.find((entry) => entry.result?.recommendation || entry.result?.summary);
+  const nextAction =
+    selected?.result?.recommendation ||
+    selected?.result?.summary ||
+    fallbackLane?.nextActionHint ||
+    "Run one read-only scout lane, then choose one isolated implementation candidate for the next measured packet.";
+  return {
+    status: selected ? "ready" : "needs_lane_result",
+    sourceLane: selected?.lane?.id || fallbackLane?.id || "",
+    nextAction,
+    measuredPacket:
+      "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
+    commandHint: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`,
+  };
+}
+
 async function researchFanout(args: LooseObject) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
@@ -5902,6 +5962,125 @@ async function researchFanout(args: LooseObject) {
     dryRun,
     fanoutPlan: plan,
     parallelLanes: lanes,
+  };
+}
+
+async function laneRunner(args: LooseObject) {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const fanoutPlan = latestResearchFanoutPlan(workDir);
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
+  const lanes = buildParallelLanes({ memory, fanoutPlan, config });
+  const laneId = String(
+    args.lane_id || args.laneId || args.lane || lanes[0]?.id || "read-only-scout",
+  );
+  const lane =
+    lanes.find((candidate: LooseObject) => candidate.id === laneId || candidate.label === laneId) ||
+    normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
+  const mode = normalizeLaneMode(args.mode, lane.mode);
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
+  const command = String(args.command || "").trim();
+  const timeBudgetSeconds =
+    positiveIntegerOption(
+      args.time_budget_seconds ??
+        args.timeBudgetSeconds ??
+        args.timeout_seconds ??
+        args.timeoutSeconds,
+      300,
+      "--time-budget-seconds",
+    ) || 300;
+  const writeScope = listOption(
+    args.write_scope ?? args.writeScope ?? args.commit_paths ?? args.commitPaths,
+  );
+  const worktreePath = String(
+    args.worktree_path || args.worktreePath || args.worktree || "",
+  ).trim();
+  if (mode === "implementation" && !worktreePath && writeScope.length === 0) {
+    throw new Error(
+      "Implementation lanes require explicit isolation: pass --worktree <path> or --write-scope <paths> before running.",
+    );
+  }
+  if (mode === "read_only_scout" && command && commandLooksMutating(command)) {
+    throw new Error("Read-only scout lanes cannot run commands that look mutating.");
+  }
+
+  const runCwd =
+    mode === "implementation" && worktreePath ? path.resolve(workDir, worktreePath) : workDir;
+  const beforeStatus =
+    mode === "read_only_scout" && command && !dryRun ? await gitStatusPorcelain(workDir) : null;
+  let commandResult: LooseObject | null = null;
+  if (command && !dryRun) {
+    const result = await runShell(command, runCwd, timeBudgetSeconds, {
+      retainMetricNames: [state.config.metricName || config.metricName || ""],
+    });
+    commandResult = {
+      code: result.exitCode,
+      timedOut: result.timedOut,
+      durationSeconds: result.durationSeconds,
+      output: tailText(result.output || "", 20, 4000),
+    };
+    if (beforeStatus != null) {
+      const afterStatus = await gitStatusPorcelain(workDir);
+      if (afterStatus !== beforeStatus) {
+        throw new Error(
+          "Read-only scout lane changed the git working tree; discard or isolate the change before continuing.",
+        );
+      }
+    }
+  }
+
+  const resultStatus =
+    args.result_status ||
+    args.resultStatus ||
+    (commandResult
+      ? commandResult.code === 0 && !commandResult.timedOut
+        ? "completed"
+        : "failed"
+      : "completed");
+  const result = {
+    status: resultStatus,
+    summary: args.summary || (commandResult ? "Lane command completed." : "Lane result recorded."),
+    recommendation:
+      args.recommendation || args.next_action || args.nextAction || lane.nextActionHint,
+    command: command || "",
+    timeBudgetSeconds,
+    isolation: {
+      mode,
+      worktree: worktreePath,
+      writeScope,
+    },
+    commandResult,
+  };
+  const entry = {
+    type: "lane_result",
+    timestamp: Date.now(),
+    segment: state.segment,
+    lane: {
+      id: lane.id,
+      title: lane.title || lane.label,
+      mode,
+    },
+    result,
+  };
+  const existingResults = latestLaneResults(workDir);
+  const laneResults = dryRun ? existingResults : [...existingResults, entry];
+  const coordinatorRecommendation = synthesizeLaneDecision({
+    workDir,
+    laneResults,
+    fallbackLane: lane,
+  });
+  if (!dryRun) appendJsonl(workDir, entry);
+  return {
+    ok: true,
+    workDir,
+    dryRun,
+    lane: entry.lane,
+    result,
+    coordinatorRecommendation,
   };
 }
 
@@ -6675,6 +6854,7 @@ async function main() {
     readJsonl,
     recipeCommand,
     researchFanout,
+    laneRunner,
     resolveWorkDir,
     runExperiment,
     serveDashboard,

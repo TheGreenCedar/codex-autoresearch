@@ -31,6 +31,7 @@ const TOOL_REGISTRY = [
   { name: "setup_session", cliCommand: "setup", actionPolicy: "state_mutation" },
   { name: "setup_research_session", cliCommand: "research-setup", actionPolicy: "state_mutation" },
   { name: "research_fanout", cliCommand: "research-fanout", actionPolicy: "read" },
+  { name: "lane_runner", cliCommand: "lane-runner", actionPolicy: "read" },
   { name: "configure_session", cliCommand: "config", actionPolicy: "state_mutation" },
   { name: "init_experiment", cliCommand: "init", actionPolicy: "state_mutation" },
   { name: "run_experiment", cliCommand: "run", actionPolicy: "process_start" },
@@ -82,6 +83,9 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
   }
   if (name === "research_fanout" && (args.yes || args.yes === "true")) {
     return "state_mutation";
+  }
+  if (name === "lane_runner" && (args.command || args.yes || args.yes === "true")) {
+    return args.command ? "process_start" : "state_mutation";
   }
   if (name === "partial_results" && args.record) return "artifact_write";
   if (name === "guided_setup" && (args.start_dashboard || args.startDashboard)) {

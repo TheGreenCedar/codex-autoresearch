@@ -115,9 +115,10 @@ When a loop is spending hours on one serial idea path, create a generic fanout p
 ```bash
 node scripts/autoresearch.mjs research-fanout --cwd <project> --dry-run
 node scripts/autoresearch.mjs research-fanout --cwd <project> --lanes 6 --yes
+node scripts/autoresearch.mjs lane-runner --cwd <project> --lane-id read-only-scout --summary "Evidence found" --recommendation "Run one measured packet for the chosen hypothesis" --yes
 ```
 
-The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Dispatch scout lanes in parallel first. Implementation lanes should edit only in a separate worktree or an explicit owned file scope, then return one concrete hypothesis for the next measured packet.
+The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Dispatch scout lanes in parallel first. `lane-runner` records or runs one lane with a bounded time budget and returns one coordinator recommendation for the next measured packet. Read-only scout lanes do not need a worktree and block commands that look mutating. Implementation lanes must pass `--worktree <path>` or `--write-scope <paths>` before they can run.
 
 ## ASI
 

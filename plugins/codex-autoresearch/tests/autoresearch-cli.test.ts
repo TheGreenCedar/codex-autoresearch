@@ -951,7 +951,8 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
     const plan = JSON.parse(fanout.stdout);
     assert.equal(plan.ok, true);
     assert.equal(plan.dryRun, false);
-    assert.ok(plan.parallelLanes.length > 0);
+    assert.ok(plan.parallelLanes.length >= 4);
+    assert.ok(plan.parallelLanes.length <= 6);
     assert.match(plan.fanoutPlan.metric.contract, /configured benchmark METRIC output/);
     assert.equal(plan.parallelLanes[0].evidenceStatus, "provisional");
 
@@ -968,6 +969,86 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
     assert.ok(exportPayload.viewModel.parallelLanes.length > 0);
     assert.equal(exportPayload.viewModel.fanoutPlan.status, "planned");
     assert.equal(exportPayload.viewModel.evidenceLedger.counts.provisional, 1);
+  });
+});
+
+test("lane-runner allows read-only lanes without worktree isolation", async () => {
+  await withTempDir("lane-runner-read-only", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--summary",
+      "Scout found one benchmark-contract hypothesis.",
+      "--recommendation",
+      "Run one benchmark-contract packet next.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.dryRun, false);
+    assert.equal(payload.lane.mode, "read_only_scout");
+    assert.equal(payload.result.isolation.worktree, "");
+    assert.deepEqual(payload.result.isolation.writeScope, []);
+
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.match(ledger, /"type":"lane_result"/);
+  });
+});
+
+test("lane-runner blocks implementation lanes without explicit isolation", async () => {
+  await withTempDir("lane-runner-isolation", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--summary",
+      "Try an implementation candidate.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Implementation lanes require explicit isolation/);
+  });
+});
+
+test("lane-runner synthesizes completed lane results into one next action", async () => {
+  await withTempDir("lane-runner-synthesis", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--summary",
+      "Benchmark contract is the riskiest assumption.",
+      "--recommendation",
+      "Run one measured packet that validates benchmark contract parsing.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.coordinatorRecommendation.status, "ready");
+    assert.equal(
+      payload.coordinatorRecommendation.nextAction,
+      "Run one measured packet that validates benchmark contract parsing.",
+    );
+    assert.equal(typeof payload.coordinatorRecommendation.nextAction, "string");
   });
 });
 

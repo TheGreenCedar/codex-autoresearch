@@ -187,6 +187,27 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         yes: args.yes,
       }),
     }),
+    "lane-runner": async (args) => ({
+      result: await deps.laneRunner({
+        cwd: args.cwd,
+        laneId: args.laneId,
+        lane: args.lane,
+        mode: args.mode,
+        command: args.command,
+        worktree: args.worktree,
+        worktreePath: args.worktreePath,
+        writeScope: args.writeScope,
+        commitPaths: args.commitPaths,
+        resultStatus: args.resultStatus,
+        summary: args.summary,
+        recommendation: args.recommendation,
+        nextAction: args.nextAction,
+        timeBudgetSeconds: args.timeBudgetSeconds,
+        timeoutSeconds: args.timeoutSeconds,
+        dryRun: args.dryRun,
+        yes: args.yes,
+      }),
+    }),
     config: async (args) => ({
       result: await deps.configureSession({
         cwd: args.cwd,
