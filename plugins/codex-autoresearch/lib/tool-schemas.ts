@@ -254,6 +254,34 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "lane_runner",
+    description:
+      "Run or record one coordinated research lane with conservative isolation and a single synthesized next packet recommendation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        lane_id: { type: "string" },
+        lane: { type: "string" },
+        mode: { type: "string", enum: ["read_only_scout", "implementation"] },
+        command: { type: "string" },
+        worktree: { type: "string" },
+        worktree_path: { type: "string" },
+        write_scope: { type: "array", items: { type: "string" } },
+        commit_paths: { type: "array", items: { type: "string" } },
+        result_status: { type: "string", enum: ["completed", "blocked", "failed", "planned"] },
+        summary: { type: "string" },
+        recommendation: { type: "string" },
+        next_action: { type: "string" },
+        time_budget_seconds: { type: "integer" },
+        timeout_seconds: { type: "integer" },
+        dry_run: { type: "boolean" },
+        yes: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "configure_session",
     description:
       "Update runtime settings such as autonomy mode, checks policy, keep policy, dashboard refresh, commit paths, or iteration limit.",
@@ -619,6 +647,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   recipes: "list_recipes",
   "research-setup": "setup_research_session",
   "research-fanout": "research_fanout",
+  "lane-runner": "lane_runner",
   config: "configure_session",
   "quality-gap": "measure_quality_gap",
   "gap-candidates": "gap_candidates",
@@ -677,6 +706,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   evidence_status: "evidenceStatus",
   json_full: "jsonFull",
   keep_policy: "keepPolicy",
+  lane_id: "laneId",
   lane_count: "laneCount",
   max_iterations: "maxIterations",
   metrics_file: "metricsFile",
@@ -694,11 +724,15 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   session_jsonl: "sessionJsonl",
   revert_paths: "revertPaths",
   secondary_metrics: "secondaryMetrics",
+  result_status: "resultStatus",
   skip_init: "skipInit",
   start_dashboard: "startDashboard",
   timeout_seconds: "timeoutSeconds",
+  time_budget_seconds: "timeBudgetSeconds",
   trust_catalog: "trustCatalog",
+  worktree_path: "worktreePath",
   working_dir: "cwd",
+  write_scope: "writeScope",
 };
 
 export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {

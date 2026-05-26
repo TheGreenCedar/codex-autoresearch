@@ -9,6 +9,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Added
 
 - Added `research-fanout` / `research_fanout`, a generic parallel lane planner that turns current session memory into read-only scout lanes and isolated implementation lanes without creating project-specific metrics.
+- Added `lane-runner` / `lane_runner`, a conservative coordinator path for recording or running one lane with read-only defaults, implementation isolation checks, time budgets, and one synthesized next measured packet recommendation.
 - Added `--metrics-file` for `log` so PowerShell and Windows sessions can record structured metric metadata without brittle inline JSON quoting.
 - Added `--asi-json-file` for `log` so PowerShell and Windows sessions can record ASI without fragile inline JSON quoting while preserving inline `--asi` and legacy `--asi-file`.
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.

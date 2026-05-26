@@ -140,6 +140,20 @@ const CONTRACTS = {
     safety: "Read-only by default; --yes appends only a fanout plan to the Autoresearch ledger.",
     outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "fanoutPlan", "parallelLanes"]),
   },
+  lane_runner: {
+    purpose: "Run or record one planned lane and synthesize a single coordinator next action.",
+    whenToUse: "Use after research_fanout when a lane needs bounded execution or a handoff.",
+    contrast: "Use research_fanout to create lanes; use next_experiment for the measured packet.",
+    safety: "Read-only scout by default; implementation requires --worktree or --write-scope.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "dryRun",
+      "lane",
+      "result",
+      "coordinatorRecommendation",
+    ]),
+  },
   configure_session: {
     purpose: "Update runtime settings such as autonomy mode, policies, paths, and limits.",
     whenToUse: "Use to tune an existing session without recreating it.",
@@ -366,6 +380,7 @@ const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
   "checks_inspect",
   "doctor_session",
   "gap_candidates",
+  "lane_runner",
 ]);
 
 type ToolName = keyof typeof CONTRACTS;
