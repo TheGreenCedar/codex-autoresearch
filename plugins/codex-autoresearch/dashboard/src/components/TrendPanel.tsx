@@ -123,16 +123,13 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
         </span>
       </div>
 
-      <div className="metric-summary-row">
-        <MetricConstruction readout={readout} session={session} />
-        <div className="chart-legend" aria-label="Status legend">
-          {STATUS_VALUES.map((status) => (
-            <span key={status}>
-              <i className={`legend-swatch ${status}`} />
-              {STATUS_LABELS[status]}
-            </span>
-          ))}
-        </div>
+      <div className="chart-legend" aria-label="Status legend">
+        {STATUS_VALUES.map((status) => (
+          <span key={status}>
+            <i className={`legend-swatch ${status}`} />
+            {STATUS_LABELS[status]}
+          </span>
+        ))}
       </div>
 
       <figure
@@ -260,7 +257,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       </p>
       <ChartDataList chartData={chartData} />
 
-      <MetricDetails readout={readout} point={detailPoint} />
+      <MetricDetails readout={readout} session={session} point={detailPoint} />
 
       {selectedPoint && (
         <ExperimentModal
@@ -861,15 +858,17 @@ function WeightedExperimentMetrics({
 
 function MetricDetails({
   readout,
+  session,
   point,
 }: {
   readout: DashboardReadout;
+  session: SessionSegment;
   point: ChartDatum | null;
 }) {
   const breakdown = point?.breakdown || undefined;
   return (
-    <details className="metric-details-panel" id="metric-details" aria-label="Metric details">
-      <summary className="metric-details-summary">
+    <section className="metric-details-panel" id="metric-details" aria-label="Metric details">
+      <div className="metric-details-summary">
         <span className="metric-details-summary-copy">
           <span className="eyebrow">Metric details</span>
           <strong id="metric-details-title">
@@ -881,11 +880,12 @@ function MetricDetails({
         <span className="panel-note" id="metric-details-selected">
           {point ? `Run #${point.runNumber} / ${point.statusLabel}` : "No run selected"}
         </span>
-      </summary>
+      </div>
       <div className="metric-details-body">
         <p className="metric-details-copy" id="metric-details-copy">
           {metricDetailsCopy(readout, point)}
         </p>
+        <MetricConstruction readout={readout} session={session} />
         {readout.metricDefinition.fallbackNote && (
           <p className="form-error metric-fallback-note" id="metric-fallback-note">
             {readout.metricDefinition.fallbackNote}
@@ -894,7 +894,7 @@ function MetricDetails({
         <MetricEvidenceList readout={readout} point={point} breakdown={breakdown} />
         <MetricBreakdownList readout={readout} breakdown={breakdown} />
       </div>
-    </details>
+    </section>
   );
 }
 

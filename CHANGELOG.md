@@ -4,6 +4,17 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 1.5.1
+
+### Fixed
+
+- Moved dashboard metric-construction details into a visible Metric Details section below the chart so formula, inputs, and decision-rule evidence stay visible without taking chart space.
+- Corrected the release notes to describe the full 1.5 session release train instead of only the final simplifier PR.
+
+### Changed
+
+- Bumped public package, lockfile, plugin manifest, demo export, and runtime drift surfaces to `1.5.1`.
+
 ## 1.5.0
 
 ### Added
