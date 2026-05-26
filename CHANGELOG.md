@@ -8,6 +8,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Fixed
 
+- Replaced the broken README dashboard screenshot with a fresh demo dashboard capture.
 - Moved dashboard metric-construction details into a visible Metric Details section below the chart so formula, inputs, and decision-rule evidence stay visible without taking chart space.
 - Corrected the release notes to describe the full 1.5 session release train instead of only the final simplifier PR.
 
