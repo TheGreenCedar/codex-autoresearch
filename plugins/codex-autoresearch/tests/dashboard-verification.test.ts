@@ -63,15 +63,15 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   const rail = getById("decision-rail").innerHTML;
   const nextActionDetail = getById("next-action-detail").textContent.trim();
   const nextActionTitle = getById("next-action-title").textContent.trim();
-  const metricDetails = getById("metric-details") as HTMLDetailsElement;
+  const metricDetails = getById("metric-details");
 
   assert.match(rail, /#1/);
   assert.match(rail, /Keep|Discard|crash|checks_failed/i);
   assert.notEqual(rail.includes("No decisions yet"), true);
   assert.match(nextActionTitle, /Next action/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
-  assert.equal(metricDetails.open, false);
   assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
+  assert.equal(metricDetails.contains(getById("metric-construction")), true);
   assert.equal(getById("metric-construction-status").textContent, "Formula missing");
   assert.match(getById("metric-construction-formula").textContent, /Formula not configured/);
   assert.match(getById("metric-construction-formula").textContent, /METRIC seconds=<number>/);
