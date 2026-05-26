@@ -79,10 +79,11 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 `next` is the packet-producing command. `run` is a raw benchmark probe; use it for quick diagnostics, but do not expect `log --from-last` to reuse it.
 
-For shells where inline JSON is fragile, put structured metric metadata in a file:
+For shells where inline JSON is fragile, put structured metric metadata and ASI in files:
 
 ```bash
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --metrics-file metrics.json
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --asi-json-file asi.json
 ```
 
 If a packet crashes or times out after writing artifact rows, inspect partial results before spending another expensive rerun:

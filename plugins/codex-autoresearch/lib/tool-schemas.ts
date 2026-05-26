@@ -366,6 +366,7 @@ export const toolSchemas = applyToolContracts([
         metrics: { type: "object" },
         metrics_file: { type: "string" },
         asi: { type: "object" },
+        asi_json_file: { type: "string" },
         asi_file: { type: "string" },
         evidence_status: {
           type: "string",
@@ -645,6 +646,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
   allow_dirty_revert: "allowDirtyRevert",
   allow_snippets: "allowSnippets",
+  asi_json_file: "asiJsonFile",
   asi_file: "asiFile",
   autonomy_mode: "autonomyMode",
   benchmark_command: "benchmarkCommand",
