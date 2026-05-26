@@ -1138,7 +1138,7 @@ test("lane-runner blocks write-scope cleanup commands in the main checkout", asy
       "--write-scope",
       "src",
       "--command",
-      "git reset --hard",
+      "git -C . reset --hard",
       "--summary",
       "Unsafe cleanup.",
       "--yes",

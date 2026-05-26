@@ -5881,7 +5881,7 @@ function commandLooksMutating(command: string) {
 }
 
 function commandLooksUnsafeForWriteScope(command: string) {
-  return /(^|[\s;&|])git\s+(am|apply|checkout|clean|commit|merge|rebase|reset|restore|stash|switch)(\s|$)/i.test(
+  return /(^|[\s;&|])git\b[^\r\n;&|]*\b(am|apply|checkout|clean|commit|merge|rebase|reset|restore|stash|switch)\b/i.test(
     command,
   );
 }
