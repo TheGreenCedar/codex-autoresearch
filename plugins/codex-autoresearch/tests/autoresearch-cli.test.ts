@@ -1112,7 +1112,73 @@ test("lane-runner blocks write-scope commands that hide changes in commits", asy
       "--yes",
     ]);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /cannot move HEAD/);
+    assert.match(result.stderr, /cannot run git cleanup|cannot move HEAD/);
+  });
+});
+
+test("lane-runner blocks write-scope cleanup commands in the main checkout", async () => {
+  await withTempDir("lane-runner-write-scope-cleanup", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "git reset --hard",
+      "--summary",
+      "Unsafe cleanup.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /cannot run git cleanup/);
+  });
+});
+
+test("lane-runner refuses write-scope when unrelated dirty files already exist", async () => {
+  await withTempDir("lane-runner-write-scope-pre-dirty", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await writeFile(path.join(dir, "outside.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await writeFile(path.join(dir, "outside.txt"), "user edit\n", "utf8");
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('src/owned.txt','after')\"",
+      "--summary",
+      "Owned write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /dirty files outside scope/);
   });
 });
 

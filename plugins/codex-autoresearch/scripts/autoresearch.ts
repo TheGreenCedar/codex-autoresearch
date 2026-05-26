@@ -5880,6 +5880,12 @@ function commandLooksMutating(command: string) {
   );
 }
 
+function commandLooksUnsafeForWriteScope(command: string) {
+  return /(^|[\s;&|])git\s+(am|apply|checkout|clean|commit|merge|rebase|reset|restore|stash|switch)(\s|$)/i.test(
+    command,
+  );
+}
+
 async function gitStatusPorcelain(cwd: string) {
   if (!(await insideGitRepo(cwd).catch(() => false))) return null;
   const result = await git(["status", "--porcelain"], cwd);
@@ -5943,6 +5949,21 @@ async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: str
   if (outside.length) {
     throw new Error(
       `Implementation lane changed files outside --write-scope: ${outside.slice(0, 8).join(", ")}`,
+    );
+  }
+}
+
+async function assertNoDirtyPathsOutsideWriteScope(workDir: string, writeScope: string[]) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  const dirty = await gitDirtyPathDetails(workDir);
+  const outside = dirty
+    .map((entry: any) => entry.path)
+    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside.slice(0, 8).join(", ")}`,
     );
   }
 }
@@ -6101,6 +6122,17 @@ async function laneRunner(args: LooseObject) {
   if (mode === "read_only_scout" && command && commandLooksMutating(command)) {
     throw new Error("Read-only scout lanes cannot run commands that look mutating.");
   }
+  if (
+    mode === "implementation" &&
+    !worktreePath &&
+    writeScope.length > 0 &&
+    command &&
+    commandLooksUnsafeForWriteScope(command)
+  ) {
+    throw new Error(
+      "Implementation lane --write-scope cannot run git cleanup, history, or stash commands in the main checkout; use a separate --worktree.",
+    );
+  }
 
   const runCwd =
     mode === "implementation" && worktreePath
@@ -6108,10 +6140,11 @@ async function laneRunner(args: LooseObject) {
       : workDir;
   const beforeStatus =
     mode === "read_only_scout" && command && !dryRun ? await gitStatusPorcelain(workDir) : null;
-  const writeScopeBefore =
-    mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun
-      ? await writeScopeSnapshot(workDir)
-      : null;
+  let writeScopeBefore: LooseObject | null = null;
+  if (mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun) {
+    await assertNoDirtyPathsOutsideWriteScope(workDir, writeScope);
+    writeScopeBefore = await writeScopeSnapshot(workDir);
+  }
   let commandResult: LooseObject | null = null;
   if (command && !dryRun) {
     const result = await runShell(command, runCwd, timeBudgetSeconds, {
