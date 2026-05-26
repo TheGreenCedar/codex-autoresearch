@@ -1024,6 +1024,114 @@ test("lane-runner blocks implementation lanes without explicit isolation", async
   });
 });
 
+test("lane-runner rejects the main checkout as an implementation worktree", async () => {
+  await withTempDir("lane-runner-main-worktree", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      ".",
+      "--summary",
+      "Unsafe main checkout.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /separate Git worktree/);
+  });
+});
+
+test("lane-runner blocks implementation commands that escape write scope", async () => {
+  await withTempDir("lane-runner-write-scope", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('outside.txt','escape')\"",
+      "--summary",
+      "Unsafe write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /outside --write-scope/);
+  });
+});
+
+test("lane-runner ignores completed lane results from older segments", async () => {
+  await withTempDir("lane-runner-segment-results", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "quality_gap"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "7",
+      "--status",
+      "measure",
+      "--description",
+      "First segment measurement.",
+    ]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    const first = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--summary",
+      "Old segment result.",
+      "--recommendation",
+      "Do not reuse this after a segment change.",
+      "--yes",
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+
+    await runCli(["new-segment", "--cwd", dir, "--reason", "New lane decision round.", "--yes"]);
+    const second = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--dry-run",
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    const payload = JSON.parse(second.stdout);
+    assert.equal(payload.coordinatorRecommendation.status, "needs_lane_result");
+    assert.notEqual(
+      payload.coordinatorRecommendation.nextAction,
+      "Do not reuse this after a segment change.",
+    );
+  });
+});
+
 test("lane-runner synthesizes completed lane results into one next action", async () => {
   await withTempDir("lane-runner-synthesis", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);

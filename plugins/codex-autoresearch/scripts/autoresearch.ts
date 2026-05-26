@@ -5856,8 +5856,11 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
   };
 }
 
-function latestLaneResults(workDir: string) {
-  return readJsonl(workDir).filter((entry: any) => entry?.type === "lane_result");
+function latestLaneResults(workDir: string, segment: number | null = null) {
+  return readJsonl(workDir).filter(
+    (entry: any) =>
+      entry?.type === "lane_result" && (segment == null || Number(entry.segment) === segment),
+  );
 }
 
 function normalizeLaneMode(value: unknown, fallback: string) {
@@ -5881,6 +5884,62 @@ async function gitStatusPorcelain(cwd: string) {
   if (!(await insideGitRepo(cwd).catch(() => false))) return null;
   const result = await git(["status", "--porcelain"], cwd);
   return result.code === 0 ? result.stdout : null;
+}
+
+async function gitTopLevel(cwd: string) {
+  const result = await git(["rev-parse", "--show-toplevel"], cwd);
+  if (result.code !== 0) throw new Error(`Git worktree lookup failed: ${gitOutput(result, cwd)}`);
+  return path.resolve(cwd, result.stdout.trim());
+}
+
+async function gitCommonDirectory(cwd: string) {
+  const result = await git(["rev-parse", "--git-common-dir"], cwd);
+  if (result.code !== 0) throw new Error(`Git common-dir lookup failed: ${gitOutput(result, cwd)}`);
+  const value = result.stdout.trim();
+  return path.resolve(cwd, value);
+}
+
+async function resolveLaneWorktree(workDir: string, worktreePath: string) {
+  const runCwd = path.resolve(workDir, worktreePath);
+  const [baseTopLevel, laneInsideGit] = await Promise.all([
+    gitTopLevel(workDir),
+    insideGitRepo(runCwd).catch(() => false),
+  ]);
+  if (!laneInsideGit) {
+    throw new Error(`Implementation lane worktree must be an existing Git worktree: ${runCwd}`);
+  }
+  const laneTopLevel = await gitTopLevel(runCwd);
+  if (path.resolve(baseTopLevel) === path.resolve(laneTopLevel)) {
+    throw new Error("Implementation lane --worktree must point at a separate Git worktree.");
+  }
+  const [baseCommonDir, laneCommonDir] = await Promise.all([
+    gitCommonDirectory(baseTopLevel),
+    gitCommonDirectory(laneTopLevel),
+  ]);
+  if (path.resolve(baseCommonDir) !== path.resolve(laneCommonDir)) {
+    throw new Error("Implementation lane --worktree must belong to the same Git repository.");
+  }
+  return laneTopLevel;
+}
+
+function dirtyPathWithinScope(relativePath: string, writeScope: string[]) {
+  const normalized = normalizeGitStatusPath(relativePath);
+  return writeScope.some((scope) => normalized === scope || normalized.startsWith(`${scope}/`));
+}
+
+async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: string[]) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  const dirty = await gitDirtyPathDetails(workDir);
+  const outside = dirty
+    .map((entry: any) => entry.path)
+    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane changed files outside --write-scope: ${outside.slice(0, 8).join(", ")}`,
+    );
+  }
 }
 
 function synthesizeLaneDecision({
@@ -5993,8 +6052,9 @@ async function laneRunner(args: LooseObject) {
       300,
       "--time-budget-seconds",
     ) || 300;
-  const writeScope = listOption(
+  const writeScope = normalizeRelativePaths(
     args.write_scope ?? args.writeScope ?? args.commit_paths ?? args.commitPaths,
+    "--write-scope",
   );
   const worktreePath = String(
     args.worktree_path || args.worktreePath || args.worktree || "",
@@ -6009,7 +6069,9 @@ async function laneRunner(args: LooseObject) {
   }
 
   const runCwd =
-    mode === "implementation" && worktreePath ? path.resolve(workDir, worktreePath) : workDir;
+    mode === "implementation" && worktreePath
+      ? await resolveLaneWorktree(workDir, worktreePath)
+      : workDir;
   const beforeStatus =
     mode === "read_only_scout" && command && !dryRun ? await gitStatusPorcelain(workDir) : null;
   let commandResult: LooseObject | null = null;
@@ -6030,6 +6092,9 @@ async function laneRunner(args: LooseObject) {
           "Read-only scout lane changed the git working tree; discard or isolate the change before continuing.",
         );
       }
+    }
+    if (mode === "implementation" && !worktreePath && writeScope.length > 0) {
+      await assertDirtyPathsWithinWriteScope(workDir, writeScope);
     }
   }
 
@@ -6066,7 +6131,7 @@ async function laneRunner(args: LooseObject) {
     },
     result,
   };
-  const existingResults = latestLaneResults(workDir);
+  const existingResults = latestLaneResults(workDir, state.segment);
   const laneResults = dryRun ? existingResults : [...existingResults, entry];
   const coordinatorRecommendation = synthesizeLaneDecision({
     workDir,
