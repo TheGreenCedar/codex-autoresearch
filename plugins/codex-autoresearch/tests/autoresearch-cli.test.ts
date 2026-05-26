@@ -1084,6 +1084,38 @@ test("lane-runner blocks implementation commands that escape write scope", async
   });
 });
 
+test("lane-runner blocks write-scope commands that hide changes in commits", async () => {
+  await withTempDir("lane-runner-write-scope-commit", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('outside.txt','escape')\" && git add outside.txt && git commit -m escape",
+      "--summary",
+      "Hidden unsafe write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /cannot move HEAD/);
+  });
+});
+
 test("lane-runner ignores completed lane results from older segments", async () => {
   await withTempDir("lane-runner-segment-results", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "quality_gap"]);

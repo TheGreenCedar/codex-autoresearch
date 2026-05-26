@@ -5899,6 +5899,11 @@ async function gitCommonDirectory(cwd: string) {
   return path.resolve(cwd, value);
 }
 
+async function gitRef(cwd: string, ref: string) {
+  const result = await git(["rev-parse", "--verify", ref], cwd);
+  return result.code === 0 ? result.stdout.trim() : "";
+}
+
 async function resolveLaneWorktree(workDir: string, worktreePath: string) {
   const runCwd = path.resolve(workDir, worktreePath);
   const [baseTopLevel, laneInsideGit] = await Promise.all([
@@ -5940,6 +5945,35 @@ async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: str
       `Implementation lane changed files outside --write-scope: ${outside.slice(0, 8).join(", ")}`,
     );
   }
+}
+
+async function writeScopeSnapshot(workDir: string) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  return {
+    head: await gitRef(workDir, "HEAD"),
+    stash: await gitRef(workDir, "refs/stash"),
+  };
+}
+
+async function assertWriteScopeIntegrity(
+  workDir: string,
+  writeScope: string[],
+  before: LooseObject,
+) {
+  const after = await writeScopeSnapshot(workDir);
+  if (before.head !== after.head) {
+    throw new Error(
+      "Implementation lane --write-scope cannot move HEAD; use a separate --worktree for commits or history changes.",
+    );
+  }
+  if (before.stash !== after.stash) {
+    throw new Error(
+      "Implementation lane --write-scope cannot create or change git stash entries; use a separate --worktree for hidden cleanup.",
+    );
+  }
+  await assertDirtyPathsWithinWriteScope(workDir, writeScope);
 }
 
 function synthesizeLaneDecision({
@@ -6074,6 +6108,10 @@ async function laneRunner(args: LooseObject) {
       : workDir;
   const beforeStatus =
     mode === "read_only_scout" && command && !dryRun ? await gitStatusPorcelain(workDir) : null;
+  const writeScopeBefore =
+    mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun
+      ? await writeScopeSnapshot(workDir)
+      : null;
   let commandResult: LooseObject | null = null;
   if (command && !dryRun) {
     const result = await runShell(command, runCwd, timeBudgetSeconds, {
@@ -6093,8 +6131,8 @@ async function laneRunner(args: LooseObject) {
         );
       }
     }
-    if (mode === "implementation" && !worktreePath && writeScope.length > 0) {
-      await assertDirtyPathsWithinWriteScope(workDir, writeScope);
+    if (writeScopeBefore) {
+      await assertWriteScopeIntegrity(workDir, writeScope, writeScopeBefore);
     }
   }
 
