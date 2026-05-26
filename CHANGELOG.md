@@ -10,6 +10,7 @@ This project uses a root-only changelog because the root README is the public do
 
 - Added `research-fanout` / `research_fanout`, a generic parallel lane planner that turns current session memory into read-only scout lanes and isolated implementation lanes without creating project-specific metrics.
 - Added `--metrics-file` for `log` so PowerShell and Windows sessions can record structured metric metadata without brittle inline JSON quoting.
+- Added `--asi-json-file` for `log` so PowerShell and Windows sessions can record ASI without fragile inline JSON quoting while preserving inline `--asi` and legacy `--asi-file`.
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
 - Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
 

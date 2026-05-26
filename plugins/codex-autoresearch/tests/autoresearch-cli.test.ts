@@ -3488,6 +3488,68 @@ test("log accepts ASI from a JSON file", async () => {
   });
 });
 
+test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
+  await withTempDir("asi-json-file", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "asi json file", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "asi.json"),
+      JSON.stringify(
+        {
+          hypothesis: "avoid powershell quoting",
+          evidence: 'file parsed with "quotes"',
+          next_action_hint: "continue",
+          windowsPath: "C:\\tmp\\asi.json",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi-json-file",
+      "asi.json",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    const ledger = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const run = ledger.find((entry) => entry.run === 1);
+    assert.equal(run.asi.hypothesis, "avoid powershell quoting");
+    assert.equal(run.asi.evidence, 'file parsed with "quotes"');
+    assert.equal(run.asi.windowsPath, "C:\\tmp\\asi.json");
+
+    const conflict = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "keep",
+      "--description",
+      "Conflict",
+      "--asi-json-file",
+      "asi.json",
+      "--asi",
+      "{}",
+    ]);
+    assert.notEqual(conflict.code, 0);
+    assert.match(conflict.stderr, /Use either --asi or --asi-json-file/);
+  });
+});
+
 test("broad discard cleanup preserves deep research scratchpads", async () => {
   await withTempDir("preserve-research", async (dir) => {
     await git(dir, ["init"]);
@@ -3688,6 +3750,19 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     catalog: "recipes.json",
     trustCatalog: true,
     allow_unsafe_command: true,
+  });
+  const logArgs = validateToolArguments("log_experiment", {
+    workingDir: "C:/repo",
+    status: "keep",
+    description: "ASI file",
+    asiJsonFile: "asi.json",
+  });
+  assert.equal(logArgs.asi_json_file, "asi.json");
+  assert.deepEqual(normalizeRuntimeToolArguments("log_experiment", logArgs), {
+    cwd: "C:/repo",
+    status: "keep",
+    description: "ASI file",
+    asiJsonFile: "asi.json",
   });
   const promptPlanArgs = validateToolArguments("prompt_plan", {
     workingDir: "C:/repo",

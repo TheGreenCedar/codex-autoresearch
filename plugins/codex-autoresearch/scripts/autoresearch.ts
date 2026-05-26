@@ -210,7 +210,7 @@ Usage:
   node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
@@ -4516,11 +4516,17 @@ async function logExperiment(args: any) {
   const metricsFromFile = await parseJsonFileOption(metricsFilePath, workDir, "--metrics-file");
   const metrics = metricsFromFile ?? args.metrics ?? lastPacket?.decision?.metrics ?? {};
   const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
-  const asiFilePath = args.asi_file ?? args.asiFile;
-  if (asiFilePath && args.asi != null) {
-    throw new Error("Use either --asi or --asi-file, not both.");
+  const legacyAsiFilePath = args.asi_file ?? args.asiFile;
+  const asiJsonFilePath = args.asi_json_file ?? args.asiJsonFile;
+  if (legacyAsiFilePath && asiJsonFilePath) {
+    throw new Error("Use either --asi-json-file or --asi-file, not both.");
   }
-  const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, "--asi-file");
+  const asiFilePath = asiJsonFilePath ?? legacyAsiFilePath;
+  const asiFileOptionName = asiJsonFilePath ? "--asi-json-file" : "--asi-file";
+  if (asiFilePath && args.asi != null) {
+    throw new Error(`Use either --asi or ${asiFileOptionName}, not both.`);
+  }
+  const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, asiFileOptionName);
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
   const evidenceStatus =
     evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
