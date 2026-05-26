@@ -239,6 +239,55 @@ export function FinalizationChecklist({ viewModel }: { viewModel: DashboardViewM
   );
 }
 
+export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel }) {
+  const hygiene = (viewModel.processHygiene || {}) as Record<string, unknown>;
+  const watchdog = (viewModel.watchdogSummary || {}) as Record<string, unknown>;
+  const warnings = toList(hygiene.warnings);
+  const status = String(hygiene.status || "unknown");
+  return (
+    <section
+      className="panel process-panel"
+      id="process-hygiene"
+      aria-label="Process hygiene"
+      tabIndex={-1}
+    >
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Process hygiene</p>
+          <h2 id="process-hygiene-title">
+            {status === "needs-attention" ? "Runtime needs attention" : "Runtime provenance"}
+          </h2>
+        </div>
+        <span className="panel-note">{String(hygiene.mode || "unknown")}</span>
+      </div>
+      <div className="memory-list" id="process-hygiene-detail">
+        <div className="memory-lane">
+          <strong>Active cwd</strong>
+          <span>{String(hygiene.activeCwd || "unknown")}</span>
+          <p>{String(hygiene.pluginVersion || "unknown")}</p>
+        </div>
+        <div className="memory-lane">
+          <strong>Server checks</strong>
+          <span>{String(hygiene.duplicateServerDetection || "unavailable")}</span>
+          <p>{String(hygiene.staleServerDetection || "unavailable")}</p>
+        </div>
+        <div className="memory-lane">
+          <strong>Watchdog</strong>
+          <span>{String(watchdog.status || "unknown")}</span>
+          <p>{String(watchdog.recommendation || "No watchdog summary embedded.")}</p>
+        </div>
+        {warnings.length ? (
+          <div className="memory-lane">
+            <strong>Warnings</strong>
+            <span>{warnings.length}</span>
+            <p>{warnings[0]}</p>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function normalizeChecklist(
   source: DashboardViewModel["finalizationChecklist"] | FinalizePreviewModel["checklist"],
   finalizePreview: FinalizePreviewModel = {},

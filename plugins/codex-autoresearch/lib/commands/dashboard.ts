@@ -138,6 +138,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           sourceCwd: workDir,
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
+          activeServerCount: liveDashboardServers.size,
         };
         return deps.dashboardHtml(entries, {
           workDir,
@@ -164,9 +165,11 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           sourceCwd: workDir,
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
+          activeServerCount: liveDashboardServers.size,
         }),
     });
     liveUrl = serveResult.url;
+    liveDashboardServers.add(serveResult.server);
     const health = await verifyLiveDashboardUrl(liveUrl);
     const responseViewModel = await deps.dashboardViewModel(workDir, config, {
       deliveryMode: "live-server",
@@ -175,8 +178,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       sourceCwd: workDir,
       pluginVersion: deps.pluginVersion,
       runtimeDrift,
+      activeServerCount: liveDashboardServers.size,
     });
-    liveDashboardServers.add(serveResult.server);
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
     });

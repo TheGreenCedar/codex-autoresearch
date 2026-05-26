@@ -52,6 +52,18 @@ export function buildDashboardViewModel(context: DashboardContext) {
   const measurements = current.filter((run) => run.status === "measure");
   const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
   const latestFailure = failures.at(-1) || null;
+  const parallelLanes = Array.isArray(state.parallelLanes)
+    ? state.parallelLanes
+    : Array.isArray(experimentMemory?.lanePortfolio)
+      ? experimentMemory.lanePortfolio
+      : [];
+  const watchdogSummary = buildWatchdogSummary({
+    state,
+    settings,
+    current,
+    parallelLanes,
+    fanoutPlan: state.fanoutPlan || null,
+  });
   const decisionEnvelope = normalizeDecisionEnvelope({
     state,
     settings,
@@ -67,6 +79,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory,
     segmentTransition: segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }),
     setupState: setupStateFromDashboardInput({ guidedSetup, setupPlan }),
+    watchdog: watchdogSummary,
     warnings,
   });
   const decisionEnvelopeSummary = summarizeDecisionEnvelope({
@@ -160,16 +173,22 @@ export function buildDashboardViewModel(context: DashboardContext) {
     researchIntegrity,
     trustState: trustContext.trustState,
   });
+  const finalizationPressure = buildFinalizationPressure({
+    kept,
+    finalizePreview,
+    watchdogSummary,
+  });
   const finalizationChecklist = buildFinalizationChecklist({
     current,
     kept,
     finalizePreview,
+    finalizationPressure,
   });
-  const parallelLanes = Array.isArray(state.parallelLanes)
-    ? state.parallelLanes
-    : Array.isArray(experimentMemory?.lanePortfolio)
-      ? experimentMemory.lanePortfolio
-      : [];
+  const processHygiene = buildProcessHygiene({
+    settings,
+    trustState: trustContext.trustState,
+    watchdogSummary,
+  });
   const evidenceLedger = buildEvidenceLedger(current);
   const evidenceReadout = buildEvidenceReadout({
     researchIntegrity,
@@ -226,6 +245,9 @@ export function buildDashboardViewModel(context: DashboardContext) {
     evidenceReadout,
     proofGaps,
     finalizationChecklist,
+    finalizationPressure,
+    watchdogSummary,
+    processHygiene,
     missionControl,
     aiSummary,
     trustBlockers,
@@ -335,6 +357,7 @@ function normalizeDecisionEnvelope({
   segmentTransition = null,
   setupState = null,
   warnings = [],
+  watchdog = null,
 }: LooseObject) {
   const supplied = firstRecord(
     state?.decisionEnvelope,
@@ -366,6 +389,7 @@ function normalizeDecisionEnvelope({
     experimentMemory,
     segmentTransition,
     setupState,
+    watchdog,
   });
 }
 
@@ -425,6 +449,7 @@ function summarizeDecisionEnvelope({
     limit.limitReached === true ||
     (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
   const finalization = envelope?.finalizationReadiness || {};
+  const watchdog = envelope?.watchdog || {};
   const qualityRound = envelope?.qualityRound || {};
   const canonicalSummary = summaryFromCanonicalNextAction(envelope?.canonicalNextAction, {
     current,
@@ -516,6 +541,16 @@ function summarizeDecisionEnvelope({
         "Recent runs are clustering without a new best.",
       source: "plateau",
     };
+  } else if (watchdog.stale === true) {
+    summary = {
+      ...summary,
+      kind: "watchdog",
+      priority: "Critical",
+      title: "Investigate the quiet window",
+      detail:
+        watchdog.recommendation || "No progress signal has appeared within the watchdog window.",
+      source: "watchdog",
+    };
   } else if (finalization.ready === true || finalizePreview?.ready === true) {
     summary = {
       ...summary,
@@ -592,6 +627,7 @@ function canonicalTitle(kind: string): string {
     "segment-transition": "Start a new segment",
     "quality-gap": "Close accepted quality gaps",
     "plateau-pivot": "Pivot before repeating the plateau",
+    watchdog: "Investigate the quiet window",
     finalization: "Preview finalization",
     "next-packet": "Run the next measured hypothesis",
   };
@@ -711,6 +747,172 @@ function summarizeRuntimeDrift(drift: LooseObject | null | undefined) {
     installedPath: cleanText(drift.installed?.path) || null,
     installedAvailable:
       typeof drift.installed?.available === "boolean" ? drift.installed.available : null,
+  };
+}
+
+export function buildWatchdogSummary({
+  state,
+  settings = {},
+  current = [],
+  parallelLanes = [],
+  fanoutPlan = null,
+}: LooseObject) {
+  const thresholdSeconds = watchdogThresholdSeconds(settings, state?.config);
+  const thresholdHours = round(thresholdSeconds / 3600);
+  const nowMs = timestampMs(settings.now || settings.generatedAt) || Date.now();
+  const cutoffMs = nowMs - thresholdSeconds * 1000;
+  const currentRuns = Array.isArray(current) ? current : [];
+  const completedLanes = Array.isArray(parallelLanes)
+    ? parallelLanes.filter((lane: LooseObject) => laneCompleted(lane))
+    : [];
+  const progressEvents = [
+    ...metricMovementEvents(currentRuns, state?.config?.bestDirection || "lower"),
+    ...currentRuns.map((run: LooseObject) => ({
+      kind: "decision",
+      at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+      label: `Logged run #${run.run ?? "?"} as ${run.status || "decision"}.`,
+    })),
+    ...currentRuns
+      .filter((run: LooseObject) => run.status === "keep" && cleanText(run.commit))
+      .map((run: LooseObject) => ({
+        kind: "kept_commit",
+        at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+        label: `Kept commit ${String(run.commit).slice(0, 12)} from run #${run.run ?? "?"}.`,
+      })),
+    ...completedLanes.map((lane: LooseObject) => ({
+      kind: "completed_lane",
+      at: timestampMs(lane.completedAt || lane.finishedAt || lane.updatedAt || lane.timestamp),
+      label: `Lane ${lane.title || lane.id || "unknown"} completed.`,
+    })),
+  ].filter((event) => event.at != null) as Array<{ kind: string; at: number; label: string }>;
+  const recentEvents = progressEvents.filter((event) => event.at >= cutoffMs);
+  const latestEvent = progressEvents.sort((a, b) => b.at - a.at)[0] || null;
+  const quietHours = latestEvent ? round((nowMs - latestEvent.at) / 3600000) : null;
+  const stale = currentRuns.length > 0 && recentEvents.length === 0 && quietHours != null;
+  const reasons = stale
+    ? [
+        `No metric movement, logged decision, kept commit, or completed lane in ${thresholdHours}h.`,
+        latestEvent
+          ? `Last progress signal: ${latestEvent.label}`
+          : "No dated progress signal found.",
+      ]
+    : recentEvents.length
+      ? [
+          `${recentEvents.length} progress signal${recentEvents.length === 1 ? "" : "s"} inside the watchdog window.`,
+        ]
+      : currentRuns.length
+        ? ["Run history has no dated progress signal; watchdog cannot prove a quiet window."]
+        : ["No run history yet; capture a baseline before watchdog pressure applies."];
+  const recommendation = stale
+    ? "Intervene before running more packets: inspect the active process, finalize kept work, or rescope the segment."
+    : currentRuns.length
+      ? "Continue from the decision envelope; watchdog has no stale no-progress window."
+      : "Run and log the baseline so the watchdog can compare future progress.";
+  return {
+    status: stale ? "stale" : currentRuns.length ? "tracking" : "idle",
+    stale,
+    thresholdSeconds,
+    thresholdHours,
+    quietHours,
+    latestProgressAt: latestEvent ? new Date(latestEvent.at).toISOString() : null,
+    recentProgressCount: recentEvents.length,
+    progressEventCount: progressEvents.length,
+    fanoutPlanId: cleanText(fanoutPlan?.id) || null,
+    completedLaneCount: completedLanes.length,
+    reasons,
+    recommendation,
+  };
+}
+
+function watchdogThresholdSeconds(settings: LooseObject, config: LooseObject = {}) {
+  const direct =
+    settings.watchdogNoProgressSeconds ??
+    settings.watchdogThresholdSeconds ??
+    config.watchdogNoProgressSeconds ??
+    config.watchdogThresholdSeconds;
+  const hours = settings.watchdogNoProgressHours ?? config.watchdogNoProgressHours;
+  const raw = direct ?? (hours != null ? Number(hours) * 3600 : 8 * 3600);
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 8 * 3600;
+}
+
+function metricMovementEvents(current: LooseObject[], direction: Direction) {
+  const events = [];
+  let previous: number | null = null;
+  for (const run of current) {
+    const metric = finiteMetric(run.metric);
+    if (metric == null) continue;
+    if (previous != null && metric !== previous) {
+      events.push({
+        kind: "metric_movement",
+        at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+        label: `Metric moved on run #${run.run ?? "?"} (${previous} -> ${metric}; ${direction}).`,
+      });
+    }
+    previous = metric;
+  }
+  return events;
+}
+
+function laneCompleted(lane: LooseObject) {
+  const status = String(lane.status || lane.state || lane.evidenceStatus || "").toLowerCase();
+  return ["complete", "completed", "done", "kept", "accepted", "finished"].includes(status);
+}
+
+function timestampMs(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function buildProcessHygiene({
+  settings = {},
+  trustState = {},
+  watchdogSummary = null,
+}: LooseObject) {
+  const mode = normalizeMode(settings.deliveryMode);
+  const generatedAt = timestampMs(settings.generatedAt);
+  const nowMs = timestampMs(settings.now || settings.generatedAt) || Date.now();
+  const staleExportHours = Number(settings.staleExportHours ?? settings.dashboardStaleHours ?? 8);
+  const exportAgeHours = generatedAt ? round((nowMs - generatedAt) / 3600000) : null;
+  const activeServerCount =
+    Number.isFinite(Number(settings.activeServerCount)) && Number(settings.activeServerCount) >= 0
+      ? Number(settings.activeServerCount)
+      : null;
+  const warnings = [];
+  if (mode === "static-export" && exportAgeHours != null && exportAgeHours >= staleExportHours) {
+    warnings.push(`Static export is ${exportAgeHours}h old; serve a live dashboard before acting.`);
+  }
+  if (activeServerCount != null && activeServerCount > 1) {
+    warnings.push(
+      `${activeServerCount} dashboard servers are active in this process; close stale tabs or restart serve if URLs disagree.`,
+    );
+  }
+  if (watchdogSummary?.stale) warnings.push(watchdogSummary.recommendation);
+  return {
+    status: warnings.length ? "needs-attention" : "ok",
+    mode,
+    activeCwd: cleanText(settings.sourceCwd) || trustState.sourceCwd || UNKNOWN,
+    pluginVersion: cleanText(settings.pluginVersion) || trustState.pluginVersion || UNKNOWN,
+    liveUrl: cleanText(settings.liveUrl) || trustState.liveUrl || null,
+    generatedAt: cleanText(settings.generatedAt) || null,
+    exportAgeHours,
+    runtimeDrift: trustState.runtimeDrift || summarizeRuntimeDrift(settings.runtimeDrift),
+    activeServerCount,
+    duplicateServerDetection:
+      activeServerCount == null
+        ? "unavailable from this snapshot"
+        : activeServerCount > 1
+          ? "duplicates detected in this process"
+          : "single server in this process",
+    staleServerDetection:
+      mode === "live-server"
+        ? "live URL health is checked by the serve command; older external servers are not enumerable here"
+        : "static exports cannot prove live server health",
+    warnings,
   };
 }
 
@@ -1031,6 +1233,7 @@ export function buildFinalizationChecklist({
   current = [],
   kept = [],
   finalizePreview = null,
+  finalizationPressure = null,
 }: LooseObject) {
   const warnings = Array.isArray(finalizePreview?.warnings)
     ? finalizePreview.warnings.map((warning: unknown) => warningMessage(warning)).filter(Boolean)
@@ -1076,7 +1279,58 @@ export function buildFinalizationChecklist({
         ? "Preview is ready; branch creation still stays outside the dashboard."
         : "Branch creation should wait for a ready preview packet.",
     }),
+    checklistItem({
+      label: "Finalization pressure",
+      state:
+        finalizationPressure?.status === "high"
+          ? "blocked"
+          : finalizationPressure?.status === "medium"
+            ? "ready"
+            : "idle",
+      detail:
+        finalizationPressure?.recommendation ||
+        "No finalization pressure has accumulated in this segment.",
+    }),
   ];
+}
+
+export function buildFinalizationPressure({
+  kept = [],
+  finalizePreview = null,
+  watchdogSummary = null,
+}: LooseObject) {
+  const warnings = Array.isArray(finalizePreview?.warnings)
+    ? finalizePreview.warnings.map((warning: unknown) => warningMessage(warning)).filter(Boolean)
+    : [];
+  const missingCommitCount = Number(finalizePreview?.missingCommitCount || 0);
+  const backlog = Math.max(0, kept.length - Number(finalizePreview?.groups?.length || 0));
+  const warningPressure = warnings.length + missingCommitCount + backlog;
+  const high = kept.length >= 3 || warningPressure >= 3 || watchdogSummary?.stale === true;
+  const medium = kept.length > 0 || warningPressure > 0;
+  const reasons = [
+    kept.length
+      ? `${kept.length} kept run${kept.length === 1 ? "" : "s"} in the active segment.`
+      : "",
+    backlog ? `${backlog} kept run${backlog === 1 ? "" : "s"} are not in preview groups.` : "",
+    missingCommitCount
+      ? `${missingCommitCount} kept run${missingCommitCount === 1 ? "" : "s"} lack commit metadata.`
+      : "",
+    warnings[0] || "",
+    watchdogSummary?.stale ? "Watchdog reports a stale no-progress window." : "",
+  ].filter(Boolean);
+  return {
+    status: high ? "high" : medium ? "medium" : "low",
+    keptCount: kept.length,
+    warningCount: warnings.length,
+    missingCommitCount,
+    backlog,
+    reasons,
+    recommendation: high
+      ? "Stop accumulating packets and run finalize-preview or rescope before more experiments."
+      : medium
+        ? "Preview finalization soon so kept work and warnings do not drift."
+        : "Keep collecting evidence until reviewable work exists.",
+  };
 }
 
 export function buildTrustBlockers({
@@ -1826,6 +2080,7 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "quality-gap")
     return "Accepted quality gaps should drive the next implementation step.";
   if (kind === "plateau-pivot") return "Plateau evidence should redirect the next hypothesis.";
+  if (kind === "watchdog") return "A quiet progress window should trigger intervention.";
   if (kind === "finalization") return "Finalization is ready after higher-priority loop checks.";
   if (kind === "next-packet") return "The next packet should produce metric evidence and ASI.";
   if (kind === "setup") return "Setup blockers come before trustworthy metrics.";
@@ -1836,6 +2091,7 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "segment-transition")
     return "Segment or limit state should be resolved before more tuning.";
   if (kind === "plateau") return "Plateau evidence should redirect the next hypothesis.";
+  if (kind === "watchdog") return "A quiet progress window should trigger intervention.";
   if (kind === "finalize-preview")
     return "Finalization is ready after higher-priority loop checks.";
   if (kind === "baseline") return "Establish the benchmark floor before tuning.";

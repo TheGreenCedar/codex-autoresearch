@@ -293,6 +293,112 @@ test("dashboard view model and rail expose the authoritative decision envelope",
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
 });
 
+test("dashboard view model warns after a watchdog no-progress window", () => {
+  const now = Date.UTC(2026, 4, 26, 12, 0, 0);
+  const old = now - 10 * 60 * 60 * 1000;
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "watchdog path",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+        watchdogNoProgressHours: 8,
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          description: "Baseline",
+          timestamp: old,
+          segment: 0,
+          metrics: {},
+          asi: {},
+        },
+        {
+          run: 2,
+          metric: 10,
+          status: "discard",
+          description: "No movement",
+          timestamp: old + 60_000,
+          segment: 0,
+          metrics: {},
+          asi: {},
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      confidence: null,
+    },
+    settings: {
+      deliveryMode: "live-server",
+      generatedAt: new Date(now).toISOString(),
+      now,
+      sourceCwd: "C:/repo/watchdog",
+      pluginVersion: "0.test",
+    },
+  });
+
+  assert.equal(viewModel.watchdogSummary.stale, true);
+  assert.equal(viewModel.decisionEnvelope.watchdog.stale, true);
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "watchdog");
+  assert.match(viewModel.nextBestAction.detail, /Intervene|finalize|rescope/i);
+  assert.match(viewModel.processHygiene.warnings.join("\n"), /Intervene|quiet/i);
+});
+
+test("dashboard view model exposes finalization pressure before more packets accumulate", () => {
+  const now = Date.UTC(2026, 4, 26, 12, 0, 0);
+  const runs = [1, 2, 3].map((run) => ({
+    run,
+    metric: 10 - run,
+    status: "keep",
+    description: `Kept ${run}`,
+    timestamp: now - run * 60_000,
+    segment: 0,
+    commit: `abc${run}`,
+    metrics: {},
+    asi: {},
+  }));
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "pressure path",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: runs,
+      baseline: 9,
+      best: 7,
+      confidence: 1,
+    },
+    settings: {
+      deliveryMode: "static-export",
+      generatedAt: new Date(now).toISOString(),
+      now,
+      sourceCwd: "C:/repo/pressure",
+      pluginVersion: "0.test",
+    },
+    finalizePreview: {
+      ready: false,
+      groups: [],
+      warnings: ["Final tree has unreviewed backlog."],
+      nextAction: "Run finalize-preview before more packets.",
+    },
+  });
+
+  assert.equal(viewModel.finalizationPressure.status, "high");
+  assert.match(viewModel.finalizationPressure.recommendation, /finalize-preview|rescope/i);
+  assert.ok(
+    viewModel.finalizationChecklist.some(
+      (item) => item.label === "Finalization pressure" && item.state === "blocked",
+    ),
+  );
+});
+
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
   const entries = [
     {

@@ -384,6 +384,7 @@ export function buildDecisionEnvelope({
   experimentMemory = null,
   segmentTransition = null,
   setupState = null,
+  watchdog = null,
 }: LooseObject): LooseObject {
   const current: RunRecord[] = Array.isArray(state?.current) ? state.current : [];
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
@@ -507,6 +508,16 @@ export function buildDecisionEnvelope({
           triggeredBy:
             segmentTransition?.triggeredBy ||
             (qualityRound.done === true ? ["qualityRound"] : ["limit"]),
+        }
+      : null,
+    watchdog: watchdog
+      ? {
+          status: watchdog.status || "",
+          stale: watchdog.stale === true,
+          thresholdHours: watchdog.thresholdHours ?? null,
+          quietHours: watchdog.quietHours ?? null,
+          recommendation: watchdog.recommendation || "",
+          reasons: Array.isArray(watchdog.reasons) ? watchdog.reasons : [],
         }
       : null,
     nextAction: nextAction || "Run doctor, then next.",
@@ -680,6 +691,17 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
         "Resolve the active segment transition before continuing.",
       command: "",
       triggeredBy: envelope.segmentTransition.triggeredBy || ["segmentTransition"],
+    };
+  }
+  if (envelope.watchdog?.stale === true) {
+    return {
+      kind: "watchdog",
+      priority: 8,
+      reason:
+        envelope.watchdog.recommendation ||
+        "No progress signal has appeared within the watchdog window.",
+      command: "",
+      triggeredBy: ["watchdog"],
     };
   }
   if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {

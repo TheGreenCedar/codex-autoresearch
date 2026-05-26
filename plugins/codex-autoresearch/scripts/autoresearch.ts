@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
+import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
 import { writeContextCapsule } from "../lib/context-capsule.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
@@ -3950,6 +3950,13 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   });
   const fanoutPlan = latestResearchFanoutPlan(workDir);
   const parallelLanes = buildParallelLanes({ memory, fanoutPlan, config });
+  const watchdogSummary = buildWatchdogSummary({
+    state,
+    settings,
+    current: state.current,
+    parallelLanes,
+    fanoutPlan,
+  });
   const stateWithQualityGap = { ...state, qualityGap };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -3991,6 +3998,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       workflowFriction,
       experimentMemory: memory,
       setupState: decisionSetupState(guidedSetupResult, setupPlanResult),
+      watchdog: watchdogSummary,
     }),
     canonicalCommandHints,
   );
@@ -4001,6 +4009,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     warningDetails: warnings,
     fanoutPlan,
     parallelLanes,
+    watchdogSummary,
     experimentEconomics,
     partialResults,
     workflowFriction,

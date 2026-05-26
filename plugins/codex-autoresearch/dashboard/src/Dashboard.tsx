@@ -14,6 +14,7 @@ import { TrendPanel } from "./components/TrendPanel";
 import {
   CodexBrief,
   FinalizationChecklist,
+  ProcessHygiene,
   QualityGapPanel,
   ResearchTruthMeter,
   StrategyMemory,
@@ -108,6 +109,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         <section className="workspace-grid">
           <ResearchTruthMeter viewModel={viewModel} />
           <FinalizationChecklist viewModel={viewModel} />
+          <ProcessHygiene viewModel={viewModel} />
           <QualityGapPanel viewModel={viewModel} />
         </section>
       </main>
