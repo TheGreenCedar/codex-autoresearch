@@ -4,6 +4,19 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Added
+
+- Added `research-fanout` / `research_fanout`, a generic parallel lane planner that turns current session memory into read-only scout lanes and isolated implementation lanes without creating project-specific metrics.
+- Added `--metrics-file` for `log` so PowerShell and Windows sessions can record structured metric metadata without brittle inline JSON quoting.
+- Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
+
+### Changed
+
+- Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
+- Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
+
 ## 1.5.1
 
 ### Fixed

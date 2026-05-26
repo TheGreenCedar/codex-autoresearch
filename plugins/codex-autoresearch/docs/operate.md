@@ -74,6 +74,12 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 `next` is the packet-producing command. `run` is a raw benchmark probe; use it for quick diagnostics, but do not expect `log --from-last` to reuse it.
 
+For shells where inline JSON is fragile, put structured metric metadata in a file:
+
+```bash
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --metrics-file metrics.json
+```
+
 If a packet crashes or times out after writing artifact rows, inspect partial results before spending another expensive rerun:
 
 ```bash
@@ -98,7 +104,20 @@ Statuses:
 - `crash`: benchmark failed before usable metric evidence.
 - `checks_failed`: metric exists but correctness checks failed.
 
+Logged runs carry an evidence status. Defaults are `accepted` for `keep`, `provisional` for `measure`, and `rejected` for discard/crash/check failures. Override with `--evidence-status` only when the evidence role really differs; rejected or quarantined artifacts must stay non-promotable.
+
 After logging, read the continuation result. If `shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance. If `forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final report — a finite active budget counts.
+
+## Parallel Research Lanes
+
+When a loop is spending hours on one serial idea path, create a generic fanout plan instead of inventing a one-off metric:
+
+```bash
+node scripts/autoresearch.mjs research-fanout --cwd <project> --dry-run
+node scripts/autoresearch.mjs research-fanout --cwd <project> --lanes 6 --yes
+```
+
+The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Dispatch scout lanes in parallel first. Implementation lanes should edit only in a separate worktree or an explicit owned file scope, then return one concrete hypothesis for the next measured packet.
 
 ## ASI
 
