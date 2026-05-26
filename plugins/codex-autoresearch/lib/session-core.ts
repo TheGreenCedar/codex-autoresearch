@@ -4,6 +4,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
+import {
+  acceptedCurrentRuns,
+  buildEvidenceRegistry,
+  isAcceptedCurrentEvidence,
+} from "./evidence-registry.js";
+
 export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
 export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
 export const NON_PROMOTIONAL_STATUSES = new Set(["crash", "checks_failed", "measure"]);
@@ -185,7 +191,7 @@ export function bestMetric(runs: RunRecord[], direction: Direction | string): nu
 
 export function bestKeptMetric(runs: RunRecord[], direction: Direction | string): number | null {
   return bestMetric(
-    runs.filter((run) => run.status === "keep"),
+    runs.filter((run) => run.status === "keep" && isAcceptedCurrentEvidence(run)),
     direction,
   );
 }
@@ -245,7 +251,8 @@ export function isPromotionGradeRun(run: RunRecord | null | undefined): boolean 
 }
 
 function evidenceTrack(runs: RunRecord[], direction: Direction | string) {
-  const kept = runs.filter((run) => run.status === "keep");
+  const acceptedRuns = acceptedCurrentRuns(runs);
+  const kept = acceptedRuns.filter((run) => run.status === "keep");
   const bestRun = bestMetricRun(kept, direction);
   return {
     count: runs.length,
@@ -316,7 +323,10 @@ export function currentState(workDir: string): SessionState {
   const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
-  const promotionRuns = current.filter((run) => run.status === "keep" && isPromotionGradeRun(run));
+  const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
+  const promotionRuns = evidenceRegistry.currentRuns.filter(
+    (run) => run.status === "keep" && isPromotionGradeRun(run),
+  );
   return {
     config,
     segment,
@@ -327,6 +337,7 @@ export function currentState(workDir: string): SessionState {
     confidence,
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
+    evidenceRegistry,
   };
 }
 
