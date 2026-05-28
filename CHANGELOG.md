@@ -18,7 +18,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
-- Redesigned the dashboard into an operator-first surface: a restrained editorial visual system (single accent, hairline dividers, no decorative glow/gradient stacks), a dominant next-action decision card with plain-language labels, and an operate/audit view split that keeps audit context (session memory, research truth, finalization, process hygiene, quality gap) collapsed until a reviewer needs it.
+- Redesigned the dashboard into an operator-first surface: editorial typography (Instrument Serif headline, IBM Plex Sans body), a hero next-action block above the chart in operate view, an inline score bar, no side rail or mission stepper in operate mode, and an operate/audit split that omits audit panels from the DOM until audit view is selected.
 - Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
 - Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
 - Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
