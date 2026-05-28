@@ -1942,7 +1942,13 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  assert.deepEqual(hrefs, ["#trend-panel", "#decision-rail", "#codex-brief", "#ledger"]);
+  assert.deepEqual(hrefs, [
+    "#trend-panel",
+    "#decision-rail",
+    "#codex-brief",
+    "#strategy-memory",
+    "#ledger",
+  ]);
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
@@ -2190,9 +2196,9 @@ test("dashboard readout uses the selected segment baseline", async () => {
   dom.window.close();
 });
 
-test("dashboard defaults to operate view and collapses audit context", async () => {
+test("dashboard defaults to audit view and can switch to operate", async () => {
   const entries = [
-    dashboardConfigEntry({ name: "operate default", metricName: "seconds", metricUnit: "s" }),
+    dashboardConfigEntry({ name: "audit default", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
   ];
 
@@ -2205,20 +2211,21 @@ test("dashboard defaults to operate view and collapses audit context", async () 
   });
   const toggle = getById("view-toggle") as HTMLButtonElement;
 
-  assert.equal(toggle.getAttribute("aria-pressed"), "false");
-  assert.equal(queryById("workspace-grid"), null);
-  assert.equal(queryById("research-truth-meter"), null);
-  assert.equal(queryById("strategy-memory"), null);
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.ok(getById("workspace-grid"));
+  assert.ok(getById("research-truth-meter"));
+  assert.ok(getById("strategy-memory"));
   assert.ok(getById("codex-brief"));
 
   toggle.click();
   await waitFor(
-    () => queryById("workspace-grid") != null,
-    "Audit view did not expand workspace context.",
+    () => queryById("workspace-grid") == null,
+    "Operate view did not collapse audit context.",
   );
-  assert.ok(getById("research-truth-meter"));
-  assert.equal(toggle.getAttribute("aria-pressed"), "true");
-  assert.match(dom.window.location.search, /view=audit/);
+  assert.equal(queryById("research-truth-meter"), null);
+  assert.equal(queryById("strategy-memory"), null);
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.match(dom.window.location.search, /view=operate/);
   dom.window.close();
 });
 

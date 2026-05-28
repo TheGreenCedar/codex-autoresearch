@@ -18,7 +18,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
-- Redesigned the dashboard into an operator-first surface with an operate/audit split: the run chart is the first surface after the header in both views (taller in operate), followed by scores and the decision card; audit view adds mission control, strategy memory, and workspace panels (omitted from the DOM until audit is selected). URL-backed view and chart preferences are included.
+- Redesigned the dashboard with an audit/operate split: the served dashboard now opens in audit view (full traceability); operate (Focus view) is a chart-first surface with audit panels omitted from the DOM. The run chart leads after the header in both views (taller in operate). URL-backed view and chart preferences are included.
 - Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
 - Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
 - Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
