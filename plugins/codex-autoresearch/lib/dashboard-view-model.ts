@@ -2102,7 +2102,6 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "segment-transition")
     return "Segment or limit state should be resolved before more tuning.";
   if (kind === "plateau") return "Plateau evidence should redirect the next hypothesis.";
-  if (kind === "watchdog") return "A quiet progress window should trigger intervention.";
   if (kind === "finalize-preview")
     return "Finalization is ready after higher-priority loop checks.";
   if (kind === "baseline") return "Establish the benchmark floor before tuning.";

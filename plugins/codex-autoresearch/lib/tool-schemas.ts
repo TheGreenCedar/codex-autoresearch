@@ -277,6 +277,7 @@ export const toolSchemas = applyToolContracts([
         timeout_seconds: { type: "integer" },
         dry_run: { type: "boolean" },
         yes: { type: "boolean" },
+        allow_non_git_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -673,6 +674,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
 
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
+  allow_non_git_command: "allowNonGitCommand",
   allow_dirty_revert: "allowDirtyRevert",
   allow_snippets: "allowSnippets",
   asi_json_file: "asiJsonFile",

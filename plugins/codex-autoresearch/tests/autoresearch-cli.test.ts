@@ -1672,6 +1672,218 @@ test("new segment does not treat its own ledger append as dirty source drift", a
   });
 });
 
+test("state and recommend-next share watchdog canonical next-action parity", async () => {
+  await withTempDir("watchdog-cli-parity", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "watchdog parity", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "discard",
+      "--description",
+      "No movement",
+    ]);
+
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const oldMs = Date.now() - 10 * 60 * 60 * 1000;
+    const lines = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    for (const entry of lines) {
+      if (entry.run != null) entry.timestamp = oldMs;
+    }
+    await writeFile(
+      ledgerPath,
+      `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 100 }, null, 2),
+      "utf8",
+    );
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.watchdogSummary?.stale, true);
+    assert.equal(statePayload.decisionEnvelope?.watchdog?.stale, true);
+    assert.equal(statePayload.limitReached, false);
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.decisionEnvelope?.watchdog?.stale, true);
+    assert.equal(
+      recommendPayload.decisionEnvelope?.canonicalNextAction?.kind,
+      statePayload.canonicalNextAction?.kind,
+    );
+    assert.equal(
+      recommendPayload.decisionEnvelope?.watchdog?.recommendation,
+      statePayload.decisionEnvelope?.watchdog?.recommendation,
+    );
+    assert.match(
+      String(statePayload.decisionEnvelope?.watchdog?.recommendation || ""),
+      /Intervene|finalize|rescope/i,
+    );
+  });
+});
+
+test("fanout plans are scoped to the active segment", async () => {
+  await withTempDir("fanout-segment-scope", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "fanout scope", "--metric-name", "quality_gap"]);
+    const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    assert.equal(fanout.code, 0, fanout.stderr);
+    const plan = JSON.parse(fanout.stdout).fanoutPlan;
+    assert.ok(plan.id);
+
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "measure",
+      "--description",
+      "Segment zero measurement",
+    ]);
+    await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "fresh segment for fanout scope",
+      "--yes",
+    ]);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.segment, 1);
+    assert.equal(payload.fanoutProvenance?.matchedSegment, false);
+    assert.equal(payload.fanoutProvenance?.source, "memory_or_defaults");
+    assert.notEqual(payload.fanoutPlan?.id, plan.id);
+    assert.equal(payload.fanoutPlan, null);
+  });
+});
+
+test("read-only lane-runner rejects commands outside git without explicit opt-in", async () => {
+  await withTempDir("lane-runner-non-git", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "non git lane", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
+
+    const blocked = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
+      "--yes",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /Git worktree|porcelain verification/i);
+
+    const allowed = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
+      "--allow-non-git-command",
+      "--yes",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+  });
+});
+
+test("completed lane results count as watchdog progress signals", async () => {
+  await withTempDir("watchdog-lane-result", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lane watchdog",
+      "--metric-name",
+      "seconds",
+      "--max-iterations",
+      "100",
+    ]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
+    const oldMs = Date.now() - 10 * 60 * 60 * 1000;
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Old baseline",
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const lines = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    for (const entry of lines) {
+      if (entry.run != null) entry.timestamp = oldMs;
+    }
+    await writeFile(
+      ledgerPath,
+      `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const before = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(JSON.parse(before.stdout).watchdogSummary?.stale, true);
+
+    await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--summary",
+      "Scout completed.",
+      "--recommendation",
+      "Run one measured packet next.",
+      "--yes",
+    ]);
+
+    const after = await runCli(["state", "--cwd", dir, "--compact"]);
+    const afterPayload = JSON.parse(after.stdout);
+    assert.equal(afterPayload.watchdogSummary?.stale, false);
+    assert.ok(
+      afterPayload.parallelLanes.some(
+        (lane) => lane.id === "read-only-scout" && lane.status === "completed",
+      ),
+    );
+  });
+});
+
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
