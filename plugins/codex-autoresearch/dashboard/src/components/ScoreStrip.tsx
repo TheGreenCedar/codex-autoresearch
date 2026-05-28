@@ -4,13 +4,14 @@ import { formatConfidence, formatImprovement, formatMetricValue, statusCounts } 
 interface ScoreStripProps {
   session: SessionSegment;
   readout: DashboardReadout;
+  layout?: "stack" | "bar";
 }
 
-export function ScoreStrip({ session, readout }: ScoreStripProps) {
+export function ScoreStrip({ session, readout, layout = "stack" }: ScoreStripProps) {
   const counts = statusCounts(session.runs);
   const latest = readout.recentRuns[0] || null;
   return (
-    <section className="score-strip" aria-label="What changed">
+    <section className={`score-strip score-strip--${layout}`} aria-label="What changed">
       <ScoreCell
         label="Best kept change"
         id="best-value"

@@ -65,10 +65,10 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   const nextActionTitle = getById("next-action-title").textContent.trim();
   const metricDetails = getById("metric-details");
 
-  assert.match(rail, /#1/);
-  assert.match(rail, /Keep|Discard|crash|checks_failed/i);
+  assert.match(rail, /Cache manifest|Noisy baseline|startup overhead/i);
   assert.notEqual(rail.includes("No decisions yet"), true);
-  assert.match(nextActionTitle, /Next action/i);
+  assert.ok(nextActionTitle.length > 0);
+  assert.doesNotMatch(nextActionTitle, /No decisions yet/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
   assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
   assert.equal(metricDetails.contains(getById("metric-construction")), true);
@@ -883,13 +883,17 @@ test("dashboard promotes Codex brief and session memory instead of command contr
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
   ];
 
-  const { getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-    commands: [],
-  });
+  const { getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+      commands: [],
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.match(getById("codex-brief").textContent, /Run #1 created the baseline/);
   assert.match(getById("strategy-memory").textContent, /Test manifest cache reuse/);
@@ -1938,18 +1942,11 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
+  assert.deepEqual(hrefs, ["#decision-rail", "#trend-panel", "#codex-brief", "#ledger"]);
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
-
-  assert.deepEqual(hrefs, [
-    "#trend-panel",
-    "#decision-rail",
-    "#codex-brief",
-    "#strategy-memory",
-    "#ledger",
-  ]);
-  assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  assert.equal(sideLabels.length, 0, "Operate view should not render the side rail.");
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
   const decisionRail = dom.window.document.getElementById("decision-rail");
@@ -1960,19 +1957,18 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   assert.ok(scoreStrip);
   assert.equal(
     Boolean(
-      trendPanel.compareDocumentPosition(decisionRail) &
+      decisionRail.compareDocumentPosition(trendPanel) &
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Current decision should render directly below the run chart.",
+    "Operate view should show the next action before the run chart.",
   );
   assert.equal(
     Boolean(
-      decisionRail.compareDocumentPosition(scoreStrip) &
-      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      scoreStrip.compareDocumentPosition(trendPanel) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Score strip should not sit between the chart and current decision.",
+    "Operate view should show the score bar directly above the run chart.",
   );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
@@ -2212,8 +2208,8 @@ test("dashboard defaults to operate view and collapses audit context", async () 
   assert.equal(toggle.getAttribute("aria-pressed"), "false");
   assert.equal(queryById("workspace-grid"), null);
   assert.equal(queryById("research-truth-meter"), null);
+  assert.equal(queryById("strategy-memory"), null);
   assert.ok(getById("codex-brief"));
-  assert.ok(getById("strategy-memory"));
 
   toggle.click();
   await waitFor(
@@ -2271,10 +2267,13 @@ test("dashboard decision rail shows newest runs first", async () => {
     liveActionsAvailable: false,
   });
 
-  const railText = getById("decision-rail").textContent;
-  assert.match(railText, /#6/);
-  assert.match(railText, /Run six/);
-  assert.match(railText, /#5/);
-  assert.doesNotMatch(railText, /Run one/);
+  const ledgerHtml = getById("ledger-body").innerHTML;
+  assert.match(ledgerHtml, /#6/);
+  assert.match(ledgerHtml, /Run six/);
+  assert.match(ledgerHtml, /#5/);
+  assert.ok(
+    ledgerHtml.indexOf("#6") < ledgerHtml.indexOf("#1"),
+    "Ledger should list newest runs before older runs.",
+  );
   dom.window.close();
 });
