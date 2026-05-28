@@ -5829,10 +5829,7 @@ function resolveFanoutForSegment(workDir: string, segment: number) {
   };
 }
 
-function enrichParallelLanesWithLaneResults(
-  lanes: LooseObject[],
-  laneResults: LooseObject[],
-) {
+function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: LooseObject[]) {
   const latestByLane = new Map<string, LooseObject>();
   for (const entry of laneResults) {
     const laneId = entry?.lane?.id;
