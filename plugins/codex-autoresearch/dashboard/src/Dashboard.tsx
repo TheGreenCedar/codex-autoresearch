@@ -60,12 +60,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
-      <DecisionRail
-        readout={readout}
-        viewModel={viewModel}
-        mode={mode}
-        layout={auditView ? "full" : "hero"}
-      />
+      <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
     </section>
   );
 
@@ -82,9 +77,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         {auditView ? <a href="#strategy-memory">Session memory</a> : null}
         <a href="#ledger">Ledger</a>
       </nav>
-      {auditView ? (
-        <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
-      ) : null}
+      <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
 
       <main className="wrap">
         <Header
@@ -105,30 +98,28 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           setView={setViewParam}
         />
 
-        {auditView ? (
-          <>
-            <MissionControl viewModel={viewModel} mode={mode} />
-            <section className="metric-layout" aria-label="Metric evidence">
-              <div className="metric-primary-column">
-                <TrendPanel session={session} readout={readout} />
-                {mode.liveRefresh ? decisionRail : null}
-              </div>
-              <ScoreStrip session={session} readout={readout} layout="stack" />
-            </section>
-            <section className="brief-layout" aria-label="Codex session context">
-              <CodexBrief session={session} viewModel={viewModel} />
-              <StrategyMemory viewModel={viewModel} />
-            </section>
-            {mode.liveRefresh ? null : decisionRail}
-          </>
-        ) : (
-          <section className="operate-surface" aria-label="Operator readout">
-            {decisionRail}
-            <ScoreStrip session={session} readout={readout} layout="bar" />
-            <TrendPanel session={session} readout={readout} />
-            <CodexBrief session={session} viewModel={viewModel} />
-          </section>
-        )}
+        {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
+
+        {!auditView ? decisionRail : null}
+        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
+
+        <section
+          className={`metric-layout${auditView ? "" : " metric-layout--chart"}`}
+          aria-label="Metric evidence"
+        >
+          <div className="metric-primary-column">
+            <TrendPanel session={session} readout={readout} detailsDefaultOpen={auditView} />
+            {auditView && mode.liveRefresh ? decisionRail : null}
+          </div>
+          {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
+        </section>
+
+        <section className="brief-layout" aria-label="Codex session context">
+          <CodexBrief session={session} viewModel={viewModel} />
+          {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
+        </section>
+
+        {auditView && !mode.liveRefresh ? decisionRail : null}
 
         <Ledger session={session} readout={readout} />
 

@@ -1946,7 +1946,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
-  assert.equal(sideLabels.length, 0, "Operate view should not render the side rail.");
+  assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
   const decisionRail = dom.window.document.getElementById("decision-rail");

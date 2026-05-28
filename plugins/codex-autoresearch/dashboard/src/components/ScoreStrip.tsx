@@ -4,7 +4,7 @@ import { formatConfidence, formatImprovement, formatMetricValue, statusCounts } 
 interface ScoreStripProps {
   session: SessionSegment;
   readout: DashboardReadout;
-  layout?: "stack" | "bar";
+  layout?: "stack" | "compact";
 }
 
 export function ScoreStrip({ session, readout, layout = "stack" }: ScoreStripProps) {

@@ -52,6 +52,7 @@ const FOCUSABLE_DIALOG_SELECTOR =
 interface TrendPanelProps {
   session: SessionSegment;
   readout: DashboardReadout;
+  detailsDefaultOpen?: boolean;
 }
 
 interface ChartDatum {
@@ -78,7 +79,7 @@ interface ChartDatum {
   breakdown: RunMetricBreakdown | null;
 }
 
-export function TrendPanel({ session, readout }: TrendPanelProps) {
+export function TrendPanel({ session, readout, detailsDefaultOpen = true }: TrendPanelProps) {
   const [valueModeParam, setValueMode] = useUrlParam("value", VALUE_MODES, "value");
   const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
   const valueMode = valueModeParam as ValueMode;
@@ -263,7 +264,14 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       </p>
       <ChartDataList chartData={chartData} />
 
-      <MetricDetails readout={readout} session={session} point={detailPoint} />
+      {detailsDefaultOpen ? (
+        <MetricDetails readout={readout} session={session} point={detailPoint} />
+      ) : (
+        <details className="metric-details-disclosure">
+          <summary>How this metric is computed</summary>
+          <MetricDetails readout={readout} session={session} point={detailPoint} />
+        </details>
+      )}
 
       {selectedPoint && (
         <ExperimentModal

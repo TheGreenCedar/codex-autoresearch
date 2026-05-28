@@ -7,14 +7,11 @@ export function DecisionRail({
   readout,
   viewModel,
   mode,
-  layout = "full",
 }: {
   readout: DashboardReadout;
   viewModel: DashboardViewModel;
   mode: DashboardMode;
-  layout?: "hero" | "full";
 }) {
-  const hero = layout === "hero";
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
   const chips = evidenceChipsFor(viewModel, action, readout);
@@ -40,49 +37,34 @@ export function DecisionRail({
       ];
   return (
     <section
-      className={`decision-panel tone-${action.tone || "focus"}${hero ? " decision-panel--hero" : ""}`}
+      className={`decision-panel tone-${action.tone || "focus"}`}
       id="decision-rail"
       tabIndex={-1}
     >
       <div className="decision-copy">
-        {!hero ? <p className="eyebrow">{action.priority || "Next move"}</p> : null}
+        <p className="eyebrow">{action.priority || "Next move"}</p>
         <h2 id="next-action-title">
-          {String(envelope.title || action.title || readout.nextAction || "Choose next step")}
+          {readout.nextAction ? "Next action" : action.title || "Choose next hypothesis"}
         </h2>
-        {!hero ? (
-          <div className="decision-envelope-card" id="decision-envelope-summary">
-            <span>Decision basis</span>
-            <strong>{String(envelope.title || action.title || "Next action")}</strong>
-            <em>
-              {[
-                envelope.kind ? `source: ${envelope.kind}` : "",
-                envelope.fresh === false
-                  ? "stale packet"
-                  : envelope.fresh === true
-                    ? "fresh packet"
-                    : "",
-                typeof envelope.measurementRuns === "number"
-                  ? `${envelope.measurementRuns} measurement${envelope.measurementRuns === 1 ? "" : "s"}`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" / ")}
-            </em>
-          </div>
-        ) : (
-          <p className="decision-hero-kicker" id="decision-envelope-summary">
+        <div className="decision-envelope-card" id="decision-envelope-summary">
+          <span>Decision basis</span>
+          <strong>{String(envelope.title || action.title || "Next action")}</strong>
+          <em>
             {[
-              String(envelope.title || action.priority || "Next move"),
               envelope.kind ? `source: ${envelope.kind}` : "",
-              envelope.fresh === false ? "stale packet" : "",
+              envelope.fresh === false
+                ? "stale packet"
+                : envelope.fresh === true
+                  ? "fresh packet"
+                  : "",
               typeof envelope.measurementRuns === "number"
                 ? `${envelope.measurementRuns} measurement${envelope.measurementRuns === 1 ? "" : "s"}`
                 : "",
             ]
               .filter(Boolean)
-              .join(" · ")}
-          </p>
-        )}
+              .join(" / ")}
+          </em>
+        </div>
         <p id="next-action-detail" className="next-action-text">
           {readout.nextAction ||
             action.detail ||
@@ -113,92 +95,49 @@ export function DecisionRail({
             ) : null}
           </div>
         ) : null}
-        {hero ? (
-          <details className="decision-details">
-            <summary>Why this is safe</summary>
-            <div
-              className="evidence-chips"
-              id="decision-evidence-chips"
-              aria-label="Decision evidence"
+        <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
+          {chips.map((chip) => (
+            <span
+              className={`evidence-chip ${chip.tone || "neutral"}`}
+              key={`${chip.label}-${chip.value}`}
             >
-              {chips.map((chip) => (
-                <span
-                  className={`evidence-chip ${chip.tone || "neutral"}`}
-                  key={`${chip.label}-${chip.value}`}
-                >
-                  <strong>{chip.label}</strong>
-                  <em>{chip.value}</em>
-                </span>
-              ))}
-            </div>
-            <div className="readout-facts">
-              <span className="readout-label">Best result so far</span>
-              <strong id="best-kept-detail">
-                {readout.bestRun?.description || "No kept result yet."}
-              </strong>
-              <span className="readout-label">Most recent setback</span>
-              <strong id="recent-failure-detail">
-                {readout.latestFailure?.description || "No recent failure."}
-              </strong>
-            </div>
-          </details>
-        ) : (
-          <>
-            <div
-              className="evidence-chips"
-              id="decision-evidence-chips"
-              aria-label="Decision evidence"
-            >
-              {chips.map((chip) => (
-                <span
-                  className={`evidence-chip ${chip.tone || "neutral"}`}
-                  key={`${chip.label}-${chip.value}`}
-                >
-                  <strong>{chip.label}</strong>
-                  <em>{chip.value}</em>
-                </span>
-              ))}
-            </div>
-            <div className="readout-facts">
-              <span className="readout-label">Best result so far</span>
-              <strong id="best-kept-detail">
-                {readout.bestRun?.description || "No kept result yet."}
-              </strong>
-              <span className="readout-label">Most recent setback</span>
-              <strong id="recent-failure-detail">
-                {readout.latestFailure?.description || "No recent failure."}
-              </strong>
-            </div>
-          </>
-        )}
-        {!hero ? (
-          <DecisionCopyActions
-            reportCopied={reportCopy.copied}
-            handoffCopied={handoffCopy.copied}
-            copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
-            copyHandoff={() =>
-              handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
-            }
-          />
-        ) : null}
-        {!hero ? (
-          <div className="decision-meta">
-            <span>{action.utilityCopy || readout.confidenceText}</span>
-            <span>{mode.liveRefresh ? "Live data available" : "Read-only snapshot"}</span>
-          </div>
-        ) : null}
-      </div>
-      {!hero ? (
-        <div className="decision-list" aria-label="Recent decision history">
-          {railItems.map((item) => (
-            <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
-              <span>{item.id}</span>
-              <strong>{item.title}</strong>
-              <em>{item.detail}</em>
-            </div>
+              <strong>{chip.label}</strong>
+              <em>{chip.value}</em>
+            </span>
           ))}
         </div>
-      ) : null}
+        <div className="readout-facts">
+          <span className="readout-label">Best result so far</span>
+          <strong id="best-kept-detail">
+            {readout.bestRun?.description || "No kept result yet."}
+          </strong>
+          <span className="readout-label">Most recent setback</span>
+          <strong id="recent-failure-detail">
+            {readout.latestFailure?.description || "No recent failure."}
+          </strong>
+        </div>
+        <DecisionCopyActions
+          reportCopied={reportCopy.copied}
+          handoffCopied={handoffCopy.copied}
+          copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
+          copyHandoff={() =>
+            handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
+          }
+        />
+        <div className="decision-meta">
+          <span>{action.utilityCopy || readout.confidenceText}</span>
+          <span>{mode.liveRefresh ? "Live data available" : "Read-only snapshot"}</span>
+        </div>
+      </div>
+      <div className="decision-list" aria-label="Recent decision history">
+        {railItems.map((item) => (
+          <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
+            <span>{item.id}</span>
+            <strong>{item.title}</strong>
+            <em>{item.detail}</em>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

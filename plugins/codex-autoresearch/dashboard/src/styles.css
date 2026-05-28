@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
-
 :root {
   color-scheme: light;
   /* Editorial technical palette: calm cool paper, one teal accent, restrained semantics. */
@@ -56,7 +54,7 @@ h6,
 .side-status strong,
 .toast-title,
 .chart-tooltip span {
-  font-family: "IBM Plex Sans", sans-serif !important;
+  font-family: "Outfit", sans-serif !important;
 }
 
 body {
@@ -64,7 +62,7 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family:
-    "IBM Plex Sans",
+    "Inter",
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -111,20 +109,18 @@ a:focus-visible {
 
 .runboard-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  max-width: 1180px;
+  grid-template-columns: 86px minmax(0, 1fr);
+  max-width: 1360px;
   min-height: 100vh;
   margin: 0 auto;
   background: var(--page);
-}
-
-.view-audit.runboard-shell {
-  grid-template-columns: 86px minmax(0, 1fr);
-  max-width: 1500px;
   border-left: 1px solid var(--glass-border);
   border-right: 1px solid var(--glass-border);
-  background: rgba(255, 255, 255, 0.45);
-  box-shadow: 0 0 60px rgba(18, 127, 122, 0.04);
+  box-shadow: var(--shadow-card);
+}
+
+.view-operate .mission-section {
+  display: none;
 }
 
 .skip-links {
@@ -556,16 +552,6 @@ p {
   margin-bottom: 12px;
 }
 
-.operate-surface {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 14px;
-}
-
-.operate-surface .decision-layout {
-  margin-bottom: 0;
-}
-
 .decision-panel {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.46fr);
@@ -580,65 +566,6 @@ p {
 
 .mode-static .decision-panel {
   border-left-color: var(--teal-dark);
-}
-
-.decision-panel--hero {
-  grid-template-columns: 1fr;
-  gap: 0;
-  border: 0;
-  border-radius: 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  background: transparent;
-  box-shadow: none;
-  padding: 22px 0 18px;
-}
-
-.decision-panel--hero .decision-copy h2 {
-  font-family: "Instrument Serif", Georgia, serif !important;
-  font-size: clamp(2rem, 4vw, 2.75rem);
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  line-height: 1.08;
-}
-
-.decision-hero-kicker {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.decision-panel--hero .next-action-text {
-  margin-top: 14px;
-  color: var(--ink);
-  font-size: 17px;
-  line-height: 1.5;
-}
-
-.decision-panel--hero .next-command-copy {
-  margin-top: 16px;
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-.decision-details {
-  margin-top: 16px;
-  border-top: 1px solid var(--soft-line);
-  padding-top: 12px;
-}
-
-.decision-details summary {
-  color: var(--teal-dark);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 650;
-  list-style-position: outside;
-}
-
-.decision-details[open] summary {
-  margin-bottom: 10px;
 }
 
 .decision-copy h2 {
@@ -860,62 +787,36 @@ p {
   gap: 8px;
 }
 
-.score-strip--bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
-  align-items: baseline;
-  border: 0;
-  border-top: 1px solid var(--soft-line);
-  border-bottom: 1px solid var(--soft-line);
-  padding: 10px 0;
+.score-strip--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
 }
 
-.score-strip--bar .score-cell {
-  display: inline-flex;
-  flex-direction: row;
+.score-strip--compact .score-cell {
+  min-height: 64px;
   gap: 8px;
-  align-items: baseline;
-  min-height: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
+  padding: 10px 12px;
 }
 
-.score-strip--bar .score-cell:hover {
-  box-shadow: none;
+.metric-layout--chart {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.score-strip--bar .score-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
+.metric-layout--chart .metric-primary-column {
+  grid-column: 1 / -1;
 }
 
-.score-strip--bar .score-cell strong {
-  font-size: 15px;
-  font-weight: 700;
+.metric-details-disclosure {
+  margin-top: 12px;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 10px;
 }
 
-.view-operate .trend-panel {
-  border-left: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.view-operate .panel {
-  border-left-width: 1px;
-  border-radius: 12px;
-}
-
-.view-operate .wrap {
-  padding-top: 12px;
+.metric-details-disclosure summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .metric-layout .score-strip {
