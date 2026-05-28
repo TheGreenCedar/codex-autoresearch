@@ -6005,18 +6005,48 @@ function normalizeLaneMode(value: unknown, fallback: string) {
   throw new Error("--mode must be read_only_scout or implementation.");
 }
 
-function commandLooksMutating(command: string) {
-  return (
-    /(^|[\s;&|])(git\s+(add|am|apply|checkout|clean|commit|merge|mv|rebase|reset|restore|rm|switch)|npm\s+(install|i)|pnpm\s+(add|install)|yarn\s+(add|install)|rm\s+|del\s+|erase\s+|remove-item|set-content|out-file|new-item|move-item|copy-item|apply_patch)(\s|$)/i.test(
+type LaneCommandSafety = {
+  mutating: boolean;
+  unsafeForWriteScope: boolean;
+};
+
+const LANE_GIT_MUTATING_SUBCOMMANDS =
+  "add|am|apply|bisect|checkout|cherry-pick|clean|commit|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|tag|worktree";
+const LANE_GIT_WRITE_SCOPE_UNSAFE =
+  "am|apply|bisect|checkout|cherry-pick|clean|commit|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag|worktree";
+const LANE_PACKAGE_MANAGER_MUTATING =
+  "(?:npm\\s+(?:ci|install|i|update|uninstall|remove|add)|pnpm\\s+(?:add|install|remove|update|uninstall)|yarn\\s+(?:add|install|remove|upgrade|uninstall)|bun\\s+(?:add|install|remove))";
+
+function classifyLaneCommandSafety(command: string): LaneCommandSafety {
+  const gitMutating = new RegExp(
+    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_MUTATING_SUBCOMMANDS})\\b`,
+    "i",
+  ).test(command);
+  const packageMutating = new RegExp(
+    `(^|[\\s;&|])${LANE_PACKAGE_MANAGER_MUTATING}(\\s|$)`,
+    "i",
+  ).test(command);
+  const fileMutating =
+    /(^|[\s;&|])(rm\s+|del\s+|erase\s+|remove-item|set-content|out-file|new-item|move-item|copy-item|apply_patch)(\s|$)/i.test(
       command,
-    ) || /(^|[^<])>>?[^&]/.test(command)
-  );
+    ) || /(^|[^<])>>?[^&]/.test(command);
+  const mutating = gitMutating || packageMutating || fileMutating;
+  const gitUnsafeForWriteScope = new RegExp(
+    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_WRITE_SCOPE_UNSAFE})\\b`,
+    "i",
+  ).test(command);
+  return {
+    mutating,
+    unsafeForWriteScope: gitUnsafeForWriteScope || packageMutating,
+  };
+}
+
+function commandLooksMutating(command: string) {
+  return classifyLaneCommandSafety(command).mutating;
 }
 
 function commandLooksUnsafeForWriteScope(command: string) {
-  return /(^|[\s;&|])git\b[^\r\n;&|]*\b(am|apply|checkout|clean|commit|merge|rebase|reset|restore|stash|switch)\b/i.test(
-    command,
-  );
+  return classifyLaneCommandSafety(command).unsafeForWriteScope;
 }
 
 async function gitStatusPorcelain(cwd: string) {

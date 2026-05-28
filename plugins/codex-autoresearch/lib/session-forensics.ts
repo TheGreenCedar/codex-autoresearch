@@ -16,6 +16,7 @@ export interface SessionForensicsOptions {
   maxSnippets?: number;
   maxSnippetChars?: number;
   thresholds?: Partial<DecisionThresholdConfig>;
+  createReadStream?: typeof fs.createReadStream;
 }
 
 export interface SessionForensicsError {
@@ -78,8 +79,8 @@ export async function parseSessionForensics(
     decisionThresholds: { ...DEFAULT_DECISION_THRESHOLDS, ...options.thresholds },
   });
   const state = createAccumulator(sessionJsonl, thresholds);
-  const stream = fs.createReadStream(sessionJsonl, { encoding: "utf8" });
-  stream.on("error", () => {});
+  const openStream = options.createReadStream ?? fs.createReadStream;
+  const stream = openStream(sessionJsonl, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let lineNumber = 0;
   try {

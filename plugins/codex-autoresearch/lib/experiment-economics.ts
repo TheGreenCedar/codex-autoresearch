@@ -141,12 +141,14 @@ function innerTimeoutSeconds(lastRun: LooseObject | null): number | null {
 
 function parseTimeoutFromCommand(command: string): number | null {
   const match = command.match(
-    /(?:--(?:test-)?timeout(?:-seconds|Seconds)?|timeout(?:Seconds)?)=?\s*([0-9.]+)/i,
+    /(?:--(?:test[-_]?timeout(?:-seconds|Seconds)?)|--timeout(?:-seconds|Seconds)?|timeout(?:Seconds)?)=?\s*([0-9.]+)/i,
   );
   if (!match) return null;
   const value = Number(match[1]);
   if (!Number.isFinite(value)) return null;
-  return /testtimeout/i.test(match[0]) && value > 1000 ? value / 1000 : value;
+  const flag = match[0].replace(/\s*=?[\s]*[0-9.]+$/, "");
+  const usesMilliseconds = /--test[-_]?timeout(?![-_]?seconds)/i.test(flag) && value > 1000;
+  return usesMilliseconds ? value / 1000 : value;
 }
 
 function median(values: number[]): number | null {
