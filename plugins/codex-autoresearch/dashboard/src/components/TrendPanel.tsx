@@ -28,6 +28,10 @@ import {
   improvementPercent,
 } from "../model";
 import type { ChartModel, DashboardReadout, RunMetricBreakdown, SessionSegment } from "../types";
+import { useUrlParam } from "../hooks/useUrlState";
+
+const VALUE_MODES = ["value", "percent"] as const;
+const AXIS_MODES = ["iteration", "timestamp"] as const;
 
 const STATUS_COLORS: Record<string, string> = {
   keep: "#2BA8A2",
@@ -48,6 +52,8 @@ const FOCUSABLE_DIALOG_SELECTOR =
 interface TrendPanelProps {
   session: SessionSegment;
   readout: DashboardReadout;
+  detailsDefaultOpen?: boolean;
+  chartHeight?: number;
 }
 
 interface ChartDatum {
@@ -74,9 +80,16 @@ interface ChartDatum {
   breakdown: RunMetricBreakdown | null;
 }
 
-export function TrendPanel({ session, readout }: TrendPanelProps) {
-  const [valueMode, setValueMode] = useState<ValueMode>("value");
-  const [axisMode, setAxisMode] = useState<AxisMode>("iteration");
+export function TrendPanel({
+  session,
+  readout,
+  detailsDefaultOpen = true,
+  chartHeight = 350,
+}: TrendPanelProps) {
+  const [valueModeParam, setValueMode] = useUrlParam("value", VALUE_MODES, "value");
+  const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
+  const valueMode = valueModeParam as ValueMode;
+  const axisMode = axisModeParam as AxisMode;
   const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
   const modalOpenerRef = useRef<ChartPointOpener>(null);
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
@@ -144,7 +157,7 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
         <p id="trend-chart-desc" className="sr-only">
           {chart.summary}
         </p>
-        <ResponsiveContainer width="100%" height={350}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
           <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
             <defs>
               <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
@@ -257,7 +270,14 @@ export function TrendPanel({ session, readout }: TrendPanelProps) {
       </p>
       <ChartDataList chartData={chartData} />
 
-      <MetricDetails readout={readout} session={session} point={detailPoint} />
+      {detailsDefaultOpen ? (
+        <MetricDetails readout={readout} session={session} point={detailPoint} />
+      ) : (
+        <details className="metric-details-disclosure">
+          <summary>How this metric is computed</summary>
+          <MetricDetails readout={readout} session={session} point={detailPoint} />
+        </details>
+      )}
 
       {selectedPoint && (
         <ExperimentModal
@@ -754,7 +774,7 @@ function ExperimentModal({
           aria-label="Close experiment details"
           onClick={onClose}
         >
-          x
+          {"\u00d7"}
         </button>
         <p className="eyebrow">
           {point.statusLabel} / {point.timestampLabel || "no timestamp"}

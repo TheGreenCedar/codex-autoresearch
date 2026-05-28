@@ -47,7 +47,7 @@ export function DecisionRail({
           {readout.nextAction ? "Next action" : action.title || "Choose next hypothesis"}
         </h2>
         <div className="decision-envelope-card" id="decision-envelope-summary">
-          <span>Decision envelope</span>
+          <span>Decision basis</span>
           <strong>{String(envelope.title || action.title || "Next action")}</strong>
           <em>
             {[
@@ -68,7 +68,7 @@ export function DecisionRail({
         <p id="next-action-detail" className="next-action-text">
           {readout.nextAction ||
             action.detail ||
-            "Add ASI next_action_hint to make the next session obvious."}
+            "No next step recorded yet. Run a packet to generate one."}
         </p>
         {showCommandCopy ? (
           <div className="next-command-copy" id="decision-next-command">
@@ -79,7 +79,7 @@ export function DecisionRail({
                       .label as string)
                   : "Next command"}
               </span>
-              <code>{command}</code>
+              <code translate="no">{command}</code>
             </div>
             <button
               type="button"
@@ -107,11 +107,11 @@ export function DecisionRail({
           ))}
         </div>
         <div className="readout-facts">
-          <span className="readout-label">Best kept change</span>
+          <span className="readout-label">Best result so far</span>
           <strong id="best-kept-detail">
-            {readout.bestRun?.description || "No kept anchor yet."}
+            {readout.bestRun?.description || "No kept result yet."}
           </strong>
-          <span className="readout-label">Recent failures</span>
+          <span className="readout-label">Most recent setback</span>
           <strong id="recent-failure-detail">
             {readout.latestFailure?.description || "No recent failure."}
           </strong>

@@ -9,6 +9,7 @@ import type {
   SessionSegment,
 } from "../types";
 import { directionLabel, formatDisplayTime, recordFrom } from "../model";
+import type { DashboardView } from "../constants";
 import { useCopyText } from "../hooks/useCopyText";
 
 interface HeaderProps {
@@ -25,6 +26,8 @@ interface HeaderProps {
   readout: DashboardReadout;
   theme: "light" | "dark";
   setTheme: (theme: "light" | "dark") => void;
+  view: DashboardView;
+  setView: (view: DashboardView) => void;
 }
 
 export function Header({
@@ -41,6 +44,8 @@ export function Header({
   readout,
   theme,
   setTheme,
+  view,
+  setView,
 }: HeaderProps) {
   const { copied: copiedUrl, copy: copyDashboardUrlText, status: copyUrlStatus } = useCopyText();
   const hasMultipleSegments = normalized.segments.length > 1;
@@ -68,6 +73,18 @@ export function Header({
         </div>
         <div className="toolbar-actions">
           <div className="header-actions">
+            <button
+              id="view-toggle"
+              type="button"
+              className="tool-button subtle"
+              onClick={() => setView(view === "audit" ? "operate" : "audit")}
+              aria-pressed={view === "audit"}
+              aria-label={
+                view === "audit" ? "Switch to focused operate view" : "Switch to full audit view"
+              }
+            >
+              {view === "audit" ? "Focus view" : "Audit view"}
+            </button>
             <button
               id="refresh-now"
               type="button"
@@ -287,7 +304,7 @@ function segmentTitle(segment: SessionSegment | undefined) {
 }
 
 function truncateTitle(value: string, max: number) {
-  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}...` : value;
+  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}\u2026` : value;
 }
 
 function segmentRunText(segment: SessionSegment) {

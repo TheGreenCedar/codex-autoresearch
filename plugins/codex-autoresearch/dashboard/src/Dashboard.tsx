@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import type { DashboardEntry, DashboardMeta } from "./types";
 import { buildReadout, dashboardMode } from "./model";
+import { DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW } from "./constants";
+import type { DashboardView } from "./constants";
 import { useDashboardSession } from "./hooks/useDashboardSession";
 import { useDashboardTheme } from "./hooks/useDashboardTheme";
 import { useLiveDashboard } from "./hooks/useLiveDashboard";
 import { useRunToast } from "./hooks/useRunToast";
+import { useUrlParam } from "./hooks/useUrlState";
 import { SideRail } from "./components/SideRail";
 import { Header } from "./components/Header";
 import { DecisionRail } from "./components/DecisionRail";
@@ -51,6 +54,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
   const { theme, setTheme } = useDashboardTheme();
   const { dismissToast, toast } = useRunToast(activeSegment, session.runs);
+  const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
+  const view = viewParam as DashboardView;
+  const auditView = view === "audit";
 
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
@@ -60,13 +66,15 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
   return (
     <div
-      className={`runboard-shell ${mode.liveRefresh || mode.showcase ? "mode-live" : "mode-static"}`}
+      className={`runboard-shell ${mode.liveRefresh || mode.showcase ? "mode-live" : "mode-static"} ${
+        auditView ? "view-audit" : "view-operate"
+      }`}
     >
       <nav className="skip-links" aria-label="Skip links">
         <a href="#trend-panel">Run chart</a>
-        <a href="#decision-rail">Current decision</a>
+        <a href="#decision-rail">Next action</a>
         <a href="#codex-brief">Codex brief</a>
-        <a href="#strategy-memory">Session memory</a>
+        {auditView ? <a href="#strategy-memory">Session memory</a> : null}
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
@@ -86,32 +94,47 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           readout={readout}
           theme={theme}
           setTheme={setTheme}
+          view={view}
+          setView={setViewParam}
         />
 
-        <MissionControl viewModel={viewModel} mode={mode} />
-
-        <section className="metric-layout" aria-label="Metric evidence">
+        <section
+          className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
+          aria-label="Metric evidence"
+        >
           <div className="metric-primary-column">
-            <TrendPanel session={session} readout={readout} />
-            {mode.liveRefresh ? decisionRail : null}
+            <TrendPanel
+              session={session}
+              readout={readout}
+              detailsDefaultOpen={auditView}
+              chartHeight={auditView ? 350 : 420}
+            />
+            {auditView && mode.liveRefresh ? decisionRail : null}
           </div>
-          <ScoreStrip session={session} readout={readout} />
+          {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
         </section>
+
+        {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
+        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
+        {!auditView ? decisionRail : null}
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />
-          <StrategyMemory viewModel={viewModel} />
+          {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
         </section>
-        {mode.liveRefresh ? null : decisionRail}
+
+        {auditView && !mode.liveRefresh ? decisionRail : null}
 
         <Ledger session={session} readout={readout} />
 
-        <section className="workspace-grid">
-          <ResearchTruthMeter viewModel={viewModel} />
-          <FinalizationChecklist viewModel={viewModel} />
-          <ProcessHygiene viewModel={viewModel} />
-          <QualityGapPanel viewModel={viewModel} />
-        </section>
+        {auditView ? (
+          <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">
+            <ResearchTruthMeter viewModel={viewModel} />
+            <FinalizationChecklist viewModel={viewModel} />
+            <ProcessHygiene viewModel={viewModel} />
+            <QualityGapPanel viewModel={viewModel} />
+          </section>
+        ) : null}
       </main>
 
       {toast && (

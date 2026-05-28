@@ -1,34 +1,35 @@
 :root {
   color-scheme: light;
-  --page: #faf7f2;
+  /* Editorial technical palette: calm cool paper, one teal accent, restrained semantics. */
+  --page: #ecefed;
   --surface: #ffffff;
-  --surface-2: #fffbf0;
-  --cream: #fffaf0;
-  --ink: #112d2a;
-  --muted: #4e6e6a;
-  --line: #b0deda;
-  --soft-line: #dcf2f0;
-  --teal: #1cb5ad;
-  --teal-light: #44cfc7;
-  --teal-dark: #127f7a;
-  --primary-bg: #e5f6f4;
-  --green: #2ecc71;
-  --red: #ff6f47;
-  --coral: #ff6f47;
-  --coral-dark: #e04f26;
-  --amber: #fbc531;
-  --accent-light: #ffeaa7;
-  --amber-dark: #d5a315;
-  --blue: #48dbfb;
-  --graph: #127f7a;
-  --focus: #1cb5ad;
-  --shadow: 0 12px 32px rgba(18, 127, 122, 0.08);
-  --shadow-card: 0 6px 24px rgba(18, 127, 122, 0.06), 0 1px 3px rgba(18, 127, 122, 0.04);
-  --shadow-teal-glow: 0 0 20px rgba(28, 181, 173, 0.25);
-  --shadow-coral-glow: 0 0 20px rgba(255, 111, 71, 0.25);
-  --shadow-accent-glow: 0 8px 30px rgba(251, 197, 49, 0.15);
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.4);
+  --surface-2: #f8fafb;
+  --cream: #f6f9f9;
+  --ink: #14201f;
+  --muted: #5a6b69;
+  --line: #d7dee0;
+  --soft-line: #e7ecee;
+  --teal: #0f8f88;
+  --teal-light: #2bb3ab;
+  --teal-dark: #0b6c66;
+  --primary-bg: #e6f3f2;
+  --green: #1f9d57;
+  --red: #d8563a;
+  --coral: #d8563a;
+  --coral-dark: #b23f27;
+  --amber: #c98a12;
+  --accent-light: #f5e6c2;
+  --amber-dark: #9a6b0c;
+  --blue: #2f7fb0;
+  --graph: #0f8f88;
+  --focus: #0f8f88;
+  --shadow: 0 1px 2px rgba(20, 32, 31, 0.06), 0 8px 24px rgba(20, 32, 31, 0.06);
+  --shadow-card: 0 1px 2px rgba(20, 32, 31, 0.05);
+  --shadow-teal-glow: 0 0 0 1px rgba(15, 143, 136, 0.18);
+  --shadow-coral-glow: 0 0 0 1px rgba(216, 86, 58, 0.18);
+  --shadow-accent-glow: 0 0 #0000;
+  --glass-bg: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(20, 32, 31, 0.08);
 }
 
 *[hidden] {
@@ -58,7 +59,7 @@ h6,
 
 body {
   margin: 0;
-  background: linear-gradient(180deg, var(--page) 0%, #fefdfb 52%, #fff5e6 100%);
+  background: var(--page);
   color: var(--ink);
   font-family:
     "Inter",
@@ -109,13 +110,17 @@ a:focus-visible {
 .runboard-shell {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
-  max-width: 1500px;
+  max-width: 1360px;
   min-height: 100vh;
   margin: 0 auto;
+  background: var(--page);
   border-left: 1px solid var(--glass-border);
   border-right: 1px solid var(--glass-border);
-  background: rgba(255, 255, 255, 0.45);
-  box-shadow: 0 0 60px rgba(18, 127, 122, 0.04);
+  box-shadow: var(--shadow-card);
+}
+
+.view-operate .mission-section {
+  display: none;
 }
 
 .skip-links {
@@ -168,10 +173,9 @@ a:focus-visible {
   width: 36px;
   height: 36px;
   margin: 0 auto;
-  border: 2px solid var(--teal-dark);
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--amber) 0%, var(--cream) 42%, var(--teal-light) 100%);
-  box-shadow: var(--shadow-accent-glow);
+  border: 1px solid var(--teal-dark);
+  border-radius: 10px;
+  background: var(--primary-bg);
   color: var(--teal-dark);
   font-size: 12px;
   font-weight: 900;
@@ -194,7 +198,10 @@ a:focus-visible {
   font-size: 11px;
   font-weight: 750;
   padding: 10px 6px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .side-nav a:hover {
@@ -550,15 +557,15 @@ p {
   grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.46fr);
   gap: 18px;
   border: 1px solid var(--line);
-  border-left: 6px solid var(--coral);
+  border-left: 3px solid var(--teal);
   border-radius: 12px;
-  background: linear-gradient(180deg, #fff 0%, var(--cream) 100%);
+  background: var(--surface);
   box-shadow: var(--shadow-card);
   padding: 18px;
 }
 
 .mode-static .decision-panel {
-  border-left-color: var(--coral-dark);
+  border-left-color: var(--teal-dark);
 }
 
 .decision-copy h2 {
@@ -695,7 +702,7 @@ p {
   gap: 6px 14px;
   max-width: 720px;
   margin-top: 12px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
 }
 
@@ -733,7 +740,7 @@ p {
 }
 
 .decision-meta span {
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 8px;
 }
 
@@ -749,7 +756,7 @@ p {
   grid-template-columns: 44px minmax(0, 1fr);
   gap: 2px 10px;
   align-items: center;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
 }
 
@@ -780,6 +787,43 @@ p {
   gap: 8px;
 }
 
+.score-strip--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.score-strip--compact .score-cell {
+  min-height: 64px;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.metric-layout--chart-primary {
+  grid-template-columns: minmax(0, 1fr);
+  margin-bottom: 10px;
+}
+
+.metric-layout--chart-primary .metric-primary-column {
+  grid-column: 1 / -1;
+}
+
+.view-operate .metric-layout--chart-primary .trend-panel {
+  box-shadow: var(--shadow);
+}
+
+.metric-details-disclosure {
+  margin-top: 12px;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 10px;
+}
+
+.metric-details-disclosure summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .metric-layout .score-strip {
   grid-template-columns: 1fr;
   align-self: start;
@@ -791,17 +835,18 @@ p {
   gap: 18px;
   min-height: 88px;
   border: 1px solid var(--soft-line);
-  border-left: 6px solid var(--teal-light);
+  border-left: 3px solid var(--teal-light);
   border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
   padding: 14px;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .score-cell:hover {
   box-shadow: var(--shadow);
-  transform: translateY(-2px);
   border-color: var(--line);
 }
 
@@ -839,12 +884,14 @@ p {
 .panel {
   min-width: 0;
   border: 1px solid var(--soft-line);
-  border-left: 6px solid var(--teal-light);
+  border-left: 3px solid var(--teal-light);
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
   padding: 18px;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .panel:hover {
@@ -853,13 +900,13 @@ p {
 }
 
 .trend-panel {
-  border-left-color: var(--amber);
-  background: linear-gradient(180deg, var(--cream) 0%, #ffffff 100%);
-  box-shadow: var(--shadow-card), var(--shadow-accent-glow);
+  border-left-color: var(--teal);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .trend-panel:hover {
-  box-shadow: var(--shadow), var(--shadow-accent-glow);
+  box-shadow: var(--shadow);
 }
 
 .ledger-panel {
@@ -872,7 +919,7 @@ p {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
-  border-bottom: 3px dashed var(--soft-line);
+  border-bottom: 1px solid var(--soft-line);
   padding-bottom: 10px;
 }
 
@@ -911,7 +958,7 @@ p {
   justify-content: space-between;
   gap: 10px 18px;
   margin-bottom: 10px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
 }
 
@@ -1087,9 +1134,9 @@ p {
   width: 100%;
   min-height: 350px;
   margin: 0;
-  border: 2px dashed rgba(43, 168, 162, 0.28);
+  border: 1px solid var(--soft-line);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(232, 246, 245, 0.82) 0%, rgba(255, 248, 231, 0.86) 100%);
+  background: var(--surface-2);
   padding: 6px 4px 0;
 }
 
@@ -1157,7 +1204,10 @@ p {
   height: 12px;
   border: 3px solid var(--cream);
   border-radius: 999px;
-  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transition:
+    transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
 }
 
 .chart-point-dot.keep {
@@ -1424,7 +1474,9 @@ p {
   border-radius: 50%;
   background: var(--line);
   flex-shrink: 0;
-  transition: all 0.3s ease;
+  transition:
+    background-color 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
 .mission-line {
@@ -1539,7 +1591,9 @@ p {
   padding: 4px 10px;
   font-size: 11px;
   font-weight: 800;
-  transition: all 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .mission-command button:hover {
@@ -1578,7 +1632,9 @@ p {
   transform: translateY(-20px);
   opacity: 0;
   animation: slide-in-toast 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  transition: all 0.3s ease;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
 }
 
 .toast.success {
@@ -1654,7 +1710,7 @@ p {
   max-height: calc(100vh - 40px);
   overflow: auto;
   border: 1px solid var(--line);
-  border-left: 6px solid var(--teal);
+  border-left: 3px solid var(--teal);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: var(--shadow-teal-glow);
@@ -1686,7 +1742,7 @@ p {
 .experiment-metrics div {
   display: grid;
   gap: 4px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 8px;
 }
 
@@ -1752,7 +1808,7 @@ p {
 
 .metric-details-panel {
   margin-top: 14px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 12px;
 }
 
@@ -1853,7 +1909,7 @@ p {
 .memory-lane {
   display: grid;
   gap: 5px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
 }
 
@@ -1909,7 +1965,7 @@ p {
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
 }
 
@@ -1970,7 +2026,7 @@ p {
 
 .source-line {
   margin-top: 12px;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
   padding-top: 10px;
   color: var(--muted);
   font-size: 12px;
@@ -1984,38 +2040,39 @@ p {
 
 .tool-button {
   min-height: 36px;
-  border: 1px solid var(--amber-dark);
-  border-radius: 999px;
-  background: linear-gradient(180deg, var(--amber) 0%, var(--amber-dark) 100%);
-  box-shadow: var(--shadow-accent-glow);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
   color: var(--teal-dark);
   padding: 8px 14px;
-  font-weight: 850;
+  font-weight: 750;
   cursor: pointer;
   transition:
-    transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background 0.14s ease,
+    background-color 0.14s ease,
     border-color 0.14s ease,
     box-shadow 0.14s ease;
 }
 
 .tool-button:hover {
-  background: linear-gradient(180deg, var(--accent-light, #ffe47a) 0%, var(--amber) 100%);
-  border-color: var(--amber-dark);
-  transform: translateY(-1px) scale(1.01);
+  background: var(--primary-bg);
+  border-color: var(--teal);
 }
 
 .tool-button.primary {
   border-color: var(--teal-dark);
-  background: linear-gradient(180deg, var(--teal-light) 0%, var(--teal) 100%);
-  box-shadow: var(--shadow-teal-glow);
+  background: var(--teal);
   color: #fff;
+}
+
+.tool-button.primary:hover {
+  background: var(--teal-dark);
 }
 
 .tool-button.subtle {
   border-color: var(--line);
-  background: var(--cream);
-  box-shadow: var(--shadow-card);
+  background: var(--surface);
+  box-shadow: none;
   color: var(--teal-dark);
 }
 
@@ -2040,7 +2097,7 @@ p {
   position: relative;
   max-height: 520px;
   overflow: auto;
-  border-top: 3px dashed var(--soft-line);
+  border-top: 1px solid var(--soft-line);
 }
 
 #ledger-body {
@@ -2073,7 +2130,7 @@ p {
   gap: 10px;
   align-items: center;
   min-height: 76px;
-  border-bottom: 3px dashed var(--soft-line);
+  border-bottom: 1px solid var(--soft-line);
   padding: 8px 6px;
 }
 
@@ -2484,11 +2541,11 @@ p {
   --blue: #48dbfb;
   --graph: #44cfc7;
   --focus: #44cfc7;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --shadow-card: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-teal-glow: 0 0 20px rgba(28, 181, 173, 0.35);
-  --shadow-coral-glow: 0 0 20px rgba(255, 111, 71, 0.35);
-  --shadow-accent-glow: 0 8px 30px rgba(251, 197, 49, 0.25);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-teal-glow: 0 0 0 1px rgba(44, 207, 199, 0.3);
+  --shadow-coral-glow: 0 0 0 1px rgba(255, 111, 71, 0.3);
+  --shadow-accent-glow: 0 0 #0000;
   --glass-bg: rgba(14, 22, 21, 0.75);
   --glass-border: rgba(255, 255, 255, 0.08);
 }

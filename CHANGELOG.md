@@ -18,6 +18,9 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Redesigned the dashboard with an audit/operate split: the served dashboard now opens in audit view (full traceability); operate (Focus view) is a chart-first surface with audit panels omitted from the DOM. The run chart leads after the header in both views (taller in operate). URL-backed view and chart preferences are included.
+- Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
+- Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
 - Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
 - The decision envelope can now prioritize watchdog intervention when no metric movement, logged decision, kept commit, or completed lane appears inside the configured quiet-window threshold.
 - `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.

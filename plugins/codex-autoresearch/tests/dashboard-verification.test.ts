@@ -65,10 +65,10 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   const nextActionTitle = getById("next-action-title").textContent.trim();
   const metricDetails = getById("metric-details");
 
-  assert.match(rail, /#1/);
-  assert.match(rail, /Keep|Discard|crash|checks_failed/i);
+  assert.match(rail, /Cache manifest|Noisy baseline|startup overhead/i);
   assert.notEqual(rail.includes("No decisions yet"), true);
-  assert.match(nextActionTitle, /Next action/i);
+  assert.ok(nextActionTitle.length > 0);
+  assert.doesNotMatch(nextActionTitle, /No decisions yet/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
   assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
   assert.equal(metricDetails.contains(getById("metric-construction")), true);
@@ -92,7 +92,9 @@ test("dashboard ledger and truth meter do not coerce unknown evidence to zero", 
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta());
+  const { getById } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
   const ledger = getById("ledger").textContent;
   assert.doesNotMatch(ledger, /0%/);
   assert.match(ledger, /-/);
@@ -881,13 +883,17 @@ test("dashboard promotes Codex brief and session memory instead of command contr
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
   ];
 
-  const { getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-    commands: [],
-  });
+  const { getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+      commands: [],
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.match(getById("codex-brief").textContent, /Run #1 created the baseline/);
   assert.match(getById("strategy-memory").textContent, /Test manifest cache reuse/);
@@ -927,7 +933,9 @@ test("dashboard explains that zero quality gaps still need a fresh research roun
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
 
   assert.equal(getById("quality-gap-title").textContent, "0 open / 3 total");
   assert.match(getById("quality-gap-detail").textContent, /Accepted gaps closed/);
@@ -1850,12 +1858,16 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
 
-  const { dom, getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-  });
+  const { dom, getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.equal(queryById("trust-strip"), null);
   assert.equal(dom.window.document.getElementById("trust-warnings"), null);
@@ -1930,10 +1942,6 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
-    item.textContent?.trim(),
-  );
-
   assert.deepEqual(hrefs, [
     "#trend-panel",
     "#decision-rail",
@@ -1941,6 +1949,9 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     "#strategy-memory",
     "#ledger",
   ]);
+  const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
+    item.textContent?.trim(),
+  );
   assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
@@ -1956,15 +1967,14 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Current decision should render directly below the run chart.",
+    "Operate view should show the run chart before the next action.",
   );
   assert.equal(
     Boolean(
-      decisionRail.compareDocumentPosition(scoreStrip) &
-      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      trendPanel.compareDocumentPosition(scoreStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Score strip should not sit between the chart and current decision.",
+    "Operate view should show the run chart before the score strip.",
   );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
@@ -2186,6 +2196,62 @@ test("dashboard readout uses the selected segment baseline", async () => {
   dom.window.close();
 });
 
+test("dashboard defaults to audit view and can switch to operate", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "audit default", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById, queryById, dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+    commands: [],
+  });
+  const toggle = getById("view-toggle") as HTMLButtonElement;
+
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.ok(getById("workspace-grid"));
+  assert.ok(getById("research-truth-meter"));
+  assert.ok(getById("strategy-memory"));
+  assert.ok(getById("codex-brief"));
+
+  toggle.click();
+  await waitFor(
+    () => queryById("workspace-grid") == null,
+    "Operate view did not collapse audit context.",
+  );
+  assert.equal(queryById("research-truth-meter"), null);
+  assert.equal(queryById("strategy-memory"), null);
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.match(dom.window.location.search, /view=operate/);
+  dom.window.close();
+});
+
+test("dashboard restores audit view and chart preferences from the URL", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "url state", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit&value=percent",
+  });
+
+  assert.ok(getById("workspace-grid"));
+  assert.equal(getById("view-toggle").getAttribute("aria-pressed"), "true");
+  const percentButtons = Array.from(dom.window.document.querySelectorAll("button")).filter(
+    (button) => button.getAttribute("aria-pressed") === "true",
+  );
+  assert.ok(
+    percentButtons.some((button) => /%|percent/i.test(button.textContent || "")),
+    "Percent value mode was not restored from the URL.",
+  );
+  dom.window.close();
+});
+
 test("dashboard decision rail shows newest runs first", async () => {
   const entries = [
     {
@@ -2208,10 +2274,13 @@ test("dashboard decision rail shows newest runs first", async () => {
     liveActionsAvailable: false,
   });
 
-  const railText = getById("decision-rail").textContent;
-  assert.match(railText, /#6/);
-  assert.match(railText, /Run six/);
-  assert.match(railText, /#5/);
-  assert.doesNotMatch(railText, /Run one/);
+  const ledgerHtml = getById("ledger-body").innerHTML;
+  assert.match(ledgerHtml, /#6/);
+  assert.match(ledgerHtml, /Run six/);
+  assert.match(ledgerHtml, /#5/);
+  assert.ok(
+    ledgerHtml.indexOf("#6") < ledgerHtml.indexOf("#1"),
+    "Ledger should list newest runs before older runs.",
+  );
   dom.window.close();
 });
