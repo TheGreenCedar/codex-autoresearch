@@ -355,6 +355,33 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.match(gaps, /\[evidence:ev-/);
     assert.equal(evidence.schemaVersion, 1);
     assert.equal(JSON.stringify(evidence).includes("abcdefghijklmnop"), false);
+
+    const reapplied = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "session-019e",
+      "--apply",
+    ]);
+    assert.equal(reapplied.code, 0, reapplied.stderr);
+    const evidenceAfter = JSON.parse(
+      await readFile(path.join(researchRoot, "evidence-index.json"), "utf8"),
+    );
+    const claimIds = new Set(
+      (evidenceAfter.claims || []).map((claim: { id?: string }) => claim.id).filter(Boolean),
+    );
+    const gapsAfter = await readFile(path.join(researchRoot, "quality-gaps.md"), "utf8");
+    const referencedIds = [...gapsAfter.matchAll(/\[evidence:(ev-[^\]]+)\]/g)].map(
+      (match) => match[1],
+    );
+    assert.equal(referencedIds.length > 0, true);
+    for (const evidenceId of referencedIds) {
+      assert.equal(claimIds.has(evidenceId), true, evidenceId);
+    }
+    assert.equal((evidenceAfter.claims || []).length >= (evidence.claims || []).length, true);
   });
 });
 
@@ -1081,6 +1108,101 @@ test("lane-runner blocks implementation lanes without explicit isolation", async
   });
 });
 
+test("lane-runner rejects missing and foreign implementation worktrees", async () => {
+  await withTempDir("lane-runner-worktree-edges", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "README.md"), "base\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const missing = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      "missing-worktree-path",
+      "--command",
+      "git status --short",
+      "--summary",
+      "Missing worktree.",
+      "--yes",
+    ]);
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.stderr, /existing Git worktree/i);
+
+    const foreignRepo = path.join(dir, "foreign-repo");
+    await mkdir(foreignRepo, { recursive: true });
+    await git(foreignRepo, ["init"]);
+    await git(foreignRepo, ["config", "user.email", "codex@example.test"]);
+    await git(foreignRepo, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(foreignRepo, "README.md"), "foreign\n", "utf8");
+    await git(foreignRepo, ["add", "-A"]);
+    await git(foreignRepo, ["commit", "-m", "foreign"]);
+
+    const foreign = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      foreignRepo,
+      "--command",
+      "git status --short",
+      "--summary",
+      "Foreign worktree.",
+      "--yes",
+    ]);
+    assert.notEqual(foreign.code, 0);
+    assert.match(foreign.stderr, /same Git repository/i);
+  });
+});
+
+test("lane-runner allows a sibling implementation worktree", async () => {
+  await withTempDir("lane-runner-worktree-pass", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "README.md"), "base\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const worktreePath = path.join(dir, "lane-worktree");
+    await git(dir, ["worktree", "add", worktreePath, "-b", "lane-impl"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      worktreePath,
+      "--command",
+      "git status --short",
+      "--summary",
+      "Sibling worktree command.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result.commandResult.code, 0);
+  });
+});
+
 test("lane-runner rejects the main checkout as an implementation worktree", async () => {
   await withTempDir("lane-runner-main-worktree", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
@@ -1171,6 +1293,49 @@ test("lane-runner blocks write-scope commands that hide changes in commits", asy
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /cannot run git cleanup|cannot move HEAD/);
   });
+});
+
+test("lane-runner blocks write-scope mutators before execution", async () => {
+  const blockedCommands = [
+    ["git stash push -m blocked", /cannot run git cleanup|look mutating/i],
+    ["git cherry-pick HEAD", /cannot run git cleanup|look mutating/i],
+    ["git revert --no-edit HEAD", /cannot run git cleanup|look mutating/i],
+    ["npm ci", /cannot run git cleanup|dependency|look mutating/i],
+  ];
+  for (const [command, pattern] of blockedCommands) {
+    await withTempDir("lane-runner-write-scope-mutator", async (dir) => {
+      await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+      await git(dir, ["init"]);
+      await git(dir, ["config", "user.email", "codex@example.test"]);
+      await git(dir, ["config", "user.name", "Codex Test"]);
+      await git(dir, ["add", "-A"]);
+      await git(dir, ["commit", "-m", "initial"]);
+      const marker = path.join(dir, "lane-ran.marker");
+      const guardedCommand = `${command} && node -e "require('fs').writeFileSync('lane-ran.marker','ran')"`;
+
+      const result = await runCli([
+        "lane-runner",
+        "--cwd",
+        dir,
+        "--lane-id",
+        "implementation-candidate",
+        "--mode",
+        "implementation",
+        "--write-scope",
+        "src",
+        "--command",
+        guardedCommand,
+        "--summary",
+        "Unsafe mutator.",
+        "--yes",
+      ]);
+      assert.notEqual(result.code, 0, command);
+      assert.match(result.stderr, pattern, command);
+      await assert.rejects(() => access(marker));
+    });
+  }
 });
 
 test("lane-runner blocks write-scope cleanup commands in the main checkout", async () => {
@@ -4291,6 +4456,99 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     }),
   );
   assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
+
+  const laneRunnerArgs = validateToolArguments("lane_runner", {
+    workingDir: "C:/repo",
+    laneId: "read-only-scout",
+    mode: "read_only_scout",
+    command: "git status --short",
+    yes: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("lane_runner", laneRunnerArgs), {
+    cwd: "C:/repo",
+    laneId: "read-only-scout",
+    mode: "read_only_scout",
+    command: "git status --short",
+    yes: true,
+  });
+
+  const forensicsArgs = validateToolArguments("session_forensics", {
+    workingDir: "C:/repo",
+    sessionJsonl: "rollout.jsonl",
+    researchSlug: "study",
+    apply: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("session_forensics", forensicsArgs), {
+    cwd: "C:/repo",
+    sessionJsonl: "rollout.jsonl",
+    researchSlug: "study",
+    apply: true,
+  });
+
+  const partialResultsArgs = validateToolArguments("partial_results", {
+    workingDir: "C:/repo",
+    fromLast: true,
+    record: "rows=out/rows.json",
+    description: "Salvage rows",
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("partial_results", partialResultsArgs), {
+    cwd: "C:/repo",
+    fromLast: true,
+    record: "rows=out/rows.json",
+    description: "Salvage rows",
+  });
+
+  const goalBridgeArgs = validateToolArguments("codex_goal_bridge", {
+    workingDir: "C:/repo",
+    codexGoalObjective: "Close the loop",
+    codexGoalStatus: "active",
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("codex_goal_bridge", goalBridgeArgs), {
+    cwd: "C:/repo",
+    codexGoalObjective: "Close the loop",
+    codexGoalStatus: "active",
+  });
+});
+
+test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
+  await withTempDir("log-contract-edges", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "log contract", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const packet = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(packet.code, 0, packet.stderr);
+
+    const metricsConflict = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "conflict",
+      "--metrics",
+      '{"seconds":1}',
+      "--metrics-file",
+      "metrics.json",
+    ]);
+    assert.notEqual(metricsConflict.code, 0);
+    assert.match(metricsConflict.stderr, /either --metrics or --metrics-file/i);
+
+    const invalidEvidence = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "bad evidence",
+      "--evidence-status",
+      "mystery",
+    ]);
+    assert.notEqual(invalidEvidence.code, 0);
+    assert.match(invalidEvidence.stderr, /evidence-status/i);
+  });
 });
 
 test("plugin manifest does not declare an MCP server", async () => {

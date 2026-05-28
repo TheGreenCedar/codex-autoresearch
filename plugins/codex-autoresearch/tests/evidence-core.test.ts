@@ -785,3 +785,61 @@ test("session forensics parses bounded signals without raw body persistence", as
     assert.equal(JSON.stringify(result).includes("sk-test"), false);
   });
 });
+
+test("parseSessionForensics returns unreadable_file when the read stream fails", async () => {
+  await withTempDir("session-forensics-stream-error", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(sessionPath, '{"type":"session_meta"}\n', "utf8");
+    const { PassThrough } = await import("node:stream");
+    const result = await parseSessionForensics({
+      sessionJsonl: sessionPath,
+      createReadStream: () => {
+        const stream = new PassThrough();
+        queueMicrotask(() => stream.destroy(new Error("stream broke")));
+        return stream as ReturnType<typeof import("node:fs").createReadStream>;
+      },
+    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "unreadable_file");
+    assert.match(result.message, /stream broke/i);
+    assert.equal(result.path, sessionPath);
+  });
+});
+
+test("analyzeExperimentEconomics converts dashed test-timeout millisecond values", () => {
+  for (const command of [
+    "node bench.mjs --test-timeout 5000",
+    "node bench.mjs --test-timeout=5000",
+  ]) {
+    const economics = analyzeExperimentEconomics({
+      state: { baseline: 10, config: { bestDirection: "lower" }, current: [] },
+      lastRun: {
+        run: { durationSeconds: 30 },
+        packetEvidence: {
+          timeoutSeconds: 3,
+          commandIdentity: { command },
+        },
+      },
+    });
+    const warning = economics.warnings.find(
+      (entry) => entry.code === "outer_timeout_shorter_than_inner",
+    );
+    assert.equal(warning?.details?.innerTimeout, 5, command);
+  }
+
+  const secondsEconomics = analyzeExperimentEconomics({
+    state: { baseline: 10, config: { bestDirection: "lower" }, current: [] },
+    lastRun: {
+      run: { durationSeconds: 30 },
+      packetEvidence: {
+        timeoutSeconds: 3,
+        commandIdentity: { command: "node bench.mjs --test-timeout-seconds 5" },
+      },
+    },
+  });
+  const secondsWarning = secondsEconomics.warnings.find(
+    (entry) => entry.code === "outer_timeout_shorter_than_inner",
+  );
+  assert.equal(secondsWarning?.details?.innerTimeout, 5);
+});
