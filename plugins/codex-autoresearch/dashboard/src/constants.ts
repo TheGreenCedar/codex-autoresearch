@@ -20,3 +20,7 @@ export const TONES = {
 
 export const LEDGER_ROW_HEIGHT = 82;
 export const LEDGER_VISIBLE_ROWS = 16;
+
+export const DASHBOARD_VIEWS = ["operate", "audit"] as const;
+export type DashboardView = (typeof DASHBOARD_VIEWS)[number];
+export const DEFAULT_DASHBOARD_VIEW: DashboardView = "operate";

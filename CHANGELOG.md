@@ -18,6 +18,9 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Redesigned the dashboard into an operator-first surface: a restrained editorial visual system (single accent, hairline dividers, no decorative glow/gradient stacks), a dominant next-action decision card with plain-language labels, and an operate/audit view split that keeps audit context (session memory, research truth, finalization, process hygiene, quality gap) collapsed until a reviewer needs it.
+- Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
+- Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
 - Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
 - The decision envelope can now prioritize watchdog intervention when no metric movement, logged decision, kept commit, or completed lane appears inside the configured quiet-window threshold.
 - `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.

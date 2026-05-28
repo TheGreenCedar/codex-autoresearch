@@ -153,6 +153,7 @@ Prefer the served dashboard:
 - Use `export` only for offline snapshots.
 - Static exports are read-only; use the served dashboard when packet freshness matters.
 - Treat the dashboard as a visual aid, not a control surface. It should not expose inert live controls, mutation buttons, or command receipts.
+- The dashboard opens in operate view: the next-action decision, metric trend, and run log are foreground while audit context (session memory, research truth, finalization, process hygiene, quality gap) is collapsed. Switch to audit view from the header toggle when a reviewer needs full traceability. View, selected segment, and chart value/axis preferences are stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`), so a served dashboard link can be shared with that exact state.
 
 Read dashboard evidence in this order:
 

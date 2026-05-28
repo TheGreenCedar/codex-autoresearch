@@ -92,7 +92,9 @@ test("dashboard ledger and truth meter do not coerce unknown evidence to zero", 
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta());
+  const { getById } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
   const ledger = getById("ledger").textContent;
   assert.doesNotMatch(ledger, /0%/);
   assert.match(ledger, /-/);
@@ -927,7 +929,9 @@ test("dashboard explains that zero quality gaps still need a fresh research roun
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
 
   assert.equal(getById("quality-gap-title").textContent, "0 open / 3 total");
   assert.match(getById("quality-gap-detail").textContent, /Accepted gaps closed/);
@@ -1850,12 +1854,16 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
 
-  const { dom, getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-  });
+  const { dom, getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.equal(queryById("trust-strip"), null);
   assert.equal(dom.window.document.getElementById("trust-warnings"), null);
@@ -2183,6 +2191,61 @@ test("dashboard readout uses the selected segment baseline", async () => {
     "ArrowLeft segment shortcut did not update.",
   );
   assert.equal(getById("segment-tab-0").getAttribute("aria-selected"), "true");
+  dom.window.close();
+});
+
+test("dashboard defaults to operate view and collapses audit context", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "operate default", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById, queryById, dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+    commands: [],
+  });
+  const toggle = getById("view-toggle") as HTMLButtonElement;
+
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.equal(queryById("workspace-grid"), null);
+  assert.equal(queryById("research-truth-meter"), null);
+  assert.ok(getById("codex-brief"));
+  assert.ok(getById("strategy-memory"));
+
+  toggle.click();
+  await waitFor(
+    () => queryById("workspace-grid") != null,
+    "Audit view did not expand workspace context.",
+  );
+  assert.ok(getById("research-truth-meter"));
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.match(dom.window.location.search, /view=audit/);
+  dom.window.close();
+});
+
+test("dashboard restores audit view and chart preferences from the URL", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "url state", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit&value=percent",
+  });
+
+  assert.ok(getById("workspace-grid"));
+  assert.equal(getById("view-toggle").getAttribute("aria-pressed"), "true");
+  const percentButtons = Array.from(dom.window.document.querySelectorAll("button")).filter(
+    (button) => button.getAttribute("aria-pressed") === "true",
+  );
+  assert.ok(
+    percentButtons.some((button) => /%|percent/i.test(button.textContent || "")),
+    "Percent value mode was not restored from the URL.",
+  );
   dom.window.close();
 });
 

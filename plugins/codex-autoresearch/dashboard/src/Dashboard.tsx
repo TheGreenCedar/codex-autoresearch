@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import type { DashboardEntry, DashboardMeta } from "./types";
 import { buildReadout, dashboardMode } from "./model";
+import { DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW } from "./constants";
+import type { DashboardView } from "./constants";
 import { useDashboardSession } from "./hooks/useDashboardSession";
 import { useDashboardTheme } from "./hooks/useDashboardTheme";
 import { useLiveDashboard } from "./hooks/useLiveDashboard";
 import { useRunToast } from "./hooks/useRunToast";
+import { useUrlParam } from "./hooks/useUrlState";
 import { SideRail } from "./components/SideRail";
 import { Header } from "./components/Header";
 import { DecisionRail } from "./components/DecisionRail";
@@ -51,6 +54,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
   const { theme, setTheme } = useDashboardTheme();
   const { dismissToast, toast } = useRunToast(activeSegment, session.runs);
+  const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
+  const view = viewParam as DashboardView;
+  const auditView = view === "audit";
 
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
@@ -60,7 +66,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
   return (
     <div
-      className={`runboard-shell ${mode.liveRefresh || mode.showcase ? "mode-live" : "mode-static"}`}
+      className={`runboard-shell ${mode.liveRefresh || mode.showcase ? "mode-live" : "mode-static"} ${
+        auditView ? "view-audit" : "view-operate"
+      }`}
     >
       <nav className="skip-links" aria-label="Skip links">
         <a href="#trend-panel">Run chart</a>
@@ -86,6 +94,8 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           readout={readout}
           theme={theme}
           setTheme={setTheme}
+          view={view}
+          setView={setViewParam}
         />
 
         <MissionControl viewModel={viewModel} mode={mode} />
@@ -106,12 +116,14 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
 
         <Ledger session={session} readout={readout} />
 
-        <section className="workspace-grid">
-          <ResearchTruthMeter viewModel={viewModel} />
-          <FinalizationChecklist viewModel={viewModel} />
-          <ProcessHygiene viewModel={viewModel} />
-          <QualityGapPanel viewModel={viewModel} />
-        </section>
+        {auditView ? (
+          <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">
+            <ResearchTruthMeter viewModel={viewModel} />
+            <FinalizationChecklist viewModel={viewModel} />
+            <ProcessHygiene viewModel={viewModel} />
+            <QualityGapPanel viewModel={viewModel} />
+          </section>
+        ) : null}
       </main>
 
       {toast && (

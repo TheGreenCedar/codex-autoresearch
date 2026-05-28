@@ -28,6 +28,10 @@ import {
   improvementPercent,
 } from "../model";
 import type { ChartModel, DashboardReadout, RunMetricBreakdown, SessionSegment } from "../types";
+import { useUrlParam } from "../hooks/useUrlState";
+
+const VALUE_MODES = ["value", "percent"] as const;
+const AXIS_MODES = ["iteration", "timestamp"] as const;
 
 const STATUS_COLORS: Record<string, string> = {
   keep: "#2BA8A2",
@@ -75,8 +79,10 @@ interface ChartDatum {
 }
 
 export function TrendPanel({ session, readout }: TrendPanelProps) {
-  const [valueMode, setValueMode] = useState<ValueMode>("value");
-  const [axisMode, setAxisMode] = useState<AxisMode>("iteration");
+  const [valueModeParam, setValueMode] = useUrlParam("value", VALUE_MODES, "value");
+  const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
+  const valueMode = valueModeParam as ValueMode;
+  const axisMode = axisModeParam as AxisMode;
   const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
   const modalOpenerRef = useRef<ChartPointOpener>(null);
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
@@ -754,7 +760,7 @@ function ExperimentModal({
           aria-label="Close experiment details"
           onClick={onClose}
         >
-          x
+          {"\u00d7"}
         </button>
         <p className="eyebrow">
           {point.statusLabel} / {point.timestampLabel || "no timestamp"}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { DEMO_ENTRIES, DEMO_META } from "../demoData";
 import { defaultConfig, normalizeEntries } from "../model";
+import { getUrlValue, setUrlValue } from "./useUrlState";
 import type {
   DashboardEntry,
   DashboardMeta,
@@ -38,11 +39,15 @@ export function useDashboardSession({
     () => initialMeta?.viewModel || {},
   );
   const normalized = useMemo(() => normalizeEntries(entries), [entries]);
-  const [activeSegment, setActiveSegment] = useState(() => normalized.latestSegment);
-  const [manualSegment, setManualSegment] = useState(false);
+  const urlSegment = useMemo(() => readSegmentParam(), []);
+  const [activeSegment, setActiveSegment] = useState(() =>
+    urlSegment == null ? normalized.latestSegment : urlSegment,
+  );
+  const [manualSegment, setManualSegment] = useState(urlSegment != null);
   const selectActiveSegment = useCallback((segment: number) => {
     setManualSegment(true);
     setActiveSegment(segment);
+    setUrlValue("segment", String(segment));
   }, []);
 
   useEffect(() => {
@@ -67,6 +72,13 @@ export function useDashboardSession({
     setViewModel,
     viewModel,
   };
+}
+
+function readSegmentParam(): number | null {
+  const raw = getUrlValue("segment");
+  if (raw == null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function initialEntriesFor(initialEntries?: DashboardEntry[]) {
