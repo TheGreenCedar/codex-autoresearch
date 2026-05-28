@@ -206,6 +206,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         timeoutSeconds: args.timeoutSeconds,
         dryRun: args.dryRun,
         yes: args.yes,
+        allowNonGitCommand: args.allowNonGitCommand,
       }),
     }),
     config: async (args) => ({

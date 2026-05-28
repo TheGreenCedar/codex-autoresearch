@@ -18,7 +18,9 @@ CLI commands return structured content; prefer `--json-full`, `--compact`, or th
 
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
 
-The resume contract also carries a watchdog summary. By default it treats an eight-hour quiet window as suspicious when there has been no metric movement, no logged decision, no kept commit, and no completed lane. Tune it with `watchdogNoProgressHours` or `watchdogNoProgressSeconds` in config when a project has a different overnight rhythm. If it fires, do not just feed the machine another packet. Inspect the process, finalize kept work, or rescope the segment.
+`state --compact`, `recommend-next --compact`, and the dashboard should agree on the same watchdog summary and canonical next-action kind. If they diverge, treat that as a bug rather than a dashboard-only signal.
+
+The resume contract also carries a watchdog summary. By default it treats an eight-hour quiet window as suspicious when there has been no metric movement, no logged decision, no kept commit, or a completed lane result in the active segment. Tune it with `watchdogNoProgressHours` or `watchdogNoProgressSeconds` in config when a project has a different overnight rhythm. If it fires, do not just feed the machine another packet. Inspect the process, finalize kept work, or rescope the segment.
 
 Read existing files before editing:
 
@@ -124,7 +126,9 @@ node scripts/autoresearch.mjs research-fanout --cwd <project> --lanes 6 --yes
 node scripts/autoresearch.mjs lane-runner --cwd <project> --lane-id read-only-scout --summary "Evidence found" --recommendation "Run one measured packet for the chosen hypothesis" --yes
 ```
 
-The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Dispatch scout lanes in parallel first. `lane-runner` records or runs one lane with a bounded time budget and returns one coordinator recommendation for the next measured packet. Read-only scout lanes do not need a worktree and block commands that look mutating. Implementation lanes must pass `--worktree <path>` or `--write-scope <paths>` before they can run.
+The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Fanout plans are segment-scoped: after `new-segment`, run a fresh `research-fanout --yes` for the new segment or rely on memory/default lanes until you do. `state --compact` exposes `fanoutProvenance` so you can see whether the active segment has a matching plan.
+
+Dispatch scout lanes in parallel first. `lane-runner` records or runs one lane with a bounded time budget and returns one coordinator recommendation for the next measured packet. Completed lane results update lane status and count as watchdog progress. Read-only scout lanes do not need a worktree, block commands that look mutating, and fail closed outside Git when running commands unless `--allow-non-git-command` is explicitly passed. Implementation lanes must pass `--worktree <path>` or `--write-scope <paths>` before they can run.
 
 ## ASI
 

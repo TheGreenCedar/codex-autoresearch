@@ -204,7 +204,7 @@ Usage:
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
   node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
+  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--allow-non-git-command] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
@@ -3945,20 +3945,13 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     ok: false,
     warnings: [error.message],
   }));
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
-    settings,
-  });
-  const fanoutPlan = latestResearchFanoutPlan(workDir);
-  const parallelLanes = buildParallelLanes({ memory, fanoutPlan, config });
-  const watchdogSummary = buildWatchdogSummary({
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
     state,
+    config,
     settings,
-    current: state.current,
-    parallelLanes,
-    fanoutPlan,
   });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const stateWithQualityGap = { ...state, qualityGap };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -4010,6 +4003,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     researchIntegrity,
     warningDetails: warnings,
     fanoutPlan,
+    fanoutProvenance,
     parallelLanes,
     watchdogSummary,
     experimentEconomics,
@@ -5385,13 +5379,14 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     warnings: [error.message],
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
-    settings: dashboardSettings(config),
+  const settings = dashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
   });
-  const fanoutPlan = latestResearchFanoutPlan(workDir);
-  const parallelLanes = buildParallelLanes({ memory, fanoutPlan, config });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const stateWithQualityGap = { ...state, qualityGap };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -5431,6 +5426,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       salvageCandidates: partialResults.candidates,
       workflowFriction,
       experimentMemory: memory,
+      watchdog: watchdogSummary,
     }),
     continuation.commands,
   );
@@ -5467,7 +5463,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
     fanoutPlan,
+    fanoutProvenance,
     parallelLanes,
+    watchdogSummary,
     memory,
     experimentEconomics,
     partialResults,
@@ -5548,6 +5546,7 @@ function compactPublicState(state: LooseObject) {
       ? state.parallelLanes.slice(0, 6).map((lane: any) => ({
           id: lane.id,
           title: lane.title || lane.label,
+          status: lane.status,
           mode: lane.mode,
           evidenceStatus: lane.evidenceStatus,
           nextActionHint: lane.nextActionHint,
@@ -5557,9 +5556,19 @@ function compactPublicState(state: LooseObject) {
       ? {
           id: state.fanoutPlan.id,
           status: state.fanoutPlan.status,
+          segment: state.fanoutPlan.segment ?? state.segment,
           nextAction: state.fanoutPlan.nextAction,
         }
       : null,
+    fanoutProvenance: state.fanoutProvenance || null,
+    watchdogSummary: state.watchdogSummary
+      ? {
+          stale: state.watchdogSummary.stale === true,
+          status: state.watchdogSummary.status || "",
+          recommendation: state.watchdogSummary.recommendation || "",
+          quietHours: state.watchdogSummary.quietHours ?? null,
+        }
+      : state.decisionEnvelope?.watchdog || null,
     blockers: [...new Set(blockers)].slice(0, 6),
     goalAdvice: state.decisionEnvelope?.goalAdvice || state.resumeAudit?.goalAdvice || null,
     report: {
@@ -5789,13 +5798,109 @@ function loopContinuation(
   };
 }
 
-function latestResearchFanoutPlan(workDir: string) {
-  return (
-    [...readJsonl(workDir)]
-      .reverse()
-      .find((entry: any) => entry?.type === "research_fanout" && entry.fanoutPlan)?.fanoutPlan ||
-    null
-  );
+function resolveFanoutForSegment(workDir: string, segment: number) {
+  const entry = [...readJsonl(workDir)]
+    .reverse()
+    .find(
+      (item: any) =>
+        item?.type === "research_fanout" &&
+        item.fanoutPlan &&
+        Number(item.segment) === Number(segment),
+    );
+  if (!entry) {
+    return {
+      fanoutPlan: null,
+      fanoutProvenance: {
+        source: "memory_or_defaults",
+        segment,
+        matchedSegment: false,
+      },
+    };
+  }
+  return {
+    fanoutPlan: entry.fanoutPlan,
+    fanoutProvenance: {
+      source: "segment_plan",
+      segment,
+      matchedSegment: true,
+      planId: entry.fanoutPlan.id || null,
+      createdAt: entry.fanoutPlan.createdAt || null,
+    },
+  };
+}
+
+function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: LooseObject[]) {
+  const latestByLane = new Map<string, LooseObject>();
+  for (const entry of laneResults) {
+    const laneId = entry?.lane?.id;
+    if (!laneId) continue;
+    const existing = latestByLane.get(laneId);
+    if (!existing || Number(entry.timestamp || 0) >= Number(existing.timestamp || 0)) {
+      latestByLane.set(laneId, entry);
+    }
+  }
+  return lanes.map((lane) => {
+    const entry = latestByLane.get(lane.id);
+    if (!entry?.result) return lane;
+    const resultStatus = String(entry.result.status || "").toLowerCase();
+    const completed = resultStatus === "completed";
+    return {
+      ...lane,
+      status: completed ? "completed" : entry.result.status || lane.status,
+      evidenceStatus: completed ? "accepted" : lane.evidenceStatus,
+      completedAt: entry.timestamp ? new Date(entry.timestamp).toISOString() : lane.completedAt,
+      lastLaneResult: {
+        status: entry.result.status,
+        summary: entry.result.summary || "",
+        recommendation: entry.result.recommendation || "",
+      },
+    };
+  });
+}
+
+function buildParallelOrchestrationContext({
+  workDir,
+  state,
+  config,
+  settings = {},
+  memory = null,
+}: {
+  workDir: string;
+  state: LooseObject;
+  config: LooseObject;
+  settings?: LooseObject;
+  memory?: LooseObject | null;
+}) {
+  const resolvedMemory =
+    memory ||
+    buildExperimentMemory({
+      runs: state.current,
+      direction: state.config.bestDirection,
+      settings: Object.keys(settings).length ? settings : dashboardSettings(config),
+    });
+  const { fanoutPlan, fanoutProvenance } = resolveFanoutForSegment(workDir, state.segment);
+  const laneResults = latestLaneResults(workDir, state.segment);
+  const baseLanes = buildParallelLanes({
+    memory: resolvedMemory,
+    fanoutPlan,
+    config,
+  });
+  const parallelLanes = enrichParallelLanesWithLaneResults(baseLanes, laneResults);
+  const watchdogSummary = buildWatchdogSummary({
+    state,
+    settings,
+    current: state.current,
+    parallelLanes,
+    fanoutPlan,
+  });
+  return {
+    memory: resolvedMemory,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    laneResults,
+    watchdogSummary,
+  };
 }
 
 function buildParallelLanes({
@@ -6110,13 +6215,13 @@ async function researchFanout(args: LooseObject) {
 async function laneRunner(args: LooseObject) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
-  const fanoutPlan = latestResearchFanoutPlan(workDir);
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
-    settings: dashboardSettings(config),
+  const settings = dashboardSettings(config);
+  const { parallelLanes: lanes } = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
   });
-  const lanes = buildParallelLanes({ memory, fanoutPlan, config });
   const laneId = String(
     args.lane_id || args.laneId || args.lane || lanes[0]?.id || "read-only-scout",
   );
@@ -6149,6 +6254,17 @@ async function laneRunner(args: LooseObject) {
   }
   if (mode === "read_only_scout" && command && commandLooksMutating(command)) {
     throw new Error("Read-only scout lanes cannot run commands that look mutating.");
+  }
+  const allowNonGitReadOnlyCommand = boolOption(
+    args.allow_non_git_command ?? args.allowNonGitCommand,
+    false,
+  );
+  if (mode === "read_only_scout" && command && !dryRun && !(await insideGitRepo(workDir))) {
+    if (!allowNonGitReadOnlyCommand) {
+      throw new Error(
+        "Read-only scout lanes cannot run commands outside a Git worktree without porcelain verification. Use --worktree or implementation mode with --write-scope for isolated edits, or pass --allow-non-git-command only when the command is provably read-only.",
+      );
+    }
   }
   if (
     mode === "implementation" &&
