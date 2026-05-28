@@ -53,6 +53,7 @@ interface TrendPanelProps {
   session: SessionSegment;
   readout: DashboardReadout;
   detailsDefaultOpen?: boolean;
+  chartHeight?: number;
 }
 
 interface ChartDatum {
@@ -79,7 +80,12 @@ interface ChartDatum {
   breakdown: RunMetricBreakdown | null;
 }
 
-export function TrendPanel({ session, readout, detailsDefaultOpen = true }: TrendPanelProps) {
+export function TrendPanel({
+  session,
+  readout,
+  detailsDefaultOpen = true,
+  chartHeight = 350,
+}: TrendPanelProps) {
   const [valueModeParam, setValueMode] = useUrlParam("value", VALUE_MODES, "value");
   const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
   const valueMode = valueModeParam as ValueMode;
@@ -151,7 +157,7 @@ export function TrendPanel({ session, readout, detailsDefaultOpen = true }: Tren
         <p id="trend-chart-desc" className="sr-only">
           {chart.summary}
         </p>
-        <ResponsiveContainer width="100%" height={350}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
           <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
             <defs>
               <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">

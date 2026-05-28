@@ -798,12 +798,17 @@ p {
   padding: 10px 12px;
 }
 
-.metric-layout--chart {
+.metric-layout--chart-primary {
   grid-template-columns: minmax(0, 1fr);
+  margin-bottom: 10px;
 }
 
-.metric-layout--chart .metric-primary-column {
+.metric-layout--chart-primary .metric-primary-column {
   grid-column: 1 / -1;
+}
+
+.view-operate .metric-layout--chart-primary .trend-panel {
+  box-shadow: var(--shadow);
 }
 
 .metric-details-disclosure {

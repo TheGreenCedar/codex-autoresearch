@@ -71,8 +71,8 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       }`}
     >
       <nav className="skip-links" aria-label="Skip links">
-        <a href="#decision-rail">Next action</a>
         <a href="#trend-panel">Run chart</a>
+        <a href="#decision-rail">Next action</a>
         <a href="#codex-brief">Codex brief</a>
         {auditView ? <a href="#strategy-memory">Session memory</a> : null}
         <a href="#ledger">Ledger</a>
@@ -98,21 +98,25 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           setView={setViewParam}
         />
 
-        {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
-
-        {!auditView ? decisionRail : null}
-        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
-
         <section
-          className={`metric-layout${auditView ? "" : " metric-layout--chart"}`}
+          className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
           aria-label="Metric evidence"
         >
           <div className="metric-primary-column">
-            <TrendPanel session={session} readout={readout} detailsDefaultOpen={auditView} />
+            <TrendPanel
+              session={session}
+              readout={readout}
+              detailsDefaultOpen={auditView}
+              chartHeight={auditView ? 350 : 420}
+            />
             {auditView && mode.liveRefresh ? decisionRail : null}
           </div>
           {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
         </section>
+
+        {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
+        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
+        {!auditView ? decisionRail : null}
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />

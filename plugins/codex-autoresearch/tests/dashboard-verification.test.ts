@@ -1942,7 +1942,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  assert.deepEqual(hrefs, ["#decision-rail", "#trend-panel", "#codex-brief", "#ledger"]);
+  assert.deepEqual(hrefs, ["#trend-panel", "#decision-rail", "#codex-brief", "#ledger"]);
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
@@ -1957,18 +1957,18 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   assert.ok(scoreStrip);
   assert.equal(
     Boolean(
-      decisionRail.compareDocumentPosition(trendPanel) &
-      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      trendPanel.compareDocumentPosition(decisionRail) &
+        dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the next action before the run chart.",
+    "Operate view should show the run chart before the next action.",
   );
   assert.equal(
     Boolean(
-      scoreStrip.compareDocumentPosition(trendPanel) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      trendPanel.compareDocumentPosition(scoreStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the score bar directly above the run chart.",
+    "Operate view should show the run chart before the score strip.",
   );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
