@@ -1964,7 +1964,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   assert.equal(
     Boolean(
       trendPanel.compareDocumentPosition(decisionRail) &
-        dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
     "Operate view should show the run chart before the next action.",
