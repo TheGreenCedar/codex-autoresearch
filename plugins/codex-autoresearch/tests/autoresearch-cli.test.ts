@@ -4928,7 +4928,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.match(dashboard, /Best kept change/);
     assert.match(dashboard, /Recent failure/);
     assert.match(dashboard, /Next action/);
-    assert.match(dashboard, /Experiment portfolio/);
+    assert.match(dashboard, /Parallel exploration board/);
     assert.match(dashboard, /lower is better/);
     assert.ok(payload.viewModel.nextBestAction.detail);
     assert.ok(payload.viewModel.nextBestAction.explanation.why);

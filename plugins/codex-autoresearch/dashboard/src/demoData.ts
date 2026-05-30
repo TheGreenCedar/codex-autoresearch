@@ -80,6 +80,51 @@ export const DEMO_META: DashboardMeta = {
         },
       ],
     },
+    fanoutPlan: { id: "demo-fanout", status: "planned" },
+    parallelLanes: [
+      {
+        id: "latency",
+        title: "Index rebuild speed",
+        status: "completed",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+        recommendation: "Preserve the latest 5.62s rebuild path.",
+      },
+      {
+        id: "footprint",
+        title: "Peak memory",
+        status: "active",
+        mode: "implementation",
+        evidenceStatus: "provisional",
+        recommendation: "Keep memory below 220 MB while retaining the faster path.",
+      },
+      {
+        id: "promotion",
+        title: "Promotion readiness",
+        status: "planned",
+        mode: "validation",
+        evidenceStatus: "provisional",
+        recommendation: "Repeat correctness and recall checks before packaging review.",
+      },
+    ],
+    evidenceReadout: {
+      label: "exploratory",
+      title: "Exploratory",
+      promotable: false,
+    },
+    evidenceLedger: {
+      counts: { accepted: 54, provisional: 0, rejected: 46, superseded: 0 },
+      acceptedCurrent: 54,
+    },
+    watchdogSummary: {
+      status: "tracking",
+      stale: false,
+      recommendation: "Continue from the decision envelope; watchdog has no stale window.",
+    },
+    finalizationPressure: {
+      status: "medium",
+      recommendation: "Preview finalization after the candidate survives correctness checks.",
+    },
     aiSummary: {
       title: "Promotion candidate is visible",
       happened: ["100 runs logged", "54 kept", "46 rejected, failed, or crashed"],

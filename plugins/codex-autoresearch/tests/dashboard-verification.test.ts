@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import {
@@ -7,6 +9,7 @@ import {
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -1881,6 +1884,209 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
 });
 
+test("dashboard keeps the chart first while rendering v2 readiness signals", async () => {
+  const viewModel = {
+    nextBestAction: {
+      priority: "Next move",
+      title: "Repeat the best packet",
+      detail: "Confirm the kept path before promotion.",
+    },
+    evidenceReadout: { label: "promotion_eligible", title: "Promotion eligible", promotable: true },
+    evidenceLedger: {
+      counts: { accepted: 2, provisional: 1, rejected: 1, superseded: 0 },
+      acceptedCurrent: 2,
+    },
+    parallelLanes: [
+      {
+        id: "scout",
+        title: "Scout lane",
+        status: "active",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+        recommendation: "Repeat the winning packet.",
+      },
+    ],
+    fanoutPlan: { status: "planned" },
+    watchdogSummary: { status: "tracking", recommendation: "Continue from the decision envelope." },
+    finalizationPressure: {
+      status: "medium",
+      recommendation: "Preview finalization soon.",
+    },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "signal path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  for (const view of ["audit", "operate"]) {
+    const { dom, getById, queryById } = await runDashboard(
+      entries,
+      {
+        deliveryMode: "live-server",
+        liveRefreshAvailable: true,
+        liveActionsAvailable: false,
+        viewModel,
+      },
+      { url: `http://127.0.0.1/?view=${view}` },
+    );
+    const chart = getById("trend-chart");
+    const signalStrip = getById("v2-release-signals");
+    const details = getById("metric-details");
+
+    assert.equal(signalStrip.getAttribute("aria-label"), "Run readiness signals");
+    assert.equal(signalStrip.querySelectorAll(".signal-item").length, 5);
+    assert.match(signalStrip.textContent, /Repeat the best packet/);
+    assert.match(signalStrip.textContent, /2 current \/ 1 provisional \/ 1 audit-only/);
+    assert.match(signalStrip.textContent, /1 active \/ 0 done/);
+    assert.equal(signalStrip.querySelector("button"), null);
+    assert.ok(
+      chart.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "signal strip should render after the chart",
+    );
+    assert.ok(
+      signalStrip.compareDocumentPosition(details) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "signal strip should render before metric details",
+    );
+    if (view === "operate") {
+      assert.equal(queryById("workspace-grid"), null);
+      assert.equal(queryById("strategy-memory"), null);
+    } else {
+      assert.ok(getById("strategy-memory"));
+    }
+  }
+});
+
+test("dashboard renders strategy lanes and evidence status classes", async () => {
+  const viewModel = {
+    evidenceChips: [
+      { label: "Accepted", value: "Kept packet is current", evidenceStatus: "accepted" },
+      { label: "Rejected", value: "Rollback evidence remains visible", evidenceStatus: "rejected" },
+      {
+        label: "Quarantined",
+        value: "Artifact cannot promote",
+        evidenceStatus: "quarantined",
+      },
+    ],
+    evidenceReadout: { label: "exploratory", title: "Exploratory", promotable: false },
+    parallelLanes: [
+      {
+        id: "read-only-scout",
+        title: "Read-only scout",
+        status: "completed",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+        nextActionHint: "Use the scout result for one measured packet.",
+      },
+      {
+        id: "implementation-candidate",
+        title: "Implementation candidate",
+        status: "planned",
+        mode: "implementation",
+        evidenceStatus: "provisional",
+        recommendation: "Isolate before mutating source.",
+      },
+    ],
+    fanoutPlan: { status: "planned" },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "lane path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
+
+  const lanes = getById("strategy-memory");
+  assert.match(lanes.textContent, /Strategy lanes/);
+  assert.match(lanes.textContent, /Read-only scout/);
+  assert.match(lanes.textContent, /Implementation candidate/);
+  assert.match(lanes.textContent, /1 active \/ 1 done/);
+  assert.equal(lanes.querySelectorAll(".strategy-lane-card").length, 2);
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="accepted"]').length >= 1,
+    true,
+  );
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="rejected"]').length >= 1,
+    true,
+  );
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="suspicious"]').length >= 1,
+    true,
+  );
+});
+
+test("dashboard reports completed-only lanes without inflating active readiness", async () => {
+  const viewModel = {
+    parallelLanes: [
+      {
+        id: "completed-lane",
+        title: "Completed lane",
+        status: "completed",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+      },
+      {
+        id: "blocked-lane",
+        title: "Blocked lane",
+        status: "blocked",
+        mode: "implementation",
+        evidenceStatus: "quarantined",
+      },
+    ],
+    fanoutPlan: { status: "paused" },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "lane count path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
+
+  assert.match(getById("v2-release-signals").textContent, /0 active \/ 1 done/);
+  assert.match(getById("strategy-memory").textContent, /0 active \/ 1 done/);
+});
+
+test("dashboard responsive styles keep readiness strip two-up until mobile", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const tabletBlock = extractCssBlock(css, "@media (max-width: 1080px)");
+  const mobileBlock = extractCssBlock(css, "@media (max-width: 720px)");
+
+  assert.match(
+    tabletBlock,
+    /\.dashboard-toolbar,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+  );
+  assert.doesNotMatch(
+    tabletBlock,
+    /\.metric-evidence-list,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*1fr/,
+  );
+  assert.match(
+    mobileBlock,
+    /\.toolbar-controls,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*1fr/,
+  );
+});
+
 test("dashboard surfaces generated suspicious research reasons", async () => {
   const viewModel = {
     researchTruth: {
@@ -2284,3 +2490,20 @@ test("dashboard decision rail shows newest runs first", async () => {
   );
   dom.window.close();
 });
+
+function extractCssBlock(css: string, marker: string) {
+  const start = css.indexOf(marker);
+  assert.notEqual(start, -1, `Missing CSS marker: ${marker}`);
+  const open = css.indexOf("{", start);
+  assert.notEqual(open, -1, `Missing CSS block for marker: ${marker}`);
+  let depth = 0;
+  for (let index = open; index < css.length; index += 1) {
+    const char = css[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return css.slice(open + 1, index);
+    }
+  }
+  throw new Error(`Unclosed CSS block for marker: ${marker}`);
+}

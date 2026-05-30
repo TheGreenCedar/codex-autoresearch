@@ -41,21 +41,33 @@
   <text x="924" y="354" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800">RUNS</text>
   <text x="924" y="376" fill="#15201c" font-family="Consolas, monospace" font-size="25" font-weight="800">100 (29 kept)</text>
 
-  <rect x="112" y="454" width="1038" height="154" rx="8" fill="#fffaf4" stroke="#ef6c4a" stroke-width="2"/>
-  <rect x="112" y="454" width="8" height="154" rx="4" fill="#ef6c4a"/>
-  <text x="144" y="494" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">Next</text>
-  <text x="144" y="532" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="36" font-weight="900">Next action</text>
-  <text x="144" y="566" fill="#44504a" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="650">Confirm the faster path against memory footprint and index correctness checks.</text>
-  <rect x="820" y="486" width="104" height="42" rx="6" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="846" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">#100</text>
-  <rect x="940" y="486" width="104" height="42" rx="6" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="966" y="512" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800">Keep</text>
-  <rect x="144" y="582" width="118" height="48" rx="6" fill="#ffffff" stroke="#ef6c4a"/>
-  <text x="158" y="604" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="800">EVIDENCE</text>
-  <text x="158" y="622" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">Exploratory</text>
-  <rect x="276" y="582" width="276" height="48" rx="6" fill="#ffffff" stroke="#ef6c4a"/>
-  <text x="290" y="604" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="800">PROMOTION PROOF</text>
-  <text x="290" y="622" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">Repeat or holdout still required</text>
-  <rect x="820" y="544" width="224" height="34" rx="6" fill="#ffffff" stroke="#d7ded9"/>
-  <text x="842" y="566" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Actions stay in CLI</text>
+  <rect x="112" y="444" width="760" height="74" rx="8" fill="#f8fafb" stroke="#d7ded9"/>
+  <line x1="126" y1="456" x2="126" y2="506" stroke="#c98a12" stroke-width="3"/>
+  <text x="138" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">NEXT</text>
+  <text x="138" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">Resolve safety blocker</text>
+  <text x="138" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Critical</text>
+  <line x1="292" y1="456" x2="292" y2="506" stroke="#c98a12" stroke-width="3"/>
+  <text x="304" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">EVIDENCE</text>
+  <text x="304" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">Exploratory</text>
+  <text x="304" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">29 current / 71 audit-only</text>
+  <line x1="474" y1="456" x2="474" y2="506" stroke="#1e8c86" stroke-width="3"/>
+  <text x="486" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">LANES</text>
+  <text x="486" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">11 active / 0 done</text>
+  <text x="486" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Strategy readiness</text>
+  <line x1="650" y1="456" x2="650" y2="506" stroke="#c98a12" stroke-width="3"/>
+  <text x="662" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">WATCHDOG</text>
+  <text x="662" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">Stale</text>
+  <text x="662" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Inspect or rescope</text>
+
+  <rect x="112" y="548" width="1038" height="82" rx="8" fill="#ffffff" stroke="#d7ded9"/>
+  <rect x="112" y="548" width="8" height="82" rx="4" fill="#1e8c86"/>
+  <text x="144" y="576" fill="#1e8c86" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="900">STRATEGY LANES</text>
+  <text x="144" y="606" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="900">Parallel exploration board</text>
+  <rect x="526" y="570" width="160" height="34" rx="17" fill="#e6f3f2" stroke="#1e8c86"/>
+  <text x="552" y="592" fill="#0d5c58" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="900">completed</text>
+  <rect x="706" y="570" width="170" height="34" rx="17" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="728" y="592" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="900">implementation</text>
+  <rect x="896" y="570" width="170" height="34" rx="17" fill="#ffffff" stroke="#d7ded9"/>
+  <text x="930" y="592" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="900">provisional</text>
+  <text x="144" y="624" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Chart first. Readiness visible. Actions stay in CLI.</text>
 </svg>

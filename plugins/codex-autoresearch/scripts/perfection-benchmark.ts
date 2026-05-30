@@ -764,7 +764,7 @@ const checks = [
         "aiSummary",
         "Next action",
         "nextBestAction",
-        "Session memory",
+        "Strategy lanes",
         "lanePortfolio",
         "plateau",
       ])

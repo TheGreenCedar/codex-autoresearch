@@ -48,6 +48,7 @@ node scripts/autoresearch.mjs serve --cwd <project>
 
 Use it for:
 
+- the chart-led readiness strip: next action, evidence status, lanes, watchdog, and finalization pressure
 - decision-envelope summary and one next action
 - next safe action and why it is safe
 - trust blockers
@@ -56,7 +57,7 @@ Use it for:
 - metric trajectory
 - measurement points that are trend evidence, not promotion evidence
 - setup, gap, packet, log, and finalize readiness
-- strategy lanes and plateau guidance
+- strategy lanes, fanout status, lane evidence, and plateau guidance
 - copyable report and AI handoff packet
 
 Static exports are offline snapshots:

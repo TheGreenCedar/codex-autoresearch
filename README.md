@@ -126,7 +126,8 @@ Ask codex to boot up the dashboard if it hasn't already.
 The dashboard shows:
 
 * baseline, latest, best, confidence, and weighted metric formulas
-* Codex brief and session memory
+* a chart-first readiness strip for next action, evidence, lanes, watchdog, and finalization pressure
+* Codex brief and strategy lanes
 * next safe action, evidence label, proof gaps, and why the action is safe
 * packet economics, workflow friction, partial-result candidates, and stale-progress warnings
 * ledger entries, ASI, and handoff context
