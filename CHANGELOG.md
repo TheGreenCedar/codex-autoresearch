@@ -15,18 +15,22 @@ This project uses a root-only changelog because the root README is the public do
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
 - Added watchdog, process-hygiene, and finalization-pressure dashboard readouts so long quiet windows, stale snapshots, runtime provenance, and accumulating kept work become visible before the loop sleepwalks into more packets.
 - Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
+- Hardened finalization and best-run readouts so only accepted/current keeps drive promotion surfaces and review branches; rejected, provisional, superseded, and quarantined evidence remains audit-only.
 
 ### Changed
 
 - Redesigned the dashboard with an audit/operate split: the served dashboard now opens in audit view (full traceability); operate (Focus view) is a chart-first surface with audit panels omitted from the DOM. The run chart leads after the header in both views (taller in operate). URL-backed view and chart preferences are included.
+- Added a quiet chart-adjacent readiness strip for next action, evidence status, lane readiness, watchdog state, and finalization pressure without adding dashboard mutation controls.
 - Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
 - Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
-- Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the session-memory panel shows lane mode and evidence status.
+- Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the Strategy Lanes board shows lane mode, lane status, evidence status, and next recommendations.
 - The decision envelope can now prioritize watchdog intervention when no metric movement, logged decision, kept commit, or completed lane appears inside the configured quiet-window threshold.
 - `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.
 - `research-fanout` plans are segment-scoped: a new segment ignores prior fanout plans and falls back to memory/default lanes until a fresh plan is recorded for that segment.
 - Completed `lane-runner` results now enrich parallel lane status and count as watchdog progress signals.
+- Empty `lane-runner --yes` records are planning breadcrumbs, not completed accepted evidence, and do not reset watchdog progress.
 - Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
+- `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.
 - Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
 
 ### Release

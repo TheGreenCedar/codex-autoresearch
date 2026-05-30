@@ -1078,11 +1078,102 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
     assert.equal(payload.ok, true);
     assert.equal(payload.dryRun, false);
     assert.equal(payload.lane.mode, "read_only_scout");
+    assert.equal(payload.result.status, "completed");
+    assert.equal(payload.result.evidenceAccepted, true);
     assert.equal(payload.result.isolation.worktree, "");
     assert.deepEqual(payload.result.isolation.writeScope, []);
 
     const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
     assert.match(ledger, /"type":"lane_result"/);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    const lane = statePayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(lane.status, "completed");
+    assert.equal(lane.evidenceStatus, "accepted");
+  });
+});
+
+test("empty lane-runner records are planned breadcrumbs, not watchdog progress", async () => {
+  await withTempDir("lane-runner-empty-planned", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lane watchdog",
+      "--metric-name",
+      "quality_gap",
+      "--max-iterations",
+      "100",
+    ]);
+    const oldTimestamp = Date.now() - 10 * 60 * 60 * 1000;
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "lane watchdog",
+          metricName: "quality_gap",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 4,
+          status: "measure",
+          description: "Old baseline.",
+          timestamp: oldTimestamp,
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const emptyResult = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--yes",
+    ]);
+    assert.equal(emptyResult.code, 0, emptyResult.stderr);
+    const emptyPayload = JSON.parse(emptyResult.stdout);
+    assert.equal(emptyPayload.result.status, "planned");
+    assert.equal(emptyPayload.result.evidenceAccepted, false);
+
+    const staleState = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(staleState.code, 0, staleState.stderr);
+    const stalePayload = JSON.parse(staleState.stdout);
+    const plannedLane = stalePayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(plannedLane.status, "planned");
+    assert.equal(plannedLane.evidenceStatus, "provisional");
+    assert.equal(stalePayload.watchdogSummary.stale, true);
+
+    const commandResult = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e ""`,
+      "--allow-non-git-command",
+      "--yes",
+    ]);
+    assert.equal(commandResult.code, 0, commandResult.stderr);
+    const commandPayload = JSON.parse(commandResult.stdout);
+    assert.equal(commandPayload.result.status, "completed");
+    assert.equal(commandPayload.result.evidenceAccepted, true);
+
+    const freshState = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(freshState.code, 0, freshState.stderr);
+    const freshPayload = JSON.parse(freshState.stdout);
+    const completedLane = freshPayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(completedLane.status, "completed");
+    assert.equal(completedLane.evidenceStatus, "accepted");
+    assert.equal(freshPayload.watchdogSummary.stale, false);
   });
 });
 
@@ -4274,7 +4365,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const [
     { toolSchemas },
     { validateToolContracts },
-    { cliCommandForTool, toolMutates, validateToolRegistry },
+    { actionPolicyForTool, cliCommandForTool, toolMutates, validateToolRegistry },
   ] = await Promise.all([
     import("../lib/tool-schemas.js"),
     import("../lib/tool-contracts.js"),
@@ -4310,7 +4401,7 @@ test("tool schemas expose guidance and output contracts", async () => {
     "Read-only by default; starts a local dashboard only when start_dashboard=true.",
   );
   assert.equal(guided.annotations.readOnlyHint, false);
-  assert.equal(researchFanout.annotations.readOnlyHint, true);
+  assert.equal(researchFanout.annotations.readOnlyHint, false);
   assert.equal(researchFanout.annotations.openWorldHint, false);
   assert.equal(guided.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
@@ -4348,6 +4439,8 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
   assert.equal(toolMutates("next_experiment"), true);
   assert.equal(toolMutates("research_fanout"), false);
+  assert.equal(actionPolicyForTool("research_fanout"), "read");
+  assert.equal(actionPolicyForTool("research_fanout", { yes: true }), "state_mutation");
   assert.equal(toolMutates("read_state"), false);
 });
 
@@ -4833,9 +4926,9 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
 
     assert.match(dashboard, /Codex brief/);
     assert.match(dashboard, /Best kept change/);
-    assert.match(dashboard, /Recent failures/);
+    assert.match(dashboard, /Recent failure/);
     assert.match(dashboard, /Next action/);
-    assert.match(dashboard, /Experiment portfolio/);
+    assert.match(dashboard, /Parallel exploration board/);
     assert.match(dashboard, /lower is better/);
     assert.ok(payload.viewModel.nextBestAction.detail);
     assert.ok(payload.viewModel.nextBestAction.explanation.why);

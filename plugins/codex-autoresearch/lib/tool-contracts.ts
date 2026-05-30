@@ -137,7 +137,8 @@ const CONTRACTS = {
     whenToUse: "Use when the loop is spending too long serially exploring one hypothesis path.",
     contrast:
       "Use next_experiment to run a measured packet after a lane has produced a concrete hypothesis.",
-    safety: "Read-only by default; --yes appends only a fanout plan to the Autoresearch ledger.",
+    safety:
+      "Dry-run/default is read-only; yes=true appends only a fanout plan to the Autoresearch ledger.",
     outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "fanoutPlan", "parallelLanes"]),
   },
   lane_runner: {
@@ -366,7 +367,6 @@ const READ_ONLY_TOOLS = new Set([
   "recommend_next",
   "codex_goal_bridge",
   "list_recipes",
-  "research_fanout",
   "read_state",
   "measure_quality_gap",
   "finalize_preview",

@@ -667,6 +667,7 @@ p {
   gap: 2px;
   max-width: 260px;
   border: 1px solid var(--soft-line);
+  border-left: 3px solid var(--soft-line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.82);
   padding: 7px 9px;
@@ -694,6 +695,98 @@ p {
 
 .evidence-chip.warn {
   border-color: var(--coral);
+}
+
+.evidence-chip.evidence-accepted {
+  border-color: var(--teal);
+  border-left-color: var(--teal-dark);
+  background: var(--primary-bg);
+}
+
+.evidence-chip.evidence-provisional {
+  border-color: var(--soft-line);
+  border-left-color: var(--muted);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.evidence-chip.evidence-rejected {
+  border-color: rgba(216, 86, 58, 0.55);
+  border-left-color: var(--coral);
+  background: rgba(216, 86, 58, 0.07);
+}
+
+.evidence-chip.evidence-suspicious {
+  border-color: rgba(201, 138, 18, 0.58);
+  border-left-color: var(--amber);
+  background: rgba(245, 230, 194, 0.5);
+}
+
+.signal-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: rgba(248, 250, 251, 0.78);
+  padding: 8px;
+}
+
+.signal-item {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 56px;
+  border-left: 2px solid var(--line);
+  padding: 2px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.signal-item.good {
+  border-left-color: var(--teal);
+}
+
+.signal-item.warn {
+  border-left-color: var(--amber);
+}
+
+.signal-item.danger {
+  border-left-color: var(--coral);
+}
+
+.signal-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.signal-item strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.15;
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.signal-item em {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.25;
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .readout-facts {
@@ -1906,6 +1999,101 @@ p {
   gap: 8px;
 }
 
+.lane-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strategy-lane-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: rgba(248, 250, 251, 0.72);
+  padding: 10px;
+}
+
+.strategy-lane-card__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.strategy-lane-card__head strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.status-pill,
+.evidence-state {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--soft-line);
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  overflow-wrap: anywhere;
+  text-transform: uppercase;
+}
+
+.status-pill.good,
+.evidence-state.accepted {
+  border-color: rgba(15, 143, 136, 0.45);
+  color: var(--teal-dark);
+  background: var(--primary-bg);
+}
+
+.status-pill.warn,
+.evidence-state.warning {
+  border-color: rgba(201, 138, 18, 0.5);
+  color: var(--amber-dark);
+  background: rgba(245, 230, 194, 0.58);
+}
+
+.evidence-state.rejected {
+  border-color: rgba(216, 86, 58, 0.45);
+  color: var(--coral-dark);
+  background: rgba(216, 86, 58, 0.07);
+}
+
+.status-pill.neutral,
+.evidence-state.provisional {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.strategy-lane-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.strategy-lane-meta > span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.strategy-lane-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .memory-lane {
   display: grid;
   gap: 5px;
@@ -2257,6 +2445,16 @@ p {
   .brief-layout,
   .decision-layout,
   .decision-panel,
+  .signal-strip,
+  .workspace-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-toolbar,
+  .metric-layout,
+  .brief-layout,
+  .decision-layout,
+  .decision-panel,
   .workspace-grid {
     grid-template-columns: 1fr;
   }
@@ -2286,6 +2484,7 @@ p {
 
   .metric-evidence-list,
   .metric-detail-list,
+  .lane-board,
   .experiment-metrics {
     grid-template-columns: 1fr;
   }
@@ -2448,6 +2647,7 @@ p {
 
   .toolbar-controls,
   .score-strip,
+  .signal-strip,
   .next-command-copy {
     grid-template-columns: 1fr;
   }
@@ -2567,8 +2767,15 @@ p {
 .dark-theme .next-command-copy,
 .dark-theme .decision-envelope-card,
 .dark-theme .mission-command,
+.dark-theme .signal-strip,
+.dark-theme .strategy-lane-card,
 .dark-theme .evidence-chip {
   background: rgba(0, 0, 0, 0.25);
+}
+
+.dark-theme .status-pill.neutral,
+.dark-theme .evidence-state.provisional {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .dark-theme .tool-button.subtle,

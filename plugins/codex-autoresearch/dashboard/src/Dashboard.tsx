@@ -13,6 +13,7 @@ import { Header } from "./components/Header";
 import { DecisionRail } from "./components/DecisionRail";
 import { MissionControl } from "./components/MissionControl";
 import { ScoreStrip } from "./components/ScoreStrip";
+import { SignalStrip } from "./components/SignalStrip";
 import { TrendPanel } from "./components/TrendPanel";
 import {
   CodexBrief,
@@ -74,7 +75,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         <a href="#trend-panel">Run chart</a>
         <a href="#decision-rail">Next action</a>
         <a href="#codex-brief">Codex brief</a>
-        {auditView ? <a href="#strategy-memory">Session memory</a> : null}
+        {auditView ? <a href="#strategy-memory">Strategy lanes</a> : null}
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
@@ -108,6 +109,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
               readout={readout}
               detailsDefaultOpen={auditView}
               chartHeight={auditView ? 350 : 420}
+              afterChart={<SignalStrip view={view} viewModel={viewModel} />}
             />
             {auditView && mode.liveRefresh ? decisionRail : null}
           </div>

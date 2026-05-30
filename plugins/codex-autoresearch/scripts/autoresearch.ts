@@ -5844,11 +5844,13 @@ function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: L
     if (!entry?.result) return lane;
     const resultStatus = String(entry.result.status || "").toLowerCase();
     const completed = resultStatus === "completed";
+    const accepted = completed && laneResultHasAcceptedEvidence(entry.result);
     return {
       ...lane,
       status: completed ? "completed" : entry.result.status || lane.status,
-      evidenceStatus: completed ? "accepted" : lane.evidenceStatus,
-      completedAt: entry.timestamp ? new Date(entry.timestamp).toISOString() : lane.completedAt,
+      evidenceStatus: accepted ? "accepted" : entry.result.evidenceStatus || lane.evidenceStatus,
+      completedAt:
+        accepted && entry.timestamp ? new Date(entry.timestamp).toISOString() : lane.completedAt,
       lastLaneResult: {
         status: entry.result.status,
         summary: entry.result.summary || "",
@@ -5856,6 +5858,10 @@ function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: L
       },
     };
   });
+}
+
+function laneResultHasAcceptedEvidence(result: LooseObject) {
+  return result?.evidenceAccepted === true;
 }
 
 function buildParallelOrchestrationContext({
@@ -6343,6 +6349,10 @@ async function laneRunner(args: LooseObject) {
     }
   }
 
+  const explicitSummary = String(args.summary || "").trim();
+  const explicitRecommendation = String(
+    args.recommendation || args.next_action || args.nextAction || "",
+  ).trim();
   const resultStatus =
     args.result_status ||
     args.resultStatus ||
@@ -6350,12 +6360,21 @@ async function laneRunner(args: LooseObject) {
       ? commandResult.code === 0 && !commandResult.timedOut
         ? "completed"
         : "failed"
-      : "completed");
+      : explicitSummary || explicitRecommendation
+        ? "completed"
+        : "planned");
+  const commandSucceeded =
+    commandResult && Number(commandResult.code) === 0 && commandResult.timedOut !== true;
+  const evidenceAccepted = Boolean(
+    String(resultStatus).toLowerCase() === "completed" &&
+    (commandSucceeded || explicitSummary || explicitRecommendation),
+  );
   const result = {
     status: resultStatus,
-    summary: args.summary || (commandResult ? "Lane command completed." : "Lane result recorded."),
-    recommendation:
-      args.recommendation || args.next_action || args.nextAction || lane.nextActionHint,
+    summary:
+      explicitSummary || (commandResult ? "Lane command completed." : "Lane result recorded."),
+    recommendation: explicitRecommendation || lane.nextActionHint,
+    evidenceAccepted,
     command: command || "",
     timeBudgetSeconds,
     isolation: {

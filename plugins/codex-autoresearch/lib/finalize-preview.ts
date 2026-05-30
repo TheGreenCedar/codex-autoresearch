@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isAcceptedCurrentEvidence } from "./evidence-registry.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
@@ -587,7 +588,9 @@ async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line))
-      .filter((entry: LooseObject) => entry.status === "keep") as KeptRun[];
+      .filter(
+        (entry: LooseObject) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
+      ) as KeptRun[];
   } catch {
     return [];
   }

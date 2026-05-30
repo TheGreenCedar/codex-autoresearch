@@ -153,13 +153,13 @@ Prefer the served dashboard:
 - Use `export` only for offline snapshots.
 - Static exports are read-only; use the served dashboard when packet freshness matters.
 - Treat the dashboard as a visual aid, not a control surface. It should not expose inert live controls, mutation buttons, or command receipts.
-- The dashboard opens in audit view: the metric trend, scores, mission control, session memory, research truth, finalization, process hygiene, and quality gap are visible by default. Switch to operate (Focus view) from the header toggle for a chart-first surface with audit panels removed from the DOM. View, selected segment, and chart value/axis preferences are stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`), so a served dashboard link can be shared with that exact state.
+- The dashboard opens in audit view: the metric trend, chart-led readiness strip, scores, mission control, strategy lanes, research truth, finalization, process hygiene, and quality gap are visible by default. Switch to operate (Focus view) from the header toggle for a chart-first surface with audit panels removed from the DOM; operate keeps lane detail summarized as readiness only. View, selected segment, and chart value/axis preferences are stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`), so a served dashboard link can be shared with that exact state.
 
 Read dashboard evidence in this order:
 
 1. Decision envelope summary: packet freshness, blockers, segment transition, plateau, finalization readiness, and the one authoritative next action.
-2. Metric trend: baseline, best, latest, measurement points, confidence, weighted formula when present.
-3. Codex brief and session memory: what happened, what matters, plateau, lanes, novelty, repeated families.
+2. Metric trend and readiness strip: baseline, best, latest, measurement points, confidence, weighted formula when present, next action, evidence status, lanes, watchdog, and finalization pressure.
+3. Codex brief and strategy lanes: what happened, what matters, plateau, lane mode, evidence status, novelty, repeated families.
 4. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
 5. Ledger and ASI: what was kept, measured, rejected, crashed, or blocked by checks.
 6. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
@@ -187,7 +187,7 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize-preview --cwd <project>` before branch creation.
-2. Keep only `status: "keep"` evidence.
+2. Keep only accepted/current `status: "keep"` evidence; rejected, provisional, superseded, and quarantined evidence stays audit-visible but must not drive review branches.
 3. Treat previews and plans as read-only.
 4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
 5. Treat finalization pressure as a stop-and-review signal when kept runs, preview warnings, missing commit metadata, or watchdog pressure accumulate.

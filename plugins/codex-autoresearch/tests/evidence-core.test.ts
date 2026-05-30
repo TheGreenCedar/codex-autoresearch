@@ -365,6 +365,7 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
 
     const state = currentState(dir);
     assert.equal(state.best, 6);
+    assert.equal(state.development.best, 6);
     assert.equal(state.evidenceRegistry.counts.accepted, 1);
     assert.equal(state.evidenceRegistry.counts.provisional, 1);
     assert.equal(state.evidenceRegistry.counts.rejected, 1);
@@ -381,6 +382,68 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
       ["run-1", "run-2", "run-3"],
     );
   });
+});
+
+test("decision envelope omits rejected and superseded keeps from best evidence", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      config: { bestDirection: "lower" },
+      current: [
+        {
+          run: 1,
+          metric: 1,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { promotionGrade: true },
+        },
+        {
+          run: 2,
+          metric: 2,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded run.",
+          metrics: { promotionGrade: true },
+        },
+        {
+          run: 3,
+          metric: 3,
+          status: "keep",
+          description: "Legacy accepted keep.",
+          metrics: { promotionGrade: true },
+        },
+      ],
+      results: [
+        {
+          run: 1,
+          metric: 1,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { promotionGrade: true },
+        },
+        {
+          run: 2,
+          metric: 2,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded run.",
+          metrics: { promotionGrade: true },
+        },
+        {
+          run: 3,
+          metric: 3,
+          status: "keep",
+          description: "Legacy accepted keep.",
+          metrics: { promotionGrade: true },
+        },
+      ],
+    },
+    nextAction: "Continue.",
+  });
+
+  assert.equal(envelope.historicalBest.run, 3);
+  assert.equal(envelope.promotionGradeBest.run, 3);
 });
 
 test("evidence registry rejects quarantined artifacts and accepts current artifact evidence", async () => {

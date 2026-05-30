@@ -401,11 +401,13 @@ export function buildDecisionEnvelope({
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
   const direction = state?.config?.bestDirection || "lower";
   const historicalBest = bestMetricRun(
-    all.filter((run) => run.status === "keep"),
+    all.filter((run) => run.status === "keep" && isAcceptedCurrentEvidence(run)),
     direction,
   );
   const promotionBest = bestMetricRun(
-    current.filter((run) => run.status === "keep" && isPromotionGradeRun(run)),
+    current.filter(
+      (run) => run.status === "keep" && isAcceptedCurrentEvidence(run) && isPromotionGradeRun(run),
+    ),
     direction,
   );
   const codes = warningCodes(warningDetails);

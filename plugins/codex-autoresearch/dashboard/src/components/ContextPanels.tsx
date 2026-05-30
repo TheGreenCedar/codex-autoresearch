@@ -109,41 +109,53 @@ export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel })
   ).slice(0, 6);
   const fanoutStatus =
     typeof viewModel.fanoutPlan?.status === "string" ? viewModel.fanoutPlan.status : "";
+  const completed = lanes.filter((lane) => laneStatusKey(lane) === "completed").length;
+  const active = lanes.filter((lane) =>
+    ["active", "ready", "running", "tracking", "planned", "accepted"].includes(laneStatusKey(lane)),
+  ).length;
   return (
     <section
       className="panel memory-panel"
       id="strategy-memory"
-      aria-label="Session memory"
+      aria-label="Strategy lanes"
       tabIndex={-1}
     >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Session memory</p>
-          <h2>Experiment portfolio</h2>
+          <p className="eyebrow">Strategy lanes</p>
+          <h2>Parallel exploration board</h2>
         </div>
         <span className="panel-note">
-          {fanoutStatus || (memory.plateau?.detected ? "Plateau detected" : "No plateau")}
+          {lanes.length
+            ? `${active} active / ${completed} done`
+            : fanoutStatus || (memory.plateau?.detected ? "Plateau detected" : "No lanes")}
         </span>
       </div>
-      <div className="memory-list">
+      <div className="lane-board">
         {lanes.length ? (
           lanes.map((lane) => (
-            <div className="memory-lane" key={lane.id || lane.title}>
-              <strong>{lane.title || lane.id || "Lane"}</strong>
-              <span>
-                {[lane.status || "tracking", lane.mode, lane.evidenceStatus]
-                  .filter(Boolean)
-                  .join(" / ")}
-              </span>
+            <article className="strategy-lane-card" key={lane.id || lane.title}>
+              <div className="strategy-lane-card__head">
+                <strong>{lane.title || lane.label || lane.id || "Lane"}</strong>
+                <span className={`status-pill ${laneStatusTone(laneStatusKey(lane))}`}>
+                  {lane.status || "tracking"}
+                </span>
+              </div>
+              <div className="strategy-lane-meta">
+                <span>{lane.mode || "mode unknown"}</span>
+                <span className={`evidence-state ${evidenceStateKey(lane.evidenceStatus)}`}>
+                  {lane.evidenceStatus || "evidence pending"}
+                </span>
+              </div>
               <p>
                 {lane.nextActionHint ||
                   lane.recommendation ||
                   "Use ASI to choose the next measured hypothesis."}
               </p>
-            </div>
+            </article>
           ))
         ) : (
-          <div className="empty">No strategy lanes embedded in this export.</div>
+          <div className="empty">No strategy lanes are embedded in this export.</div>
         )}
       </div>
     </section>
@@ -286,6 +298,29 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
       </div>
     </section>
   );
+}
+
+function laneStatusKey(lane: Record<string, unknown>) {
+  const key = String(lane.status || lane.state || lane.evidenceStatus || "tracking").toLowerCase();
+  if (["done", "complete", "completed", "accepted", "finished"].includes(key)) return "completed";
+  if (["blocked", "failed", "error", "rejected"].includes(key)) return "blocked";
+  if (["ready", "active", "running", "tracking", "planned"].includes(key)) return key;
+  return "tracking";
+}
+
+function laneStatusTone(status: string) {
+  if (status === "completed" || status === "accepted") return "good";
+  if (status === "blocked") return "warn";
+  return "neutral";
+}
+
+function evidenceStateKey(value: unknown) {
+  const key = String(value || "pending").toLowerCase();
+  if (["accepted", "current", "promotion_eligible"].includes(key)) return "accepted";
+  if (["rejected", "superseded"].includes(key)) return "rejected";
+  if (["quarantined", "suspicious"].includes(key)) return "warning";
+  if (["provisional", "pending", "exploratory"].includes(key)) return "provisional";
+  return "provisional";
 }
 
 function normalizeChecklist(
