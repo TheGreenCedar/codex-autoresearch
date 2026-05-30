@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 2.0.0
 
 ### Added
 
@@ -28,6 +28,10 @@ This project uses a root-only changelog because the root README is the public do
 - Completed `lane-runner` results now enrich parallel lane status and count as watchdog progress signals.
 - Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
 - Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, built assets, and local cache runtime surfaces to `2.0.0`.
 
 ## 1.5.1
 
