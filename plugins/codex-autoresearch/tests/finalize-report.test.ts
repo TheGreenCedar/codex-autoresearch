@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -787,6 +788,83 @@ test("finalizer plan keeps only kept commits and flags excluded history", async 
   assert.doesNotMatch(plan.groups[0].files.join("\n"), /autoresearch-dashboard\.html/);
   assert.match(plan.warnings.join("\n"), /Excluded 3 unkept commits/);
   assert.ok(unloggedHash);
+});
+
+test("finalization ignores rejected keeps while preserving legacy accepted keeps", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-finalize-evidence-"));
+  const repo = path.join(root, "repo");
+  await fsp.mkdir(repo, { recursive: true });
+
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, "src", "base.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+
+  await git(["switch", "-c", "codex/autoresearch-evidence"], repo);
+  await writeFile(path.join(repo, "src", "rejected.txt"), "rejected\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "rejected keep"], repo);
+  const rejectedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(path.join(repo, "src", "accepted.txt"), "accepted\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "legacy accepted keep"], repo);
+  const acceptedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "evidence loop",
+        metricName: "seconds",
+        bestDirection: "lower",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        evidenceStatus: "rejected",
+        metric: 1,
+        description: "Rejected keep",
+        commit: rejectedHash,
+      }),
+      JSON.stringify({
+        run: 2,
+        status: "keep",
+        metric: 2,
+        description: "Legacy accepted keep",
+        commit: acceptedHash,
+      }),
+    ].join("\n") + "\n",
+  );
+  await git(["add", "autoresearch.jsonl"], repo);
+  await git(["commit", "-m", "session log"], repo);
+
+  const preview = await finalizePreview({ cwd: repo, trunk: "main" });
+  assert.equal(preview.groups.length, 1);
+  assert.equal(preview.groups[0].commit, acceptedHash);
+
+  const output = path.join(root, "groups.json");
+  const result = await run(
+    process.execPath,
+    [finalizer, "plan", "--output", output, "--goal", "evidence-loop"],
+    repo,
+  );
+  assert.match(result.stdout, /Selected kept commits: 1/);
+
+  const plan = JSON.parse(await fsp.readFile(output, "utf8"));
+  assert.equal(plan.groups.length, 1);
+  assert.equal(plan.kept_commits.length, 1);
+  assert.equal(plan.groups[0].last_commit, acceptedHash);
+  assert.deepEqual(plan.kept_commits, [acceptedHash]);
+  assert.equal(
+    plan.excluded_commits.some(
+      (item) => item.commit === rejectedHash && item.status === "rejected",
+    ),
+    true,
+  );
 });
 
 test("finalizer plan recommends collapsing overlap and can collapse on request", async () => {

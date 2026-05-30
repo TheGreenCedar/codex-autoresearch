@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { isAcceptedCurrentEvidence } from "../lib/evidence-registry.js";
+
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
@@ -471,7 +473,9 @@ function runEvidenceForCommit(entries: RunEntry[], hash: string): RunEntry | nul
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const run = entries[index];
     const commit = String(run.commit || "");
-    if (commitMatchesHash(commit, hash)) return run.status === "keep" ? run : null;
+    if (commitMatchesHash(commit, hash)) {
+      return run.status === "keep" && isAcceptedCurrentEvidence(run) ? run : null;
+    }
   }
   return null;
 }
@@ -539,7 +543,8 @@ function parseCommitStatus(entries: RunEntry[], hash: string): RunEntry | null {
 
 function describeCommitStatus(entry: RunEntry | null): string {
   if (!entry) return "unlogged";
-  if (entry.status === "keep") return "kept";
+  if (entry.status === "keep" && isAcceptedCurrentEvidence(entry)) return "kept";
+  if (entry.status === "keep" && entry.evidenceStatus) return String(entry.evidenceStatus);
   return String(entry.status || "unlogged");
 }
 
@@ -865,7 +870,9 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
-  const keptRuns = entries.filter((entry) => entry.status === "keep");
+  const keptRuns = entries.filter(
+    (entry) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
+  );
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
   const selectedCommits = new Set<string>();

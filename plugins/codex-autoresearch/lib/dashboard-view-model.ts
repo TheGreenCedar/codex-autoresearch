@@ -768,7 +768,7 @@ export function buildWatchdogSummary({
     : [];
   const progressEvents = [
     ...metricMovementEvents(currentRuns, state?.config?.bestDirection || "lower"),
-    ...currentRuns.map((run: LooseObject) => ({
+    ...currentRuns.filter(watchdogDecisionRun).map((run: LooseObject) => ({
       kind: "decision",
       at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
       label: `Logged run #${run.run ?? "?"} as ${run.status || "decision"}.`,
@@ -858,6 +858,12 @@ function metricMovementEvents(current: LooseObject[], direction: Direction) {
 function laneCompleted(lane: LooseObject) {
   const status = String(lane.status || lane.state || lane.evidenceStatus || "").toLowerCase();
   return ["complete", "completed", "done", "kept", "accepted", "finished"].includes(status);
+}
+
+function watchdogDecisionRun(run: LooseObject) {
+  if (run?.type === "lane_result") return false;
+  const status = String(run?.status || "").toLowerCase();
+  return ["keep", "discard", "crash", "checks_failed", "measure"].includes(status);
 }
 
 function timestampMs(value: unknown): number | null {

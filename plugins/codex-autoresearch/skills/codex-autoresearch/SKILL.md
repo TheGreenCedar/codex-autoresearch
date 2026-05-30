@@ -187,7 +187,7 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize-preview --cwd <project>` before branch creation.
-2. Keep only `status: "keep"` evidence.
+2. Keep only accepted/current `status: "keep"` evidence; rejected, provisional, superseded, and quarantined evidence stays audit-visible but must not drive review branches.
 3. Treat previews and plans as read-only.
 4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
 5. Treat finalization pressure as a stop-and-review signal when kept runs, preview warnings, missing commit metadata, or watchdog pressure accumulate.

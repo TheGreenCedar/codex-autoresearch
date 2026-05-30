@@ -15,6 +15,7 @@ This project uses a root-only changelog because the root README is the public do
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
 - Added watchdog, process-hygiene, and finalization-pressure dashboard readouts so long quiet windows, stale snapshots, runtime provenance, and accumulating kept work become visible before the loop sleepwalks into more packets.
 - Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
+- Hardened finalization and best-run readouts so only accepted/current keeps drive promotion surfaces and review branches; rejected, provisional, superseded, and quarantined evidence remains audit-only.
 
 ### Changed
 
@@ -26,7 +27,9 @@ This project uses a root-only changelog because the root README is the public do
 - `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.
 - `research-fanout` plans are segment-scoped: a new segment ignores prior fanout plans and falls back to memory/default lanes until a fresh plan is recorded for that segment.
 - Completed `lane-runner` results now enrich parallel lane status and count as watchdog progress signals.
+- Empty `lane-runner --yes` records are planning breadcrumbs, not completed accepted evidence, and do not reset watchdog progress.
 - Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
+- `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.
 - Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
 
 ### Release
