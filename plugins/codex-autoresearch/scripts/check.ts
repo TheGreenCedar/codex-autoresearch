@@ -27,21 +27,7 @@ const productChecks: CommandSpec[] = [
   ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
   ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
   ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
-  [
-    "tests",
-    node,
-    [
-      "--test",
-      "--test-concurrency=8",
-      "dist/tests/autoresearch-cli.test.mjs",
-      "dist/tests/dashboard-verification.test.mjs",
-      "dist/tests/evidence-core.test.mjs",
-      "dist/tests/experiment-memory.test.mjs",
-      "dist/tests/finalize-report.test.mjs",
-      "dist/tests/full-product.test.mjs",
-      "dist/tests/perfection-benchmark.test.mjs",
-    ],
-  ],
+  ["tests", npm, ["run", "test:compiled"]],
 ];
 
 const dashboardBuildChecks: CommandSpec[] = [
