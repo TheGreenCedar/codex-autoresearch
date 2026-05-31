@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
@@ -3790,7 +3790,9 @@ test("keep logs fail instead of recording success when git commit fails", async 
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
     await mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
-    await writeFile(path.join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", "utf8");
+    const hookPath = path.join(dir, ".git", "hooks", "pre-commit");
+    await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+    await chmod(hookPath, 0o755);
 
     await runCli(["init", "--cwd", dir, "--name", "commit failure", "--metric-name", "seconds"]);
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
