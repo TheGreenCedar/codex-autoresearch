@@ -42,6 +42,12 @@ This project uses a root-only changelog because the root README is the public do
 - Simplified internal tool schema lookups, CLI projection helpers, runner/setup response assembly, finalization progress metadata, evidence predicates, next-action policy rules, and dashboard component/live-refresh surfaces without changing public JSON contracts.
 - Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.
 
+### Fixed
+
+- Refreshed the v2 documentation map, glossary, workflow diagrams, finalization wording, troubleshooting rows, and public README so they describe the current operator checklist, watchdog, lane, runtime-provenance, packet-diagnostic, evidence-status, and audit/operate dashboard behavior.
+- Scrubbed branch-specific finalization warnings from public showcase dashboard exports and added release-gate checks so demo snapshots cannot ship with transient source-branch warnings.
+- Made the documented `scripts/finalize-autoresearch.mjs` launcher hydrate the matching release runtime like the main CLI launcher, and added package smoke coverage for it.
+
 ### Release
 
 - Bumped public package, lockfile, plugin manifest, built assets, and local cache runtime surfaces to `2.0.0`.
