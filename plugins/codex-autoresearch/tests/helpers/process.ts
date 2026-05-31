@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const quoteForShell = (value) => {
   return JSON.stringify(String(value));
@@ -66,9 +67,57 @@ export const runInteractiveProcess = (command, args, answers, cwd) => {
   });
 };
 
+const cliModuleCache = new Map();
+
+const cliModule = async (cli) => {
+  const href = pathToFileURL(cli).href;
+  if (!cliModuleCache.has(href)) cliModuleCache.set(href, import(href));
+  return await cliModuleCache.get(href);
+};
+
+const shouldSpawnCli = (args, options = {}) => {
+  if (options.spawn === true) return true;
+  if (process.env.CODEX_AUTORESEARCH_TEST_SPAWN_CLI === "1") return true;
+  return args?.[0] === "serve";
+};
+
+const runCliInProcess = async (cli, args, cwd) => {
+  const previousCwd = process.cwd();
+  const previousExitCode = process.exitCode;
+  let stdout = "";
+  let stderr = "";
+  try {
+    process.chdir(cwd);
+    process.exitCode = undefined;
+    const mod = await cliModule(cli);
+    assert.equal(
+      typeof mod.runAutoresearchCli,
+      "function",
+      "CLI module must export runAutoresearchCli for fast in-process tests",
+    );
+    const code = await mod.runAutoresearchCli(args, {
+      stdout: (text) => {
+        stdout += `${text}\n`;
+      },
+      stderr: (text) => {
+        stderr += `${text}\n`;
+      },
+    });
+    return processResult(code, stdout, stderr);
+  } catch (error) {
+    stderr += `${error?.stack || error?.message || String(error)}\n`;
+    return processResult(-1, stdout, stderr);
+  } finally {
+    process.chdir(previousCwd);
+    process.exitCode = previousExitCode;
+  }
+};
+
 export const createCliRunner = (cli, defaultCwd) => {
   return (args, options = {}) =>
-    runProcess(process.execPath, [cli, ...args], options.cwd || defaultCwd);
+    shouldSpawnCli(args, options)
+      ? runProcess(process.execPath, [cli, ...args], options.cwd || defaultCwd)
+      : runCliInProcess(cli, args, options.cwd || defaultCwd);
 };
 
 export const createInteractiveCliRunner = (cli, defaultCwd) => {
@@ -91,8 +140,32 @@ export const withTempDir = async (prefix, name, fn) => {
   try {
     return await fn(dir);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rmWithRetries(dir);
   }
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const rmWithRetries = async (dir) => {
+  let lastError = null;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      await rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = error?.code || "";
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(code)) throw error;
+      await sleep(Math.min(1000, 100 * (attempt + 1)));
+    }
+  }
+  await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 }).catch(() => {
+    if (process.env.CODEX_AUTORESEARCH_TEST_STRICT_CLEANUP === "1") {
+      if (lastError) throw lastError;
+      throw new Error(`Failed to remove temp dir ${dir}`);
+    }
+    console.warn(`warning: temp cleanup deferred for ${dir}`);
+  });
 };
 
 export const runGit = async (cwd, args) => {

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { fileURLToPath } from "node:url";
 import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
 import { writeContextCapsule } from "../lib/context-capsule.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
@@ -4896,7 +4897,7 @@ async function resolveProgressPath(workDir: string) {
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(
     target,
     `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
@@ -4907,9 +4908,26 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
 
 async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
   const target = await resolveProgressPath(workDir);
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(target, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   return target;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function mkdirWithRetries(dir: string) {
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(String(error?.code || ""))) throw error;
+      await sleep(40 * (attempt + 1));
+    }
+  }
+  if (lastError) throw lastError;
 }
 
 async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
@@ -7124,11 +7142,32 @@ function compactNextExperimentPacket(packet: LooseObject) {
   };
 }
 
-async function main() {
-  const args = parseCliArgs(process.argv.slice(2));
+export async function runAutoresearchCli(
+  argv: string[] = process.argv.slice(2),
+  io: {
+    stderr?: (text: string) => void;
+    stdout?: (text: string) => void;
+  } = {},
+): Promise<number> {
+  const writeStdout = io.stdout || console.log;
+  const writeStderr = io.stderr || console.error;
+  try {
+    await executeAutoresearchCli(argv, writeStdout);
+    return 0;
+  } catch (error: any) {
+    writeStderr(error.stack || error.message || String(error));
+    return 1;
+  }
+}
+
+async function executeAutoresearchCli(
+  argv: string[],
+  writeStdout: (text: string) => void,
+): Promise<void> {
+  const args = parseCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
-    console.log(usage());
+    writeStdout(usage());
     return;
   }
   const handlers = createCliCommandHandlers({
@@ -7181,14 +7220,18 @@ async function main() {
   });
   const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
   if (outcome.text != null) {
-    console.log(outcome.text);
+    writeStdout(outcome.text);
     return;
   }
-  console.log(JSON.stringify(outcome.result, null, 2));
+  writeStdout(JSON.stringify(outcome.result, null, 2));
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 
-main().catch((error: any) => {
-  console.error(error.stack || error.message || String(error));
-  process.exitCode = 1;
-});
+async function main() {
+  const code = await runAutoresearchCli(process.argv.slice(2));
+  if (code !== 0) process.exitCode = code;
+}
+
+if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+  void main();
+}
