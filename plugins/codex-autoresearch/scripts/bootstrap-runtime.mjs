@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { createWriteStream, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +28,25 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   });
 
   return pathToFileURL(target).href;
+}
+
+export function isDirectScript(importerUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  const scriptPath = fileURLToPath(importerUrl);
+  const resolvedArgv = path.resolve(argvPath);
+  const resolvedScript = path.resolve(scriptPath);
+  if (samePath(resolvedArgv, resolvedScript)) return true;
+
+  try {
+    return samePath(realpathSync.native(resolvedArgv), realpathSync.native(resolvedScript));
+  } catch {
+    return false;
+  }
+}
+
+function samePath(left, right) {
+  if (process.platform === "win32") return left.toLowerCase() === right.toLowerCase();
+  return left === right;
 }
 
 function missingRuntimeError(pluginRoot, target) {

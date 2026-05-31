@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
 import { JSDOM } from "jsdom";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -5106,7 +5107,11 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     readFile(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs"), "utf8"),
     readFile(path.join(pluginRoot, "lib", "runner.ts"), "utf8"),
   ]);
-  assert.match(cliShim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(
+    cliShim,
+    /import \{ ensureRuntime, isDirectScript \} from "\.\/bootstrap-runtime\.mjs"/,
+  );
+  assert.match(cliShim, /isDirectScript\(import\.meta\.url\)/);
   assert.match(
     cliShim,
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
@@ -5114,4 +5119,28 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
   assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
+});
+
+test("source launcher direct-script detection survives normalized paths", async () => {
+  await withTempDir("launcher-direct", async (dir) => {
+    const script = path.join(dir, "autoresearch.mjs");
+    const other = path.join(dir, "other.mjs");
+    await writeFile(script, "");
+    await writeFile(other, "");
+
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+    assert.equal(typeof bootstrap.isDirectScript, "function");
+    assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, script), true);
+    assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, other), false);
+
+    const link = path.join(dir, "autoresearch-link.mjs");
+    try {
+      await symlink(script, link);
+      assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, link), true);
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+    }
+  });
 });
