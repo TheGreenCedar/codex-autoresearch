@@ -2,11 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { redactPathDisplay } from "./evidence-redaction.js";
+import { isKeepStatus, isRejectedRunStatus } from "./run-status.js";
 
 type LooseObject = Record<string, any>;
 
 export type EvidenceStatus = "provisional" | "accepted" | "rejected" | "superseded";
 export type EvidenceKind = "run" | "artifact";
+export const EVIDENCE_STATUS_VALUES: EvidenceStatus[] = [
+  "provisional",
+  "accepted",
+  "rejected",
+  "superseded",
+];
+export const EVIDENCE_STATUSES = new Set<EvidenceStatus>(EVIDENCE_STATUS_VALUES);
 
 export interface EvidenceRegistryEntry extends LooseObject {
   id: string;
@@ -38,20 +46,13 @@ export function normalizeEvidenceStatus(
   fallback: EvidenceStatus = "provisional",
 ): EvidenceStatus {
   const normalized = String(value || "").toLowerCase();
-  if (
-    normalized === "provisional" ||
-    normalized === "accepted" ||
-    normalized === "rejected" ||
-    normalized === "superseded"
-  ) {
-    return normalized;
-  }
+  if (EVIDENCE_STATUSES.has(normalized as EvidenceStatus)) return normalized as EvidenceStatus;
   return fallback;
 }
 
 export function defaultEvidenceStatusForRun(run: LooseObject): EvidenceStatus {
   const status = String(run?.status || "");
-  if (status === "keep") return "accepted";
+  if (isKeepStatus(status)) return "accepted";
   if (status === "measure") return "provisional";
   return "rejected";
 }
@@ -64,11 +65,11 @@ export function isAcceptedCurrentEvidence(value: LooseObject | null | undefined)
 }
 
 export function isKeepRun(run: LooseObject | null | undefined): boolean {
-  return String(run?.status || "") === "keep";
+  return isKeepStatus(run?.status);
 }
 
 export function isRejectedRun(run: LooseObject | null | undefined): boolean {
-  return ["discard", "crash", "checks_failed"].includes(String(run?.status || ""));
+  return isRejectedRunStatus(run?.status);
 }
 
 export function isAcceptedCurrentRun(run: LooseObject | null | undefined): boolean {

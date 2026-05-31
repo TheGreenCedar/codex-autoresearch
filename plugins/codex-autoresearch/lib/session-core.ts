@@ -5,10 +5,28 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
+import {
+  FAILURE_STATUSES,
+  NON_PROMOTIONAL_STATUSES,
+  STATUS_VALUES,
+  isFailureStatus,
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+} from "./run-status.js";
 
-export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
-export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
-export const NON_PROMOTIONAL_STATUSES = new Set(["crash", "checks_failed", "measure"]);
+export {
+  FAILURE_STATUSES,
+  NON_METRIC_ELIGIBLE_STATUSES,
+  NON_PROMOTIONAL_STATUSES,
+  REJECTED_RUN_STATUSES,
+  STATUS_VALUES,
+  isFailureStatus,
+  isKeepStatus,
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+  isRejectedRunStatus,
+  normalizeRunStatus,
+} from "./run-status.js";
 export const RESEARCH_DIR = "autoresearch.research";
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher";
@@ -70,14 +88,6 @@ export function finiteMetric(value: unknown): number | null {
 
 export function hasFiniteMetric(run: RunRecord | null | undefined): boolean {
   return finiteMetric(run?.metric) != null;
-}
-
-export function isFailureStatus(status: unknown): boolean {
-  return FAILURE_STATUSES.has(String(status));
-}
-
-export function isPromotionalStatus(status: unknown): boolean {
-  return !NON_PROMOTIONAL_STATUSES.has(String(status));
 }
 
 export function isBaselineEligibleMetricRun(run: RunRecord | null | undefined): boolean {

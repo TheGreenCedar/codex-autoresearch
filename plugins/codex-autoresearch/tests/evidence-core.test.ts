@@ -17,6 +17,11 @@ import {
 } from "../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
 import {
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+  isRejectedRunStatus,
+} from "../lib/run-status.js";
+import {
   redactCommandDisplay,
   redactEvidenceObject,
   redactEvidenceText,
@@ -383,6 +388,18 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
       ["run-1", "run-2", "run-3", "run-4"],
     );
   });
+});
+
+test("run status taxonomy separates rejected evidence from metric-eligible records", () => {
+  assert.equal(isRejectedRunStatus("discard"), true);
+  assert.equal(isMetricEligibleStatus("discard"), true);
+  assert.equal(isPromotionalStatus("discard"), true);
+  assert.equal(isRejectedRunStatus("measure"), false);
+  assert.equal(isMetricEligibleStatus("measure"), false);
+  assert.equal(isMetricEligibleStatus("crash"), false);
+  assert.equal(isMetricEligibleStatus("checks_failed"), false);
+  assert.equal(isRejectedRunStatus("keep"), false);
+  assert.equal(isMetricEligibleStatus("keep"), true);
 });
 
 test("truth signals ignore rejected and superseded keeps as current best evidence", () => {

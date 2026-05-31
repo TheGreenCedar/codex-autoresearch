@@ -20,7 +20,12 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
-import { artifactEvidenceList, artifactList } from "../lib/evidence-registry.js";
+import {
+  EVIDENCE_STATUSES,
+  artifactEvidenceList,
+  artifactList,
+  defaultEvidenceStatusForRun,
+} from "../lib/evidence-registry.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { mergeEvidenceClaims } from "../lib/evidence-index.js";
 import {
@@ -72,7 +77,7 @@ import {
   safeSlug,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
-  isPromotionalStatus,
+  isMetricEligibleStatus,
   promotionGradeValue,
 } from "../lib/session-core.js";
 import {
@@ -135,7 +140,6 @@ const RESEARCH_DIR = "autoresearch.research";
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
-const EVIDENCE_STATUSES = new Set(["accepted", "rejected", "provisional", "superseded"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
@@ -343,17 +347,11 @@ function enumOption<T extends string>(
   return normalized as T;
 }
 
-function defaultEvidenceStatusForDecision(status: string) {
-  if (status === "keep") return "accepted";
-  if (status === "measure") return "provisional";
-  return "rejected";
-}
-
 function evidenceStatusOption(value: unknown, status: string) {
   return enumOption(
     value,
     EVIDENCE_STATUSES,
-    defaultEvidenceStatusForDecision(status),
+    defaultEvidenceStatusForRun({ status }),
     "--evidence-status",
   );
 }
@@ -4563,7 +4561,7 @@ async function logExperiment(args: any) {
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
   const evidenceStatus =
     evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
-    defaultEvidenceStatusForDecision(status);
+    defaultEvidenceStatusForRun({ status });
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
@@ -4644,7 +4642,7 @@ async function logExperiment(args: any) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
-    metricEligible: isPromotionalStatus(status) && finiteMetric(metric) != null,
+    metricEligible: isMetricEligibleStatus(status) && finiteMetric(metric) != null,
     status,
     evidenceStatus,
     description,
