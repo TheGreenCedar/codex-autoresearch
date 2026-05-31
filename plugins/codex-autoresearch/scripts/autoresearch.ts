@@ -5286,6 +5286,9 @@ function partialResultEligiblePacket(packet: LooseObject | null): boolean {
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const compact = boolOption(args.compact, false);
+  if (compact) return await publicCompactState({ workDir, config });
+
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
@@ -5427,14 +5430,148 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
-  return boolOption(args.compact, false) ? compactPublicState(fullState) : fullState;
+  return compact ? compactPublicState(fullState) : fullState;
+}
+
+async function publicCompactState({
+  workDir,
+  config,
+}: {
+  workDir: string;
+  config: LooseObject;
+}): Promise<LooseObject> {
+  const state = currentState(workDir);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const qualityGap = await currentQualityGapSummary(workDir);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
+  const warningDetails = await operatorWarningsForWorkDir(workDir);
+  const settings = dashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
+  });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: runtimeProvenance(),
+  };
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
+  const statusCounts = Object.fromEntries(
+    [...STATUS_VALUES].map((status: string) => [
+      status,
+      state.current.filter((run: any) => run.status === status).length,
+    ]),
+  );
+  const continuation = loopContinuation(workDir, state, config, "state");
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization: null,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction: [],
+      experimentMemory: memory,
+      watchdog: watchdogSummary,
+    }),
+    continuation.commands,
+  );
+  decisionEnvelope.finalizationReadiness = compactFinalizationPreview(workDir);
+  return compactPublicState({
+    ok: true,
+    workDir,
+    config: state.config,
+    segment: state.segment,
+    runs: state.current.length,
+    totalRuns: state.results.length,
+    kept: statusCounts.keep,
+    discarded: statusCounts.discard,
+    measured: statusCounts.measure,
+    crashed: statusCounts.crash,
+    checksFailed: statusCounts.checks_failed,
+    baseline: state.baseline,
+    best: state.best,
+    development: state.development,
+    promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
+    confidence: state.confidence,
+    scaffoldHealth,
+    researchIntegrity,
+    runtimeProvenance: stateWithQualityGap.runtimeProvenance,
+    limit: iterationLimitInfo(state, config),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+      dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
+      commitPaths: config.commitPaths || [],
+    },
+    commands: dashboardCommands(workDir),
+    warnings: warningDetails.map((warning: any) => warning.message),
+    warningDetails,
+    qualityGap,
+    memory,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    watchdogSummary,
+    laneLifecycle,
+    packetDiagnostics,
+    experimentEconomics,
+    partialResults,
+    workflowFriction: [],
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+    continuation,
+  });
 }
 
 function compactPublicState(state: LooseObject) {
   const limit = state.limit || {};
   const continuation = state.continuation || {};
+  const compactDecisionEnvelope = compactEnvelope(state.decisionEnvelope || state.resumeAudit);
   const canonicalNextAction =
-    state.decisionEnvelope?.canonicalNextAction || state.resumeAudit?.canonicalNextAction || null;
+    compactDecisionEnvelope?.canonicalNextAction ||
+    state.decisionEnvelope?.canonicalNextAction ||
+    state.resumeAudit?.canonicalNextAction ||
+    null;
   const blockers = [
     ...(Array.isArray(state.warningDetails)
       ? state.warningDetails.map((warning: any) => warning.message || warning.code)
@@ -5523,7 +5660,7 @@ function compactPublicState(state: LooseObject) {
         }
       : state.decisionEnvelope?.watchdog || null,
     blockers: [...new Set(blockers)].slice(0, 6),
-    goalAdvice: state.decisionEnvelope?.goalAdvice || state.resumeAudit?.goalAdvice || null,
+    goalAdvice: compactDecisionEnvelope?.goalAdvice || null,
     report: {
       happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.measured} measured, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
       decision:
@@ -5570,14 +5707,115 @@ function compactPublicState(state: LooseObject) {
       ? state.workflowFriction.slice(0, 5)
       : [],
     commands: continuation.commands || state.commands || {},
-    resumeAudit: state.resumeAudit || null,
-    decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+    resumeAudit: compactDecisionEnvelope,
+    decisionEnvelope: compactDecisionEnvelope,
     canonicalNextAction,
     runtimeProvenance: state.runtimeProvenance,
-    loopContract: state.decisionEnvelope?.loopContract || state.resumeAudit?.loopContract,
-    laneLifecycle: state.laneLifecycle,
+    loopContract: compactDecisionEnvelope?.loopContract,
+    laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
   });
+}
+
+function compactFinalizationPreview(workDir: string): LooseObject {
+  return {
+    available: false,
+    ready: null,
+    compact: true,
+    nextAction: `Run finalize-preview when review readiness is needed: ${continuationCommands(workDir).finalizePreview}`,
+    warnings: ["Finalization readiness is not checked in compact state."],
+  };
+}
+
+function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject | null {
+  if (!envelope) return null;
+  return {
+    activeSegment: envelope.activeSegment || null,
+    historicalBest: envelope.historicalBest || null,
+    promotionGradeBest: envelope.promotionGradeBest || null,
+    latestPacketFreshness: envelope.latestPacketFreshness || null,
+    benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
+    dirtySourceDrift: envelope.dirtySourceDrift || null,
+    qualityRound: envelope.qualityRound || null,
+    scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
+    researchIntegrity: envelope.researchIntegrity || null,
+    goalAdvice: envelope.goalAdvice || null,
+    finalizationReadiness: compactFinalizationReadiness(envelope.finalizationReadiness),
+    experimentEconomics: compactExperimentEconomics(envelope.experimentEconomics),
+    workflowFriction: Array.isArray(envelope.workflowFriction)
+      ? envelope.workflowFriction.slice(0, 5)
+      : [],
+    watchdog: envelope.watchdog || null,
+    contextDistillation: envelope.contextDistillation || null,
+    laneLifecycle: compactLaneLifecycle(envelope.laneLifecycle),
+    runtimeProvenance: envelope.runtimeProvenance || null,
+    packetDiagnostics: envelope.packetDiagnostics || null,
+    nextAction: envelope.nextAction || "",
+    loopContract: envelope.loopContract || null,
+    canonicalNextAction: envelope.canonicalNextAction || null,
+  };
+}
+
+function compactScaffoldHealth(scaffoldHealth: LooseObject | null | undefined): LooseObject | null {
+  if (!scaffoldHealth) return null;
+  return {
+    ok: scaffoldHealth.ok,
+    status: scaffoldHealth.status,
+    blockers: Array.isArray(scaffoldHealth.blockers)
+      ? scaffoldHealth.blockers.slice(0, 6)
+      : Array.isArray(scaffoldHealth.checks)
+        ? scaffoldHealth.checks
+            .filter((check: any) => check.severity === "blocker")
+            .map((check: any) => check.message || check.code)
+            .slice(0, 6)
+        : [],
+  };
+}
+
+function compactFinalizationReadiness(readiness: LooseObject | null | undefined): LooseObject {
+  return {
+    available: readiness?.available !== false,
+    ready: readiness?.ready === null ? null : readiness?.ready === true,
+    nextAction: readiness?.nextAction || readiness?.recommendation || "",
+    warnings: Array.isArray(readiness?.warnings) ? readiness.warnings.slice(0, 3) : [],
+  };
+}
+
+function compactExperimentEconomics(economics: LooseObject | null | undefined): LooseObject | null {
+  if (!economics) return null;
+  return {
+    runtimeClass: economics.runtimeClass,
+    expectedRuntimeSeconds: economics.expectedRuntimeSeconds ?? null,
+    baselineFreshness: economics.baselineFreshness,
+    freshRunRequired: economics.freshRunRequired === true,
+    freshRunReason: economics.freshRunReason || "",
+    warnings: Array.isArray(economics.warnings) ? economics.warnings.slice(0, 3) : [],
+    progress: economics.progress || null,
+  };
+}
+
+function compactLaneLifecycle(laneLifecycle: LooseObject | null | undefined): LooseObject | null {
+  if (!laneLifecycle) return null;
+  const lanes = Array.isArray(laneLifecycle.lanes) ? laneLifecycle.lanes : [];
+  return {
+    stale: laneLifecycle.stale === true,
+    counts: {
+      planned: Array.isArray(laneLifecycle.plannedLanes) ? laneLifecycle.plannedLanes.length : 0,
+      running: Array.isArray(laneLifecycle.runningLanes) ? laneLifecycle.runningLanes.length : 0,
+      result: Array.isArray(laneLifecycle.resultLanes) ? laneLifecycle.resultLanes.length : 0,
+      stale: Array.isArray(laneLifecycle.staleLanes) ? laneLifecycle.staleLanes.length : 0,
+    },
+    lanes: lanes.slice(0, 6).map((lane: any) => ({
+      id: lane.id,
+      title: lane.title || lane.label,
+      status: lane.status,
+      mode: lane.mode,
+      evidenceStatus: lane.evidenceStatus,
+      nextActionHint: lane.nextActionHint,
+    })),
+    recommendation: laneLifecycle.recommendation || "",
+    command: laneLifecycle.command || "",
+  };
 }
 
 function dashboardCommands(workDir: string, qualityGap: any = null) {

@@ -252,9 +252,20 @@ test("state surfaces active runner progress while next is still executing", asyn
   await withTempDir("active-progress", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "active progress", "--metric-name", "seconds"]);
     const script = path.join(dir, "slow-packet.mjs");
+    const releaseFile = path.join(dir, "release-packet");
     await writeFile(
       script,
-      ["setTimeout(() => {", "  console.log('METRIC seconds=1');", "}, 1500);"].join("\n"),
+      [
+        "import { existsSync } from 'node:fs';",
+        "const releaseFile = process.argv[2];",
+        "const started = Date.now();",
+        "const timer = setInterval(() => {",
+        "  if (existsSync(releaseFile) || Date.now() - started > 30000) {",
+        "    clearInterval(timer);",
+        "    console.log('METRIC seconds=1');",
+        "  }",
+        "}, 100);",
+      ].join("\n"),
     );
 
     const child = spawn(process.execPath, [
@@ -263,7 +274,7 @@ test("state surfaces active runner progress while next is still executing", asyn
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      `${quoteForShell(process.execPath)} ${quoteForShell(script)} ${quoteForShell(releaseFile)}`,
     ]);
     let stdout = "";
     let stderr = "";
@@ -276,7 +287,7 @@ test("state surfaces active runner progress while next is still executing", asyn
 
     let progress = null;
     const started = Date.now();
-    while (Date.now() - started < 5000) {
+    while (Date.now() - started < 10000) {
       const state = await runCli(["state", "--cwd", dir, "--compact"]);
       assert.equal(state.code, 0, state.stderr);
       const payload = JSON.parse(state.stdout);
@@ -284,6 +295,7 @@ test("state surfaces active runner progress while next is still executing", asyn
       if (progress?.exitState === "running") break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await writeFile(releaseFile, "go\n", "utf8");
     assert.equal(progress?.exitState, "running");
     assert.match(progress?.packetId || "", /active/);
 
@@ -1837,6 +1849,13 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.scaffoldHealth.ok, false);
     assert.match(doctorPayload.warnings.join("\n"), /self-recursive|commitPaths/i);
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.scaffoldHealth.ok, false);
+    assert.equal(compactPayload.canonicalNextAction.kind, "safety-blocker");
+    assert.ok(compactPayload.decisionEnvelope.scaffoldHealth.blockers.length > 0);
   });
 });
 
@@ -2135,6 +2154,16 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const dirtyPayload = JSON.parse(dirty.stdout);
     assert.equal(dirtyPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
     assert.ok(dirtyPayload.warningDetails.some((warning) => warning.code === "git_dirty"));
+
+    const dirtyCompact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(dirtyCompact.code, 0, dirtyCompact.stderr);
+    const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
+    assert.equal(dirtyCompactPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.ok(
+      dirtyCompactPayload.blockers.some((blocker) =>
+        String(blocker).includes("Git worktree is dirty"),
+      ),
+    );
   });
 });
 
@@ -3190,7 +3219,12 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.decisionEnvelope.activeSegment.segment, 0);
     assert.equal(statePayload.resumeAudit.latestPacketFreshness.fresh, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, null);
+    assert.match(
+      statePayload.decisionEnvelope.finalizationReadiness.nextAction,
+      /finalize-preview/,
+    );
     assert.equal(typeof statePayload.decisionEnvelope.nextAction, "string");
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
