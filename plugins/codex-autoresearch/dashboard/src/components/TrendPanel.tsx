@@ -45,6 +45,7 @@ type AxisMode = "iteration" | "timestamp";
 type ChartPointOpener = HTMLElement | SVGElement | null;
 type MetricConstructionItem = { label: string; value: string; detail: string; id: string };
 type SegmentedControlOption<T extends string> = readonly [T, string];
+type TrendChartState = ReturnType<typeof buildTrendChartState>;
 
 const FOCUSABLE_DIALOG_SELECTOR =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -94,6 +95,7 @@ export function TrendPanel({
   const axisMode = axisModeParam as AxisMode;
   const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
   const modalOpenerRef = useRef<ChartPointOpener>(null);
+  const modalOpenerSelectorRef = useRef<string>("");
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
   const chartData = useMemo(() => buildChartData(chart, readout), [chart, readout]);
   const chartState = useMemo(
@@ -101,15 +103,22 @@ export function TrendPanel({
     [axisMode, chart, chartData, readout, valueMode],
   );
   const detailPoint = selectedPoint || chartData.at(-1) || null;
-  const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
-    chartState;
   const openPoint = (point: ChartDatum, opener: ChartPointOpener) => {
     modalOpenerRef.current = opener;
+    modalOpenerSelectorRef.current = `[aria-label="${chartPointAriaLabel(point.runNumber)}"]`;
     setSelectedPoint(point);
   };
   const closePoint = () => {
     setSelectedPoint(null);
-    window.setTimeout(() => modalOpenerRef.current?.focus(), 0);
+    window.setTimeout(() => {
+      const opener = modalOpenerRef.current;
+      if (opener?.isConnected) {
+        opener.focus();
+        return;
+      }
+      const fallback = document.querySelector<HTMLElement>(modalOpenerSelectorRef.current);
+      fallback?.focus();
+    }, 0);
   };
   return (
     <section
@@ -147,125 +156,15 @@ export function TrendPanel({
         ))}
       </div>
 
-      <figure
-        id="trend-chart"
-        className="chart-frame"
-        role="img"
-        aria-labelledby="trend-chart-title trend-chart-desc"
-      >
-        <figcaption id="trend-chart-title" className="sr-only">
-          Baseline-normalized metric trend
-        </figcaption>
-        <p id="trend-chart-desc" className="sr-only">
-          {chart.summary}
-        </p>
-        <ResponsiveContainer width="100%" height={chartHeight}>
-          <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
-            <defs>
-              <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.22} />
-                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="trendAreaGradientDark" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.38} />
-                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="6 8" />
-            <XAxis
-              dataKey={xKey}
-              type={usesTimestampScale ? "number" : "category"}
-              scale={usesTimestampScale ? "time" : undefined}
-              domain={usesTimestampScale ? ["dataMin", "dataMax"] : undefined}
-              padding={usesTimestampScale ? { left: 20, right: 28 } : undefined}
-              ticks={usesTimestampScale ? timestampTicks : undefined}
-              tickFormatter={
-                usesTimestampScale ? (value) => formatDisplayTime(Number(value)) : undefined
-              }
-              interval={usesTimestampScale ? 0 : "preserveStartEnd"}
-              minTickGap={usesTimestampScale ? 32 : 8}
-              tickMargin={10}
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
-            />
-            <YAxis
-              width={74}
-              domain={yDomain}
-              tickCount={5}
-              tickFormatter={(value) =>
-                formatChartAxisTickValue(Number(value), valueMode, readout, chart.domain)
-              }
-              tickMargin={8}
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
-            />
-            {valueMode === "value" && chart.winZoneBounds && (
-              <ReferenceArea
-                className="win-zone"
-                y1={chart.winZoneBounds.y1}
-                y2={chart.winZoneBounds.y2}
-                strokeOpacity={0}
-              />
-            )}
-            {baselineLine != null && (
-              <ReferenceLine
-                className="baseline-line"
-                y={baselineLine}
-                stroke="var(--coral)"
-                strokeDasharray="8 8"
-                strokeWidth={2}
-              />
-            )}
-            {bestLine != null && (
-              <ReferenceLine
-                className="best-line"
-                y={bestLine}
-                stroke="var(--amber-dark)"
-                strokeDasharray="4 6"
-                strokeWidth={3}
-              />
-            )}
-            <Tooltip
-              content={<ChartTooltip valueMode={valueMode} readout={readout} />}
-              cursor={{ stroke: "var(--teal)", strokeWidth: 2, strokeDasharray: "4 6" }}
-            />
-            <Area
-              className="trendArea"
-              type="monotone"
-              dataKey={yKey}
-              fill="url(#trendAreaGradient)"
-              stroke="none"
-              isAnimationActive={false}
-            />
-            <Line
-              className="linePath"
-              type="monotone"
-              dataKey={yKey}
-              isAnimationActive={false}
-              stroke="var(--graph)"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={5}
-              dot={<ChartDot onSelect={openPoint} />}
-              activeDot={<ChartActiveDot />}
-            >
-              <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
-            </Line>
-          </ComposedChart>
-        </ResponsiveContainer>
-        <div className="chartRunTicks" aria-hidden="true">
-          {chartData.map((item) => (
-            <span key={`tick-${item.runNumber}`} />
-          ))}
-        </div>
-        <div className="chart-point-labels" aria-hidden="true">
-          {chartData.map((item) => (
-            <span key={`label-${item.runNumber}`}>{item.label}</span>
-          ))}
-        </div>
-      </figure>
+      <TrendChartFigure
+        chart={chart}
+        chartData={chartData}
+        chartHeight={chartHeight}
+        chartState={chartState}
+        onPointSelect={openPoint}
+        readout={readout}
+        valueMode={valueMode}
+      />
 
       <p id="trend-chart-summary" className="sr-summary">
         {chart.summary}
@@ -343,6 +242,148 @@ function ChartDataList({ chartData }: { chartData: ChartDatum[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function TrendChartFigure({
+  chart,
+  chartData,
+  chartHeight,
+  chartState,
+  onPointSelect,
+  readout,
+  valueMode,
+}: {
+  chart: ChartModel;
+  chartData: ChartDatum[];
+  chartHeight: number;
+  chartState: TrendChartState;
+  onPointSelect: (point: ChartDatum, opener: ChartPointOpener) => void;
+  readout: DashboardReadout;
+  valueMode: ValueMode;
+}) {
+  const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
+    chartState;
+  return (
+    <figure
+      id="trend-chart"
+      className="chart-frame"
+      role="img"
+      aria-labelledby="trend-chart-title trend-chart-desc"
+    >
+      <figcaption id="trend-chart-title" className="sr-only">
+        Baseline-normalized metric trend
+      </figcaption>
+      <p id="trend-chart-desc" className="sr-only">
+        {chart.summary}
+      </p>
+      <ResponsiveContainer width="100%" height={chartHeight}>
+        <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
+          <defs>
+            <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.22} />
+              <stop offset="95%" stopColor="var(--graph)" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="trendAreaGradientDark" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.38} />
+              <stop offset="95%" stopColor="var(--graph)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="6 8" />
+          <XAxis
+            dataKey={xKey}
+            type={usesTimestampScale ? "number" : "category"}
+            scale={usesTimestampScale ? "time" : undefined}
+            domain={usesTimestampScale ? ["dataMin", "dataMax"] : undefined}
+            padding={usesTimestampScale ? { left: 20, right: 28 } : undefined}
+            ticks={usesTimestampScale ? timestampTicks : undefined}
+            tickFormatter={
+              usesTimestampScale ? (value) => formatDisplayTime(Number(value)) : undefined
+            }
+            interval={usesTimestampScale ? 0 : "preserveStartEnd"}
+            minTickGap={usesTimestampScale ? 32 : 8}
+            tickMargin={10}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
+          />
+          <YAxis
+            width={74}
+            domain={yDomain}
+            tickCount={5}
+            tickFormatter={(value) =>
+              formatChartAxisTickValue(Number(value), valueMode, readout, chart.domain)
+            }
+            tickMargin={8}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
+          />
+          {valueMode === "value" && chart.winZoneBounds && (
+            <ReferenceArea
+              className="win-zone"
+              y1={chart.winZoneBounds.y1}
+              y2={chart.winZoneBounds.y2}
+              strokeOpacity={0}
+            />
+          )}
+          {baselineLine != null && (
+            <ReferenceLine
+              className="baseline-line"
+              y={baselineLine}
+              stroke="var(--coral)"
+              strokeDasharray="8 8"
+              strokeWidth={2}
+            />
+          )}
+          {bestLine != null && (
+            <ReferenceLine
+              className="best-line"
+              y={bestLine}
+              stroke="var(--amber-dark)"
+              strokeDasharray="4 6"
+              strokeWidth={3}
+            />
+          )}
+          <Tooltip
+            content={<ChartTooltip valueMode={valueMode} readout={readout} />}
+            cursor={{ stroke: "var(--teal)", strokeWidth: 2, strokeDasharray: "4 6" }}
+          />
+          <Area
+            className="trendArea"
+            type="monotone"
+            dataKey={yKey}
+            fill="url(#trendAreaGradient)"
+            stroke="none"
+            isAnimationActive={false}
+          />
+          <Line
+            className="linePath"
+            type="monotone"
+            dataKey={yKey}
+            isAnimationActive={false}
+            stroke="var(--graph)"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={5}
+            dot={<ChartDot onSelect={onPointSelect} />}
+            activeDot={<ChartActiveDot />}
+          >
+            <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
+          </Line>
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div className="chartRunTicks" aria-hidden="true">
+        {chartData.map((item) => (
+          <span key={`tick-${item.runNumber}`} />
+        ))}
+      </div>
+      <div className="chart-point-labels" aria-hidden="true">
+        {chartData.map((item) => (
+          <span key={`label-${item.runNumber}`}>{item.label}</span>
+        ))}
+      </div>
+    </figure>
   );
 }
 
@@ -530,6 +571,17 @@ function buildChartData(chart: ChartModel, readout: DashboardReadout): ChartDatu
   });
 }
 
+function runEvidenceRows(point: ChartDatum | null): Array<[string, string]> {
+  if (!point) return [];
+  const rows: Array<[string, string]> = [
+    ["Hypothesis", point.hypothesis],
+    ["Evidence", point.evidence],
+    ["Rollback", point.rollbackReason],
+    ["Next", point.nextActionHint],
+  ];
+  return rows.filter(([, value]) => Boolean(value));
+}
+
 function isWeightedMetric(readout: DashboardReadout): boolean {
   return readout.metricDefinition.mode === "weighted_cost";
 }
@@ -620,7 +672,7 @@ function ChartDot({
         type="button"
         className="chart-point-button"
         aria-haspopup="dialog"
-        aria-label={`Open details for run ${payload.runNumber}`}
+        aria-label={chartPointAriaLabel(payload.runNumber)}
         onClick={(event) => onSelect?.(payload, event.currentTarget)}
       >
         {payload.latest && <span className="latest-halo-ui" aria-hidden="true" />}
@@ -631,6 +683,10 @@ function ChartDot({
       </button>
     </foreignObject>
   );
+}
+
+function chartPointAriaLabel(runNumber: number): string {
+  return `Open details for run ${runNumber}`;
 }
 
 function ChartActiveDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDatum }) {
@@ -683,6 +739,7 @@ function ChartTooltip({
 }) {
   const item = payload?.[0]?.payload;
   if (!active || !item) return null;
+  const evidenceRows = runEvidenceRows(item);
   return (
     <div className="chart-tooltip">
       <div className="chart-tooltip-header">
@@ -692,26 +749,14 @@ function ChartTooltip({
       <strong>{formatChartAxisValue(payload?.[0]?.value ?? null, valueMode, readout)}</strong>
       <p>{item.description}</p>
 
-      {(item.hypothesis || item.evidence || item.nextActionHint) && (
+      {evidenceRows.length > 0 && (
         <div className="chart-tooltip-asi">
-          {item.hypothesis && (
-            <div className="chart-tooltip-asi-item">
-              <b>Hypothesis</b>
-              {item.hypothesis}
+          {evidenceRows.map(([label, value]) => (
+            <div className="chart-tooltip-asi-item" key={label}>
+              <b>{label === "Next" ? "Next Action" : label}</b>
+              {value}
             </div>
-          )}
-          {item.evidence && (
-            <div className="chart-tooltip-asi-item">
-              <b>Evidence</b>
-              {item.evidence}
-            </div>
-          )}
-          {item.nextActionHint && (
-            <div className="chart-tooltip-asi-item">
-              <b>Next Action</b>
-              {item.nextActionHint}
-            </div>
-          )}
+          ))}
         </div>
       )}
       {item.heldMetric && (
@@ -956,6 +1001,7 @@ function MetricEvidenceList({
 }) {
   const secondary = secondaryMetricEntries(point, readout);
   const warnings = metricEvidenceWarnings(readout, point, secondary);
+  const evidenceRows = runEvidenceRows(point);
   return (
     <dl className="metric-evidence-list">
       <div>
@@ -974,30 +1020,12 @@ function MetricEvidenceList({
             : "No secondary metrics"}
         </dd>
       </div>
-      {point?.hypothesis && (
-        <div>
-          <dt>Hypothesis</dt>
-          <dd>{point.hypothesis}</dd>
+      {evidenceRows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label === "Next" ? "Next action" : label}</dt>
+          <dd>{value}</dd>
         </div>
-      )}
-      {point?.evidence && (
-        <div>
-          <dt>Evidence</dt>
-          <dd>{point.evidence}</dd>
-        </div>
-      )}
-      {point?.rollbackReason && (
-        <div>
-          <dt>Rollback</dt>
-          <dd>{point.rollbackReason}</dd>
-        </div>
-      )}
-      {point?.nextActionHint && (
-        <div>
-          <dt>Next action</dt>
-          <dd>{point.nextActionHint}</dd>
-        </div>
-      )}
+      ))}
       {warnings.length ? (
         <div>
           <dt>Warnings</dt>

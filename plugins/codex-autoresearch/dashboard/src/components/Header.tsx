@@ -123,42 +123,7 @@ export function Header({
               aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
               style={{ display: "inline-flex", alignItems: "center" }}
             >
-              {theme === "light" ? (
-                <>
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ marginRight: "6px" }}
-                  >
-                    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-                  </svg>
-                  Dark
-                </>
-              ) : (
-                <>
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ marginRight: "6px" }}
-                  >
-                    <circle cx="12" cy="12" r="4" />
-                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-                  </svg>
-                  Light
-                </>
-              )}
+              <ThemeToggleContent theme={theme} />
             </button>
           </div>
           <div className="generated-cell">
@@ -204,6 +169,48 @@ export function Header({
   );
 }
 
+function ThemeToggleContent({ theme }: { theme: "light" | "dark" }) {
+  if (theme === "light") {
+    return (
+      <>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ marginRight: "6px" }}
+        >
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+        </svg>
+        Dark
+      </>
+    );
+  }
+  return (
+    <>
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={{ marginRight: "6px" }}
+      >
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+      </svg>
+      Light
+    </>
+  );
+}
+
 function SegmentNavigator({
   activeSegment,
   normalized,
@@ -225,16 +232,7 @@ function SegmentNavigator({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const max = normalized.segments.length - 1;
     const current = selectedIndex < 0 ? 0 : selectedIndex;
-    const nextIndex =
-      event.key === "ArrowRight"
-        ? Math.min(current + 1, max)
-        : event.key === "ArrowLeft"
-          ? Math.max(current - 1, 0)
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? max
-              : -1;
+    const nextIndex = nextSegmentIndexForKey(event.key, current, max);
     if (nextIndex < 0) return;
     event.preventDefault();
     selectSegment(normalized.segments[nextIndex].segment);
@@ -293,6 +291,14 @@ function SegmentNavigator({
       </p>
     </div>
   );
+}
+
+function nextSegmentIndexForKey(key: string, current: number, max: number) {
+  if (key === "ArrowRight") return Math.min(current + 1, max);
+  if (key === "ArrowLeft") return Math.max(current - 1, 0);
+  if (key === "Home") return 0;
+  if (key === "End") return max;
+  return -1;
 }
 
 function segmentButtonId(segment: number) {
