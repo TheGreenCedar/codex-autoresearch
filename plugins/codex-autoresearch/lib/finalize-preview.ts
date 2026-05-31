@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
+import {
+  finalizationPlanFingerprint,
+  readAutoresearchLedger,
+} from "./finalization-plan.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 
@@ -594,16 +598,7 @@ function withProgress(
 }
 
 async function readLedgerEntries(cwd: string): Promise<LooseObject[]> {
-  try {
-    const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
-    return text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch {
-    return [];
-  }
+  return await readAutoresearchLedger(cwd, { mode: "silent-empty" });
 }
 
 async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
@@ -761,54 +756,8 @@ function findExcludedPlannedFileConflicts(
     .filter((commit) => commit.files.length > 0);
 }
 
-function normalizedExcludedCommits(plan: LooseObject) {
-  return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : []).map((item) => ({
-    commit: String(item?.commit || ""),
-    status: String(item?.status || ""),
-    subject: String(item?.subject || ""),
-  }));
-}
-
 function planFingerprint(plan: LooseObject): string {
-  const stable = {
-    mode: plan.mode || "",
-    source_branch: plan.source_branch || "",
-    base: plan.base || "",
-    trunk: plan.trunk || "",
-    final_tree: plan.final_tree || "",
-    goal: plan.goal || "",
-    kept_commits: plan.kept_commits || [],
-    kept_run_count: plan.kept_run_count || 0,
-    excluded_commits: normalizedExcludedCommits(plan),
-    excluded_commit_count: plan.excluded_commit_count || 0,
-    overlap_files: plan.overlap_files || [],
-    current_tree_coverage: normalizeCurrentTreeCoverage(plan.current_tree_coverage),
-    groups: (plan.groups || []).map((group: LooseObject) => ({
-      title: group.title || "",
-      last_commit: group.last_commit || "",
-      slug: group.slug || "",
-      files: group.files || [],
-      source_groups: (group.source_groups || []).map((source: LooseObject) => ({
-        last_commit: source.last_commit || "",
-        parent_commit: source.parent_commit || "",
-        files: source.files || [],
-      })),
-    })),
-  };
-  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
-}
-
-function normalizeCurrentTreeCoverage(coverage: LooseObject = {}) {
-  return {
-    review_unit: coverage.review_unit || "",
-    file_count: coverage.file_count || 0,
-    all_file_count: coverage.all_file_count || 0,
-    exclude_session_artifacts: Boolean(coverage.exclude_session_artifacts),
-    include_session_artifacts: Boolean(coverage.include_session_artifacts),
-    included_files: coverage.included_files || [],
-    excluded_session_artifacts: coverage.excluded_session_artifacts || [],
-    current_tree_fingerprint: coverage.current_tree_fingerprint || "",
-  };
+  return finalizationPlanFingerprint(plan);
 }
 
 function safeSlug(value: unknown): string {

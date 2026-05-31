@@ -3,8 +3,13 @@ import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import {
+  finalizationPlanFingerprint,
+  readAutoresearchLedger,
+} from "../lib/finalization-plan.js";
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
 import { withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -56,6 +61,101 @@ function testWithTempRoot(name, prefix, body) {
     await withTempRoot(prefix, body);
   });
 }
+
+test("session artifact modes preserve finalization, dirty tree, and source checkout policy", () => {
+  const cases: Array<[string, boolean, boolean, boolean]> = [
+    ["autoresearch.jsonl", true, true, true],
+    ["autoresearch-dashboard.html", true, true, true],
+    ["autoresearch.research/study/quality-gaps.md", true, true, true],
+    [".git/autoresearch-runtime/state.json", true, true, true],
+    ["autoresearch-finalize/scratch.groups.json", true, true, true],
+    [".gitattributes", false, true, false],
+    ["src/autoresearch-dashboard.html", false, false, false],
+    ["src/value.txt", false, false, false],
+  ];
+  for (const [file, finalization, dirtyTree, sourceCheckout] of cases) {
+    assert.equal(
+      isAutoresearchSessionArtifact(file, "finalization"),
+      finalization,
+      `${file} finalization`,
+    );
+    assert.equal(
+      isAutoresearchSessionArtifact(file, "dirty-tree"),
+      dirtyTree,
+      `${file} dirty-tree`,
+    );
+    assert.equal(
+      isAutoresearchSessionArtifact(file, "source-checkout"),
+      sourceCheckout,
+      `${file} source-checkout`,
+    );
+  }
+});
+
+testWithTempRoot(
+  "finalization plan helpers keep fingerprint and ledger contracts stable",
+  "autoresearch-finalization-plan-",
+  async (root) => {
+    const plan = {
+      source_branch: "codex/autoresearch",
+      planned_at: "ignored",
+      base: "base",
+      trunk: "main",
+      final_tree: "head",
+      goal: "goal",
+      kept_commits: ["abc"],
+      kept_run_count: 1,
+      excluded_commits: [{ commit: "def", status: "discard", subject: "Discarded" }],
+      excluded_commit_count: 1,
+      overlap_files: ["src/a.ts"],
+      current_tree_coverage: {
+        review_unit: "current_tree",
+        file_count: 1,
+        all_file_count: 2,
+        exclude_session_artifacts: true,
+        include_session_artifacts: false,
+        included_files: ["src/a.ts"],
+        excluded_session_artifacts: ["autoresearch.jsonl"],
+        current_tree_fingerprint: "tree-fingerprint",
+      },
+      groups: [
+        {
+          title: "Change",
+          body: "ignored",
+          last_commit: "abc",
+          slug: "change",
+          files: ["src/a.ts"],
+          source_groups: [
+            {
+              title: "ignored",
+              last_commit: "abc",
+              parent_commit: "base",
+              files: ["src/a.ts"],
+            },
+          ],
+        },
+      ],
+    };
+    assert.equal(
+      finalizationPlanFingerprint({ ...plan, warnings: ["ignored"] }),
+      finalizationPlanFingerprint(plan),
+    );
+    assert.notEqual(
+      finalizationPlanFingerprint({
+        ...plan,
+        groups: [{ ...plan.groups[0], files: ["src/a.ts", "src/b.ts"] }],
+      }),
+      finalizationPlanFingerprint(plan),
+    );
+
+    await writeFile(path.join(root, "autoresearch.jsonl"), "{ not json\n");
+    assert.deepEqual(await readAutoresearchLedger(root, { mode: "silent-empty" }), []);
+    await assert.rejects(
+      () => readAutoresearchLedger(root, { mode: "strict" }),
+      /Corrupt autoresearch\.jsonl at line 1/,
+    );
+  },
+);
 
 testWithTempRoot(
   "finalizer writes an ignored review summary and preserves verification",

@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
+import {
+  assertGeneratedPlanMetadata,
+  finalizationPlanFingerprint,
+  readAutoresearchLedger,
+} from "../lib/finalization-plan.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -15,7 +19,6 @@ type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
 type CliArgs = LooseObject & { _: string[] };
-type JsonError = Error & { code?: string };
 type RunEntry = LooseObject & {
   commit?: string;
   description?: string;
@@ -385,45 +388,6 @@ async function assertNoExcludedFileConflicts(
   );
 }
 
-function normalizedExcludedCommits(plan: FinalizePlan): ExcludedCommit[] {
-  return (Array.isArray(plan.excluded_commits) ? plan.excluded_commits : []).map((item) => ({
-    commit: String(item?.commit || ""),
-    status: String(item?.status || ""),
-    subject: String(item?.subject || ""),
-  }));
-}
-
-function assertGeneratedPlanMetadata(config: FinalizePlan): void {
-  const hasExcludedCount = Object.hasOwn(config, "excluded_commit_count");
-  const looksGenerated = Boolean(
-    config.source_branch ||
-    config.planned_at ||
-    config.plan_fingerprint ||
-    hasExcludedCount ||
-    Object.hasOwn(config, "kept_run_count") ||
-    Object.hasOwn(config, "kept_commits"),
-  );
-  if (hasExcludedCount) {
-    const count = Number(config.excluded_commit_count);
-    if (!Number.isInteger(count) || count < 0) {
-      throw new Error(
-        "Stale finalization plan: excluded_commit_count must be a non-negative integer. Rerun finalizer plan.",
-      );
-    }
-    const excluded = normalizedExcludedCommits(config);
-    if (count !== excluded.length) {
-      throw new Error(
-        "Stale finalization plan: excluded_commit_count does not match excluded_commits. Rerun finalizer plan.",
-      );
-    }
-  }
-  if (looksGenerated && !config.plan_fingerprint) {
-    throw new Error(
-      "Stale finalization plan: generated plan fingerprint is missing. Rerun finalizer plan.",
-    );
-  }
-}
-
 function safeSlug(value: unknown): string {
   return (
     String(value || "autoresearch")
@@ -463,28 +427,7 @@ function commitMatchesHash(commit: unknown, hash: string): boolean {
 }
 
 async function readAutoresearchJsonl(cwd: string): Promise<RunEntry[]> {
-  const file = path.join(cwd, "autoresearch.jsonl");
-  let text;
-  try {
-    text = await fsp.readFile(file, "utf8");
-  } catch (error) {
-    const readError = error as JsonError;
-    if (readError?.code === "ENOENT") return [];
-    throw new Error(`Could not read autoresearch.jsonl: ${readError.message || readError}`);
-  }
-  return text
-    .split(/\r?\n/)
-    .map((line, index) => {
-      const trimmed = line.trim();
-      if (!trimmed) return null;
-      try {
-        return { ...JSON.parse(trimmed), __line: index + 1 };
-      } catch (error) {
-        const parseError = error as Error;
-        throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`);
-      }
-    })
-    .filter((entry): entry is RunEntry => Boolean(entry));
+  return (await readAutoresearchLedger(cwd, { mode: "strict" })) as RunEntry[];
 }
 
 async function commitHistory(base: string, cwd: string): Promise<CommitInfo[]> {
@@ -1140,45 +1083,7 @@ async function main() {
 }
 
 function planFingerprint(plan: FinalizePlan): string {
-  const stable = {
-    mode: plan.mode || "",
-    source_branch: plan.source_branch || "",
-    base: plan.base || "",
-    trunk: plan.trunk || "",
-    final_tree: plan.final_tree || "",
-    goal: plan.goal || "",
-    kept_commits: plan.kept_commits || [],
-    kept_run_count: plan.kept_run_count || 0,
-    excluded_commits: normalizedExcludedCommits(plan),
-    excluded_commit_count: plan.excluded_commit_count || 0,
-    overlap_files: plan.overlap_files || [],
-    current_tree_coverage: normalizeCurrentTreeCoverage(plan.current_tree_coverage),
-    groups: (plan.groups || []).map((group) => ({
-      title: group.title || "",
-      last_commit: group.last_commit || "",
-      slug: group.slug || "",
-      files: group.files || [],
-      source_groups: (group.source_groups || []).map((source) => ({
-        last_commit: source.last_commit || "",
-        parent_commit: source.parent_commit || "",
-        files: source.files || [],
-      })),
-    })),
-  };
-  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
-}
-
-function normalizeCurrentTreeCoverage(coverage: LooseObject = {}) {
-  return {
-    review_unit: coverage.review_unit || "",
-    file_count: coverage.file_count || 0,
-    all_file_count: coverage.all_file_count || 0,
-    exclude_session_artifacts: Boolean(coverage.exclude_session_artifacts),
-    include_session_artifacts: Boolean(coverage.include_session_artifacts),
-    included_files: coverage.included_files || [],
-    excluded_session_artifacts: coverage.excluded_session_artifacts || [],
-    current_tree_fingerprint: coverage.current_tree_fingerprint || "",
-  };
+  return finalizationPlanFingerprint(plan);
 }
 
 function analyzeGroupOverlap(groups: PlanGroup[]): OverlapAnalysis {
