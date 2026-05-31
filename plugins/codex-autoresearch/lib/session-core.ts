@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
+import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import {
   FAILURE_STATUSES,
   NON_PROMOTIONAL_STATUSES,
@@ -536,15 +537,23 @@ export function buildDecisionEnvelope({
           reasons: Array.isArray(watchdog.reasons) ? watchdog.reasons : [],
         }
       : null,
+    contextDistillation,
+    laneLifecycle: state?.laneLifecycle || null,
+    runtimeProvenance: state?.runtimeProvenance || null,
+    packetDiagnostics: state?.packetDiagnostics || null,
     nextAction: nextAction || "Run doctor, then next.",
   };
+  const loopContract = buildLoopContractStatus(envelope);
+  const legacyAction = canonicalNextActionForEnvelope(envelope);
+  const governanceAction = canonicalNextActionForLoop(envelope);
+  const canonicalNextAction =
+    legacyAction?.kind === "next-packet" && governanceAction.kind !== "next-packet"
+      ? governanceAction
+      : legacyAction;
   return {
     ...envelope,
-    canonicalNextAction: canonicalNextActionForEnvelope({
-      ...envelope,
-      contextDistillation,
-      nextAction: nextAction || "Run doctor, then next.",
-    }),
+    loopContract,
+    canonicalNextAction,
   };
 }
 

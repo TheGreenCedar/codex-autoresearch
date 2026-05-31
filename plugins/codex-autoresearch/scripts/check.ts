@@ -25,6 +25,7 @@ const syntaxChecks: CommandSpec[] = [
 
 const productChecks: CommandSpec[] = [
   ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
+  ["command-surface-map", node, ["dist/scripts/command-surface-map.mjs"]],
   ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
   ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
   ["tests", npm, ["run", "test:compiled"]],

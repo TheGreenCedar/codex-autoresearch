@@ -40,6 +40,30 @@ flowchart LR
   Ledger --> Continuation["Continuation contract"]
 ```
 
+## Loop Governance Flow
+
+```mermaid
+flowchart TD
+  Inputs["autoresearch.jsonl + config + last-run packet"] --> State["Session state builder"]
+  State --> Governance["Loop governance"]
+  State --> Lanes["laneLifecycle"]
+  State --> Runtime["runtimeProvenance"]
+  State --> Diagnostics["packetDiagnostics"]
+  Governance --> Action["Canonical next action"]
+  Lanes --> Action
+  Runtime --> Action
+  Diagnostics --> Action
+  Action --> Checklist["operatorChecklist"]
+  Action --> Contract["loopContract"]
+  Checklist --> Handoff["Codex resume handoff"]
+  Contract --> Compact["state / recommend-next / onboarding-packet"]
+  Action --> Dashboard["Read-only dashboard packet brake"]
+```
+
+The governance boundary is deliberately narrow. Session state collects durable ledger, config, packet, lane, runtime, and diagnostic facts; loop governance chooses whether another packet is allowed; `operatorChecklist` compresses that choice into one command, one safety reason, one blocker, one evidence role, and one source for Codex handoff.
+
+Module ownership follows that boundary: session-core builds the state envelope, lane lifecycle owns stale lane status, runtime provenance owns source-vs-installed truth, packet diagnostics owns evidence-loss classification, CLI handlers expose compact readouts, and the dashboard renders the same packet brake without becoming a mutating control surface.
+
 ## Source Layout
 
 ```mermaid

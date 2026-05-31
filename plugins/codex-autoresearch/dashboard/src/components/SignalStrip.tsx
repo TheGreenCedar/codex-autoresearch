@@ -51,12 +51,15 @@ function nextSignal(viewModel: DashboardViewModel): SignalItem {
   const action = recordFrom(viewModel.nextBestAction);
   const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
   const title = clean(action.title) || clean(envelope.title) || "Choose next action";
+  const packetBrake = action.packetBrake === true;
   return {
     id: "next",
     label: "Next",
     value: truncate(title, 34),
-    detail: truncate(clean(action.priority) || clean(envelope.kind) || "Decision envelope", 58),
-    tone: action.tone === "warn" ? "warn" : "neutral",
+    detail: packetBrake
+      ? "Do not run another packet"
+      : truncate(clean(action.priority) || clean(envelope.kind) || "Decision envelope", 58),
+    tone: packetBrake || action.tone === "warn" ? "warn" : "neutral",
     live: true,
   };
 }

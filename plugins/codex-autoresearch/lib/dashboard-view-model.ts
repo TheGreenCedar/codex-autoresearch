@@ -16,11 +16,27 @@ type RunLike = LooseObject & {
 };
 type CommandMap = Map<string, string>;
 
+const PACKET_BRAKE_KINDS = new Set([
+  "context-distillation",
+  "lane-cleanup",
+  "runtime-provenance",
+  "packet-diagnostic",
+  "workflow-friction",
+  "finalization",
+  "stale-packet",
+  "setup",
+  "benchmark-command",
+  "log-decision",
+  "segment-transition",
+  "watchdog",
+]);
+
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
   liveUrl?: string;
   pluginVersion?: string;
   runtimeDrift?: LooseObject | null;
+  dashboardServerRegistry?: LooseObject | null;
   generatedAt?: string;
   sourceCwd?: string;
 }
@@ -333,6 +349,7 @@ function normalizeDashboardSettings(
       settings.pluginVersion || settings.version || state?.config?.pluginVersion,
     ),
     runtimeDrift: (settings.runtimeDrift as LooseObject) || drift || null,
+    dashboardServerRegistry: recordOrNull(settings.dashboardServerRegistry),
     generatedAt: cleanText(
       settings.generatedAt || settings.exportedAt || settings.snapshotGeneratedAt,
     ),
@@ -899,6 +916,9 @@ export function buildProcessHygiene({
     Number.isFinite(Number(settings.activeServerCount)) && Number(settings.activeServerCount) >= 0
       ? Number(settings.activeServerCount)
       : null;
+  const dashboardServerRegistry = recordOrNull(settings.dashboardServerRegistry);
+  const registryMessage = cleanText(dashboardServerRegistry?.message);
+  const registryStale = dashboardServerRegistry?.stale === true;
   const warnings = [];
   if (mode === "static-export" && exportAgeHours != null && exportAgeHours >= staleExportHours) {
     warnings.push(
@@ -914,6 +934,7 @@ export function buildProcessHygiene({
       `${activeServerCount} dashboard servers are active in this process; close stale tabs or restart serve if URLs disagree.`,
     );
   }
+  if (registryStale && registryMessage) warnings.push(registryMessage);
   if (watchdogSummary?.stale) warnings.push(watchdogSummary.recommendation);
   return {
     status: warnings.length ? "needs-attention" : "ok",
@@ -924,6 +945,7 @@ export function buildProcessHygiene({
     generatedAt: cleanText(settings.generatedAt) || null,
     exportAgeHours,
     runtimeDrift: trustState.runtimeDrift || summarizeRuntimeDrift(settings.runtimeDrift),
+    dashboardServerRegistry,
     activeServerCount,
     duplicateServerDetection:
       activeServerCount == null
@@ -932,9 +954,10 @@ export function buildProcessHygiene({
           ? "duplicates detected in this process"
           : "single server in this process",
     staleServerDetection:
-      mode === "live-server"
+      registryMessage ||
+      (mode === "live-server"
         ? "live URL health is checked by the serve command; older external servers are not enumerable here"
-        : "static exports cannot prove live server health",
+        : "static exports cannot prove live server health"),
     warnings,
   };
 }
@@ -2061,6 +2084,7 @@ function actionFromDecisionEnvelope(
     "finalize-preview": "finalize-preview",
     baseline: "next",
   };
+  const packetBrake = PACKET_BRAKE_KINDS.has(kind);
   return actionItem({
     kind,
     priority: cleanText(summary.priority) || "Next",
@@ -2071,7 +2095,7 @@ function actionFromDecisionEnvelope(
     command:
       cleanText(summary.command) ||
       commandByKind[kind] ||
-      (kind === "watchdog" ? "" : commandMap.get("next run") || ""),
+      (packetBrake ? "" : commandMap.get("next run") || ""),
     commandLabel: labelByKind[kind] || "Next",
     tone: ["finalize-preview", "finalization"].includes(kind)
       ? "good"
@@ -2097,6 +2121,11 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
   if (kind === "workflow-friction")
     return "Workflow friction should be removed before spending another packet.";
+  if (kind === "lane-cleanup") return "Lane cleanup comes before another measured packet.";
+  if (kind === "runtime-provenance")
+    return "Runtime provenance should be refreshed before trusting another packet.";
+  if (kind === "packet-diagnostic")
+    return "Packet diagnostics should explain the last run before another packet.";
   if (kind === "benchmark-mismatch")
     return "Benchmark timeout and command-shape mismatches come before reruns.";
   if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
@@ -2317,6 +2346,7 @@ function actionItem({
     title,
     detail,
     utilityCopy,
+    packetBrake: PACKET_BRAKE_KINDS.has(kind),
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
@@ -2564,6 +2594,11 @@ function unique<T>(items: T[]): T[] {
 function recordValue(value: unknown): LooseObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
+}
+
+function recordOrNull(value: unknown): LooseObject | null {
+  const record = recordValue(value);
+  return Object.keys(record).length ? record : null;
 }
 
 function firstRecord(...values: unknown[]): LooseObject {

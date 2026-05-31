@@ -22,6 +22,18 @@ Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name o
 
 The resume contract also carries a watchdog summary. By default it treats an eight-hour quiet window as suspicious when there has been no metric movement, no logged decision, no kept commit, or a completed lane result in the active segment. Tune it with `watchdogNoProgressHours` or `watchdogNoProgressSeconds` in config when a project has a different overnight rhythm. If it fires, do not just feed the machine another packet. Inspect the process, finalize kept work, or rescope the segment.
 
+## Operator Checklist
+
+Use the compact operator checklist as the Codex resume handoff after compaction, long-running work, or any point where another agent may inherit the loop:
+
+```bash
+node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
+```
+
+The checklist returns one command, one safety reason, one blocker, one evidence role, and one source. Treat it as the shortest safe continuation path: the command says what to do next, the safety reason explains why it outranks another packet, the blocker names the stop condition when one exists, the evidence role says how to use the result, and the source points back to the governance readout that made the call.
+
+Read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any of them blocks packet work, clear that action before `next`.
+
 Read existing files before editing:
 
 - `autoresearch.md`

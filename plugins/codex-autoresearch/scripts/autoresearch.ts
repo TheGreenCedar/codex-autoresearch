@@ -12,7 +12,9 @@ import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
+import { buildRecommendNextResponse } from "../lib/commands/recommend-next.js";
 import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
+import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
@@ -35,6 +37,9 @@ import {
 } from "../lib/finalize-preview.js";
 import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
+import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
+import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -243,7 +248,7 @@ Usage:
   node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
-  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
+  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]
   node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
   node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
@@ -1806,7 +1811,16 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
           : baseEnvelope.canonicalNextAction,
       }
     : null;
-  return {
+  const loopContract = decisionEnvelope?.loopContract || compact.loopContract || null;
+  const operatorChecklist = boolOption(args.operatorChecklist ?? args.operator_checklist, false)
+    ? buildOperatorChecklist(action, {
+        workDir,
+        pluginRoot: PLUGIN_ROOT,
+        loopContract,
+        source: "recommend-next",
+      })
+    : undefined;
+  return buildRecommendNextResponse({
     ok: true,
     workDir,
     action,
@@ -1830,7 +1844,10 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     compactState: boolOption(args.compact, false) ? compact : undefined,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
-  };
+    operatorChecklist,
+    runtimeProvenance: compact.runtimeProvenance || viewModel.processHygiene?.runtimeDrift || null,
+    loopContract,
+  });
 }
 
 function canonicalActionForRecommendNext(
@@ -1863,6 +1880,9 @@ function canonicalTitle(kind: unknown, fallback: unknown): string {
     "stale-packet": "Replace the stale packet",
     "partial-salvage": "Review partial results",
     "context-distillation": "Refresh context",
+    "lane-cleanup": "Close stale lanes",
+    "runtime-provenance": "Inspect runtime provenance",
+    "packet-diagnostic": "Inspect packet diagnostics",
     "quality-gap": "Close accepted quality gaps",
     "plateau-pivot": "Pivot before repeating the plateau",
     finalization: "Preview finalization",
@@ -3956,7 +3976,31 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     settings,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-  const stateWithQualityGap = { ...state, qualityGap };
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = classifyPacketDiagnostics({
+    packetEvidence: lastRun?.packetEvidence || {},
+    run: lastRun?.run || {},
+    decision: lastRun?.decision || {},
+    metrics: lastRun?.decision?.metrics || lastRun?.run?.parsedMetrics || {},
+    metricName: state.config.metricName,
+    command: continuationCommands(workDir).partialResults,
+  });
+  const currentRuntimeProvenance = runtimeProvenance();
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -3972,7 +4016,11 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+    progress:
+      activeProgress ||
+      (await readActiveProgressSnapshot(workDir, config)) ||
+      lastRun?.packetEvidence?.progressSnapshot ||
+      null,
   });
   const commands = dashboardCommands(workDir, qualityGap);
   const guidedCommands = (guidedSetupResult as LooseObject).commands || {};
@@ -3984,7 +4032,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   };
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...state, limit: iterationLimitInfo(state, config) },
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails: warnings,
@@ -4009,6 +4057,9 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     fanoutPlan,
     fanoutProvenance,
     parallelLanes,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
     watchdogSummary,
     experimentEconomics,
     partialResults,
@@ -5236,7 +5287,31 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     settings,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-  const stateWithQualityGap = { ...state, qualityGap };
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = classifyPacketDiagnostics({
+    packetEvidence: lastRun?.packetEvidence || {},
+    run: lastRun?.run || {},
+    decision: lastRun?.decision || {},
+    metrics: lastRun?.decision?.metrics || lastRun?.run?.parsedMetrics || {},
+    metricName: state.config.metricName,
+    command: continuationCommands(workDir).partialResults,
+  });
+  const currentRuntimeProvenance = runtimeProvenance();
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -5252,7 +5327,11 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+    progress:
+      activeProgress ||
+      (await readActiveProgressSnapshot(workDir, config)) ||
+      lastRun?.packetEvidence?.progressSnapshot ||
+      null,
   });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
@@ -5263,7 +5342,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const continuation = loopContinuation(workDir, state, config, "state");
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...state, limit: iterationLimitInfo(state, config) },
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails,
@@ -5299,7 +5378,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
-    runtimeProvenance: runtimeProvenance(),
+    runtimeProvenance: currentRuntimeProvenance,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -5314,6 +5393,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     fanoutPlan,
     fanoutProvenance,
     parallelLanes,
+    laneLifecycle,
+    packetDiagnostics,
     watchdogSummary,
     memory,
     experimentEconomics,
@@ -5337,7 +5418,7 @@ function compactPublicState(state: LooseObject) {
       : []),
     ...(Array.isArray(state.warnings) ? state.warnings : []),
   ].filter(Boolean);
-  return {
+  return buildCompactStateResponse({
     ok: state.ok,
     workDir: state.workDir,
     name: state.config?.name || "Autoresearch",
@@ -5469,7 +5550,11 @@ function compactPublicState(state: LooseObject) {
     resumeAudit: state.resumeAudit || null,
     decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
     canonicalNextAction,
-  };
+    runtimeProvenance: state.runtimeProvenance,
+    loopContract: state.decisionEnvelope?.loopContract || state.resumeAudit?.loopContract,
+    laneLifecycle: state.laneLifecycle,
+    packetDiagnostics: state.packetDiagnostics,
+  });
 }
 
 function dashboardCommands(workDir: string, qualityGap: any = null) {
@@ -5524,13 +5609,23 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
 }
 
 function runtimeProvenance(drift: LooseObject | null = null) {
+  const drifted = drift?.ok === false;
   return {
     pluginVersion: PLUGIN_VERSION,
     sourceRoot: PLUGIN_ROOT,
     repoRoot: REPO_ROOT,
+    localVersion: PLUGIN_VERSION,
+    installedVersion:
+      drift?.installed?.version || drift?.installed?.pluginVersion || drift?.routing?.version || "",
     installedCachePath:
       drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
-    driftConfidence: drift ? (drift.ok === false ? "drift-detected" : "checked") : "source-only",
+    drifted,
+    status: drift ? (drifted ? "drift-detected" : "checked") : "unavailable",
+    driftConfidence: drift ? (drifted ? "drift-detected" : "checked") : "source-only",
+    reason: drifted
+      ? "Source and installed runtime drift needs inspection before public claims."
+      : "",
+    inspectCommand: "",
   };
 }
 
@@ -6107,6 +6202,7 @@ function continuationCommands(workDir: string) {
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
+    laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,
     gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(currentQualityGapSlug(workDir) || "research")}`,
     liveDashboard: `node ${script} serve --cwd ${cwd}`,
     exportDashboard: `node ${script} export --cwd ${cwd}`,
@@ -6119,6 +6215,7 @@ function continuationCommands(workDir: string) {
     checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
     newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
     promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
+    finalizePreview: `node ${script} finalize-preview --cwd ${cwd}`,
     finalizeCurrentTree: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
   };
 }
@@ -6149,7 +6246,13 @@ function commandForCanonicalKind(kind: unknown, commands: unknown): string {
     case "partial-salvage":
       return lookup.partialResults || "";
     case "context-distillation":
-      return "";
+      return lookup.onboardingPacket || lookup.state || "";
+    case "lane-cleanup":
+      return lookup.state || lookup.laneRunner || "";
+    case "runtime-provenance":
+      return lookup.doctorExplain || lookup.doctor || "";
+    case "packet-diagnostic":
+      return lookup.partialResults || lookup.state || "";
     case "quality-gap":
       return lookup.gapCandidates || "";
     case "plateau-pivot":

@@ -1,5 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
+import {
+  readServeRegistry,
+  summarizeServeRegistry,
+  writeServeRegistry,
+} from "../dashboard-server-registry.js";
 
 type LooseObject = Record<string, any>;
 
@@ -49,12 +54,14 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         ok: false,
         warnings: [error.message],
       }));
+    const dashboardServerRegistry = await dashboardServerRegistryStatus(workDir);
     const dashboardContext = {
       deliveryMode: "static-export",
       generatedAt,
       sourceCwd,
       pluginVersion: deps.pluginVersion,
       runtimeDrift,
+      dashboardServerRegistry,
       publicExport: showcaseExport,
       suppressEnvironmentWarnings: showcaseExport,
     };
@@ -115,6 +122,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const startedAt = Date.now();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     let liveUrl = "";
+    let dashboardServerRegistry: LooseObject | null = null;
     const runtimeDrift = await deps
       .buildDriftReport({
         pluginRoot: deps.pluginRoot,
@@ -139,6 +147,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
           activeServerCount: liveDashboardServers.size,
+          dashboardServerRegistry,
         };
         return deps.dashboardHtml(entries, {
           workDir,
@@ -166,11 +175,24 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
           activeServerCount: liveDashboardServers.size,
+          dashboardServerRegistry,
         }),
     });
     liveUrl = serveResult.url;
     liveDashboardServers.add(serveResult.server);
     const health = await verifyLiveDashboardUrl(liveUrl);
+    const registryWrite = await writeServeRegistry(workDir, {
+      pid: process.pid,
+      port: Number(serveResult.port),
+      cwd: workDir,
+      startedAt: new Date(startedAt).toISOString(),
+      version: deps.pluginVersion,
+      healthUrl: health.url,
+    });
+    dashboardServerRegistry = summarizeServeRegistry(registryWrite.record, {
+      currentPid: process.pid,
+      currentCwd: workDir,
+    });
     const responseViewModel = await deps.dashboardViewModel(workDir, config, {
       deliveryMode: "live-server",
       liveUrl,
@@ -179,6 +201,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       pluginVersion: deps.pluginVersion,
       runtimeDrift,
       activeServerCount: liveDashboardServers.size,
+      dashboardServerRegistry,
     });
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
@@ -191,6 +214,11 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       verified: health.ok,
       healthUrl: health.url,
       checkedAt: health.checkedAt,
+      registry: {
+        path: registryWrite.path,
+        status: dashboardServerRegistry,
+        previous: registryWrite.previous,
+      },
       decisionEnvelopeSummary: responseViewModel.decisionEnvelopeSummary || null,
       modeGuidance: {
         deliveryMode: "live-server",
@@ -239,4 +267,10 @@ async function verifyLiveDashboardUrl(url: string) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function dashboardServerRegistryStatus(workDir: string) {
+  const record = await readServeRegistry(workDir);
+  const summary = summarizeServeRegistry(record, { currentCwd: workDir });
+  return summary.available ? summary : null;
 }

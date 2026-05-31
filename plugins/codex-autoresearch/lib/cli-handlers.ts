@@ -71,6 +71,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.recommendNext({
         cwd: args.cwd,
         compact: args.compact,
+        operatorChecklist: args.operatorChecklist,
       }),
     }),
     "codex-goal-brief": async (args) => ({
