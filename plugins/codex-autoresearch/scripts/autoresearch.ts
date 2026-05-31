@@ -3477,6 +3477,55 @@ async function appendRuntimeConfigFile(files: any[], sessionCwd: any, updates: a
   files.push(await writeSessionFile(configPath, content, { overwrite: true }));
 }
 
+async function appendRuntimeConfigUpdates(files: any[], sessionCwd: any, updates: LooseObject) {
+  if (Object.keys(updates).length > 0) {
+    await appendRuntimeConfigFile(files, sessionCwd, updates);
+  }
+}
+
+async function appendSetupRuntimeConfig(
+  files: any[],
+  sessionCwd: any,
+  args: LooseObject,
+  options: {
+    includeRecipe?: boolean;
+    includeRecipeCatalogProvenance?: boolean;
+    grouped?: boolean;
+  } = {},
+) {
+  const maxIterations = positiveIntegerOption(
+    args.max_iterations ?? args.maxIterations,
+    null,
+    "maxIterations",
+  );
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
+
+  if (options.grouped) {
+    const nextConfig: LooseObject = { ...runtimeUpdates };
+    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
+    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
+    await appendRuntimeConfigUpdates(files, sessionCwd, nextConfig);
+    return;
+  }
+
+  const setupConfig: LooseObject = {};
+  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
+  if (options.includeRecipe && (args.recipe_id || args.recipeId || args.recipe)) {
+    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, setupConfig);
+  if (options.includeRecipeCatalogProvenance && args.recipeCatalogProvenance) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, {
+      recipeCatalogProvenance: args.recipeCatalogProvenance,
+    });
+  }
+  if (commitPaths.length > 0) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, { commitPaths });
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, runtimeUpdates);
+}
+
 function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
   const paths = [
     ...new Set(
@@ -3497,6 +3546,39 @@ function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
         ]
       : [],
     note: "Checkpoint these generated session files before the first experiment commit if this project is in Git.",
+  };
+}
+
+async function setupCommandResponseFields({
+  args,
+  benchmarkMode,
+  checkpoint,
+  metricName,
+  sessionCwd,
+  shellKind,
+  workDir,
+}: LooseObject) {
+  const benchmarkCommand =
+    shellKind === "bash"
+      ? "bash ./autoresearch.sh"
+      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
+  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  return {
+    scaffoldHealth: await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) }),
+    benchmarkMode,
+    benchmarkLintCommand,
+    scopeWarnings: scopeWarningsFromArgs(args),
+    firstRunChecklist: firstRunChecklist({
+      setupCommand: "already completed",
+      benchmarkLintCommand,
+      doctorCommand,
+      checkpoint,
+      baselineCommand,
+      logCommand,
+    }),
   };
 }
 
@@ -3621,30 +3703,10 @@ async function setupSession(args: LooseObject) {
     ideasContent: () => renderIdeasDocument(args),
   });
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const setupConfig: LooseObject = {};
-  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
-  if (args.recipe_id || args.recipeId || args.recipe)
-    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
-  if (Object.keys(setupConfig).length > 0)
-    await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
-  if (args.recipeCatalogProvenance) {
-    await appendRuntimeConfigFile(files, sessionCwd, {
-      recipeCatalogProvenance: args.recipeCatalogProvenance,
-    });
-  }
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  if (commitPaths.length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
-  }
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (Object.keys(runtimeUpdates).length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, runtimeUpdates);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, {
+    includeRecipe: true,
+    includeRecipeCatalogProvenance: true,
+  });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3652,10 +3714,6 @@ async function setupSession(args: LooseObject) {
   }
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name);
   const metricName = validateMetricName(args.metric_name || args.metricName);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   const benchmarkMode = {
     explicitCommand: Boolean(args.benchmark_command || args.benchmarkCommand),
     printsMetric: explicitBenchmarkPrintsMetric(args),
@@ -3663,11 +3721,15 @@ async function setupSession(args: LooseObject) {
       ? "The benchmark command/script is expected to print METRIC lines."
       : "The generated benchmark script wraps the command and emits the primary metric from elapsed time.",
   };
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode,
+    checkpoint,
+    metricName,
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
 
   return {
     ok: true,
@@ -3676,18 +3738,7 @@ async function setupSession(args: LooseObject) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode,
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
   };
 }
@@ -3753,19 +3804,7 @@ async function setupResearchSession(args: any) {
   });
   const researchDir = researchDirPath(workDir, slug);
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (maxIterations != null || commitPaths.length > 0 || Object.keys(runtimeUpdates).length > 0) {
-    const nextConfig: LooseObject = { ...runtimeUpdates };
-    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
-    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
-    await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, { grouped: true });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3781,15 +3820,19 @@ async function setupResearchSession(args: any) {
 
   const gap = await measureQualityGap({ cwd: workDir, researchSlug: slug });
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name || `Deep research: ${goal}`);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote("quality_gap")} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode: {
+      explicitCommand: true,
+      printsMetric: true,
+      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
+    },
+    checkpoint,
+    metricName: "quality_gap",
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
   return {
     ok: true,
     workDir,
@@ -3799,22 +3842,7 @@ async function setupResearchSession(args: any) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode: {
-      explicitCommand: true,
-      printsMetric: true,
-      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
-    },
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
     qualityGap: {
       open: gap.open,
