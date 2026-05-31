@@ -35,6 +35,7 @@ This project uses a root-only changelog because the root README is the public do
 - Added narrower package test scripts for CLI, dashboard, finalization, and core evidence slices; the compiled CLI regression path now runs bounded shards instead of one giant serial file.
 - Aligned the dashboard dev entry with the TypeScript source entrypoint (`/src/main.tsx`).
 - Simplified internal tool schema lookups, CLI projection helpers, runner/setup response assembly, finalization progress metadata, evidence predicates, next-action policy rules, and dashboard component/live-refresh surfaces without changing public JSON contracts.
+- Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.
 
 ### Release
 

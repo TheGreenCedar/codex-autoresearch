@@ -3,10 +3,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
-import {
-  finalizationPlanFingerprint,
-  readAutoresearchLedger,
-} from "./finalization-plan.js";
+import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 

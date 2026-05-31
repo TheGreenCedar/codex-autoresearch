@@ -3,10 +3,7 @@ import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import {
-  finalizationPlanFingerprint,
-  readAutoresearchLedger,
-} from "../lib/finalization-plan.js";
+import { finalizationPlanFingerprint, readAutoresearchLedger } from "../lib/finalization-plan.js";
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
@@ -44,7 +41,7 @@ async function run(command, args, cwd, allowFailure = false) {
 }
 
 async function git(args, cwd) {
-  return await run("git", args, cwd);
+  return await run("git", ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], cwd);
 }
 
 async function writeFile(file, contents) {

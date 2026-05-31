@@ -52,13 +52,15 @@ function parseArgs(argv: string[]): { jobs: number; specs: ShardSpec[] } {
 function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
   const label = args.at(-1) || "node";
   const startedAt = Date.now();
-  return runCommand([label, process.execPath, args], { cwd: process.cwd(), env }).then((result) => ({
-    code: result.code,
-    durationSeconds: (Date.now() - startedAt) / 1000,
-    label,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  }));
+  return runCommand([label, process.execPath, args], { cwd: process.cwd(), env }).then(
+    (result) => ({
+      code: result.code,
+      durationSeconds: (Date.now() - startedAt) / 1000,
+      label,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    }),
+  );
 }
 
 async function discoverTestCount(file: string): Promise<number | null> {

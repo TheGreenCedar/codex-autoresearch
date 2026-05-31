@@ -48,7 +48,13 @@ const processOptions = (cwdOrOptions) =>
 export const runProcess = (command, args, cwdOrOptions) => {
   const options = processOptions(cwdOrOptions);
   return new Promise((resolve) => {
-    const child = spawnTestProcess(command, args, options.cwd, ["ignore", "pipe", "pipe"], options.env);
+    const child = spawnTestProcess(
+      command,
+      args,
+      options.cwd,
+      ["ignore", "pipe", "pipe"],
+      options.env,
+    );
     const output = captureProcessOutput(child);
     resolveWithProcessResult(child, output, resolve);
   });
@@ -186,8 +192,11 @@ const rmWithRetries = async (dir) => {
   });
 };
 
+const testGitConfig = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
+
 export const runGit = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
+  const testArgs = [...testGitConfig, ...args];
+  const result = await runProcess("git", testArgs, cwd);
   assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
   return result.stdout.trim();
 };

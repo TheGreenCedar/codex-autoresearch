@@ -31,9 +31,7 @@ export async function readAutoresearchLedger(
         } catch (error) {
           if (mode === "silent-empty") throw error;
           const parseError = error as Error;
-          throw new Error(
-            `Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`,
-          );
+          throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`);
         }
       })
       .filter((entry): entry is LooseObject => Boolean(entry));
@@ -105,11 +103,11 @@ export function assertGeneratedPlanMetadata(config: LooseObject): void {
   const hasExcludedCount = Object.hasOwn(config, "excluded_commit_count");
   const looksGenerated = Boolean(
     config.source_branch ||
-      config.planned_at ||
-      config.plan_fingerprint ||
-      hasExcludedCount ||
-      Object.hasOwn(config, "kept_run_count") ||
-      Object.hasOwn(config, "kept_commits"),
+    config.planned_at ||
+    config.plan_fingerprint ||
+    hasExcludedCount ||
+    Object.hasOwn(config, "kept_run_count") ||
+    Object.hasOwn(config, "kept_commits"),
   );
   if (hasExcludedCount) {
     const count = Number(config.excluded_commit_count);
