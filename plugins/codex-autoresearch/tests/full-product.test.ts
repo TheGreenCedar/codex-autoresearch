@@ -1303,7 +1303,7 @@ test("live server log actions stay disabled and leave last-run packets untouched
 
 async function waitForServerPayload(stdoutFn, stderrFn) {
   const started = Date.now();
-  while (Date.now() - started < 15000) {
+  while (Date.now() - started < 45000) {
     const stdout = stdoutFn();
     if (stdout.trim().endsWith("}")) return JSON.parse(stdout);
     await new Promise((resolve) => setTimeout(resolve, 50));

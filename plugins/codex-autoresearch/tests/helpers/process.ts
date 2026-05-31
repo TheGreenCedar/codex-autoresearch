@@ -192,11 +192,22 @@ const rmWithRetries = async (dir) => {
   });
 };
 
-const testGitConfig = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
+const testGitConfigEntries = [
+  ["commit.gpgsign", "false"],
+  ["tag.gpgsign", "false"],
+  ["core.autocrlf", "false"],
+];
 
 export const runGit = async (cwd, args) => {
-  const testArgs = [...testGitConfig, ...args];
-  const result = await runProcess("git", testArgs, cwd);
+  const result = await runProcess("git", args, cwd);
   assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
+  if (args[0] === "init") await configureTestGitRepo(cwd);
   return result.stdout.trim();
+};
+
+const configureTestGitRepo = async (cwd) => {
+  for (const [key, value] of testGitConfigEntries) {
+    const result = await runProcess("git", ["config", key, value], cwd);
+    assert.equal(result.code, 0, `git config ${key} failed\n${result.stderr}${result.stdout}`);
+  }
 };
