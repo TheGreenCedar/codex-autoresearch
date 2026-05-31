@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
 import { JSDOM } from "jsdom";
+import { redactCommandDisplay } from "../lib/evidence-redaction.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import {
@@ -2300,7 +2301,10 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
     assert.match(packet.packetEvidence.packetId, /^packet-/);
-    assert.equal(packet.packetEvidence.commandIdentity.command, command);
+    assert.equal(
+      packet.packetEvidence.commandIdentity.command,
+      redactCommandDisplay(command, { workDir: dir }),
+    );
     assert.equal(packet.packetEvidence.exitStatus, 0);
     assert.equal(packet.packetEvidence.metrics.seconds, 3);
     assert.match(packet.packetEvidence.stdoutTail, /METRIC seconds=3/);
