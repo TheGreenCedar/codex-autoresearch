@@ -538,7 +538,35 @@ export function buildDecisionEnvelope({
   };
 }
 
+type CanonicalRule = (envelope: LooseObject) => LooseObject | null;
+
+const CANONICAL_NEXT_ACTION_RULES: CanonicalRule[] = [
+  scaffoldBlockerAction,
+  dirtySourceDriftAction,
+  timeoutMismatchAction,
+  workflowBlockerAction,
+  workflowWarningAction,
+  stalePacketAction,
+  setupAction,
+  benchmarkCommandAction,
+  logDecisionAction,
+  segmentTransitionAction,
+  plateauAction,
+  watchdogAction,
+  finalizationAction,
+  baselineAction,
+  nextPacketAction,
+];
+
 function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
+  for (const rule of CANONICAL_NEXT_ACTION_RULES) {
+    const action = rule(envelope);
+    if (action) return action;
+  }
+  return nextPacketAction(envelope);
+}
+
+function scaffoldBlockerAction(envelope: LooseObject): LooseObject | null {
   const scaffoldBlockers = envelope.scaffoldHealth?.blockers || [];
   if (Array.isArray(scaffoldBlockers) && scaffoldBlockers.length > 0) {
     return {
@@ -549,6 +577,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["scaffoldHealth"],
     };
   }
+  return null;
+}
+
+function dirtySourceDriftAction(envelope: LooseObject): LooseObject | null {
   if (envelope.dirtySourceDrift?.dirty === true) {
     return {
       kind: "workflow-friction",
@@ -558,6 +590,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["dirtySourceDrift"],
     };
   }
+  return null;
+}
+
+function timeoutMismatchAction(envelope: LooseObject): LooseObject | null {
   const timeoutMismatch = firstEconomicsWarning(
     envelope.experimentEconomics,
     "outer_timeout_shorter_than_inner",
@@ -571,6 +607,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", timeoutMismatch.code],
     };
   }
+  return null;
+}
+
+function workflowBlockerAction(envelope: LooseObject): LooseObject | null {
   const workflowBlocker = firstWorkflowFriction(envelope.workflowFriction, "blocker");
   if (workflowBlocker) {
     return {
@@ -581,6 +621,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: workflowBlocker.suggestedAction?.triggeredBy || [workflowBlocker.kind],
     };
   }
+  return null;
+}
+
+function workflowWarningAction(envelope: LooseObject): LooseObject | null {
   const workflowWarning = firstWorkflowFriction(envelope.workflowFriction, "warning");
   if (workflowWarning) {
     return {
@@ -604,6 +648,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", repeatedSmallProbe.code],
     };
   }
+  return null;
+}
+
+function stalePacketAction(envelope: LooseObject): LooseObject | null {
   if (envelope.latestPacketFreshness?.fresh === false) {
     return {
       kind: "stale-packet",
@@ -629,6 +677,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", "progress"],
     };
   }
+  return null;
+}
+
+function setupAction(envelope: LooseObject): LooseObject | null {
   const setupBlockers = Array.isArray(envelope.setupState?.blockers)
     ? envelope.setupState.blockers
     : [];
@@ -644,6 +696,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["setup"],
     };
   }
+  return null;
+}
+
+function benchmarkCommandAction(envelope: LooseObject): LooseObject | null {
   if (envelope.setupState?.stage === "needs-benchmark-command") {
     return {
       kind: "benchmark-command",
@@ -653,6 +709,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["setup", "benchmarkCommand"],
     };
   }
+  return null;
+}
+
+function logDecisionAction(envelope: LooseObject): LooseObject | null {
   const salvage = firstDiagnosticSalvage(envelope.salvageCandidates);
   if (salvage) {
     return {
@@ -672,6 +732,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["latestPacketFreshness"],
     };
   }
+  return null;
+}
+
+function segmentTransitionAction(envelope: LooseObject): LooseObject | null {
   if (envelope.contextDistillation?.required === true) {
     return {
       kind: "context-distillation",
@@ -699,17 +763,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: envelope.segmentTransition.triggeredBy || ["segmentTransition"],
     };
   }
-  if (envelope.watchdog?.stale === true) {
-    return {
-      kind: "watchdog",
-      priority: 8,
-      reason:
-        envelope.watchdog.recommendation ||
-        "No progress signal has appeared within the watchdog window.",
-      command: "",
-      triggeredBy: ["watchdog"],
-    };
-  }
+  return null;
+}
+
+function plateauAction(envelope: LooseObject): LooseObject | null {
   if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {
     return {
       kind: "quality-gap",
@@ -734,6 +791,25 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: exhausted ? ["experimentMemory", "exhaustedFamily"] : ["experimentMemory"],
     };
   }
+  return null;
+}
+
+function watchdogAction(envelope: LooseObject): LooseObject | null {
+  if (envelope.watchdog?.stale === true) {
+    return {
+      kind: "watchdog",
+      priority: 8,
+      reason:
+        envelope.watchdog.recommendation ||
+        "No progress signal has appeared within the watchdog window.",
+      command: "",
+      triggeredBy: ["watchdog"],
+    };
+  }
+  return null;
+}
+
+function finalizationAction(envelope: LooseObject): LooseObject | null {
   if (envelope.finalizationReadiness?.ready === true) {
     return {
       kind: "finalization",
@@ -743,6 +819,14 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["finalizationReadiness"],
     };
   }
+  return null;
+}
+
+function baselineAction(_envelope: LooseObject): LooseObject | null {
+  return null;
+}
+
+function nextPacketAction(envelope: LooseObject): LooseObject {
   return {
     kind: "next-packet",
     priority: 10,
