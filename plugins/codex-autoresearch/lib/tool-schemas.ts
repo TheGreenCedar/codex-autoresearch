@@ -151,6 +151,7 @@ export const toolSchemas = applyToolContracts([
         dry_run: { type: "boolean" },
         apply: { type: "boolean" },
         allow_snippets: { type: "boolean" },
+        allow_outside_workdir: { type: "boolean" },
         max_snippets: { type: "integer" },
         max_snippet_chars: { type: "integer" },
       },
@@ -675,6 +676,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
   allow_non_git_command: "allowNonGitCommand",
+  allow_outside_workdir: "allowOutsideWorkdir",
   allow_dirty_revert: "allowDirtyRevert",
   allow_snippets: "allowSnippets",
   asi_json_file: "asiJsonFile",
@@ -738,7 +740,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
 };
 
 export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {
-  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  const schema = schemaForTool(name);
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
   for (const required of schema.required || []) {
@@ -760,21 +762,9 @@ export function validateToolArguments(name: string, args: ToolArgs = {}, options
 }
 
 export function normalizeToolArguments(name: string, args: ToolArgs = {}): ToolArgs {
-  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  const schema = schemaForTool(name);
   if (!schema) return args || {};
-  const aliases = new Map<string, string>();
-  for (const key of Object.keys(schema.properties || {})) {
-    aliases.set(key, key);
-    aliases.set(toCamel(key), key);
-  }
-  if (schema.properties?.working_dir) {
-    aliases.set("workingDir", "working_dir");
-    aliases.set("cwd", "working_dir");
-  }
-  if (schema.properties?.recipe_id) aliases.set("recipe", "recipe_id");
-  if (schema.properties?.research_slug) aliases.set("slug", "research_slug");
-  if (schema.properties?.confirm) aliases.set("yes", "confirm");
-  if (schema.properties?.json_full) aliases.set("full", "json_full");
+  const aliases = aliasesForSchema(schema);
 
   const normalized: ToolArgs = {};
   for (const [key, value] of Object.entries(args || {})) {
@@ -803,7 +793,8 @@ export function requireUnsafeCommandGate(
   args: ToolArgs = {},
   boolOption = defaultBoolOption,
 ) {
-  const normalized: ToolArgs = normalizeToolArguments(toolName, args);
+  const schema = schemaForTool(toolName);
+  const normalized: ToolArgs = schema ? normalizeToolArguments(toolName, args) : args || {};
   const setupCatalogCanMaterializeCommands =
     (toolName === "setup_plan" ||
       toolName === "guided_setup" ||
@@ -825,6 +816,27 @@ export function requireUnsafeCommandGate(
       `${toolName} custom shell commands require allow_unsafe_command=true. Prefer a configured autoresearch script when possible.`,
     );
   }
+}
+
+function schemaForTool(name: string): JsonSchema | null {
+  return toolSchemas.find((tool) => tool.name === name)?.inputSchema || null;
+}
+
+function aliasesForSchema(schema: JsonSchema) {
+  const aliases = new Map<string, string>();
+  for (const key of Object.keys(schema.properties || {})) {
+    aliases.set(key, key);
+    aliases.set(toCamel(key), key);
+  }
+  if (schema.properties?.working_dir) {
+    aliases.set("workingDir", "working_dir");
+    aliases.set("cwd", "working_dir");
+  }
+  if (schema.properties?.recipe_id) aliases.set("recipe", "recipe_id");
+  if (schema.properties?.research_slug) aliases.set("slug", "research_slug");
+  if (schema.properties?.confirm) aliases.set("yes", "confirm");
+  if (schema.properties?.json_full) aliases.set("full", "json_full");
+  return aliases;
 }
 
 function inferActiveResearchSlug(name: string, normalized: ToolArgs) {

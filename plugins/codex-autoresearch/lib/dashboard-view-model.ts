@@ -439,19 +439,7 @@ function summarizeDecisionEnvelope({
   experimentMemory = null,
 }: LooseObject) {
   const freshness = envelope?.latestPacketFreshness || {};
-  const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
-  const setupBlockers = [
-    ...scaffoldBlockers,
-    ...stringList(setupPlan?.missing),
-    ...stringList(setupPlan?.missingEssentials),
-  ];
-  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
-  const limitReached =
-    limit.limitReached === true ||
-    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
   const finalization = envelope?.finalizationReadiness || {};
-  const watchdog = envelope?.watchdog || {};
-  const qualityRound = envelope?.qualityRound || {};
   const canonicalSummary = summaryFromCanonicalNextAction(envelope?.canonicalNextAction, {
     current,
     measurements,
@@ -472,99 +460,121 @@ function summarizeDecisionEnvelope({
     finalizationReady: finalization.ready ?? null,
   };
 
-  if (freshness.fresh === false) {
-    summary = {
-      ...summary,
-      kind: "stale-packet",
-      priority: "Critical",
-      title: "Replace the stale packet",
-      detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
-      source: "packet",
-    };
-  } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
-    summary = {
-      ...summary,
-      kind: "setup",
-      priority: "Critical",
-      title: "Complete setup",
-      detail:
-        setupBlockers[0] ||
-        guidedSetup?.nextAction ||
-        "Repair setup blockers before trusting another packet.",
-      source: "setup",
-    };
-  } else if (guidedSetup?.stage === "needs-benchmark-command") {
-    summary = {
-      ...summary,
-      kind: "benchmark-command",
-      priority: "Critical",
-      title: "Add a benchmark command",
-      detail:
-        guidedSetup?.nextAction ||
-        "This session has logged metrics, but next has no default benchmark script to run.",
-      source: "setup",
-    };
-  } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
-    const suggested =
-      guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
-    summary = {
-      ...summary,
-      kind: "log-decision",
-      priority: "Critical",
-      title: "Log the last packet",
-      detail: suggested
-        ? `Record the last packet as ${suggested}, then run a new packet.`
-        : "Record the fresh last-run packet before starting another packet.",
-      source: "packet",
-    };
-  } else if (limitReached || guidedSetup?.stage === "limit-reached" || qualityRound.done === true) {
-    summary = {
-      ...summary,
-      kind: "segment-transition",
-      priority: "Transition",
-      title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
-      detail:
-        guidedSetup?.nextAction ||
-        (qualityRound.done === true
-          ? "The active quality round is closed; refresh gaps or preview finalization."
-          : "The active segment reached its limit; extend the limit or start a new segment."),
-      source: "segment",
-    };
-  } else if (experimentMemory?.plateau?.detected) {
-    summary = {
-      ...summary,
-      kind: "plateau",
-      priority: "Critical",
-      title: "Break the plateau",
-      detail:
-        experimentMemory?.diversityGuidance?.nextActionHint ||
-        experimentMemory?.plateau?.recommendation ||
-        "Recent runs are clustering without a new best.",
-      source: "plateau",
-    };
-  } else if (watchdog.stale === true) {
-    summary = {
-      ...summary,
-      kind: "watchdog",
-      priority: "Critical",
-      title: "Investigate the quiet window",
-      detail:
-        watchdog.recommendation || "No progress signal has appeared within the watchdog window.",
-      source: "watchdog",
-    };
-  } else if (finalization.ready === true || finalizePreview?.ready === true) {
-    summary = {
-      ...summary,
-      kind: "finalize-preview",
-      priority: "Review",
-      title: "Preview finalization",
-      detail:
-        finalization.nextAction ||
-        finalizePreview?.nextAction ||
-        "Inspect the branch packet before creating review branches.",
-      source: "finalize",
-    };
-  } else if (!current.length) {
+  if (!canonicalSummary) {
+    const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
+    const setupBlockers = [
+      ...scaffoldBlockers,
+      ...stringList(setupPlan?.missing),
+      ...stringList(setupPlan?.missingEssentials),
+    ];
+    const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
+    const limitReached =
+      limit.limitReached === true ||
+      (Number.isFinite(Number(limit.remainingIterations)) &&
+        Number(limit.remainingIterations) <= 0);
+    const watchdog = envelope?.watchdog || {};
+    const qualityRound = envelope?.qualityRound || {};
+
+    if (freshness.fresh === false) {
+      summary = {
+        ...summary,
+        kind: "stale-packet",
+        priority: "Critical",
+        title: "Replace the stale packet",
+        detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
+        source: "packet",
+      };
+    } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
+      summary = {
+        ...summary,
+        kind: "setup",
+        priority: "Critical",
+        title: "Complete setup",
+        detail:
+          setupBlockers[0] ||
+          guidedSetup?.nextAction ||
+          "Repair setup blockers before trusting another packet.",
+        source: "setup",
+      };
+    } else if (guidedSetup?.stage === "needs-benchmark-command") {
+      summary = {
+        ...summary,
+        kind: "benchmark-command",
+        priority: "Critical",
+        title: "Add a benchmark command",
+        detail:
+          guidedSetup?.nextAction ||
+          "This session has logged metrics, but next has no default benchmark script to run.",
+        source: "setup",
+      };
+    } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
+      const suggested =
+        guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
+      summary = {
+        ...summary,
+        kind: "log-decision",
+        priority: "Critical",
+        title: "Log the last packet",
+        detail: suggested
+          ? `Record the last packet as ${suggested}, then run a new packet.`
+          : "Record the fresh last-run packet before starting another packet.",
+        source: "packet",
+      };
+    } else if (
+      limitReached ||
+      guidedSetup?.stage === "limit-reached" ||
+      qualityRound.done === true
+    ) {
+      summary = {
+        ...summary,
+        kind: "segment-transition",
+        priority: "Transition",
+        title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
+        detail:
+          guidedSetup?.nextAction ||
+          (qualityRound.done === true
+            ? "The active quality round is closed; refresh gaps or preview finalization."
+            : "The active segment reached its limit; extend the limit or start a new segment."),
+        source: "segment",
+      };
+    } else if (experimentMemory?.plateau?.detected) {
+      summary = {
+        ...summary,
+        kind: "plateau",
+        priority: "Critical",
+        title: "Break the plateau",
+        detail:
+          experimentMemory?.diversityGuidance?.nextActionHint ||
+          experimentMemory?.plateau?.recommendation ||
+          "Recent runs are clustering without a new best.",
+        source: "plateau",
+      };
+    } else if (watchdog.stale === true) {
+      summary = {
+        ...summary,
+        kind: "watchdog",
+        priority: "Critical",
+        title: "Investigate the quiet window",
+        detail:
+          watchdog.recommendation || "No progress signal has appeared within the watchdog window.",
+        source: "watchdog",
+      };
+    } else if (finalization.ready === true || finalizePreview?.ready === true) {
+      summary = {
+        ...summary,
+        kind: "finalize-preview",
+        priority: "Review",
+        title: "Preview finalization",
+        detail:
+          finalization.nextAction ||
+          finalizePreview?.nextAction ||
+          "Inspect the branch packet before creating review branches.",
+        source: "finalize",
+      };
+    }
+  }
+
+  if (summary.kind === "continue" && !current.length) {
     summary = {
       ...summary,
       kind: "baseline",

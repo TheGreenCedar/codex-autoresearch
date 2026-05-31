@@ -2,11 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { redactPathDisplay } from "./evidence-redaction.js";
+import { isKeepStatus, isRejectedRunStatus } from "./run-status.js";
 
 type LooseObject = Record<string, any>;
 
 export type EvidenceStatus = "provisional" | "accepted" | "rejected" | "superseded";
 export type EvidenceKind = "run" | "artifact";
+export const EVIDENCE_STATUS_VALUES: EvidenceStatus[] = [
+  "provisional",
+  "accepted",
+  "rejected",
+  "superseded",
+];
+export const EVIDENCE_STATUSES = new Set<EvidenceStatus>(EVIDENCE_STATUS_VALUES);
 
 export interface EvidenceRegistryEntry extends LooseObject {
   id: string;
@@ -38,20 +46,13 @@ export function normalizeEvidenceStatus(
   fallback: EvidenceStatus = "provisional",
 ): EvidenceStatus {
   const normalized = String(value || "").toLowerCase();
-  if (
-    normalized === "provisional" ||
-    normalized === "accepted" ||
-    normalized === "rejected" ||
-    normalized === "superseded"
-  ) {
-    return normalized;
-  }
+  if (EVIDENCE_STATUSES.has(normalized as EvidenceStatus)) return normalized as EvidenceStatus;
   return fallback;
 }
 
 export function defaultEvidenceStatusForRun(run: LooseObject): EvidenceStatus {
   const status = String(run?.status || "");
-  if (status === "keep") return "accepted";
+  if (isKeepStatus(status)) return "accepted";
   if (status === "measure") return "provisional";
   return "rejected";
 }
@@ -61,6 +62,18 @@ export function isAcceptedCurrentEvidence(value: LooseObject | null | undefined)
     value?.kind === "artifact" ? "provisional" : defaultEvidenceStatusForRun(value || {});
   const evidenceStatus = normalizeEvidenceStatus(value?.evidenceStatus, fallback);
   return evidenceStatus === "accepted" && value?.quarantined !== true;
+}
+
+export function isKeepRun(run: LooseObject | null | undefined): boolean {
+  return isKeepStatus(run?.status);
+}
+
+export function isRejectedRun(run: LooseObject | null | undefined): boolean {
+  return isRejectedRunStatus(run?.status);
+}
+
+export function isAcceptedCurrentRun(run: LooseObject | null | undefined): boolean {
+  return isKeepRun(run) && isAcceptedCurrentEvidence(run);
 }
 
 export function artifactEvidenceList(
@@ -126,14 +139,14 @@ export function buildEvidenceRegistry({
     entries: normalized,
     acceptedCurrent,
     audit: normalized.filter((entry) => entry.auditVisible),
-    currentRuns: (runs || []).filter((run) => isAcceptedCurrentEvidence(run)),
+    currentRuns: (runs || []).filter((run) => isAcceptedCurrentRun(run)),
     currentArtifacts: acceptedCurrent.filter((entry) => entry.kind === "artifact"),
     counts: evidenceStatusCounts(normalized),
   };
 }
 
 export function acceptedCurrentRuns(runs: LooseObject[] = []): LooseObject[] {
-  return runs.filter((run) => isAcceptedCurrentEvidence(run));
+  return runs.filter((run) => isAcceptedCurrentRun(run));
 }
 
 function runEvidenceEntry(run: LooseObject): EvidenceRegistryEntry {

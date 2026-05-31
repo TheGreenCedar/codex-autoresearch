@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -17,6 +16,11 @@ import {
   statusHash,
 } from "../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
+import {
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+  isRejectedRunStatus,
+} from "../lib/run-status.js";
 import {
   redactCommandDisplay,
   redactEvidenceObject,
@@ -40,6 +44,7 @@ import {
   buildPartialResultEvidenceClaim,
   discoverPartialResultCandidates,
 } from "../lib/partial-results.js";
+import { buildResearchIntegrity } from "../lib/truth-signals.js";
 import {
   createProgressSnapshot,
   progressSnapshotFromRun,
@@ -52,16 +57,9 @@ import {
 } from "../lib/research-path-guard.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
-import { quoteForShell } from "./helpers/process.js";
+import { quoteForShell, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-e1-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-};
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch-e1", name, fn);
 
 test("runner parses early metrics from full output while retaining only bounded tails", async () => {
   await withTempDir("full-output-metric", async (dir) => {
@@ -362,6 +360,13 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
       evidenceStatus: "accepted",
       description: "Accepted current result.",
     });
+    appendJsonl(dir, {
+      run: 4,
+      metric: 1,
+      status: "keep",
+      evidenceStatus: "superseded",
+      description: "Superseded keep must remain audit only.",
+    });
 
     const state = currentState(dir);
     assert.equal(state.best, 6);
@@ -369,6 +374,7 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
     assert.equal(state.evidenceRegistry.counts.accepted, 1);
     assert.equal(state.evidenceRegistry.counts.provisional, 1);
     assert.equal(state.evidenceRegistry.counts.rejected, 1);
+    assert.equal(state.evidenceRegistry.counts.superseded, 1);
     assert.deepEqual(
       state.evidenceRegistry.currentRuns.map((run) => run.run),
       [3],
@@ -379,9 +385,89 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
     );
     assert.deepEqual(
       state.evidenceRegistry.audit.map((entry) => entry.id),
-      ["run-1", "run-2", "run-3"],
+      ["run-1", "run-2", "run-3", "run-4"],
     );
   });
+});
+
+test("run status taxonomy separates rejected evidence from metric-eligible records", () => {
+  assert.equal(isRejectedRunStatus("discard"), true);
+  assert.equal(isMetricEligibleStatus("discard"), true);
+  assert.equal(isPromotionalStatus("discard"), true);
+  assert.equal(isRejectedRunStatus("measure"), false);
+  assert.equal(isMetricEligibleStatus("measure"), false);
+  assert.equal(isMetricEligibleStatus("crash"), false);
+  assert.equal(isMetricEligibleStatus("checks_failed"), false);
+  assert.equal(isRejectedRunStatus("keep"), false);
+  assert.equal(isMetricEligibleStatus("keep"), true);
+});
+
+test("truth signals ignore rejected and superseded keeps as current best evidence", () => {
+  const integrity = buildResearchIntegrity({
+    state: {
+      config: { metricName: "quality_gap", bestDirection: "lower" },
+      current: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+        {
+          run: 2,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+      ],
+      results: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+        {
+          run: 2,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+      ],
+    },
+  });
+
+  assert.equal(integrity.evidenceLabels.includes("dev_best"), false);
+  assert.equal(integrity.evidenceLabels.includes("promotion_eligible"), false);
+  assert.doesNotMatch(integrity.warnings.join("\n"), /Current best is development-only/);
+
+  const stalePrecomputed = buildResearchIntegrity({
+    state: {
+      config: { metricName: "quality_gap", bestDirection: "lower" },
+      current: [],
+      development: {
+        bestRun: {
+          run: 9,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Stale precomputed best.",
+          metrics: { quality_gap: 0 },
+        },
+      },
+    },
+  });
+
+  assert.equal(stalePrecomputed.evidenceLabels.includes("dev_best"), false);
+  assert.doesNotMatch(stalePrecomputed.warnings.join("\n"), /Current best is development-only/);
 });
 
 test("decision envelope omits rejected and superseded keeps from best evidence", () => {

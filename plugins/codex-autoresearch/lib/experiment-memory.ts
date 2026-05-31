@@ -1,3 +1,4 @@
+import { isAcceptedCurrentRun, isRejectedRun } from "./evidence-registry.js";
 import { finiteMetric } from "./session-core.js";
 import { resolveDecisionThresholds } from "./decision-thresholds.js";
 
@@ -27,7 +28,6 @@ type FamilySummary = LooseObject & {
   requiredPrecondition?: string;
 };
 
-const FAILURE_STATUSES = new Set(["discard", "crash", "checks_failed"]);
 const FAMILY_IGNORE_KEYS = new Set([
   "attempt",
   "attempts",
@@ -44,17 +44,9 @@ function getAsi(run: LooseObject): LooseObject {
   return run.asi || {};
 }
 
-function isKeepStatus(status: unknown): boolean {
-  return status === "keep";
-}
-
-function isRejectedStatus(status: unknown): boolean {
-  return FAILURE_STATUSES.has(String(status));
-}
-
 function isRejectedOrRegressedRun(run: LooseObject): boolean {
   return (
-    isRejectedStatus(run.status) ||
+    isRejectedRun(run) ||
     Boolean(run.asi?.regression || run.regression || run.promotion?.label === "invalidated")
   );
 }
@@ -81,7 +73,7 @@ function missingAsiFields(run: MemoryRun, asi = getAsi(run)): string[] {
   if (!asi.hypothesis) missing.push("hypothesis");
   if (!asi.evidence) missing.push("evidence");
   if (
-    !isKeepStatus(run.status) &&
+    !isAcceptedCurrentRun(run) &&
     !asi.next_action_hint &&
     !asi.nextAction &&
     !asi.rollback_reason
@@ -127,9 +119,9 @@ export function buildExperimentMemory({
         risk: "Sparse ASI increases the chance that future packets repeat rejected work.",
       });
     }
-    if (isKeepStatus(run.status)) {
+    if (isAcceptedCurrentRun(run)) {
       kept.push(compact);
-    } else if (isRejectedStatus(run.status)) {
+    } else if (isRejectedRun(run)) {
       rejected.push({
         ...compact,
         rollbackReason: asi.rollback_reason || asi.failure || "",
@@ -295,7 +287,7 @@ function summarizeFamilies(
     family.runs += 1;
     family.latestRun = compactFamilyRun(run);
     family.statuses[status] = (family.statuses[status] || 0) + 1;
-    if (isKeepStatus(status)) family.kept += 1;
+    if (isAcceptedCurrentRun(run)) family.kept += 1;
     if (isRejectedOrRegressedRun(run)) family.rejected += 1;
     const metric = finiteMetric(run.metric);
     const bestMetric = finiteMetric(family.bestRun?.metric);
@@ -304,7 +296,7 @@ function summarizeFamilies(
       family.bestRun = compactFamilyRun(run);
     }
     if (
-      isKeepStatus(run.status) &&
+      isAcceptedCurrentRun(run) &&
       metric != null &&
       (bestKeptMetric == null || isBetter(metric, bestKeptMetric, direction))
     ) {
@@ -313,7 +305,7 @@ function summarizeFamilies(
   }
   const summarized = [...map.values()].map((family) => {
     const runsForFamily = familyRuns.get(family.key) || [];
-    const lastKeepIndex = findLastIndex(runsForFamily, (run) => isKeepStatus(run.status));
+    const lastKeepIndex = findLastIndex(runsForFamily, (run) => isAcceptedCurrentRun(run));
     const sinceKeep = runsForFamily.slice(lastKeepIndex + 1);
     const failedRuns = sinceKeep.filter(isRejectedOrRegressedRun).map((run) => run.run);
     const exhausted = failedRuns.length >= thresholds.rejectedOrRegressedRunsInFamily;
@@ -353,12 +345,12 @@ function detectPlateau({
   metricShelves?: LooseObject[];
 }): LooseObject {
   const finiteRuns = runs.filter(hasNumericMetricForPlateau);
-  const keptFinite = finiteRuns.filter((run) => isKeepStatus(run.status));
+  const keptFinite = finiteRuns.filter((run) => isAcceptedCurrentRun(run));
   const best = bestRun(keptFinite, direction);
   const bestIndex = best ? runs.findIndex((run) => run.run === best.run) : -1;
   const runsSinceBest = bestIndex >= 0 ? runs.length - bestIndex - 1 : runs.length;
   const recent = runs.slice(-Math.min(6, runs.length));
-  const recentFailures = recent.filter((run) => isRejectedStatus(run.status)).length;
+  const recentFailures = recent.filter((run) => isRejectedRun(run)).length;
   const familyCounts = countRunsByFamily(recent);
   const repeatedFamilyRuns = Math.max(0, ...familyCounts.values());
   const repeatedFamilyKey = mostRepeatedFamilyKey(familyCounts);
@@ -471,9 +463,9 @@ function buildLanePortfolio({
   missingAsi: number;
   settings?: LooseObject;
 }) {
-  const recentFailures = runs.slice(-5).filter((run) => isRejectedStatus(run.status)).length;
-  const kept = runs.filter((run) => isKeepStatus(run.status));
-  const rejected = runs.filter((run) => isRejectedStatus(run.status));
+  const recentFailures = runs.slice(-5).filter((run) => isRejectedRun(run)).length;
+  const kept = runs.filter((run) => isAcceptedCurrentRun(run));
+  const rejected = runs.filter((run) => isRejectedRun(run));
   const topFamily = bestIncumbentFamily(families, direction);
   const exhaustedFamily = families.find((family) => family.exhausted);
   const checksPolicy = settings.checksPolicy || "always";

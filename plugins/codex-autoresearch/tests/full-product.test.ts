@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import test from "./helpers/sharded-test.js";
 import {
   appendJsonl,
   currentState,
@@ -1303,7 +1303,7 @@ test("live server log actions stay disabled and leave last-run packets untouched
 
 async function waitForServerPayload(stdoutFn, stderrFn) {
   const started = Date.now();
-  while (Date.now() - started < 15000) {
+  while (Date.now() - started < 45000) {
     const stdout = stdoutFn();
     if (stdout.trim().endsWith("}")) return JSON.parse(stdout);
     await new Promise((resolve) => setTimeout(resolve, 50));

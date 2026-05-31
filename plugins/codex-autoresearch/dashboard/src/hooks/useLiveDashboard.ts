@@ -4,6 +4,11 @@ import { formatDisplayTime, parseJsonl } from "../model";
 import type { DashboardEntry, DashboardMeta, DashboardMode, DashboardViewModel } from "../types";
 
 type LiveStatus = { title: string; detail: string };
+type LiveDashboardSnapshot = {
+  entries: DashboardEntry[];
+  generatedAt: string;
+  viewModel: DashboardViewModel;
+};
 
 interface UseLiveDashboardArgs {
   meta: DashboardMeta;
@@ -21,8 +26,9 @@ export function useLiveDashboard({
   setMeta,
   setViewModel,
 }: UseLiveDashboardArgs) {
+  const { liveRefresh, refreshDone } = mode;
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => liveStatusFor(mode, meta));
-  const [liveEnabled, setLiveEnabled] = useState(mode.liveRefresh);
+  const [liveEnabled, setLiveEnabled] = useState(liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
   const [lastError, setLastError] = useState<string | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
@@ -34,49 +40,32 @@ export function useLiveDashboard({
     }
     try {
       setRefreshState("refreshing");
-      const [jsonlResponse, viewModelResponse] = await Promise.all([
-        fetch("autoresearch.jsonl", { cache: "no-store" }),
-        fetch("view-model.json", { cache: "no-store" }),
-      ]);
-      const failures = [
-        responseFailure(jsonlResponse, "autoresearch.jsonl"),
-        responseFailure(viewModelResponse, "view-model.json"),
-      ].filter(Boolean);
-      if (failures.length) throw new Error(failures.join("; "));
-
-      const text = await jsonlResponse.text();
-      const payload = (await viewModelResponse.json()) as DashboardViewModel;
-      setEntries(parseJsonl(text));
-      setViewModel(payload || {});
+      const snapshot = await fetchLiveDashboardSnapshot();
+      setEntries(snapshot.entries);
+      setViewModel(snapshot.viewModel);
       setMeta((current) => ({
         ...current,
-        viewModel: payload || {},
-        generatedAt: new Date().toISOString(),
+        viewModel: snapshot.viewModel,
+        generatedAt: snapshot.generatedAt,
       }));
-      setLiveStatus({
-        title: mode.refreshDone,
-        detail: formatDisplayTime(new Date().toISOString()),
-      });
+      setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
       setRefreshState("idle");
       setRefreshGeneration((value) => value + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setLiveStatus({
-        title: mode.liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
-        detail: message,
-      });
+      setLiveStatus(refreshFailureStatus(liveRefresh, message));
       setRefreshState("error");
       setLastError(message);
     }
-  }, [mode.liveRefresh, mode.refreshDone, setEntries, setMeta, setViewModel]);
+  }, [liveRefresh, refreshDone, setEntries, setMeta, setViewModel]);
 
   useEffect(() => {
-    if (!liveEnabled || !mode.liveRefresh) return undefined;
+    if (!liveEnabled || !liveRefresh) return undefined;
     refreshLiveData();
     const refreshMs = Math.max(1, Number(meta.refreshMs || 5000));
     const timer = setInterval(refreshLiveData, refreshMs);
     return () => clearInterval(timer);
-  }, [liveEnabled, meta.refreshMs, mode.liveRefresh, refreshLiveData]);
+  }, [liveEnabled, meta.refreshMs, liveRefresh, refreshLiveData]);
 
   return {
     liveEnabled,
@@ -95,6 +84,40 @@ function liveStatusFor(mode: DashboardMode, meta: DashboardMeta): LiveStatus {
     detail: mode.showcase
       ? mode.detail
       : `${mode.detail}${meta.generatedAt ? ` Generated ${formatDisplayTime(meta.generatedAt)}.` : ""}`,
+  };
+}
+
+async function fetchLiveDashboardSnapshot(): Promise<LiveDashboardSnapshot> {
+  const [jsonlResponse, viewModelResponse] = await Promise.all([
+    fetch("autoresearch.jsonl", { cache: "no-store" }),
+    fetch("view-model.json", { cache: "no-store" }),
+  ]);
+  const failures = [
+    responseFailure(jsonlResponse, "autoresearch.jsonl"),
+    responseFailure(viewModelResponse, "view-model.json"),
+  ].filter(Boolean);
+  if (failures.length) throw new Error(failures.join("; "));
+
+  const text = await jsonlResponse.text();
+  const payload = (await viewModelResponse.json()) as DashboardViewModel;
+  return {
+    entries: parseJsonl(text),
+    generatedAt: new Date().toISOString(),
+    viewModel: payload || {},
+  };
+}
+
+function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveStatus {
+  return {
+    title: refreshDone,
+    detail: formatDisplayTime(generatedAt),
+  };
+}
+
+function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
+  return {
+    title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
+    detail: message,
   };
 }
 

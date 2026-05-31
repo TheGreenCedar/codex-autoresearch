@@ -6,10 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { fileURLToPath } from "node:url";
 import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
-import { writeContextCapsule } from "../lib/context-capsule.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
+import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
+import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
+import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
@@ -19,17 +22,18 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
-import { artifactEvidenceList, artifactList } from "../lib/evidence-registry.js";
+import {
+  EVIDENCE_STATUSES,
+  artifactEvidenceList,
+  artifactList,
+  defaultEvidenceStatusForRun,
+} from "../lib/evidence-registry.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { mergeEvidenceClaims } from "../lib/evidence-index.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
-import {
-  buildPartialResultEvidenceClaim,
-  discoverPartialResultCandidates,
-} from "../lib/partial-results.js";
+import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import {
   gapCandidates as buildGapCandidates,
@@ -46,7 +50,6 @@ import {
   revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
-import { parseSessionForensics } from "../lib/session-forensics.js";
 import {
   parseMetricLines,
   runProcess as runBoundedProcess,
@@ -71,7 +74,7 @@ import {
   safeSlug,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
-  isPromotionalStatus,
+  isMetricEligibleStatus,
   promotionGradeValue,
 } from "../lib/session-core.js";
 import {
@@ -134,7 +137,6 @@ const RESEARCH_DIR = "autoresearch.research";
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
-const EVIDENCE_STATUSES = new Set(["accepted", "rejected", "provisional", "superseded"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
@@ -183,6 +185,54 @@ const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands
   validateMetricName,
 });
 
+const sessionForensics = createSessionForensicsCommand({
+  boolOption,
+  pluginRoot: PLUGIN_ROOT,
+  positiveIntegerOption,
+  resolveWorkDir,
+  shellQuote,
+});
+
+const partialResultsCommand = createPartialResultsCommand({
+  appendJsonl,
+  assertFreshLastRunPacket,
+  boolOption,
+  computeConfidence,
+  currentState,
+  deleteLastRunPacket,
+  finiteMetric,
+  loopContinuation,
+  readConfig,
+  readLastRunPacket,
+  researchSlugFromArgs,
+  resolveWorkDir,
+});
+
+const laneRunner = createLaneRunnerCommand({
+  appendJsonl,
+  assertNoDirtyPathsOutsideWriteScope,
+  assertWriteScopeIntegrity,
+  boolOption,
+  buildParallelOrchestrationContext,
+  commandLooksMutating,
+  commandLooksUnsafeForWriteScope,
+  currentState,
+  dashboardSettings,
+  gitStatusPorcelain,
+  insideGitRepo,
+  latestLaneResults,
+  normalizeLaneMode,
+  normalizeParallelLane,
+  normalizeRelativePaths,
+  positiveIntegerOption,
+  resolveLaneWorktree,
+  resolveWorkDir,
+  runShell,
+  synthesizeLaneDecision,
+  tailText,
+  writeScopeSnapshot,
+});
+
 function usage() {
   return `Codex Autoresearch
 
@@ -195,7 +245,7 @@ Usage:
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
   node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
   node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
-  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets]
+  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
@@ -342,17 +392,11 @@ function enumOption<T extends string>(
   return normalized as T;
 }
 
-function defaultEvidenceStatusForDecision(status: string) {
-  if (status === "keep") return "accepted";
-  if (status === "measure") return "provisional";
-  return "rejected";
-}
-
 function evidenceStatusOption(value: unknown, status: string) {
   return enumOption(
     value,
     EVIDENCE_STATUSES,
-    defaultEvidenceStatusForDecision(status),
+    defaultEvidenceStatusForRun({ status }),
     "--evidence-status",
   );
 }
@@ -1825,74 +1869,6 @@ function canonicalTitle(kind: unknown, fallback: unknown): string {
     "next-packet": "Run the next measured packet",
   };
   return titles[text] || String(fallback || "Next action");
-}
-
-async function sessionForensics(args: LooseObject): Promise<LooseObject> {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const apply = boolOption(args.apply, false);
-  const dryRun = boolOption(args.dryRun, !apply);
-  const sessionJsonl = String(args.sessionJsonl || "");
-  const researchSlug = String(args.researchSlug || "");
-  const parsed = await parseSessionForensics({
-    sessionJsonl,
-    allowSnippets: boolOption(args.allowSnippets, false),
-    maxSnippets: positiveIntegerOption(args.maxSnippets, 8, "--max-snippets") ?? 8,
-    maxSnippetChars: positiveIntegerOption(args.maxSnippetChars, 320, "--max-snippet-chars") ?? 320,
-  });
-  if (!parsed.ok) {
-    return {
-      ...parsed,
-      wrote: false,
-    };
-  }
-  const capsule = await writeContextCapsule({
-    cwd: workDir,
-    researchSlug,
-    summary: parsed,
-    apply: apply && !dryRun,
-  });
-  const contextSignal = parsed.productSignals.find(
-    (signal: any) => signal.kind === "context_distillation_required",
-  );
-  const canonicalNextAction = contextSignal
-    ? {
-        kind: "context-distillation",
-        priority: 6,
-        reason: contextSignal.message,
-        command: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${shellQuote(workDir)} --session-jsonl ${shellQuote(sessionJsonl)} --research-slug ${shellQuote(researchSlug)} --apply`,
-        triggeredBy: ["sessionForensics"],
-      }
-    : {
-        kind: "next-packet",
-        priority: 10,
-        reason: "Review imported signals, then continue with the safest next Autoresearch action.",
-        command: "",
-        triggeredBy: ["sessionForensics"],
-      };
-  return {
-    ok: true,
-    workDir,
-    dryRun: capsule.dryRun,
-    wrote: !capsule.dryRun,
-    outputDir: capsule.outputDir,
-    plannedFiles: capsule.files,
-    sourcePath: parsed.sourcePath,
-    timeWindow: parsed.timeWindow,
-    counts: parsed.counts,
-    responseCounts: parsed.responseCounts,
-    toolCounts: parsed.toolCounts,
-    commandClasses: parsed.commandClasses,
-    compactions: parsed.compactions,
-    goal: parsed.goal,
-    userCorrections: parsed.userCorrections,
-    productSignals: parsed.productSignals,
-    workflowWaste: parsed.workflowWaste,
-    blockers: parsed.blockers,
-    snippets: parsed.snippets,
-    evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
-    canonicalNextAction,
-    nextAction: canonicalNextAction.reason,
-  };
 }
 
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
@@ -3477,6 +3453,55 @@ async function appendRuntimeConfigFile(files: any[], sessionCwd: any, updates: a
   files.push(await writeSessionFile(configPath, content, { overwrite: true }));
 }
 
+async function appendRuntimeConfigUpdates(files: any[], sessionCwd: any, updates: LooseObject) {
+  if (Object.keys(updates).length > 0) {
+    await appendRuntimeConfigFile(files, sessionCwd, updates);
+  }
+}
+
+async function appendSetupRuntimeConfig(
+  files: any[],
+  sessionCwd: any,
+  args: LooseObject,
+  options: {
+    includeRecipe?: boolean;
+    includeRecipeCatalogProvenance?: boolean;
+    grouped?: boolean;
+  } = {},
+) {
+  const maxIterations = positiveIntegerOption(
+    args.max_iterations ?? args.maxIterations,
+    null,
+    "maxIterations",
+  );
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
+
+  if (options.grouped) {
+    const nextConfig: LooseObject = { ...runtimeUpdates };
+    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
+    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
+    await appendRuntimeConfigUpdates(files, sessionCwd, nextConfig);
+    return;
+  }
+
+  const setupConfig: LooseObject = {};
+  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
+  if (options.includeRecipe && (args.recipe_id || args.recipeId || args.recipe)) {
+    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, setupConfig);
+  if (options.includeRecipeCatalogProvenance && args.recipeCatalogProvenance) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, {
+      recipeCatalogProvenance: args.recipeCatalogProvenance,
+    });
+  }
+  if (commitPaths.length > 0) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, { commitPaths });
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, runtimeUpdates);
+}
+
 function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
   const paths = [
     ...new Set(
@@ -3497,6 +3522,39 @@ function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
         ]
       : [],
     note: "Checkpoint these generated session files before the first experiment commit if this project is in Git.",
+  };
+}
+
+async function setupCommandResponseFields({
+  args,
+  benchmarkMode,
+  checkpoint,
+  metricName,
+  sessionCwd,
+  shellKind,
+  workDir,
+}: LooseObject) {
+  const benchmarkCommand =
+    shellKind === "bash"
+      ? "bash ./autoresearch.sh"
+      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
+  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  return {
+    scaffoldHealth: await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) }),
+    benchmarkMode,
+    benchmarkLintCommand,
+    scopeWarnings: scopeWarningsFromArgs(args),
+    firstRunChecklist: firstRunChecklist({
+      setupCommand: "already completed",
+      benchmarkLintCommand,
+      doctorCommand,
+      checkpoint,
+      baselineCommand,
+      logCommand,
+    }),
   };
 }
 
@@ -3621,30 +3679,10 @@ async function setupSession(args: LooseObject) {
     ideasContent: () => renderIdeasDocument(args),
   });
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const setupConfig: LooseObject = {};
-  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
-  if (args.recipe_id || args.recipeId || args.recipe)
-    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
-  if (Object.keys(setupConfig).length > 0)
-    await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
-  if (args.recipeCatalogProvenance) {
-    await appendRuntimeConfigFile(files, sessionCwd, {
-      recipeCatalogProvenance: args.recipeCatalogProvenance,
-    });
-  }
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  if (commitPaths.length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
-  }
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (Object.keys(runtimeUpdates).length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, runtimeUpdates);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, {
+    includeRecipe: true,
+    includeRecipeCatalogProvenance: true,
+  });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3652,10 +3690,6 @@ async function setupSession(args: LooseObject) {
   }
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name);
   const metricName = validateMetricName(args.metric_name || args.metricName);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   const benchmarkMode = {
     explicitCommand: Boolean(args.benchmark_command || args.benchmarkCommand),
     printsMetric: explicitBenchmarkPrintsMetric(args),
@@ -3663,11 +3697,15 @@ async function setupSession(args: LooseObject) {
       ? "The benchmark command/script is expected to print METRIC lines."
       : "The generated benchmark script wraps the command and emits the primary metric from elapsed time.",
   };
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode,
+    checkpoint,
+    metricName,
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
 
   return {
     ok: true,
@@ -3676,18 +3714,7 @@ async function setupSession(args: LooseObject) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode,
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
   };
 }
@@ -3753,19 +3780,7 @@ async function setupResearchSession(args: any) {
   });
   const researchDir = researchDirPath(workDir, slug);
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (maxIterations != null || commitPaths.length > 0 || Object.keys(runtimeUpdates).length > 0) {
-    const nextConfig: LooseObject = { ...runtimeUpdates };
-    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
-    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
-    await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, { grouped: true });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3781,15 +3796,19 @@ async function setupResearchSession(args: any) {
 
   const gap = await measureQualityGap({ cwd: workDir, researchSlug: slug });
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name || `Deep research: ${goal}`);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote("quality_gap")} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode: {
+      explicitCommand: true,
+      printsMetric: true,
+      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
+    },
+    checkpoint,
+    metricName: "quality_gap",
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
   return {
     ok: true,
     workDir,
@@ -3799,22 +3818,7 @@ async function setupResearchSession(args: any) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode: {
-      explicitCommand: true,
-      printsMetric: true,
-      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
-    },
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
     qualityGap: {
       open: gap.open,
@@ -4233,7 +4237,7 @@ async function runExperiment(args: LooseObject) {
         ),
       }),
     };
-    void writeActiveProgressSnapshot(workDir, progressSnapshot);
+    void writeActiveProgressSnapshot(workDir, progressSnapshot).catch(() => {});
   };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
@@ -4534,7 +4538,7 @@ async function logExperiment(args: any) {
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
   const evidenceStatus =
     evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
-    defaultEvidenceStatusForDecision(status);
+    defaultEvidenceStatusForRun({ status });
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
@@ -4615,7 +4619,7 @@ async function logExperiment(args: any) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
-    metricEligible: isPromotionalStatus(status) && finiteMetric(metric) != null,
+    metricEligible: isMetricEligibleStatus(status) && finiteMetric(metric) != null,
     status,
     evidenceStatus,
     description,
@@ -4868,7 +4872,7 @@ async function resolveProgressPath(workDir: string) {
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(
     target,
     `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
@@ -4879,9 +4883,26 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
 
 async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
   const target = await resolveProgressPath(workDir);
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(target, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   return target;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function mkdirWithRetries(dir: string) {
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(String(error?.code || ""))) throw error;
+      await sleep(40 * (attempt + 1));
+    }
+  }
+  if (lastError) throw lastError;
 }
 
 async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
@@ -5189,178 +5210,6 @@ function partialResultEligiblePacket(packet: LooseObject | null): boolean {
   if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
   const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
   return exitCode != null && exitCode !== 0;
-}
-
-async function partialResultsCommand(args: LooseObject) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = currentState(workDir);
-  const artifact = args.artifact ? String(args.artifact) : "";
-  const recordId = args.record ? String(args.record).trim() : "";
-  const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
-  const lastRun = fromLast || recordId ? await readLastRunPacket(workDir) : null;
-  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun);
-  const lastRunPacket =
-    lastRun ||
-    partialResultPacketFromArtifact({
-      artifact,
-      commandHash: args.command_hash ?? args.commandHash,
-      state,
-      workDir,
-    });
-  const discovery = await discoverPartialResultCandidates({
-    workDir,
-    primaryMetricName: state.config?.metricName || "metric",
-    lastRunPacket,
-  });
-  if (!recordId) {
-    return {
-      ok: true,
-      workDir,
-      source: lastRun ? "last-run" : "artifact",
-      candidates: discovery.candidates,
-      skippedArtifacts: discovery.skippedArtifacts,
-      nextAction: discovery.candidates.length
-        ? "Review a candidate, then record it as diagnostic measure evidence with --record <candidate-id>."
-        : "No partial-result candidates were found.",
-    };
-  }
-  if (!lastRun) {
-    throw new Error(
-      "--record requires a fresh last-run packet so salvaged evidence links to its source packet.",
-    );
-  }
-  const candidate = discovery.candidates.find((item: any) => item.id === recordId);
-  if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
-  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args });
-}
-
-function partialResultPacketFromArtifact({
-  artifact,
-  commandHash,
-  state,
-  workDir,
-}: LooseObject): LooseObject {
-  if (!artifact) throw new Error("--artifact is required unless --from-last is used.");
-  const artifactPath = path.isAbsolute(artifact) ? path.resolve(artifact) : artifact;
-  return {
-    ok: false,
-    workDir,
-    history: {
-      segment: state.segment,
-      config: lastRunConfigSnapshot(state.config),
-      nextRun: state.results.length + 1,
-    },
-    packetEvidence: {
-      packetId: `artifact-${createHash("sha256").update(String(artifactPath)).digest("hex").slice(0, 12)}`,
-      metricName: state.config?.metricName || "metric",
-      commandIdentity: {
-        commandHash: commandHash ? String(commandHash) : "",
-      },
-      artifacts: [
-        {
-          name: path.basename(String(artifactPath)) || "partial-result",
-          path: String(artifactPath),
-          exists: true,
-          quarantined: false,
-        },
-      ],
-    },
-  };
-}
-
-async function recordPartialResultCandidate({
-  workDir,
-  state,
-  lastRun,
-  candidate,
-  args,
-}: LooseObject) {
-  const metricName = candidate.metricName || state.config?.metricName || "metric";
-  const metric = finiteMetric(candidate.metricValue);
-  if (metric == null) {
-    throw new Error(
-      `partial result candidate ${candidate.id} has no finite metric and must stay manual-review only.`,
-    );
-  }
-  const sourcePacketId = lastRun?.packetEvidence?.packetId || "";
-  const researchSlug = researchSlugFromArgs({
-    slug: args.research_slug ?? args.researchSlug ?? "partial-results",
-  });
-  const evidenceClaim = buildPartialResultEvidenceClaim(candidate);
-  const evidenceIndex = await mergeEvidenceClaims(workDir, researchSlug, [evidenceClaim]);
-  const experiment: LooseObject = {
-    run: state.results.length + 1,
-    commit: "",
-    metric,
-    metrics: {
-      [metricName]: metric,
-    },
-    metricEligible: false,
-    status: "measure",
-    description:
-      args.description ||
-      `Diagnostic partial result from ${candidate.artifactName} row ${candidate.rowIndex}.`,
-    timestamp: Date.now(),
-    segment: state.segment,
-    confidence: null,
-    promotion: {
-      label: "measurement",
-      reasons: ["Recorded from a partial-result salvage candidate; diagnostic measure only."],
-    },
-    asi: {
-      hypothesis: "Recover diagnostic evidence from a partial benchmark artifact.",
-      evidence: `${metricName}=${metric} from ${candidate.artifactPath} row ${candidate.rowIndex}.`,
-      rollback_reason:
-        "Source packet crashed or timed out, so this evidence cannot be treated as promotion-grade.",
-      next_action_hint:
-        "Use this diagnostic row to choose the next packet; rerun fresh before promotion.",
-      partial_result: {
-        candidateId: candidate.id,
-        status: candidate.status,
-        reason: candidate.reason,
-        sourcePacketId,
-        artifactName: candidate.artifactName,
-        artifactPath: candidate.artifactPath,
-        rowIndex: candidate.rowIndex,
-        provenance: candidate.provenance,
-        evidenceClaimId: evidenceClaim.id,
-        researchSlug,
-      },
-      promotionGrade: false,
-    },
-    artifacts: {
-      [candidate.artifactName]: candidate.artifactPath,
-    },
-    partialResult: {
-      candidateId: candidate.id,
-      sourcePacketId,
-      evidenceClaimId: evidenceClaim.id,
-      researchSlug,
-      validationStatus: candidate.status,
-    },
-  };
-  experiment.confidence = computeConfidence(
-    [...state.current, experiment],
-    state.config?.bestDirection || "lower",
-  );
-  appendJsonl(workDir, experiment);
-  await deleteLastRunPacket(workDir);
-  const stateAfter = currentState(workDir);
-  return {
-    ok: true,
-    workDir,
-    experiment,
-    evidenceClaim,
-    evidenceIndex: {
-      slug: researchSlug,
-      claims: evidenceIndex.claims.length,
-    },
-    lastRunCleared: true,
-    baseline: stateAfter.baseline,
-    best: stateAfter.best,
-    confidence: stateAfter.confidence,
-    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
-  };
 }
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
@@ -6248,171 +6097,6 @@ async function researchFanout(args: LooseObject) {
   };
 }
 
-async function laneRunner(args: LooseObject) {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = currentState(workDir);
-  const settings = dashboardSettings(config);
-  const { parallelLanes: lanes } = buildParallelOrchestrationContext({
-    workDir,
-    state,
-    config,
-    settings,
-  });
-  const laneId = String(
-    args.lane_id || args.laneId || args.lane || lanes[0]?.id || "read-only-scout",
-  );
-  const lane =
-    lanes.find((candidate: LooseObject) => candidate.id === laneId || candidate.label === laneId) ||
-    normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
-  const mode = normalizeLaneMode(args.mode, lane.mode);
-  const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
-  const command = String(args.command || "").trim();
-  const timeBudgetSeconds =
-    positiveIntegerOption(
-      args.time_budget_seconds ??
-        args.timeBudgetSeconds ??
-        args.timeout_seconds ??
-        args.timeoutSeconds,
-      300,
-      "--time-budget-seconds",
-    ) || 300;
-  const writeScope = normalizeRelativePaths(
-    args.write_scope ?? args.writeScope ?? args.commit_paths ?? args.commitPaths,
-    "--write-scope",
-  );
-  const worktreePath = String(
-    args.worktree_path || args.worktreePath || args.worktree || "",
-  ).trim();
-  if (mode === "implementation" && !worktreePath && writeScope.length === 0) {
-    throw new Error(
-      "Implementation lanes require explicit isolation: pass --worktree <path> or --write-scope <paths> before running.",
-    );
-  }
-  if (mode === "read_only_scout" && command && commandLooksMutating(command)) {
-    throw new Error("Read-only scout lanes cannot run commands that look mutating.");
-  }
-  const allowNonGitReadOnlyCommand = boolOption(
-    args.allow_non_git_command ?? args.allowNonGitCommand,
-    false,
-  );
-  if (mode === "read_only_scout" && command && !dryRun && !(await insideGitRepo(workDir))) {
-    if (!allowNonGitReadOnlyCommand) {
-      throw new Error(
-        "Read-only scout lanes cannot run commands outside a Git worktree without porcelain verification. Use --worktree or implementation mode with --write-scope for isolated edits, or pass --allow-non-git-command only when the command is provably read-only.",
-      );
-    }
-  }
-  if (
-    mode === "implementation" &&
-    !worktreePath &&
-    writeScope.length > 0 &&
-    command &&
-    commandLooksUnsafeForWriteScope(command)
-  ) {
-    throw new Error(
-      "Implementation lane --write-scope cannot run git cleanup, history, or stash commands in the main checkout; use a separate --worktree.",
-    );
-  }
-
-  const runCwd =
-    mode === "implementation" && worktreePath
-      ? await resolveLaneWorktree(workDir, worktreePath)
-      : workDir;
-  const beforeStatus =
-    mode === "read_only_scout" && command && !dryRun ? await gitStatusPorcelain(workDir) : null;
-  let writeScopeBefore: LooseObject | null = null;
-  if (mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun) {
-    await assertNoDirtyPathsOutsideWriteScope(workDir, writeScope);
-    writeScopeBefore = await writeScopeSnapshot(workDir);
-  }
-  let commandResult: LooseObject | null = null;
-  if (command && !dryRun) {
-    const result = await runShell(command, runCwd, timeBudgetSeconds, {
-      retainMetricNames: [state.config.metricName || config.metricName || ""],
-    });
-    commandResult = {
-      code: result.exitCode,
-      timedOut: result.timedOut,
-      durationSeconds: result.durationSeconds,
-      output: tailText(result.output || "", 20, 4000),
-    };
-    if (beforeStatus != null) {
-      const afterStatus = await gitStatusPorcelain(workDir);
-      if (afterStatus !== beforeStatus) {
-        throw new Error(
-          "Read-only scout lane changed the git working tree; discard or isolate the change before continuing.",
-        );
-      }
-    }
-    if (writeScopeBefore) {
-      await assertWriteScopeIntegrity(workDir, writeScope, writeScopeBefore);
-    }
-  }
-
-  const explicitSummary = String(args.summary || "").trim();
-  const explicitRecommendation = String(
-    args.recommendation || args.next_action || args.nextAction || "",
-  ).trim();
-  const resultStatus =
-    args.result_status ||
-    args.resultStatus ||
-    (commandResult
-      ? commandResult.code === 0 && !commandResult.timedOut
-        ? "completed"
-        : "failed"
-      : explicitSummary || explicitRecommendation
-        ? "completed"
-        : "planned");
-  const commandSucceeded =
-    commandResult && Number(commandResult.code) === 0 && commandResult.timedOut !== true;
-  const evidenceAccepted = Boolean(
-    String(resultStatus).toLowerCase() === "completed" &&
-    (commandSucceeded || explicitSummary || explicitRecommendation),
-  );
-  const result = {
-    status: resultStatus,
-    summary:
-      explicitSummary || (commandResult ? "Lane command completed." : "Lane result recorded."),
-    recommendation: explicitRecommendation || lane.nextActionHint,
-    evidenceAccepted,
-    command: command || "",
-    timeBudgetSeconds,
-    isolation: {
-      mode,
-      worktree: worktreePath,
-      writeScope,
-    },
-    commandResult,
-  };
-  const entry = {
-    type: "lane_result",
-    timestamp: Date.now(),
-    segment: state.segment,
-    lane: {
-      id: lane.id,
-      title: lane.title || lane.label,
-      mode,
-    },
-    result,
-  };
-  const existingResults = latestLaneResults(workDir, state.segment);
-  const laneResults = dryRun ? existingResults : [...existingResults, entry];
-  const coordinatorRecommendation = synthesizeLaneDecision({
-    workDir,
-    laneResults,
-    fallbackLane: lane,
-  });
-  if (!dryRun) appendJsonl(workDir, entry);
-  return {
-    ok: true,
-    workDir,
-    dryRun,
-    lane: entry.lane,
-    result,
-    coordinatorRecommendation,
-  };
-}
-
 function continuationCommands(workDir: string) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
@@ -7096,11 +6780,32 @@ function compactNextExperimentPacket(packet: LooseObject) {
   };
 }
 
-async function main() {
-  const args = parseCliArgs(process.argv.slice(2));
+export async function runAutoresearchCli(
+  argv: string[] = process.argv.slice(2),
+  io: {
+    stderr?: (text: string) => void;
+    stdout?: (text: string) => void;
+  } = {},
+): Promise<number> {
+  const writeStdout = io.stdout || console.log;
+  const writeStderr = io.stderr || console.error;
+  try {
+    await executeAutoresearchCli(argv, writeStdout);
+    return 0;
+  } catch (error: any) {
+    writeStderr(error.stack || error.message || String(error));
+    return 1;
+  }
+}
+
+async function executeAutoresearchCli(
+  argv: string[],
+  writeStdout: (text: string) => void,
+): Promise<void> {
+  const args = parseCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
-    console.log(usage());
+    writeStdout(usage());
     return;
   }
   const handlers = createCliCommandHandlers({
@@ -7153,14 +6858,18 @@ async function main() {
   });
   const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
   if (outcome.text != null) {
-    console.log(outcome.text);
+    writeStdout(outcome.text);
     return;
   }
-  console.log(JSON.stringify(outcome.result, null, 2));
+  writeStdout(JSON.stringify(outcome.result, null, 2));
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 
-main().catch((error: any) => {
-  console.error(error.stack || error.message || String(error));
-  process.exitCode = 1;
-});
+async function main() {
+  const code = await runAutoresearchCli(process.argv.slice(2));
+  if (code !== 0) process.exitCode = code;
+}
+
+if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+  void main();
+}

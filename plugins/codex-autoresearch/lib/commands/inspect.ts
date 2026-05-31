@@ -124,15 +124,20 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     const warnings = benchmarkInspectWarnings(command);
     if (!command) {
       return {
-        ok: true,
-        workDir,
-        ranCommand: false,
-        command: "",
-        timeoutSeconds: null,
+        ...inspectionBase({
+          ok: true,
+          workDir,
+          ranCommand: false,
+          command: "",
+          timeoutSeconds: null,
+          exitCode: null,
+          timedOut: false,
+          warnings,
+          hints: benchmarkInspectHints(state.config.metricName || ""),
+          outputPreview: "",
+          outputTruncated: false,
+        }),
         parsedMetrics: {},
-        outputPreview: "",
-        warnings,
-        hints: benchmarkInspectHints(state.config.metricName || ""),
         nextAction:
           "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet.",
       };
@@ -155,18 +160,20 @@ export function createInspectCommands(deps: InspectCommandDeps) {
       );
     }
     return {
-      ok: !result.timedOut && result.exitCode === 0,
-      workDir,
-      ranCommand: true,
-      command: result.command,
-      timeoutSeconds,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
+      ...inspectionBase({
+        ok: !result.timedOut && result.exitCode === 0,
+        workDir,
+        ranCommand: true,
+        command: result.command,
+        timeoutSeconds,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        warnings,
+        hints: benchmarkInspectHints(state.config.metricName || ""),
+        outputPreview: deps.headText(output || result.fullOutput || result.output || "", 30, 12000),
+        outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+      }),
       parsedMetrics,
-      outputPreview: deps.headText(output || result.fullOutput || result.output || "", 30, 12000),
-      outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
-      warnings,
-      hints: benchmarkInspectHints(state.config.metricName || ""),
       nextAction:
         result.timedOut || result.exitCode !== 0
           ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract."
@@ -183,17 +190,20 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     );
     if (!command) {
       return {
-        ok: true,
-        workDir,
-        ranCommand: false,
-        command: "",
-        timeoutSeconds: null,
-        exitCode: null,
-        timedOut: false,
+        ...inspectionBase({
+          ok: true,
+          workDir,
+          ranCommand: false,
+          command: "",
+          timeoutSeconds: null,
+          exitCode: null,
+          timedOut: false,
+          warnings: ["No checks command was provided."],
+          hints: checksInspectHints(),
+          outputPreview: "",
+          outputTruncated: false,
+        }),
         failedTests: [],
-        warnings: ["No checks command was provided."],
-        hints: checksInspectHints(),
-        outputPreview: "",
         nextAction:
           "Run checks-inspect with the exact correctness command before treating a failed suite as evidence.",
       };
@@ -203,18 +213,20 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     const failedTests = extractFailedTests(output);
     const warnings = checksInspectWarnings(command, output, result, failedTests);
     return {
-      ok: !result.timedOut && result.exitCode === 0,
-      workDir,
-      ranCommand: true,
-      command: result.command,
-      timeoutSeconds,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
+      ...inspectionBase({
+        ok: !result.timedOut && result.exitCode === 0,
+        workDir,
+        ranCommand: true,
+        command: result.command,
+        timeoutSeconds,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        warnings,
+        hints: checksInspectHints(),
+        outputPreview: deps.headText(output, 50, 16000),
+        outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+      }),
       failedTests,
-      warnings,
-      hints: checksInspectHints(),
-      outputPreview: deps.headText(output, 50, 16000),
-      outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
       nextAction:
         result.timedOut || result.exitCode !== 0
           ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed."
@@ -223,6 +235,34 @@ export function createInspectCommands(deps: InspectCommandDeps) {
   }
 
   return { benchmarkLint, benchmarkInspect, checksInspect };
+}
+
+function inspectionBase({
+  ok,
+  workDir,
+  ranCommand,
+  command,
+  timeoutSeconds,
+  exitCode,
+  timedOut,
+  warnings,
+  hints,
+  outputPreview,
+  outputTruncated,
+}: LooseObject): LooseObject {
+  return {
+    ok,
+    workDir,
+    ranCommand,
+    command,
+    timeoutSeconds,
+    exitCode,
+    timedOut,
+    warnings,
+    hints,
+    outputPreview,
+    outputTruncated,
+  };
 }
 
 function benchmarkInspectWarnings(command: string): string[] {
