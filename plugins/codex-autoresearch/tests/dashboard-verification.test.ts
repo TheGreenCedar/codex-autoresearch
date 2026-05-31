@@ -82,6 +82,51 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
 });
 
+test("dashboard weighted score readout uses configured metric weights", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "weighted path",
+      metricName: "seconds",
+      metricUnit: "s",
+      bestDirection: "lower",
+      metricMode: "weighted_cost",
+      metricWeights: { time: 2, memory: 1 },
+      metricMemoryKey: "memory_mb",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      description: "Baseline weighted cost",
+      metrics: { memory_mb: 100 },
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 8,
+      status: "keep",
+      description: "Faster with more memory",
+      metrics: { memory_mb: 120 },
+      confidence: 1,
+    },
+  ];
+
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
+
+  assert.equal(getById("metric-construction-status").textContent, "Weighted formula");
+  assert.match(
+    getById("metric-construction-formula").textContent,
+    /score = 0\.67 \* time_score \+ 0\.33 \* memory_score/,
+  );
+  assert.match(getById("metric-construction-components").textContent, /time 0\.67/);
+  assert.match(getById("metric-construction-components").textContent, /memory 0\.33/);
+  assert.match(getById("metric-detail-equation").textContent, /\(0\.67 \* 0\.80\)/);
+  assert.match(getById("metric-detail-equation").textContent, /\(0\.33 \* 1\.20\)/);
+});
+
 test("dashboard ledger and truth meter do not coerce unknown evidence to zero", async () => {
   const entries = [
     dashboardConfigEntry({ name: "unknown evidence", metricName: "seconds", metricUnit: "s" }),
@@ -1973,7 +2018,7 @@ test("dashboard renders strategy lanes and evidence status classes", async () =>
       {
         id: "read-only-scout",
         title: "Read-only scout",
-        status: "completed",
+        status: " completed ",
         mode: "read_only_scout",
         evidenceStatus: "accepted",
         nextActionHint: "Use the scout result for one measured packet.",
@@ -2038,7 +2083,7 @@ test("dashboard reports completed-only lanes without inflating active readiness"
       {
         id: "blocked-lane",
         title: "Blocked lane",
-        status: "blocked",
+        status: " Blocked ",
         mode: "implementation",
         evidenceStatus: "quarantined",
       },

@@ -1,6 +1,7 @@
 import { recordFrom } from "../model";
 import type { DashboardView } from "../constants";
 import type { DashboardViewModel, StrategyLane } from "../types";
+import { laneActive, laneCompleted } from "./laneStatus";
 
 interface SignalStripProps {
   view: DashboardView;
@@ -150,16 +151,6 @@ function strategyLanes(viewModel: DashboardViewModel): StrategyLane[] {
     return viewModel.parallelLanes;
   }
   return Array.isArray(memory.lanePortfolio) ? (memory.lanePortfolio as StrategyLane[]) : [];
-}
-
-function laneCompleted(lane: StrategyLane) {
-  const status = clean(lane.status || lane.state || lane.evidenceStatus).toLowerCase();
-  return ["done", "complete", "completed", "accepted", "finished"].includes(status);
-}
-
-function laneActive(lane: StrategyLane) {
-  const status = clean(lane.status || lane.state || lane.evidenceStatus).toLowerCase();
-  return ["active", "ready", "running", "tracking", "planned"].includes(status);
 }
 
 function clean(value: unknown) {

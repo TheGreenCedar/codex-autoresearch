@@ -43,7 +43,7 @@ export function resolveMetricDefinition(session: SessionSegment): WeightedMetric
     weights: normalizedWeights,
     memoryKey,
     formulaInline:
-      mode === "weighted_cost" ? "score = 0.7 * time_score + 0.3 * memory_score" : formula.inline,
+      mode === "weighted_cost" ? weightedFormulaInline(normalizedWeights) : formula.inline,
     formulaDetails: formula.details,
     formulaSource: formula.source,
     formulaConfigured: formula.configured,
@@ -148,6 +148,10 @@ function normalizedWeightsFor(config: SessionConfig) {
     time: round(time / total),
     memory: round(memory / total),
   };
+}
+
+function weightedFormulaInline(weights: { time: number; memory: number }) {
+  return `score = ${weights.time} * time_score + ${weights.memory} * memory_score`;
 }
 
 function configuredFormula(config: SessionConfig) {

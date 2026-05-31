@@ -5,6 +5,7 @@ import type {
   FinalizePreviewModel,
   SessionSegment,
 } from "../types";
+import { laneActive, laneCompleted, laneStatusKey, laneStatusTone } from "./laneStatus";
 
 export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewModel }) {
   const gap = viewModel.qualityGap || {};
@@ -109,10 +110,8 @@ export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel })
   ).slice(0, 6);
   const fanoutStatus =
     typeof viewModel.fanoutPlan?.status === "string" ? viewModel.fanoutPlan.status : "";
-  const completed = lanes.filter((lane) => laneStatusKey(lane) === "completed").length;
-  const active = lanes.filter((lane) =>
-    ["active", "ready", "running", "tracking", "planned", "accepted"].includes(laneStatusKey(lane)),
-  ).length;
+  const completed = lanes.filter(laneCompleted).length;
+  const active = lanes.filter(laneActive).length;
   return (
     <section
       className="panel memory-panel"
@@ -298,20 +297,6 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
       </div>
     </section>
   );
-}
-
-function laneStatusKey(lane: Record<string, unknown>) {
-  const key = String(lane.status || lane.state || lane.evidenceStatus || "tracking").toLowerCase();
-  if (["done", "complete", "completed", "accepted", "finished"].includes(key)) return "completed";
-  if (["blocked", "failed", "error", "rejected"].includes(key)) return "blocked";
-  if (["ready", "active", "running", "tracking", "planned"].includes(key)) return key;
-  return "tracking";
-}
-
-function laneStatusTone(status: string) {
-  if (status === "completed" || status === "accepted") return "good";
-  if (status === "blocked") return "warn";
-  return "neutral";
 }
 
 function evidenceStateKey(value: unknown) {
