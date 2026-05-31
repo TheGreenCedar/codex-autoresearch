@@ -40,6 +40,7 @@ import {
   buildPartialResultEvidenceClaim,
   discoverPartialResultCandidates,
 } from "../lib/partial-results.js";
+import { buildResearchIntegrity } from "../lib/truth-signals.js";
 import {
   createProgressSnapshot,
   progressSnapshotFromRun,
@@ -362,6 +363,13 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
       evidenceStatus: "accepted",
       description: "Accepted current result.",
     });
+    appendJsonl(dir, {
+      run: 4,
+      metric: 1,
+      status: "keep",
+      evidenceStatus: "superseded",
+      description: "Superseded keep must remain audit only.",
+    });
 
     const state = currentState(dir);
     assert.equal(state.best, 6);
@@ -369,6 +377,7 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
     assert.equal(state.evidenceRegistry.counts.accepted, 1);
     assert.equal(state.evidenceRegistry.counts.provisional, 1);
     assert.equal(state.evidenceRegistry.counts.rejected, 1);
+    assert.equal(state.evidenceRegistry.counts.superseded, 1);
     assert.deepEqual(
       state.evidenceRegistry.currentRuns.map((run) => run.run),
       [3],
@@ -379,9 +388,77 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
     );
     assert.deepEqual(
       state.evidenceRegistry.audit.map((entry) => entry.id),
-      ["run-1", "run-2", "run-3"],
+      ["run-1", "run-2", "run-3", "run-4"],
     );
   });
+});
+
+test("truth signals ignore rejected and superseded keeps as current best evidence", () => {
+  const integrity = buildResearchIntegrity({
+    state: {
+      config: { metricName: "quality_gap", bestDirection: "lower" },
+      current: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+        {
+          run: 2,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+      ],
+      results: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+        {
+          run: 2,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Superseded perfect-looking run.",
+          metrics: { quality_gap: 0 },
+        },
+      ],
+    },
+  });
+
+  assert.equal(integrity.evidenceLabels.includes("dev_best"), false);
+  assert.equal(integrity.evidenceLabels.includes("promotion_eligible"), false);
+  assert.doesNotMatch(integrity.warnings.join("\n"), /Current best is development-only/);
+
+  const stalePrecomputed = buildResearchIntegrity({
+    state: {
+      config: { metricName: "quality_gap", bestDirection: "lower" },
+      current: [],
+      development: {
+        bestRun: {
+          run: 9,
+          metric: 0,
+          status: "keep",
+          evidenceStatus: "superseded",
+          description: "Stale precomputed best.",
+          metrics: { quality_gap: 0 },
+        },
+      },
+    },
+  });
+
+  assert.equal(stalePrecomputed.evidenceLabels.includes("dev_best"), false);
+  assert.doesNotMatch(stalePrecomputed.warnings.join("\n"), /Current best is development-only/);
 });
 
 test("decision envelope omits rejected and superseded keeps from best evidence", () => {

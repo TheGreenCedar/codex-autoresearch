@@ -4,11 +4,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
-import {
-  acceptedCurrentRuns,
-  buildEvidenceRegistry,
-  isAcceptedCurrentEvidence,
-} from "./evidence-registry.js";
+import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 
 export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
 export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
@@ -191,7 +187,7 @@ export function bestMetric(runs: RunRecord[], direction: Direction | string): nu
 
 export function bestKeptMetric(runs: RunRecord[], direction: Direction | string): number | null {
   return bestMetric(
-    runs.filter((run) => run.status === "keep" && isAcceptedCurrentEvidence(run)),
+    runs.filter((run) => isAcceptedCurrentRun(run)),
     direction,
   );
 }
@@ -251,8 +247,7 @@ export function isPromotionGradeRun(run: RunRecord | null | undefined): boolean 
 }
 
 function evidenceTrack(runs: RunRecord[], direction: Direction | string) {
-  const acceptedRuns = acceptedCurrentRuns(runs);
-  const kept = acceptedRuns.filter((run) => run.status === "keep");
+  const kept = runs.filter((run) => isAcceptedCurrentRun(run));
   const bestRun = bestMetricRun(kept, direction);
   return {
     count: runs.length,
@@ -325,7 +320,7 @@ export function currentState(workDir: string): SessionState {
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
   const promotionRuns = evidenceRegistry.currentRuns.filter(
-    (run) => run.status === "keep" && isPromotionGradeRun(run),
+    (run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run),
   );
   return {
     config,
@@ -401,13 +396,11 @@ export function buildDecisionEnvelope({
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
   const direction = state?.config?.bestDirection || "lower";
   const historicalBest = bestMetricRun(
-    all.filter((run) => run.status === "keep" && isAcceptedCurrentEvidence(run)),
+    all.filter((run) => isAcceptedCurrentRun(run)),
     direction,
   );
   const promotionBest = bestMetricRun(
-    current.filter(
-      (run) => run.status === "keep" && isAcceptedCurrentEvidence(run) && isPromotionGradeRun(run),
-    ),
+    current.filter((run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run)),
     direction,
   );
   const codes = warningCodes(warningDetails);

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { isAcceptedCurrentEvidence } from "../lib/evidence-registry.js";
+import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -450,7 +450,7 @@ function runEvidenceForCommit(entries: RunEntry[], hash: string): RunEntry | nul
     const run = entries[index];
     const commit = String(run.commit || "");
     if (commitMatchesHash(commit, hash)) {
-      return run.status === "keep" && isAcceptedCurrentEvidence(run) ? run : null;
+      return isAcceptedCurrentRun(run) ? run : null;
     }
   }
   return null;
@@ -519,7 +519,7 @@ function parseCommitStatus(entries: RunEntry[], hash: string): RunEntry | null {
 
 function describeCommitStatus(entry: RunEntry | null): string {
   if (!entry) return "unlogged";
-  if (entry.status === "keep" && isAcceptedCurrentEvidence(entry)) return "kept";
+  if (isAcceptedCurrentRun(entry)) return "kept";
   if (entry.status === "keep" && entry.evidenceStatus) return String(entry.evidenceStatus);
   return String(entry.status || "unlogged");
 }
@@ -853,9 +853,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
-  const keptRuns = entries.filter(
-    (entry) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
-  );
+  const keptRuns = entries.filter(isAcceptedCurrentRun);
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
   const selectedCommits = new Set<string>();

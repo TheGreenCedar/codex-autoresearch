@@ -116,6 +116,99 @@ test("incumbent guidance prefers kept families over latest rejected families", (
   assert.equal(memory.diversityGuidance.nextActionHint, "stress the good path");
 });
 
+test("experiment memory keeps rejected and superseded keeps out of current accepted lanes", () => {
+  const memory = buildExperimentMemory({
+    direction: "lower",
+    runs: [
+      kept(
+        1,
+        1,
+        "Rejected keep",
+        {
+          family: "rejected",
+          hypothesis: "rejected path",
+          evidence: "metric=1",
+        },
+        "rejected",
+      ),
+      kept(
+        2,
+        2,
+        "Superseded keep",
+        {
+          family: "superseded",
+          hypothesis: "superseded path",
+          evidence: "metric=2",
+        },
+        "superseded",
+      ),
+      kept(3, 3, "Accepted keep", {
+        family: "accepted",
+        hypothesis: "accepted path",
+        evidence: "metric=3",
+        next_action_hint: "stress accepted",
+      }),
+    ],
+  });
+
+  assert.deepEqual(
+    memory.kept.map((run) => run.run),
+    [3],
+  );
+  assert.equal(memory.summary.kept, 1);
+  assert.equal(memory.families.find((family) => family.label === "rejected")?.kept, 0);
+  assert.equal(memory.families.find((family) => family.label === "superseded")?.kept, 0);
+  assert.equal(memory.diversityGuidance.id, "incumbent-confirmation");
+  assert.match(memory.diversityGuidance.reason, /accepted/);
+
+  const repeat = detectRepeatedHypothesis({ proposed: "rejected path retry", memory });
+  assert.equal(repeat, null);
+});
+
+test("experiment memory has no incumbent lane when every keep is non-current evidence", () => {
+  const memory = buildExperimentMemory({
+    direction: "lower",
+    runs: [
+      kept(
+        1,
+        1,
+        "Rejected keep",
+        {
+          family: "rejected",
+          hypothesis: "rejected path",
+          evidence: "metric=1",
+          rollback_reason: "invalidated",
+        },
+        "rejected",
+      ),
+      kept(
+        2,
+        2,
+        "Superseded keep",
+        {
+          family: "superseded",
+          hypothesis: "superseded path",
+          evidence: "metric=2",
+          rollback_reason: "superseded",
+        },
+        "superseded",
+      ),
+    ],
+  });
+
+  assert.deepEqual(memory.kept, []);
+  assert.equal(memory.summary.kept, 0);
+  assert.equal(memory.diversityGuidance, null);
+  assert.equal(
+    memory.lanePortfolio.some((lane) => lane.id === "incumbent-confirmation"),
+    false,
+  );
+  assert.equal(
+    memory.lanePortfolio.some((lane) => lane.id === "promote"),
+    false,
+  );
+});
+
 test("incumbent guidance omits placeholder lanes when there are no kept families", () => {
   const memory = buildExperimentMemory({
     direction: "lower",
@@ -161,8 +254,8 @@ test("best kept incumbent is preserved when active families are trimmed", () => 
   assert.equal(memory.diversityGuidance.nextActionHint, "stress the best path");
 });
 
-function kept(run, metric, description, asi = {}) {
-  return { run, metric, description, status: "keep", asi };
+function kept(run, metric, description, asi = {}, evidenceStatus = "accepted") {
+  return { run, metric, description, status: "keep", evidenceStatus, asi };
 }
 
 function rejected(run, metric, description, asi = {}) {

@@ -63,6 +63,18 @@ export function isAcceptedCurrentEvidence(value: LooseObject | null | undefined)
   return evidenceStatus === "accepted" && value?.quarantined !== true;
 }
 
+export function isKeepRun(run: LooseObject | null | undefined): boolean {
+  return String(run?.status || "") === "keep";
+}
+
+export function isRejectedRun(run: LooseObject | null | undefined): boolean {
+  return ["discard", "crash", "checks_failed"].includes(String(run?.status || ""));
+}
+
+export function isAcceptedCurrentRun(run: LooseObject | null | undefined): boolean {
+  return isKeepRun(run) && isAcceptedCurrentEvidence(run);
+}
+
 export function artifactEvidenceList(
   artifacts: LooseObject = {},
   workDir = "",
@@ -126,14 +138,14 @@ export function buildEvidenceRegistry({
     entries: normalized,
     acceptedCurrent,
     audit: normalized.filter((entry) => entry.auditVisible),
-    currentRuns: (runs || []).filter((run) => isAcceptedCurrentEvidence(run)),
+    currentRuns: (runs || []).filter((run) => isAcceptedCurrentRun(run)),
     currentArtifacts: acceptedCurrent.filter((entry) => entry.kind === "artifact"),
     counts: evidenceStatusCounts(normalized),
   };
 }
 
 export function acceptedCurrentRuns(runs: LooseObject[] = []): LooseObject[] {
-  return runs.filter((run) => isAcceptedCurrentEvidence(run));
+  return runs.filter((run) => isAcceptedCurrentRun(run));
 }
 
 function runEvidenceEntry(run: LooseObject): EvidenceRegistryEntry {

@@ -880,6 +880,11 @@ testWithTempRoot(
     await git(["commit", "-m", "rejected keep"], repo);
     const rejectedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
+    await writeFile(path.join(repo, "src", "superseded.txt"), "superseded\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "superseded keep"], repo);
+    const supersededHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
     await writeFile(path.join(repo, "src", "accepted.txt"), "accepted\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "legacy accepted keep"], repo);
@@ -904,6 +909,14 @@ testWithTempRoot(
         }),
         JSON.stringify({
           run: 2,
+          status: "keep",
+          evidenceStatus: "superseded",
+          metric: 0.5,
+          description: "Superseded keep",
+          commit: supersededHash,
+        }),
+        JSON.stringify({
+          run: 3,
           status: "keep",
           metric: 2,
           description: "Legacy accepted keep",
@@ -934,6 +947,12 @@ testWithTempRoot(
     assert.equal(
       plan.excluded_commits.some(
         (item) => item.commit === rejectedHash && item.status === "rejected",
+      ),
+      true,
+    );
+    assert.equal(
+      plan.excluded_commits.some(
+        (item) => item.commit === supersededHash && item.status === "superseded",
       ),
       true,
     );

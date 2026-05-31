@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { isAcceptedCurrentEvidence } from "./evidence-registry.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 
@@ -607,9 +607,7 @@ async function readLedgerEntries(cwd: string): Promise<LooseObject[]> {
 }
 
 async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
-  return (await readLedgerEntries(cwd)).filter(
-    (entry: LooseObject) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
-  ) as KeptRun[];
+  return (await readLedgerEntries(cwd)).filter(isAcceptedCurrentRun) as KeptRun[];
 }
 
 async function readLedgerRuns(cwd: string): Promise<KeptRun[]> {
