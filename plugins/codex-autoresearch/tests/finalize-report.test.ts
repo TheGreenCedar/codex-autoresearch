@@ -198,6 +198,7 @@ testWithTempRoot(
     await git(["init", "-b", "main"], repo);
     await git(["config", "user.email", "codex@example.invalid"], repo);
     await git(["config", "user.name", "Codex Test"], repo);
+    if (process.platform === "win32") await git(["config", "core.autocrlf", "true"], repo);
 
     await writeFile(path.join(repo, "src", "value.txt"), "base\n");
     await writeFile(path.join(repo, "src", "other.txt"), "base other\n");
