@@ -146,11 +146,45 @@ testWithTempRoot(
     );
 
     await writeFile(path.join(root, "autoresearch.jsonl"), "{ not json\n");
-    assert.deepEqual(await readAutoresearchLedger(root, { mode: "silent-empty" }), []);
+    await assert.rejects(
+      () => readAutoresearchLedger(root, { mode: "silent-empty" }),
+      /Corrupt autoresearch\.jsonl at line 1/,
+    );
     await assert.rejects(
       () => readAutoresearchLedger(root, { mode: "strict" }),
       /Corrupt autoresearch\.jsonl at line 1/,
     );
+  },
+);
+
+testWithTempRoot(
+  "finalize-preview fails on corrupt autoresearch ledger",
+  "autoresearch-finalize-preview-corrupt-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src.txt"), "initial\n");
+    await git(["add", "src.txt"], repo);
+    await git(["commit", "-m", "initial"], repo);
+    await writeFile(path.join(repo, "autoresearch.jsonl"), "{ not json\n");
+
+    await assert.rejects(
+      () => finalizePreview({ cwd: repo, trunk: "main" }),
+      /Corrupt autoresearch\.jsonl at line 1/,
+    );
+
+    const result = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--trunk", "main"],
+      repo,
+      true,
+    );
+    assert.notEqual(result.code, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Corrupt autoresearch\.jsonl at line 1/);
   },
 );
 

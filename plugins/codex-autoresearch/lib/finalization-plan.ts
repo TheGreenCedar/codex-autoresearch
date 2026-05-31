@@ -29,14 +29,12 @@ export async function readAutoresearchLedger(
             ...(mode === "strict" ? { __line: index + 1 } : {}),
           };
         } catch (error) {
-          if (mode === "silent-empty") throw error;
           const parseError = error as Error;
           throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`);
         }
       })
       .filter((entry): entry is LooseObject => Boolean(entry));
   } catch (error) {
-    if (mode === "silent-empty") return [];
     const readError = error as Error & { code?: string };
     if (readError?.code === "ENOENT") return [];
     if (/^Corrupt autoresearch\.jsonl at line \d+:/.test(readError.message || "")) throw error;

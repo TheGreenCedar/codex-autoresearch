@@ -2265,6 +2265,8 @@ test("served dashboard live refresh starts by default and can be stopped", async
     {
       beforeParse(window) {
         window.__refreshFetches = [];
+        window.__liveIntervalCalls = 0;
+        window.__clearedLiveIntervals = [];
         window.fetch = async (url) => {
           window.__refreshFetches.push(String(url));
           if (String(url).includes("view-model")) {
@@ -2276,10 +2278,12 @@ test("served dashboard live refresh starts by default and can be stopped", async
           };
         };
         window.setInterval = (callback, ms) => {
-          window.__liveInterval = { callback, ms };
-          return 42;
+          window.__liveIntervalCalls += 1;
+          window.__liveInterval = { callback, id: window.__liveIntervalCalls, ms };
+          return window.__liveIntervalCalls;
         };
         window.clearInterval = (id) => {
+          window.__clearedLiveIntervals.push(id);
           window.__clearedLiveInterval = id;
         };
       },
@@ -2300,9 +2304,14 @@ test("served dashboard live refresh starts by default and can be stopped", async
     "autoresearch.jsonl",
     "view-model.json",
   ]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(dom.window.__liveIntervalCalls, 1);
+  assert.equal(dom.window.__refreshFetches.length, 2);
+  assert.deepEqual(dom.window.__clearedLiveIntervals, []);
+
   getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await waitFor(
-    () => dom.window.__clearedLiveInterval === 42,
+    () => dom.window.__clearedLiveInterval === 1,
     "Live toggle did not clear the interval.",
   );
   dom.window.close();

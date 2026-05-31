@@ -21,16 +21,14 @@ type ShardTask = {
 };
 
 function parseArgs(argv: string[]): { jobs: number; specs: ShardSpec[] } {
-  let jobs = Math.max(1, Number(process.env.CODEX_AUTORESEARCH_TEST_SHARD_JOBS || "8"));
+  let jobs = parsePositiveInteger(
+    process.env.CODEX_AUTORESEARCH_TEST_SHARD_JOBS || "8",
+    "CODEX_AUTORESEARCH_TEST_SHARD_JOBS",
+  );
   const specs: ShardSpec[] = [];
   let index = 0;
   if (argv[index] === "--jobs") {
-    jobs = Number(argv[index + 1]);
-    if (!Number.isInteger(jobs) || jobs < 1) {
-      throw new Error(
-        "Usage: node scripts/run-test-shards.mjs [--jobs <count>] <test-file> <shards> [...]",
-      );
-    }
+    jobs = parsePositiveInteger(argv[index + 1], "--jobs");
     index += 2;
   }
   for (; index < argv.length; index += 1) {
@@ -47,6 +45,16 @@ function parseArgs(argv: string[]): { jobs: number; specs: ShardSpec[] } {
   }
   if (!specs.length) throw new Error("At least one test file and shard count is required.");
   return { jobs, specs };
+}
+
+function parsePositiveInteger(value: unknown, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `${label} must be a positive integer.\nUsage: node scripts/run-test-shards.mjs [--jobs <count>] <test-file> <shards> [...]`,
+    );
+  }
+  return parsed;
 }
 
 function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
@@ -131,7 +139,18 @@ function summarize(result: ShardResult): string {
 const startedAt = Date.now();
 const { jobs, specs } = parseArgs(process.argv.slice(2));
 const tasks = (
-  await Promise.all(specs.map(async (spec) => buildTasks(spec, await discoverTestCount(spec.file))))
+  await Promise.all(
+    specs.map(async (spec) => {
+      if (spec.shards === 1) return buildTasks(spec, null);
+      const count = await discoverTestCount(spec.file);
+      if (count == null) {
+        throw new Error(
+          `${spec.file} did not emit AUTORESEARCH_TEST_COUNT during shard discovery.`,
+        );
+      }
+      return buildTasks(spec, count);
+    }),
+  )
 ).flat();
 const results = await runWithLimit(
   tasks.map((task) => () => runShard(task)),

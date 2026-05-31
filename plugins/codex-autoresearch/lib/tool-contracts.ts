@@ -172,7 +172,8 @@ const CONTRACTS = {
     purpose: "Parse Codex rollout JSONL into bounded session and waste signals.",
     whenToUse: "Use to import a long Codex session before more Autoresearch packets.",
     contrast: "Use read_state for the current Autoresearch ledger only.",
-    safety: "Dry-run is read-only; apply writes only validated research capsule files.",
+    safety:
+      "Dry-run is read-only; apply writes only validated research capsule files. Session JSONL reads are limited to --cwd unless allow_outside_workdir is explicit.",
     outputSchema: basicOutputSchema([
       "ok",
       "workDir",

@@ -93,6 +93,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         dryRun: args.dryRun,
         apply: args.apply,
         allowSnippets: args.allowSnippets,
+        allowOutsideWorkdir: args.allowOutsideWorkdir,
         maxSnippets: args.maxSnippets,
         maxSnippetChars: args.maxSnippetChars,
       }),

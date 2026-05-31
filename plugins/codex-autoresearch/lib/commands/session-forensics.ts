@@ -22,9 +22,21 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
     const apply = deps.boolOption(args.apply, false);
     const dryRun = deps.boolOption(args.dryRun, !apply);
     const sessionJsonl = String(args.sessionJsonl || "");
+    const resolvedSessionJsonl = path.resolve(workDir, sessionJsonl);
+    const sessionPathInsideWorkDir = isPathInside(workDir, resolvedSessionJsonl);
+    const allowOutsideWorkdir = deps.boolOption(
+      args.allow_outside_workdir ?? args.allowOutsideWorkdir,
+      false,
+    );
+    if (!sessionPathInsideWorkDir && !allowOutsideWorkdir) {
+      throw new Error(
+        "session-forensics refuses to read session JSONL outside --cwd without --allow-outside-workdir.",
+      );
+    }
+    const displaySessionJsonl = displayPathForWorkDir(workDir, resolvedSessionJsonl);
     const researchSlug = String(args.researchSlug || "");
     const parsed = await parseSessionForensics({
-      sessionJsonl,
+      sessionJsonl: resolvedSessionJsonl,
       allowSnippets: deps.boolOption(args.allowSnippets, false),
       maxSnippets: deps.positiveIntegerOption(args.maxSnippets, 8, "--max-snippets") ?? 8,
       maxSnippetChars:
@@ -33,16 +45,21 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
     if (!parsed.ok) {
       return {
         ...parsed,
+        path: displaySessionJsonl,
         wrote: false,
       };
     }
+    const publicParsed = {
+      ...parsed,
+      sourcePath: displaySessionJsonl,
+    };
     const capsule = await writeContextCapsule({
       cwd: workDir,
       researchSlug,
-      summary: parsed,
+      summary: publicParsed,
       apply: apply && !dryRun,
     });
-    const contextSignal = parsed.productSignals.find(
+    const contextSignal = publicParsed.productSignals.find(
       (signal: any) => signal.kind === "context_distillation_required",
     );
     const canonicalNextAction = contextSignal
@@ -50,7 +67,7 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
           kind: "context-distillation",
           priority: 6,
           reason: contextSignal.message,
-          command: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${deps.shellQuote(workDir)} --session-jsonl ${deps.shellQuote(sessionJsonl)} --research-slug ${deps.shellQuote(researchSlug)} --apply`,
+          command: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${deps.shellQuote(workDir)} --session-jsonl ${deps.shellQuote(displaySessionJsonl)} --research-slug ${deps.shellQuote(researchSlug)} --apply${sessionPathInsideWorkDir ? "" : " --allow-outside-workdir"}`,
           triggeredBy: ["sessionForensics"],
         }
       : {
@@ -68,22 +85,34 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
       wrote: !capsule.dryRun,
       outputDir: capsule.outputDir,
       plannedFiles: capsule.files,
-      sourcePath: parsed.sourcePath,
-      timeWindow: parsed.timeWindow,
-      counts: parsed.counts,
-      responseCounts: parsed.responseCounts,
-      toolCounts: parsed.toolCounts,
-      commandClasses: parsed.commandClasses,
-      compactions: parsed.compactions,
-      goal: parsed.goal,
-      userCorrections: parsed.userCorrections,
-      productSignals: parsed.productSignals,
-      workflowWaste: parsed.workflowWaste,
-      blockers: parsed.blockers,
-      snippets: parsed.snippets,
+      sourcePath: publicParsed.sourcePath,
+      timeWindow: publicParsed.timeWindow,
+      counts: publicParsed.counts,
+      responseCounts: publicParsed.responseCounts,
+      toolCounts: publicParsed.toolCounts,
+      commandClasses: publicParsed.commandClasses,
+      compactions: publicParsed.compactions,
+      goal: publicParsed.goal,
+      userCorrections: publicParsed.userCorrections,
+      productSignals: publicParsed.productSignals,
+      workflowWaste: publicParsed.workflowWaste,
+      blockers: publicParsed.blockers,
+      snippets: publicParsed.snippets,
       evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
       nextAction: canonicalNextAction.reason,
       canonicalNextAction,
     };
   };
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function displayPathForWorkDir(workDir: string, target: string): string {
+  const relative = path.relative(path.resolve(workDir), path.resolve(target)).replace(/\\/g, "/");
+  if (relative === "") return ".";
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return relative;
+  return `<outside-workdir>/${path.basename(target)}`;
 }

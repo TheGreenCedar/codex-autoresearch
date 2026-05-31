@@ -33,6 +33,10 @@ This project uses a root-only changelog because the root README is the public do
 - `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.
 - Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
 - Added narrower package test scripts for CLI, dashboard, finalization, and core evidence slices; the compiled CLI regression path now runs bounded shards instead of one giant serial file.
+- Stabilized served-dashboard live refresh so successful metadata updates do not recreate the refresh interval or trigger an extra immediate fetch.
+- Hardened bounded test sharding so invalid job counts fail with usage errors, unsharded files run once, and sharded files must emit an explicit test-count marker.
+- Tightened `session-forensics` privacy defaults: outside-workdir JSONL reads now require an explicit gate, snippets stay opt-in, and returned source/command paths are redacted or relative.
+- Made `finalize-preview` fail closed on corrupt `autoresearch.jsonl` ledgers instead of treating them as an empty finalization history.
 - Aligned the dashboard dev entry with the TypeScript source entrypoint (`/src/main.tsx`).
 - Simplified internal tool schema lookups, CLI projection helpers, runner/setup response assembly, finalization progress metadata, evidence predicates, next-action policy rules, and dashboard component/live-refresh surfaces without changing public JSON contracts.
 - Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.

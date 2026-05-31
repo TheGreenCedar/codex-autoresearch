@@ -26,6 +26,31 @@ const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
 
+async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
+  return await new Promise((resolve) => {
+    const childEnv = { ...env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, args, {
+      cwd,
+      env: childEnv,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
+    );
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
 async function renderExportedDashboard(html) {
   const dom = new JSDOM(html, {
     pretendToBeVisual: true,
@@ -76,6 +101,56 @@ test("run reports missing primary metric as a failed experiment", async () => {
     assert.match(payload.metricError, /seconds/);
     assert.equal(payload.logHint.status, "crash");
     assert.deepEqual(payload.logHint.allowedStatuses, ["crash"]);
+  });
+});
+
+test("test shard runner validates jobs and fails closed on discovery gaps", async () => {
+  await withTempDir("test-shard-runner", async (dir) => {
+    const shardRunner = path.join(pluginRoot, "dist", "scripts", "run-test-shards.mjs");
+    const unshardedFile = path.join(dir, "unsharded.test.mjs");
+    await writeFile(
+      unshardedFile,
+      [
+        "import test from 'node:test';",
+        "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+        "  console.log('DISCOVERY_WITHOUT_COUNT');",
+        "} else {",
+        "  console.log('UNSHARDED_EXECUTION_MARKER');",
+        "}",
+        "test('plain file runs once', () => {});",
+      ].join("\n"),
+    );
+
+    const invalidJobs = await runNode([shardRunner, unshardedFile, "1"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_JOBS: "not-a-number",
+      },
+    });
+    assert.notEqual(invalidJobs.code, 0);
+    assert.match(`${invalidJobs.stdout}\n${invalidJobs.stderr}`, /positive integer/);
+
+    const unsharded = await runNode([shardRunner, unshardedFile, "1"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE: "1",
+      },
+    });
+    assert.equal(unsharded.code, 0, unsharded.stderr);
+    const unshardedOutput = `${unsharded.stdout}\n${unsharded.stderr}`;
+    assert.equal(
+      (unshardedOutput.match(/UNSHARDED_EXECUTION_MARKER/g) || []).length,
+      1,
+      unshardedOutput,
+    );
+    assert.equal(unshardedOutput.includes("DISCOVERY_WITHOUT_COUNT"), false, unshardedOutput);
+
+    const missingDiscovery = await runNode([shardRunner, unshardedFile, "2"]);
+    assert.notEqual(missingDiscovery.code, 0);
+    assert.match(
+      `${missingDiscovery.stdout}\n${missingDiscovery.stderr}`,
+      /AUTORESEARCH_TEST_COUNT/,
+    );
   });
 });
 
@@ -332,6 +407,21 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
               "Chunk ID: abc\nProcess exited with code 0\nOriginal token count: 25000\nTotal output lines: 600\nOutput:\ntoken=abcdefghijklmnop",
           },
         }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:03.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:04.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:05.000Z",
+          type: "compacted",
+          payload: {},
+        }),
       ].join("\n"),
     );
 
@@ -350,6 +440,12 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.equal(dryPayload.ok, true);
     assert.equal(dryPayload.dryRun, true);
     assert.equal(dryPayload.wrote, false);
+    assert.equal(dryPayload.sourcePath, "rollout.jsonl");
+    assert.equal((dryPayload.canonicalNextAction.command || "").includes(sessionPath), false);
+    assert.match(
+      dryPayload.canonicalNextAction.command || "",
+      /--session-jsonl "?rollout\.jsonl"?/,
+    );
     assert.equal(dryPayload.plannedFiles.length, 4);
     await assert.rejects(() =>
       access(path.join(dir, "autoresearch.research", "session-019e", "session-digest.md")),
@@ -407,6 +503,76 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
       assert.equal(claimIds.has(evidenceId), true, evidenceId);
     }
     assert.equal((evidenceAfter.claims || []).length >= (evidence.claims || []).length, true);
+  });
+});
+
+test("session-forensics requires an explicit gate for outside-workdir JSONL", async () => {
+  await withTempDir("session-forensics-boundary", async (dir) => {
+    const projectDir = path.join(dir, "project");
+    await mkdir(projectDir, { recursive: true });
+    const sessionPath = path.join(dir, "outside-rollout.jsonl");
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Segments UX is not the best." }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:02.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:03.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+      ].join("\n"),
+    );
+
+    const blocked = await runCli([
+      "session-forensics",
+      "--cwd",
+      projectDir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "outside-session",
+      "--dry-run",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /--allow-outside-workdir/);
+
+    const allowed = await runCli([
+      "session-forensics",
+      "--cwd",
+      projectDir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "outside-session",
+      "--dry-run",
+      "--allow-outside-workdir",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    const payload = JSON.parse(allowed.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sourcePath, "<outside-workdir>/outside-rollout.jsonl");
+    assert.equal(payload.canonicalNextAction.kind, "context-distillation");
+    assert.equal((payload.canonicalNextAction.command || "").includes(sessionPath), false);
+    assert.match(payload.canonicalNextAction.command || "", /--allow-outside-workdir/);
+    assert.deepEqual(payload.snippets, []);
   });
 });
 

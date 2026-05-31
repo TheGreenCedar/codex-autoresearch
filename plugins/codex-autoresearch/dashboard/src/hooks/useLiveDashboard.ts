@@ -26,8 +26,9 @@ export function useLiveDashboard({
   setMeta,
   setViewModel,
 }: UseLiveDashboardArgs) {
+  const { liveRefresh, refreshDone } = mode;
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => liveStatusFor(mode, meta));
-  const [liveEnabled, setLiveEnabled] = useState(mode.liveRefresh);
+  const [liveEnabled, setLiveEnabled] = useState(liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
   const [lastError, setLastError] = useState<string | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
@@ -47,24 +48,24 @@ export function useLiveDashboard({
         viewModel: snapshot.viewModel,
         generatedAt: snapshot.generatedAt,
       }));
-      setLiveStatus(refreshSuccessStatus(mode, snapshot.generatedAt));
+      setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
       setRefreshState("idle");
       setRefreshGeneration((value) => value + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setLiveStatus(refreshFailureStatus(mode, message));
+      setLiveStatus(refreshFailureStatus(liveRefresh, message));
       setRefreshState("error");
       setLastError(message);
     }
-  }, [mode, setEntries, setMeta, setViewModel]);
+  }, [liveRefresh, refreshDone, setEntries, setMeta, setViewModel]);
 
   useEffect(() => {
-    if (!liveEnabled || !mode.liveRefresh) return undefined;
+    if (!liveEnabled || !liveRefresh) return undefined;
     refreshLiveData();
     const refreshMs = Math.max(1, Number(meta.refreshMs || 5000));
     const timer = setInterval(refreshLiveData, refreshMs);
     return () => clearInterval(timer);
-  }, [liveEnabled, meta.refreshMs, mode.liveRefresh, refreshLiveData]);
+  }, [liveEnabled, meta.refreshMs, liveRefresh, refreshLiveData]);
 
   return {
     liveEnabled,
@@ -106,16 +107,16 @@ async function fetchLiveDashboardSnapshot(): Promise<LiveDashboardSnapshot> {
   };
 }
 
-function refreshSuccessStatus(mode: DashboardMode, generatedAt: string): LiveStatus {
+function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveStatus {
   return {
-    title: mode.refreshDone,
+    title: refreshDone,
     detail: formatDisplayTime(generatedAt),
   };
 }
 
-function refreshFailureStatus(mode: DashboardMode, message: string): LiveStatus {
+function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
   return {
-    title: mode.liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
+    title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
     detail: message,
   };
 }

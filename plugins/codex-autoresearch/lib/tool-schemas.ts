@@ -151,6 +151,7 @@ export const toolSchemas = applyToolContracts([
         dry_run: { type: "boolean" },
         apply: { type: "boolean" },
         allow_snippets: { type: "boolean" },
+        allow_outside_workdir: { type: "boolean" },
         max_snippets: { type: "integer" },
         max_snippet_chars: { type: "integer" },
       },
@@ -675,6 +676,7 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
   allow_non_git_command: "allowNonGitCommand",
+  allow_outside_workdir: "allowOutsideWorkdir",
   allow_dirty_revert: "allowDirtyRevert",
   allow_snippets: "allowSnippets",
   asi_json_file: "asiJsonFile",
