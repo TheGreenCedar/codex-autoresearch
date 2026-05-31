@@ -4237,7 +4237,7 @@ async function runExperiment(args: LooseObject) {
         ),
       }),
     };
-    void writeActiveProgressSnapshot(workDir, progressSnapshot);
+    void writeActiveProgressSnapshot(workDir, progressSnapshot).catch(() => {});
   };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
