@@ -32,6 +32,9 @@ This project uses a root-only changelog because the root README is the public do
 - Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
 - `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.
 - Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
+- Added narrower package test scripts for CLI, dashboard, finalization, and core evidence slices; the compiled CLI regression path now runs bounded shards instead of one giant serial file.
+- Aligned the dashboard dev entry with the TypeScript source entrypoint (`/src/main.tsx`).
+- Simplified internal tool schema lookups, CLI projection helpers, runner/setup response assembly, finalization progress metadata, evidence predicates, next-action policy rules, and dashboard component/live-refresh surfaces without changing public JSON contracts.
 
 ### Release
 
