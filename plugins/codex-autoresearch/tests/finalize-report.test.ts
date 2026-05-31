@@ -305,7 +305,7 @@ testWithTempRoot(
     assert.doesNotMatch(branchFiles, /autoresearch\.research/);
     assert.doesNotMatch(branchFiles, /autoresearch-dashboard\.html/);
 
-    const status = (await git(["status", "--porcelain"], repo)).stdout.trim();
+    const status = (await run("git", ["status", "--porcelain"], repo)).stdout.trim();
     assert.equal(status, "");
   },
 );
