@@ -5,6 +5,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { isAcceptedCurrentEvidence } from "../lib/evidence-registry.js";
+import {
+  CLEANUP_SESSION_PATHS,
+  REPORT_DIRNAME,
+  isAutoresearchSessionArtifact,
+} from "../lib/session-artifacts.js";
 
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
@@ -107,22 +112,6 @@ groups.json:
 `;
 }
 
-const SESSION_FILES = new Set([
-  "autoresearch.jsonl",
-  "autoresearch.md",
-  "autoresearch.ideas.md",
-  "autoresearch.config.json",
-  "autoresearch.last-run.json",
-  "autoresearch-dashboard.html",
-  "autoresearch.sh",
-  "autoresearch.ps1",
-  "autoresearch.checks.sh",
-  "autoresearch.checks.ps1",
-]);
-const RESEARCH_DIR = "autoresearch.research";
-const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b) => a.localeCompare(b));
-const REPORT_DIRNAME = "autoresearch-finalize";
-
 function parseCliArgs(argv: string[]): CliArgs {
   const out: CliArgs = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
@@ -193,19 +182,6 @@ function cleanLines(text: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-}
-
-function isSessionFile(file: string): boolean {
-  const normalized = file.replace(/\\/g, "/");
-  return (
-    SESSION_FILES.has(normalized) ||
-    normalized.startsWith("autoresearch.") ||
-    normalized.startsWith("autoresearch-") ||
-    normalized === RESEARCH_DIR ||
-    normalized.startsWith(`${RESEARCH_DIR}/`) ||
-    normalized === REPORT_DIRNAME ||
-    normalized.startsWith(`${REPORT_DIRNAME}/`)
-  );
 }
 
 function validateRepoRelativePath(file: unknown, cwd: string): string {
@@ -561,7 +537,10 @@ function normalizePlanFiles(
     ...new Set(
       (Array.isArray(files) ? files : [])
         .map((file) => validateRepoRelativePath(file, cwd))
-        .filter((file) => !excludeSessionArtifacts || !isSessionFile(file)),
+        .filter(
+          (file) =>
+            !excludeSessionArtifacts || !isAutoresearchSessionArtifact(file, "finalization"),
+        ),
     ),
   ].sort((a, b) => a.localeCompare(b));
 }
@@ -833,7 +812,9 @@ async function verifyUnion(
     await git(["add", "-A"], cwd);
     await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
     const diff = await git(["diff", "--name-only", "HEAD", config.final_tree], cwd);
-    nonSession = cleanLines(diff.stdout).filter((file) => !isSessionFile(file));
+    nonSession = cleanLines(diff.stdout).filter(
+      (file) => !isAutoresearchSessionArtifact(file, "finalization"),
+    );
   } finally {
     await git(["switch", sourceBranch], cwd, true);
     await git(["branch", "-D", verifyBranch], cwd, true);
@@ -853,7 +834,9 @@ async function verifyNoSessionArtifacts(
   if (!excludeSessionArtifacts) return;
   for (const branch of createdBranches) {
     const result = await git(["diff-tree", "--no-commit-id", "--name-only", "-r", branch], cwd);
-    const sessionFiles = cleanLines(result.stdout).filter(isSessionFile);
+    const sessionFiles = cleanLines(result.stdout).filter((file) =>
+      isAutoresearchSessionArtifact(file, "finalization"),
+    );
     if (sessionFiles.length > 0) {
       throw new Error(`Session artifact found in ${branch}: ${sessionFiles.join(", ")}`);
     }

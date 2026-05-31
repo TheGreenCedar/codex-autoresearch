@@ -4,10 +4,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isAcceptedCurrentEvidence } from "./evidence-registry.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
+import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 type LooseObject = Record<string, any>;
 type GitResult = { code: number | null; ok?: boolean; stderr: string; stdout: string };
+type ProgressKind = "finalize-preview" | "finalize-current-tree";
 type KeptRun = LooseObject & {
   run: number;
   commit?: string;
@@ -373,6 +375,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
       },
       startedAt,
       "blocked",
+      "finalize-current-tree",
     );
   }
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
@@ -483,6 +486,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     },
     startedAt,
     ready ? "completed" : "blocked",
+    "finalize-current-tree",
   );
 }
 
@@ -491,10 +495,10 @@ function selectCurrentTreeFiles(
   excludeSessionArtifacts: boolean,
 ): CurrentTreeFileSelection {
   const excludedSessionArtifacts = excludeSessionArtifacts
-    ? allFiles.filter((file) => isSessionFile(file))
+    ? allFiles.filter((file) => isAutoresearchSessionArtifact(file, "source-checkout"))
     : [];
   const includedFiles = excludeSessionArtifacts
-    ? allFiles.filter((file) => !isSessionFile(file))
+    ? allFiles.filter((file) => !isAutoresearchSessionArtifact(file, "source-checkout"))
     : [...allFiles];
   return {
     allFiles: [...allFiles],
@@ -554,8 +558,17 @@ async function defaultCurrentTreePlanOutput(workDir: string, branch: string): Pr
   );
 }
 
-function withProgress(result: LooseObject, startedAt: number, status: string): LooseObject {
+function withProgress(
+  result: LooseObject,
+  startedAt: number,
+  status: string,
+  kind: ProgressKind = "finalize-preview",
+): LooseObject {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+  const label =
+    kind === "finalize-current-tree"
+      ? "Preview current final tree review unit"
+      : "Preview review branch readiness";
   return {
     ...result,
     progress: {
@@ -566,8 +579,8 @@ function withProgress(result: LooseObject, startedAt: number, status: string): L
       elapsedSeconds: durationSeconds,
       stages: [
         {
-          stage: "finalize-preview",
-          label: "Preview review branch readiness",
+          stage: kind,
+          label,
           status,
           durationSeconds,
           exitCode: null,
@@ -580,34 +593,29 @@ function withProgress(result: LooseObject, startedAt: number, status: string): L
   };
 }
 
-async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
+async function readLedgerEntries(cwd: string): Promise<LooseObject[]> {
   try {
     const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
     return text
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter(
-        (entry: LooseObject) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
-      ) as KeptRun[];
+      .map((line) => JSON.parse(line));
   } catch {
     return [];
   }
 }
 
+async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
+  return (await readLedgerEntries(cwd)).filter(
+    (entry: LooseObject) => entry.status === "keep" && isAcceptedCurrentEvidence(entry),
+  ) as KeptRun[];
+}
+
 async function readLedgerRuns(cwd: string): Promise<KeptRun[]> {
-  try {
-    const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
-    return text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((entry: LooseObject) => entry.run != null) as KeptRun[];
-  } catch {
-    return [];
-  }
+  return (await readLedgerEntries(cwd)).filter(
+    (entry: LooseObject) => entry.run != null,
+  ) as KeptRun[];
 }
 
 async function changedFilesForCommit(hash: string, cwd: string): Promise<string[]> {
@@ -616,7 +624,7 @@ async function changedFilesForCommit(hash: string, cwd: string): Promise<string[
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((file) => !isSessionFile(file));
+    .filter((file) => !isAutoresearchSessionArtifact(file, "source-checkout"));
 }
 
 async function changedFilesBetween(
@@ -630,7 +638,7 @@ async function changedFilesBetween(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((file) => !filterSession || !isSessionFile(file))
+    .filter((file) => !filterSession || !isAutoresearchSessionArtifact(file, "source-checkout"))
     .sort((a, b) => a.localeCompare(b));
 }
 
@@ -803,17 +811,6 @@ function normalizeCurrentTreeCoverage(coverage: LooseObject = {}) {
     excluded_session_artifacts: coverage.excluded_session_artifacts || [],
     current_tree_fingerprint: coverage.current_tree_fingerprint || "",
   };
-}
-
-function isSessionFile(file: string): boolean {
-  const normalized = file.replace(/\\/g, "/");
-  return (
-    normalized.startsWith("autoresearch.") ||
-    normalized.startsWith("autoresearch-") ||
-    normalized.startsWith("autoresearch.research/") ||
-    normalized === "autoresearch-finalize" ||
-    normalized.startsWith("autoresearch-finalize/")
-  );
 }
 
 function safeSlug(value: unknown): string {

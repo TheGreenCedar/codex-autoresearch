@@ -504,6 +504,7 @@ testWithTempRoot(
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ready, true);
+    assert.equal(payload.progress.stages[0].stage, "finalize-current-tree");
     assert.equal(payload.currentTreeCoverage.covered, true);
     assert.ok(payload.files.includes("src/guardrails.txt"));
     assert.ok(payload.files.includes("src/value.txt"));

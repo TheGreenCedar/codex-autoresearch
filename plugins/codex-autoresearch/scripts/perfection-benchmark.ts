@@ -612,15 +612,16 @@ const checks = [
   },
   {
     id: "finalizer-excludes-research-artifacts",
-    file: "scripts/finalize-autoresearch.mjs, scripts/finalize-autoresearch.ts",
+    file: "scripts/finalize-autoresearch.mjs, scripts/finalize-autoresearch.ts, lib/session-artifacts.ts",
     description: "Finalization excludes deep research scratchpads from review branches.",
     run: async () => {
       const finalizer = await readText("scripts/finalize-autoresearch.ts");
+      const artifacts = await readText("lib/session-artifacts.ts");
       return includesAll(finalizer, [
-        "autoresearch.research",
-        "startsWith(`${RESEARCH_DIR}/`)",
+        "isAutoresearchSessionArtifact",
         "session artifact verification",
-      ])
+      ]) &&
+        includesAll(artifacts, ["autoresearch.research", 'startsWith("autoresearch.research/")'])
         ? pass()
         : fail("Finalizer does not exclude autoresearch.research scratchpads.");
     },

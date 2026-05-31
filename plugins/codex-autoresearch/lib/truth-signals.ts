@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { finiteMetric, isPromotionGradeRun, promotionGradeValue } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
@@ -360,7 +361,7 @@ async function classifyDirtyFiles(workDir: string, config: LooseObject = {}) {
   const unrelatedFiles: string[] = [];
   for (const line of status.stdout.split(/\r?\n/).filter(Boolean)) {
     const file = slashPath(line.slice(3).replace(/^"|"$/g, ""));
-    if (isSessionFile(file)) sessionArtifacts.push(file);
+    if (isAutoresearchSessionArtifact(file, "dirty-tree")) sessionArtifacts.push(file);
     else if (commitPaths.some((scope) => file === scope || file.startsWith(`${scope}/`))) {
       scopedExperimentFiles.push(file);
     } else {
@@ -478,16 +479,6 @@ async function gitOk(args: string[], cwd: string) {
     );
     child.on("close", (code) => resolve({ code, ok: code === 0, stdout, stderr }));
   });
-}
-
-function isSessionFile(file: string) {
-  const normalized = slashPath(file);
-  return (
-    normalized.startsWith("autoresearch.") ||
-    normalized.startsWith("autoresearch-") ||
-    normalized.startsWith("autoresearch.research/") ||
-    normalized === ".gitattributes"
-  );
 }
 
 function listOption(value: unknown): string[] {
