@@ -81,10 +81,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   warnings: arraySchema(stringSchema("Warning message."), "Warnings."),
   whySafe: stringSchema("Evidence explaining why the next action is safe."),
   workDir: stringSchema("Resolved project working directory."),
-  wouldDelete: arraySchema(
-    stringSchema("Artifact path to delete."),
-    "Previewed deletion targets.",
-  ),
+  wouldDelete: arraySchema(stringSchema("Artifact path to delete."), "Previewed deletion targets."),
 };
 
 const CONTRACTS = {
