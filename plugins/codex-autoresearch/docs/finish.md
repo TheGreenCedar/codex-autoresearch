@@ -1,6 +1,6 @@
 # Finish
 
-Use finalization when a noisy loop has useful kept commits that should become reviewable work. This is where you stop admiring the evidence pile and turn it into branches other humans can actually review.
+Use finalization when a noisy loop has useful kept commits that should become reviewable work.
 
 ## Preview First
 
@@ -19,9 +19,9 @@ Preview also reports semantic safety:
 
 ## Review What Counts
 
-Only `status: "keep"` entries are candidates for review branches.
+Only accepted/current `status: "keep"` entries are candidates for review branches.
 
-Measured, discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
+Rejected, provisional, superseded, quarantined, measured, discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
 
 If the branch contents are right but the commit-level kept evidence is stale, package the final branch content instead:
 
@@ -86,7 +86,7 @@ Report:
 - merge verification status
 - cleanup targets only after merge verification succeeds
 
-Do not suggest branch cleanup until merge verification has succeeded. Before that point, the summary may name cleanup targets, but it should not hand the operator a `git branch -D`, `Remove-Item`, or `rm -rf` incantation and pretend the danger has politely left the room.
+Do not suggest branch cleanup until merge verification has succeeded. Before that point, the summary may name cleanup targets, but it should not provide destructive cleanup commands.
 
 ---
 

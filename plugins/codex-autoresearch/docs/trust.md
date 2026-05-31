@@ -20,7 +20,7 @@ Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not repor
 
 `crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep`, `discard`, or `measure` needs a finite primary metric.
 
-Use `measure` for non-promotional evidence: baselines, no-change checks, environment probes, and diagnostics. It can inform latest/trend/baseline readouts, but it is never a keep, never a finalizer input, and never a sneaky little promotion certificate wearing a hat.
+Use `measure` for non-promotional evidence: baselines, no-change checks, environment probes, and diagnostics. It can inform latest/trend/baseline readouts, but it is never a keep and never a finalizer input.
 
 `benchmark-lint` reports two layers:
 

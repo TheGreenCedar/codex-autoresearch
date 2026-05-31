@@ -1,6 +1,6 @@
 # Start
 
-Use this page for the first five minutes of a Codex Autoresearch session. The goal is not to build a cathedral. The goal is to get one honest packet measured and logged.
+Use this page for the first five minutes of a Codex Autoresearch session. The goal is to get one honest packet measured, logged, and ready to resume.
 
 ## What You Need
 
@@ -50,6 +50,7 @@ Scope: test runner config and test helpers only
 ```
 
 Codex should check Git, create or resume the session, verify the metric, serve the dashboard, run one packet, and log the decision with ASI.
+Before spending another packet, Codex should read `recommend-next --compact` and clear any operator-checklist, watchdog, runtime-provenance, lane-lifecycle, packet-diagnostic, or finalization-pressure blocker.
 
 ## CLI Path
 

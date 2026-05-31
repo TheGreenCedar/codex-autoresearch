@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Find the failing layer first. Do not mash retry like a vending machine button when no precondition changed.
+Find the failing layer first. Do not retry a live step until a precondition has changed.
 
 | Symptom | Likely Layer | What To Do |
 | --- | --- | --- |
@@ -17,7 +17,13 @@ Find the failing layer first. Do not mash retry like a vending machine button wh
 | Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or intentionally use `--allow-add-all`. |
 | Configured commit paths are missing | Stale config | Update `autoresearch.config.json` or pass explicit paths on the next log. |
 | Finalization preview blocks | Dirty tree, semantic safety, or coverage | Clean/scope the tree, inspect kept runs, resolve invalidated/reverted evidence, or use `finalize-current-tree` when current branch contents are the review unit. Session artifacts are excluded by default. |
+| Finalization preview includes rejected or provisional evidence | Evidence status | Confirm runs are accepted/current keeps before finalization. Rejected, provisional, superseded, and quarantined evidence stays audit-only. |
 | `quality_gap=0` looks final | Research scope confusion | It closes the accepted checklist only. Start a fresh gap round for broader discovery. |
+| Watchdog fires | No-progress window | Inspect the process, finalize useful kept work, rescope the segment, or start a fresh segment before running another packet. |
+| Operator checklist blocks `next` | Loop governance | Follow the checklist command first. It outranks another packet until the named blocker is cleared. |
+| Runtime provenance is unavailable or stale | Runtime drift | Inspect or refresh the installed plugin/cache before claiming source behavior is live. |
+| Packet diagnostics report evidence loss | Packet evidence | Treat the run as diagnostic evidence. Repair citation carry, synthesis, quality scoring, or benchmark failure before promoting it. |
+| `lane-runner` refuses a command outside Git | Lane isolation | Run the lane in a Git worktree, record a read-only summary without a command, or pass `--allow-non-git-command` only when that non-Git command is intentionally admitted. |
 | Benchmark runs but no METRIC line | Benchmark output | The command must print `METRIC name=value` to stdout. Wrap the workload in a script that captures timing and emits the line, or use `--benchmark-prints-metric false` to let the wrapper time it. |
 | Accidentally logged a wrong keep | Log correction | Discard cleanup must be scoped. Use `revertPaths` to roll back the kept commit. Then rerun `next` and log correctly. The ledger is append-only — the bad entry stays as historical evidence. |
 | Later run invalidates a keep | Evidence correction | Log the later packet with ASI explaining contamination, failed repeat, cache replay, or rollback. `finalize-preview` should then block that earlier keep from promotion. |

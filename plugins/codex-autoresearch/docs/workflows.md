@@ -1,6 +1,6 @@
 # Workflow Diagrams
 
-Codex Autoresearch is easiest to understand as a few small loops. Use this page when words start hiding the actual motion and everything starts sounding like a product manager whispered into a blender.
+Codex Autoresearch is easiest to understand as a few small loops: setup, packet, governance, research fanout, and finalization.
 
 ## First Five Minutes
 
@@ -45,7 +45,12 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
   [*] --> Inspect
-  Inspect --> Packet: next
+  Inspect --> Governance: recommend-next / state
+  Governance --> Blocker: checklist blocks packet
+  Blocker --> Inspect: blocker resolved
+  Governance --> Fanout: serial path is stuck
+  Fanout --> Inspect: lane recommendation
+  Governance --> Packet: next packet is safe
   Packet --> Log: keep/discard/measure or metricless failure
   Log --> Continue: log returns continuation
   Continue --> Inspect: shouldContinue
@@ -53,6 +58,22 @@ stateDiagram-v2
   Continue --> Finalize: useful kept work is ready
   Segment --> Inspect: new-segment baseline
   Finalize --> [*]
+```
+
+## Parallel Research Lanes
+
+```mermaid
+flowchart TD
+  A["Serial loop is stuck"] --> B["research-fanout --dry-run"]
+  B --> C{"Plan useful?"}
+  C -- "No" --> D["Rescope or start a new segment"]
+  C -- "Yes" --> E["research-fanout --yes"]
+  E --> F["lane-runner read-only scout lanes"]
+  F --> G{"Implementation lane needed?"}
+  G -- "No" --> H["Coordinator recommendation"]
+  G -- "Yes" --> I["lane-runner implementation with worktree or write scope"]
+  I --> H
+  H --> J["Run one measured packet"]
 ```
 
 ## Quality-Gap Research
@@ -75,9 +96,9 @@ flowchart TD
 ```mermaid
 flowchart LR
   A["Decision envelope"] --> B["Trust blockers"]
-  B --> C["Run chart"]
-  C --> D["Next best action"]
-  D --> E["Why safe"]
-  E --> F["Read-only handoff"]
+  B --> C["Run chart and readiness strip"]
+  C --> D["Operator checklist"]
+  D --> E["Runtime provenance and packet diagnostics"]
+  E --> F["Strategy lanes and watchdog"]
   F --> G["Ledger and finalization"]
 ```

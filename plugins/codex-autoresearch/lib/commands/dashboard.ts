@@ -62,7 +62,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       publicExport: showcaseExport,
       suppressEnvironmentWarnings: showcaseExport,
     };
-    const viewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
+    const rawViewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
+    const viewModel = showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel;
     const html = deps.dashboardHtml(entries, {
       workDir,
       generatedAt,
@@ -231,6 +232,34 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   }
 
   return { exportDashboard, serveDashboard };
+}
+
+function sanitizePublicShowcaseViewModel(value: LooseObject): LooseObject {
+  return sanitizePublicShowcaseValue(value) as LooseObject;
+}
+
+function sanitizePublicShowcaseValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => !containsShowcaseOnlyWarning(item))
+      .map((item) => sanitizePublicShowcaseValue(item));
+  }
+  if (!value || typeof value !== "object") return value;
+  const out: LooseObject = {};
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (containsShowcaseOnlyWarning(child)) continue;
+    out[key] = sanitizePublicShowcaseValue(child);
+  }
+  return out;
+}
+
+function containsShowcaseOnlyWarning(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /Excluded \d+ unkept non-session commit|Final tree coverage is missing/i.test(value);
+  }
+  if (Array.isArray(value)) return value.some((item) => containsShowcaseOnlyWarning(item));
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value as LooseObject).some((item) => containsShowcaseOnlyWarning(item));
 }
 
 async function verifyLiveDashboardUrl(url: string) {

@@ -1,6 +1,6 @@
 # Operate
 
-Use this page while running or resuming a loop. This is the part where discipline matters, because the benchmark will tempt you with numbers and numbers are very good at wearing little fake mustaches.
+Use this page while running or resuming a loop. The benchmark is useful only when the next action is backed by current evidence.
 
 ## Resume
 
@@ -125,7 +125,7 @@ Statuses:
 - `crash`: benchmark failed before usable metric evidence.
 - `checks_failed`: metric exists but correctness checks failed.
 
-Logged runs carry an evidence status. Defaults are `accepted` for `keep`, `provisional` for `measure`, and `rejected` for discard/crash/check failures. Override with `--evidence-status` only when the evidence role really differs; rejected or quarantined artifacts must stay non-promotable.
+Logged runs carry an evidence status. Defaults are `accepted` for `keep`, `provisional` for `measure`, and `rejected` for discard/crash/check failures. Override with `--evidence-status accepted|rejected|provisional|superseded` only when the evidence role really differs. Quarantined artifacts may appear in audit readouts, but `quarantined` is not a CLI evidence-status value. Rejected, superseded, provisional, and quarantined evidence must stay non-promotable.
 
 After logging, read the continuation result. If `shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance. If `forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final report — a finite active budget counts.
 
@@ -183,9 +183,9 @@ The scratchpad lives under `autoresearch.research/<slug>/`:
 | `quality-gaps.md` | Accepted checklist measured by the loop |
 | `notes/` and `deliverables/` | Evidence and requested artifacts |
 
-`quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete. It means this pile is done. There may be another pile. There is usually another pile.
+`quality_gap=0` closes the accepted checklist for the current round. It does not mean discovery is permanently complete. Start a fresh round when the broader question is still open.
 
-The state/dashboard readout also exposes `qualityRound.closed`, `freshRoundSuggested`, and plateau reasons. A closed round means decide whether to scout the next round, remove a constraint, or start a new segment; it is not a universal victory bell.
+The state/dashboard readout also exposes `qualityRound.closed`, `freshRoundSuggested`, and plateau reasons. A closed round means decide whether to scout the next round, remove a constraint, or start a new segment.
 
 ## Fresh Segment
 
@@ -202,7 +202,7 @@ Repeated exact-score shelves, max-iteration/tool-cap states, benchmark/config dr
 
 ## Finalization Pressure
 
-Kept commits are not a points system. They are review backlog. When kept runs, missing commit metadata, finalization warnings, or watchdog pressure stack up, the dashboard marks finalization pressure and pushes `finalize-preview` or rescoping ahead of more packets. That does not create branches by itself. It is a shove toward review while the evidence is still warm.
+Kept commits are review backlog. When kept runs, missing commit metadata, finalization warnings, or watchdog pressure stack up, the dashboard marks finalization pressure and pushes `finalize-preview` or rescoping ahead of more packets. That does not create branches by itself.
 
 ---
 
