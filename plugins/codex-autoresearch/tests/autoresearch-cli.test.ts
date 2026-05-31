@@ -151,6 +151,25 @@ test("test shard runner validates jobs and fails closed on discovery gaps", asyn
       `${missingDiscovery.stdout}\n${missingDiscovery.stderr}`,
       /AUTORESEARCH_TEST_COUNT/,
     );
+
+    const unevenShardedFile = path.join(dir, "uneven-sharded.test.mjs");
+    await writeFile(
+      unevenShardedFile,
+      [
+        "import test from 'node:test';",
+        "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+        "  console.log('AUTORESEARCH_TEST_COUNT 25');",
+        "}",
+        "test('plain file runs as a shard target', () => {});",
+      ].join("\n"),
+    );
+
+    const uneven = await runNode([shardRunner, "--jobs", "1", unevenShardedFile, "12"]);
+    assert.equal(uneven.code, 0, uneven.stderr);
+    const unevenOutput = `${uneven.stdout}\n${uneven.stderr}`;
+    assert.match(unevenOutput, /uneven-sharded\.test\.mjs 1\/9 \(1-3\)/);
+    assert.match(unevenOutput, /uneven-sharded\.test\.mjs 9\/9 \(25-25\)/);
+    assert.equal(unevenOutput.includes("/12"), false, unevenOutput);
   });
 });
 
@@ -4578,11 +4597,15 @@ test("tool schemas expose guidance and output contracts", async () => {
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
   const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
+  const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
+  const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
 
   assert.ok(guided);
   assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
+  assert.ok(onboardingPacket);
+  assert.ok(recommendNext);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -4608,6 +4631,12 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
   assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
   assert.equal(guided.inputSchema.properties.port.type, "number");
+  assert.equal(onboardingPacket.inputSchema.properties.operator_checklist, undefined);
+  assert.equal(recommendNext.inputSchema.properties.operator_checklist.type, "boolean");
+  assert.deepEqual(recommendNext.outputSchema.properties.action.type, ["string", "object"]);
+  assert.deepEqual(recommendNext.outputSchema.properties.commands.type, ["array", "object"]);
+  assert.equal(recommendNext.outputSchema.properties.laneLifecycle.type, "object");
+  assert.equal(recommendNext.outputSchema.properties.packetDiagnostics.type, "object");
   assert.equal(guided.outputSchema.properties.commands.type, "array");
   assert.equal(guided.outputSchema.properties.commands.items.type, "string");
   assert.equal(guided.outputSchema.properties.dashboard.type, "object");

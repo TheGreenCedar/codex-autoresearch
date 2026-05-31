@@ -17,6 +17,20 @@ export interface RecommendNextResponseInput {
   operatorChecklist?: unknown;
   runtimeProvenance?: unknown;
   loopContract?: unknown;
+  laneLifecycle?: unknown;
+  packetDiagnostics?: unknown;
+}
+
+interface RecommendNextAuthorityInput {
+  viewModel?: JsonObject | null;
+  compact?: JsonObject | null;
+}
+
+export interface RecommendNextRuntimeAuthority {
+  decisionEnvelope: JsonObject | null;
+  canonicalNextAction: unknown;
+  runtimeProvenance: unknown;
+  loopContract: unknown;
 }
 
 export interface RecommendNextResponse {
@@ -36,6 +50,8 @@ export interface RecommendNextResponse {
   operatorChecklist?: unknown;
   runtimeProvenance?: unknown;
   loopContract?: unknown;
+  laneLifecycle?: unknown;
+  packetDiagnostics?: unknown;
 }
 
 const DEFAULT_WHY_SAFE =
@@ -66,10 +82,58 @@ export function buildRecommendNextResponse(
   copyIfProvided(response, "operatorChecklist", input.operatorChecklist);
   copyIfProvided(response, "runtimeProvenance", input.runtimeProvenance);
   copyIfProvided(response, "loopContract", input.loopContract);
+  copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
+  copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
 
   return response;
 }
 
+export function selectRecommendNextRuntimeAuthority({
+  viewModel = null,
+  compact = null,
+}: RecommendNextAuthorityInput): RecommendNextRuntimeAuthority {
+  const viewEnvelope = recordOrNull(viewModel?.decisionEnvelope);
+  const compactEnvelope =
+    recordOrNull(compact?.decisionEnvelope) || recordOrNull(compact?.resumeAudit);
+  const viewRuntimeProvenance =
+    recordOrNull(viewEnvelope?.runtimeProvenance) ||
+    recordOrNull(recordOrNull(viewModel?.processHygiene)?.runtimeDrift);
+  const viewRuntimeBlocker = hasRuntimeProvenanceBlocker(viewEnvelope, viewRuntimeProvenance);
+  const decisionEnvelope = viewRuntimeBlocker ? viewEnvelope : compactEnvelope || viewEnvelope;
+
+  return {
+    decisionEnvelope,
+    canonicalNextAction:
+      decisionEnvelope?.canonicalNextAction ||
+      compact?.canonicalNextAction ||
+      compactEnvelope?.canonicalNextAction ||
+      null,
+    runtimeProvenance: viewRuntimeProvenance || recordOrNull(compact?.runtimeProvenance) || null,
+    loopContract: decisionEnvelope?.loopContract || compact?.loopContract || null,
+  };
+}
+
 function copyIfProvided<T extends object>(target: T, key: string, value: unknown) {
   if (value !== undefined) (target as JsonObject)[key] = value;
+}
+
+function recordOrNull(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
+}
+
+function hasRuntimeProvenanceBlocker(
+  envelope: JsonObject | null,
+  runtimeProvenance: JsonObject | null,
+): boolean {
+  if (
+    runtimeProvenance?.drifted === true ||
+    runtimeProvenance?.mismatched === true ||
+    runtimeProvenance?.stale === true ||
+    runtimeProvenance?.needsInspection === true
+  ) {
+    return true;
+  }
+  const loopContract = recordOrNull(envelope?.loopContract);
+  const blockers = Array.isArray(loopContract?.blockers) ? loopContract.blockers : [];
+  return blockers.some((blocker) => recordOrNull(blocker)?.kind === "runtime-provenance");
 }

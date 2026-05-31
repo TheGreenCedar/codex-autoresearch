@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { toolSchemas } from "../lib/tool-schemas.js";
 import { toolRegistry } from "../lib/tool-registry.js";
 
 type RegistryEntry = {
@@ -32,6 +33,7 @@ type CommandSurfaceMap = {
   scans: SourceScan[];
   missingPublicReferences: string[];
   internalReferences: string[];
+  argumentIssues: string[];
 };
 
 const ROOT = resolvePackageRoot(import.meta.url);
@@ -70,26 +72,65 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
       toolNameToEntry,
     }),
   ]);
+  const argumentIssues = await validateArgumentCoherence();
 
-  const missingPublicReferences = scans.flatMap((scan) => {
-    if (!scan.required) return [];
-    return [
-      ...scan.missingCommands.map((command) => `${scan.label}: ${command}`),
-      ...scan.missingToolNames.map((name) => `${scan.label}: ${name}`),
-      ...scan.unregisteredCommands.map((command) => `${scan.label}: ${command}`),
-      ...scan.unregisteredToolNames.map((name) => `${scan.label}: ${name}`),
-    ];
-  });
+  const missingPublicReferences = scans
+    .flatMap((scan) => {
+      if (!scan.required) return [];
+      return [
+        ...scan.missingCommands.map((command) => `${scan.label}: ${command}`),
+        ...scan.missingToolNames.map((name) => `${scan.label}: ${name}`),
+        ...scan.unregisteredCommands.map((command) => `${scan.label}: ${command}`),
+        ...scan.unregisteredToolNames.map((name) => `${scan.label}: ${name}`),
+      ];
+    })
+    .concat(argumentIssues);
 
   return {
     ok: missingPublicReferences.length === 0,
     registry,
     scans,
     missingPublicReferences,
+    argumentIssues,
     internalReferences: registry
       .filter((entry) => entry.internal)
       .map((entry) => `${entry.cliCommand} (${entry.name}) from ${entry.source}`),
   };
+}
+
+async function validateArgumentCoherence(): Promise<string[]> {
+  const issues: string[] = [];
+  const onboarding = toolSchemas.find((tool) => tool.name === "onboarding_packet");
+  const recommend = toolSchemas.find((tool) => tool.name === "recommend_next");
+  const cliHandlers = await readFirstExisting(["lib/cli-handlers.ts", "dist/lib/cli-handlers.mjs"]);
+  const onboardingHandler = extractCommandHandlerSource(cliHandlers.content, "onboarding-packet");
+  const recommendHandler = extractCommandHandlerSource(cliHandlers.content, "recommend-next");
+
+  if (onboarding?.inputSchema.properties?.operator_checklist) {
+    issues.push(
+      "onboarding_packet: operator_checklist is exposed but onboarding-packet does not handle it",
+    );
+  }
+  if (!recommend?.inputSchema.properties?.operator_checklist) {
+    issues.push(
+      "recommend_next: operator_checklist is handled by recommend-next but missing from input schema",
+    );
+  }
+  if (/operatorChecklist/.test(onboardingHandler)) {
+    issues.push("onboarding-packet: operatorChecklist handler wiring belongs on recommend-next");
+  }
+  if (!/operatorChecklist:\s*args\.operatorChecklist/.test(recommendHandler)) {
+    issues.push("recommend-next: operatorChecklist handler wiring is missing");
+  }
+
+  return issues;
+}
+
+function extractCommandHandlerSource(source: string, command: string): string {
+  const pattern = new RegExp(
+    `["']${escapeRegExp(command)}["']:\\s+async[\\s\\S]*?(?=\\n    ["'][a-z]|\\n    [A-Za-z][A-Za-z0-9]*:\\s+async|\\n  \\}\\);)`,
+  );
+  return source.match(pattern)?.[0] || "";
 }
 
 function registryEntries(): RegistryEntry[] {
@@ -212,6 +253,10 @@ function uniqueMatches(source: string, pattern: RegExp): string[] {
   return [...values].filter(Boolean).sort();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function formatCommandSurfaceMap(map: CommandSurfaceMap): string {
   const lines = ["Command surface map", ""];
   lines.push(`Registry commands: ${map.registry.filter((entry) => entry.public).length} public`);
@@ -231,6 +276,9 @@ export function formatCommandSurfaceMap(map: CommandSurfaceMap): string {
     if (scan.unregisteredToolNames.length) {
       lines.push(`  unregistered tool names: ${scan.unregisteredToolNames.join(", ")}`);
     }
+  }
+  if (map.argumentIssues.length) {
+    lines.push(`Argument issues: ${map.argumentIssues.join(", ")}`);
   }
   if (map.internalReferences.length) {
     lines.push("");

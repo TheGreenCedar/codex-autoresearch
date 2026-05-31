@@ -547,7 +547,8 @@ export function buildDecisionEnvelope({
   const legacyAction = canonicalNextActionForEnvelope(envelope);
   const governanceAction = canonicalNextActionForLoop(envelope);
   const canonicalNextAction =
-    legacyAction?.kind === "next-packet" && governanceAction.kind !== "next-packet"
+    loopContract.blockers.length > 0 ||
+    (legacyAction?.kind === "next-packet" && loopContract.canRunNextPacket === false)
       ? governanceAction
       : legacyAction;
   return {

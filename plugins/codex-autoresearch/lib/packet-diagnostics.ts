@@ -18,6 +18,8 @@ export interface PacketDiagnostics {
 
 export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagnostics {
   const packetEvidence = objectValue(input.packetEvidence) || {};
+  const run = objectValue(input.run) || {};
+  const decision = objectValue(input.decision) || {};
   const metrics = collectMetrics(input, packetEvidence);
   const text = [
     packetEvidence.stderrTail,
@@ -33,7 +35,7 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
   const stages: PacketDiagnosticStage[] = [];
   const reasons: string[] = [];
 
-  if (missingQualityScore({ input, metrics, text })) {
+  if (missingQualityScore({ input, packetEvidence, run, decision, metrics, text })) {
     addStage(stages, reasons, "missing_quality_score", "Packet exited without a quality score.");
   }
   if (markedSufficientButFailed({ input, packetEvidence, metrics, text })) {
@@ -79,32 +81,45 @@ function collectMetrics(input: LooseObject, packetEvidence: LooseObject): LooseO
   return {
     ...objectValue(input.metrics),
     ...objectValue(objectValue(input.run)?.metrics),
+    ...objectValue(objectValue(input.run)?.parsedMetrics),
     ...objectValue(objectValue(input.decision)?.metrics),
+    ...objectValue(objectValue(input.decision)?.parsedMetrics),
     ...objectValue(packetEvidence.metrics),
+    ...objectValue(packetEvidence.parsedMetrics),
   };
 }
 
 function missingQualityScore({
   input,
+  packetEvidence,
+  run,
+  decision,
   metrics,
   text,
 }: {
   input: LooseObject;
+  packetEvidence: LooseObject;
+  run: LooseObject;
+  decision: LooseObject;
   metrics: LooseObject;
   text: string;
 }): boolean {
   if (booleanValue(metrics.missing_quality_score || input.missingQualityScore)) return true;
+  if (!hasPacketDiagnosticEvidence({ input, packetEvidence, run, decision, metrics, text })) {
+    return false;
+  }
   if (/missing[_ -]?quality[_ -]?score|no quality score|quality score missing/i.test(text)) {
     return true;
   }
   const metricName = stringValue(
     input.metricName || input.primaryMetricName || objectValue(input.config)?.metricName,
   );
+  if (metricName && numberValue(metrics[metricName]) != null) return false;
   const expectedQuality =
     booleanValue(input.expectedQualityScore) ||
-    /quality|score|citation_recall|claim_recall|file_recall|symbol_recall/.test(metricName);
+    /quality|citation_recall|claim_recall|file_recall|symbol_recall/.test(metricName);
   if (!expectedQuality) return false;
-  return qualityMetric(metrics) == null;
+  return qualityMetric(metrics, metricName) == null;
 }
 
 function markedSufficientButFailed({
@@ -195,8 +210,9 @@ function hasRetrievalSignal({
   ].some((value) => Array.isArray(value) && value.length > 0);
 }
 
-function qualityMetric(metrics: LooseObject): number | null {
+function qualityMetric(metrics: LooseObject, metricName = ""): number | null {
   return firstNumber(
+    metricName ? metrics[metricName] : null,
     metrics.quality_gap,
     metrics.quality,
     metrics.quality_score,
@@ -205,6 +221,29 @@ function qualityMetric(metrics: LooseObject): number | null {
     metrics.file_recall,
     metrics.symbol_recall,
   );
+}
+
+function hasPacketDiagnosticEvidence({
+  input,
+  packetEvidence,
+  run,
+  decision,
+  metrics,
+  text,
+}: {
+  input: LooseObject;
+  packetEvidence: LooseObject;
+  run: LooseObject;
+  decision: LooseObject;
+  metrics: LooseObject;
+  text: string;
+}): boolean {
+  if (text.trim()) return true;
+  if (Object.keys(packetEvidence).length > 0) return true;
+  if (Object.keys(run).length > 0) return true;
+  if (Object.keys(decision).length > 0) return true;
+  if (Object.keys(metrics).length > 0 && input.packetEvidence != null) return true;
+  return false;
 }
 
 function addStage(

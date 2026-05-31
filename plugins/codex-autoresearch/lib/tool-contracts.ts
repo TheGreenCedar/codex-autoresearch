@@ -159,17 +159,25 @@ const CONTRACTS = {
     whenToUse: "Use when the operator asks what to do now or an agent needs one next command.",
     contrast: "Use onboarding_packet for broader handoff context.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema([
-      "ok",
-      "workDir",
-      "action",
-      "whySafe",
-      "nextStep",
-      "commands",
-      "operatorChecklist",
-      "loopContract",
-      "runtimeProvenance",
-    ]),
+    outputSchema: outputSchemaWithOverrides(
+      [
+        "ok",
+        "workDir",
+        "action",
+        "whySafe",
+        "nextStep",
+        "commands",
+        "operatorChecklist",
+        "loopContract",
+        "runtimeProvenance",
+        "laneLifecycle",
+        "packetDiagnostics",
+      ],
+      {
+        action: unionSchema(["string", "object"], "Safe next action summary or action object."),
+        commands: unionSchema(["array", "object"], "Copyable command list or named command map."),
+      },
+    ),
   },
   codex_goal_bridge: {
     purpose: "Bridge Autoresearch state into Codex Goal objective and completion-audit language.",
@@ -573,6 +581,18 @@ function basicOutputSchema(required: string[]): JsonSchema {
   };
 }
 
+function outputSchemaWithOverrides(
+  required: string[],
+  overrides: Record<string, JsonSchema>,
+): JsonSchema {
+  const schema = basicOutputSchema(required);
+  schema.properties = {
+    ...schema.properties,
+    ...overrides,
+  };
+  return schema;
+}
+
 function schemaForOutputField(field: string): JsonSchema {
   return (
     OUTPUT_FIELD_SCHEMAS[field] || {
@@ -592,6 +612,10 @@ function numberSchema(description: string): JsonSchema {
 
 function booleanSchema(description: string): JsonSchema {
   return { type: "boolean", description };
+}
+
+function unionSchema(types: string[], description: string): JsonSchema {
+  return { type: types, description, additionalProperties: types.includes("object") };
 }
 
 function objectSchema(description: string): JsonSchema {

@@ -50,10 +50,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         pluginRoot: deps.pluginRoot,
         includeInstalled: false,
       })
-      .catch((error) => ({
-        ok: false,
-        warnings: [error.message],
-      }));
+      .catch(unavailableRuntimeDrift);
     const dashboardServerRegistry = await dashboardServerRegistryStatus(workDir);
     const dashboardContext = {
       deliveryMode: "static-export",
@@ -128,10 +125,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         pluginRoot: deps.pluginRoot,
         includeInstalled: true,
       })
-      .catch((error) => ({
-        ok: false,
-        warnings: [error.message],
-      }));
+      .catch(unavailableRuntimeDrift);
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
       port: args.port,
@@ -273,4 +267,13 @@ async function dashboardServerRegistryStatus(workDir: string) {
   const record = await readServeRegistry(workDir);
   const summary = summarizeServeRegistry(record, { currentCwd: workDir });
   return summary.available ? summary : null;
+}
+
+function unavailableRuntimeDrift(error: unknown): LooseObject {
+  return {
+    ok: null,
+    status: "unavailable",
+    probeFailed: true,
+    warnings: [error instanceof Error ? error.message : String(error)],
+  };
 }

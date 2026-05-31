@@ -12,7 +12,10 @@ import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
-import { buildRecommendNextResponse } from "../lib/commands/recommend-next.js";
+import {
+  buildRecommendNextResponse,
+  selectRecommendNextRuntimeAuthority,
+} from "../lib/commands/recommend-next.js";
 import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
@@ -1772,11 +1775,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     pluginVersion: PLUGIN_VERSION,
   });
   const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
-  const canonicalNextAction =
-    compact.canonicalNextAction ||
-    compact.decisionEnvelope?.canonicalNextAction ||
-    compact.resumeAudit?.canonicalNextAction ||
-    null;
+  const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
+  const canonicalNextAction = authority.canonicalNextAction || null;
   const action = canonicalNextAction
     ? canonicalActionForRecommendNext(
         canonicalNextAction,
@@ -1789,7 +1789,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     action.detail ||
     viewModel.readout?.nextAction ||
     compact.nextAction;
-  const baseEnvelope = compact.decisionEnvelope || compact.resumeAudit || null;
+  const baseEnvelope = authority.decisionEnvelope || null;
   const decisionEnvelope = baseEnvelope
     ? {
         ...baseEnvelope,
@@ -1811,13 +1811,13 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
           : baseEnvelope.canonicalNextAction,
       }
     : null;
-  const loopContract = decisionEnvelope?.loopContract || compact.loopContract || null;
+  const loopContract = decisionEnvelope?.loopContract || authority.loopContract || null;
   const operatorChecklist = boolOption(args.operatorChecklist ?? args.operator_checklist, false)
     ? buildOperatorChecklist(action, {
         workDir,
         pluginRoot: PLUGIN_ROOT,
         loopContract,
-        source: "recommend-next",
+        source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
       })
     : undefined;
   return buildRecommendNextResponse({
@@ -1845,9 +1845,26 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
     operatorChecklist,
-    runtimeProvenance: compact.runtimeProvenance || viewModel.processHygiene?.runtimeDrift || null,
+    runtimeProvenance: authority.runtimeProvenance,
     loopContract,
+    laneLifecycle: compact.laneLifecycle,
+    packetDiagnostics: compact.packetDiagnostics,
   });
+}
+
+function recommendNextChecklistSource(
+  action: LooseObject,
+  canonicalNextAction: LooseObject | null,
+  loopContract: LooseObject | null,
+) {
+  const actionSource = String(action.source || "");
+  return (
+    (actionSource === "decision-envelope" ? "" : actionSource) ||
+    String(canonicalNextAction?.triggeredBy || "") ||
+    String(loopContract?.strongestAction?.triggeredBy || "") ||
+    actionSource ||
+    "recommend-next"
+  );
 }
 
 function canonicalActionForRecommendNext(
@@ -3945,7 +3962,9 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       pluginRoot: PLUGIN_ROOT,
       includeInstalled: Boolean(context.includeInstalledRuntime),
     }).catch((error: any) => ({
-      ok: false,
+      ok: null,
+      status: "unavailable",
+      probeFailed: true,
       warnings: [error.message],
     })));
   const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
@@ -3985,15 +4004,17 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
-  const packetDiagnostics = classifyPacketDiagnostics({
-    packetEvidence: lastRun?.packetEvidence || {},
-    run: lastRun?.run || {},
-    decision: lastRun?.decision || {},
-    metrics: lastRun?.decision?.metrics || lastRun?.run?.parsedMetrics || {},
-    metricName: state.config.metricName,
-    command: continuationCommands(workDir).partialResults,
-  });
-  const currentRuntimeProvenance = runtimeProvenance();
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance(drift);
   const stateWithQualityGap = {
     ...state,
     qualityGap,
@@ -5296,14 +5317,16 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
-  const packetDiagnostics = classifyPacketDiagnostics({
-    packetEvidence: lastRun?.packetEvidence || {},
-    run: lastRun?.run || {},
-    decision: lastRun?.decision || {},
-    metrics: lastRun?.decision?.metrics || lastRun?.run?.parsedMetrics || {},
-    metricName: state.config.metricName,
-    command: continuationCommands(workDir).partialResults,
-  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
   const currentRuntimeProvenance = runtimeProvenance();
   const stateWithQualityGap = {
     ...state,
@@ -5609,7 +5632,8 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
 }
 
 function runtimeProvenance(drift: LooseObject | null = null) {
-  const drifted = drift?.ok === false;
+  const unavailable = runtimeDriftUnavailable(drift);
+  const drifted = confirmedRuntimeDrift(drift);
   return {
     pluginVersion: PLUGIN_VERSION,
     sourceRoot: PLUGIN_ROOT,
@@ -5620,13 +5644,53 @@ function runtimeProvenance(drift: LooseObject | null = null) {
     installedCachePath:
       drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
     drifted,
-    status: drift ? (drifted ? "drift-detected" : "checked") : "unavailable",
-    driftConfidence: drift ? (drifted ? "drift-detected" : "checked") : "source-only",
+    status: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "unavailable",
+    driftConfidence: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "source-only",
     reason: drifted
       ? "Source and installed runtime drift needs inspection before public claims."
       : "",
     inspectCommand: "",
   };
+}
+
+function runtimeDriftUnavailable(drift: LooseObject | null): boolean {
+  if (!drift) return true;
+  if (drift.probeFailed === true || drift.unavailable === true) return true;
+  const status = String(drift.status || drift.driftStatus || "").toLowerCase();
+  return ["unavailable", "probe-failed", "probe_failed", "error", "unknown"].includes(status);
+}
+
+function confirmedRuntimeDrift(drift: LooseObject | null): boolean {
+  if (!drift || runtimeDriftUnavailable(drift)) return false;
+  if (
+    drift.drifted === true ||
+    drift.mismatched === true ||
+    drift.stale === true ||
+    drift.needsInspection === true
+  ) {
+    return true;
+  }
+  const warnings = Array.isArray(drift.warnings) ? drift.warnings.map(String) : [];
+  if (
+    warnings.some((warning) =>
+      /version_surface_mismatch|runtime.*drift|source.*differs/i.test(warning),
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function loopContinuation(

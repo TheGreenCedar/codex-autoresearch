@@ -863,6 +863,38 @@ test("workflow friction uses forensics, churn, dirty tree, recipes, and quality_
   );
 });
 
+test("loop contract blockers drive canonical next action ahead of legacy actions", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      current: [],
+      runtimeProvenance: {
+        drifted: true,
+        reason: "Source and installed runtime drift needs inspection.",
+      },
+    },
+    nextAction: "Run the next measured packet.",
+    finalization: { ready: true, nextAction: "Finalize reviewable kept work." },
+  });
+
+  assert.equal(envelope.loopContract.blockers[0].kind, "runtime-provenance");
+  assert.equal(envelope.canonicalNextAction.kind, "runtime-provenance");
+});
+
+test("loop contract warnings prevent next-packet canonical drift", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      current: [],
+    },
+    nextAction: "Run the next measured packet.",
+    finalization: { ready: true, nextAction: "Finalize reviewable kept work." },
+  });
+
+  assert.equal(envelope.loopContract.blockers.length, 0);
+  assert.equal(envelope.loopContract.warnings[0].kind, "finalization");
+  assert.equal(envelope.loopContract.canRunNextPacket, false);
+  assert.equal(envelope.canonicalNextAction.kind, "finalization");
+});
+
 test("session forensics parses bounded signals without raw body persistence", async () => {
   await withTempDir("session-forensics", async (dir) => {
     const sessionPath = path.join(dir, "rollout.jsonl");

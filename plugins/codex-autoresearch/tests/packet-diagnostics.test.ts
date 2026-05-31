@@ -42,6 +42,31 @@ test("classifies missing quality score for quality loops", () => {
   assert.match(result.reasons.join("\n"), /quality score/);
 });
 
+test("does not invent missing quality diagnostics without packet evidence", () => {
+  const result = classifyPacketDiagnostics({
+    metricName: "quality_gap",
+    packetEvidence: {},
+  });
+
+  assert.equal(result.primaryStage, "none");
+  assert.equal(result.unresolved, false);
+});
+
+test("treats the configured primary metric as satisfying score-like loops", () => {
+  const qualityGap = classifyPacketDiagnostics({
+    metricName: "quality_gap",
+    packetEvidence: { exitStatus: 0, metrics: { quality_gap: 0 } },
+  });
+  const pipelineScore = classifyPacketDiagnostics({
+    metricName: "pipeline_score",
+    packetEvidence: { exitStatus: 0 },
+    run: { parsedMetrics: { pipeline_score: 0.82 } },
+  });
+
+  assert.equal(qualityGap.primaryStage, "none");
+  assert.equal(pipelineScore.primaryStage, "none");
+});
+
 test("classifies sufficient packets that still fail quality", () => {
   const result = classifyPacketDiagnostics({
     metrics: {

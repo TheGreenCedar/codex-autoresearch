@@ -36,6 +36,34 @@ test("stale lanes and runtime drift block before finalization pressure", () => {
   assert.match(action.reason, /scout-retrieval/);
 });
 
+test("probe-failed runtime provenance remains non-blocking", () => {
+  const status = buildLoopContractStatus({
+    runtimeProvenance: {
+      status: "probe-failed",
+      drifted: false,
+      reason: "Runtime drift probe failed before source/runtime comparison.",
+    },
+  });
+
+  assert.equal(status.ok, true);
+  assert.equal(status.canRunNextPacket, true);
+  assert.equal(status.blockers.length, 0);
+});
+
+test("checked runtime provenance without drift remains non-blocking", () => {
+  const status = buildLoopContractStatus({
+    runtimeProvenance: {
+      status: "checked",
+      drifted: false,
+      driftConfidence: "checked",
+    },
+  });
+
+  assert.equal(status.ok, true);
+  assert.equal(status.canRunNextPacket, true);
+  assert.equal(status.blockers.length, 0);
+});
+
 test("loop contract summarizes blockers and warnings", () => {
   const status = buildLoopContractStatus({
     contextDistillation: { required: true, reason: "Session is too large." },

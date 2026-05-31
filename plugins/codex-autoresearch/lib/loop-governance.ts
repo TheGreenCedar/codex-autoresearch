@@ -150,7 +150,20 @@ function runtimeNeedsInspection(runtimeProvenance: LooseObject | null): boolean 
     runtimeProvenance.driftStatus || runtimeProvenance.status || runtimeProvenance.freshness,
   ).toLowerCase();
   if (!driftStatus) return false;
-  return !["ok", "fresh", "matched", "current", "unavailable", "unknown"].includes(driftStatus);
+  return ![
+    "ok",
+    "fresh",
+    "matched",
+    "current",
+    "checked",
+    "source-only",
+    "not-applicable",
+    "unavailable",
+    "unknown",
+    "probe-failed",
+    "probe_failed",
+    "error",
+  ].includes(driftStatus);
 }
 
 function finalizationPressure(finalizationReadiness: LooseObject | null): boolean {

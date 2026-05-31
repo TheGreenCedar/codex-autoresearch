@@ -99,7 +99,6 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
-        operator_checklist: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -113,6 +112,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
+        operator_checklist: { type: "boolean" },
       },
       required: ["working_dir"],
     },
