@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -53,16 +52,9 @@ import {
 } from "../lib/research-path-guard.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
-import { quoteForShell } from "./helpers/process.js";
+import { quoteForShell, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
-const withTempDir = async (name, fn) => {
-  const dir = await mkdtemp(path.join(tmpdir(), `autoresearch-e1-${name}-`));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-};
+const withTempDir = (name, fn) => withNamedTempDir("autoresearch-e1", name, fn);
 
 test("runner parses early metrics from full output while retaining only bounded tails", async () => {
   await withTempDir("full-output-metric", async (dir) => {

@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
+import { runCommand } from "./check-runner.js";
 
 type ShardResult = {
   code: number | null;
@@ -52,40 +52,13 @@ function parseArgs(argv: string[]): { jobs: number; specs: ShardSpec[] } {
 function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
   const label = args.at(-1) || "node";
   const startedAt = Date.now();
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      stderr += `${error.message}\n`;
-      resolve({
-        code: -1,
-        durationSeconds: (Date.now() - startedAt) / 1000,
-        label,
-        stdout,
-        stderr,
-      });
-    });
-    child.on("close", (code) => {
-      resolve({
-        code,
-        durationSeconds: (Date.now() - startedAt) / 1000,
-        label,
-        stdout,
-        stderr,
-      });
-    });
-  });
+  return runCommand([label, process.execPath, args], { cwd: process.cwd(), env }).then((result) => ({
+    code: result.code,
+    durationSeconds: (Date.now() - startedAt) / 1000,
+    label,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  }));
 }
 
 async function discoverTestCount(file: string): Promise<number | null> {

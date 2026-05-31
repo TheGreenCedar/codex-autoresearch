@@ -8,6 +8,7 @@ import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import {
   createCliRunner,
+  createSpawnedCliRunner,
   quoteForShell,
   runGit,
   withTempDir as withNamedTempDir,
@@ -16,6 +17,7 @@ import {
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
+const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
 const git = async (cwd, args) => {
@@ -36,6 +38,27 @@ async function renderExportedDashboard(html) {
   }
   return dom;
 }
+
+test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
+  await withTempDir("spawned-contract", async (dir) => {
+    const help = await runSpawnedCli(["--help"]);
+    assert.equal(help.code, 0, help.stderr);
+    assert.match(help.stdout, /Usage:/);
+
+    const env = { ...process.env, CODEX_AUTORESEARCH_WORKDIR: dir };
+    const init = await runSpawnedCli(["init", "--name", "spawned", "--metric-name", "seconds"], {
+      cwd: pluginRoot,
+      env,
+    });
+    assert.equal(init.code, 0, init.stderr);
+
+    const state = await runSpawnedCli(["state"], { cwd: pluginRoot, env });
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.config.name, "spawned");
+    assert.equal(payload.config.metricName, "seconds");
+  });
+});
 
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {

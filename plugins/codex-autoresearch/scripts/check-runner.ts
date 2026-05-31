@@ -12,13 +12,18 @@ export interface CommandResult {
 
 export function runCommand(
   [label, command, args]: CommandSpec,
-  { cwd, timeoutSeconds = 300 }: { cwd: string; timeoutSeconds?: number },
+  {
+    cwd,
+    env,
+    timeoutSeconds = 300,
+  }: { cwd: string; env?: NodeJS.ProcessEnv; timeoutSeconds?: number },
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
     const child = spawn(command, args, {
       cwd,
       detached: process.platform !== "win32",
+      env,
       shell: needsShell,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],

@@ -11,9 +11,10 @@ export const quoteForShell = (value) => {
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
 
-const spawnTestProcess = (command, args, cwd, stdio) =>
+const spawnTestProcess = (command, args, cwd, stdio, env = process.env) =>
   spawn(command, args, {
     cwd,
+    env,
     windowsHide: true,
     stdio,
   });
@@ -41,9 +42,13 @@ const resolveWithProcessResult = (child, output, resolve) => {
   child.on("close", (code) => resolve(processResult(code, output.stdout(), output.stderr())));
 };
 
-export const runProcess = (command, args, cwd) => {
+const processOptions = (cwdOrOptions) =>
+  typeof cwdOrOptions === "string" ? { cwd: cwdOrOptions } : cwdOrOptions;
+
+export const runProcess = (command, args, cwdOrOptions) => {
+  const options = processOptions(cwdOrOptions);
   return new Promise((resolve) => {
-    const child = spawnTestProcess(command, args, cwd, ["ignore", "pipe", "pipe"]);
+    const child = spawnTestProcess(command, args, options.cwd, ["ignore", "pipe", "pipe"], options.env);
     const output = captureProcessOutput(child);
     resolveWithProcessResult(child, output, resolve);
   });
@@ -77,6 +82,7 @@ const cliModule = async (cli) => {
 
 const shouldSpawnCli = (args, options = {}) => {
   if (options.spawn === true) return true;
+  if (options.env) return true;
   if (process.env.CODEX_AUTORESEARCH_TEST_SPAWN_CLI === "1") return true;
   return args?.[0] === "serve";
 };
@@ -116,8 +122,20 @@ const runCliInProcess = async (cli, args, cwd) => {
 export const createCliRunner = (cli, defaultCwd) => {
   return (args, options = {}) =>
     shouldSpawnCli(args, options)
-      ? runProcess(process.execPath, [cli, ...args], options.cwd || defaultCwd)
+      ? createSpawnedCliRunner(cli, defaultCwd)(args, options)
       : runCliInProcess(cli, args, options.cwd || defaultCwd);
+};
+
+export const createFastCliRunner = (cli, defaultCwd) => {
+  return (args, options = {}) => runCliInProcess(cli, args, options.cwd || defaultCwd);
+};
+
+export const createSpawnedCliRunner = (cli, defaultCwd) => {
+  return (args, options = {}) =>
+    runProcess(process.execPath, [cli, ...args], {
+      cwd: options.cwd || defaultCwd,
+      env: options.env,
+    });
 };
 
 export const createInteractiveCliRunner = (cli, defaultCwd) => {

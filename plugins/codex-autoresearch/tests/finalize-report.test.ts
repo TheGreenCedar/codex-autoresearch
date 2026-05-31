@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const finalizer = path.join(pluginRoot, "scripts", "finalize-autoresearch.mjs");
@@ -48,12 +48,7 @@ async function writeFile(file, contents) {
 }
 
 async function withTempRoot(prefix, body) {
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    await body(root);
-  } finally {
-    await fsp.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  }
+  return await withNamedTempDir(prefix.replace(/-$/, ""), "root", body);
 }
 
 function testWithTempRoot(name, prefix, body) {
