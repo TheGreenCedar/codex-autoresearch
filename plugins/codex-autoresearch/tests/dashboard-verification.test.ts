@@ -338,6 +338,7 @@ test("dashboard view model and rail expose the authoritative decision envelope",
 
   const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
   assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
+  assert.match(getById("v2-release-signals").textContent, /Do not run another packet/);
   assert.match(getById("decision-envelope-summary").textContent, /1 measurement/);
   assert.match(getById("ledger-body").textContent, /Measurement/);
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
@@ -1424,6 +1425,42 @@ test("dashboard action rail prioritizes stale packets before normal next actions
   assert.equal(rail[0].priority, "Critical");
   assert.match(rail[0].detail, /stale/);
   assert.match(rail[0].explanation.avoids, /old metric/);
+});
+
+test("dashboard action rail marks governance actions as packet brakes", () => {
+  const brakeKinds = [
+    "context-distillation",
+    "lane-cleanup",
+    "runtime-provenance",
+    "packet-diagnostic",
+    "workflow-friction",
+    "finalization",
+    "stale-packet",
+    "setup",
+    "benchmark-command",
+    "log-decision",
+    "segment-transition",
+    "watchdog",
+  ];
+
+  for (const kind of brakeKinds) {
+    const rail = buildActionRail({
+      current: [],
+      bestKept: null,
+      latestFailure: null,
+      nextAction: "",
+      decisionEnvelopeSummary: {
+        kind,
+        priority: "Critical",
+        title: kind,
+        detail: "Resolve this governance action before spending another packet.",
+      },
+      commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+    });
+
+    assert.equal(rail[0].packetBrake, true, kind);
+    assert.doesNotMatch(String(rail[0].command || ""), /\bnext\b/, kind);
+  }
 });
 
 test("dashboard decision envelope priority ladder is stable across competing signals", () => {

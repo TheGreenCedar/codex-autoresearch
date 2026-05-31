@@ -14,6 +14,7 @@ This project uses a root-only changelog because the root README is the public do
 - Added `--asi-json-file` for `log` so PowerShell and Windows sessions can record ASI without fragile inline JSON quoting while preserving inline `--asi` and legacy `--asi-file`.
 - Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
 - Added watchdog, process-hygiene, and finalization-pressure dashboard readouts so long quiet windows, stale snapshots, runtime provenance, and accumulating kept work become visible before the loop sleepwalks into more packets.
+- Added loop-governance readouts, operator checklist mode, stale lane lifecycle, runtime provenance, packet diagnostic taxonomy, and dashboard packet brake status so long Codex loops are harder to continue unsafely.
 - Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
 - Hardened finalization and best-run readouts so only accepted/current keeps drive promotion surfaces and review branches; rejected, provisional, superseded, and quarantined evidence remains audit-only.
 

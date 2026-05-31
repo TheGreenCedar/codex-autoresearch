@@ -112,6 +112,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
+        operator_checklist: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -721,6 +722,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   model_command: "modelCommand",
   model_timeout_seconds: "modelTimeoutSeconds",
   off_limits: "offLimits",
+  operator_checklist: "operatorChecklist",
   packet_env_file: "packetEnvFile",
   query_count: "queryCount",
   recipe_id: "recipeId",

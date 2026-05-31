@@ -878,6 +878,27 @@ const checks = [
     },
   },
   {
+    id: "loop-governance-docs",
+    file: "skills/codex-autoresearch/SKILL.md, docs/operate.md, docs/trust.md, docs/architecture.md",
+    description:
+      "Docs and skill describe the loop-governance fields Codex must read before another packet.",
+    run: async () => {
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const operate = await readText("docs/operate.md");
+      const trust = await readText("docs/trust.md");
+      const architecture = await readText("docs/architecture.md");
+      return includesAll(`${skill}\n${operate}\n${trust}\n${architecture}`, [
+        "operatorChecklist",
+        "loopContract",
+        "runtimeProvenance",
+        "laneLifecycle",
+        "packetDiagnostics",
+      ])
+        ? pass()
+        : fail("Loop-governance docs are missing required compact-readout fields.");
+    },
+  },
+  {
     id: "full-product-tests",
     file: "tests/full-product.test.ts",
     description: "Regression tests cover the full product tracks.",

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "../lib/finalization-plan.js";
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
-import { withTempDir as withNamedTempDir } from "./helpers/process.js";
+import { testGitArgs, withTempDir as withNamedTempDir } from "./helpers/process.js";
+import test from "./helpers/sharded-test.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const finalizer = path.join(pluginRoot, "scripts", "finalize-autoresearch.mjs");
@@ -41,7 +41,7 @@ async function run(command, args, cwd, allowFailure = false) {
 }
 
 async function git(args, cwd) {
-  return await run("git", ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], cwd);
+  return await run("git", testGitArgs(args), cwd);
 }
 
 async function writeFile(file, contents) {
@@ -198,6 +198,7 @@ testWithTempRoot(
     await git(["init", "-b", "main"], repo);
     await git(["config", "user.email", "codex@example.invalid"], repo);
     await git(["config", "user.name", "Codex Test"], repo);
+    if (process.platform === "win32") await git(["config", "core.autocrlf", "true"], repo);
 
     await writeFile(path.join(repo, "src", "value.txt"), "base\n");
     await writeFile(path.join(repo, "src", "other.txt"), "base other\n");

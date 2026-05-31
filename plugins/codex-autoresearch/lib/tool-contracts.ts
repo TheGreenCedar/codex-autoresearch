@@ -49,6 +49,9 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   nextStep: objectSchema(
     "Shared next safe action contract with stage, reason, command/tool, safety, and gaps.",
   ),
+  operatorChecklist: objectSchema(
+    "Compact Codex handoff with one command, safety reason, blocker, evidence role, and source.",
+  ),
   ok: booleanSchema("True when the tool completed successfully."),
   open: numberSchema("Open quality-gap item count."),
   openItems: arraySchema(stringSchema("Open quality-gap item."), "Open quality-gap items."),
@@ -57,6 +60,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   packetEvidence: objectSchema(
     "Last-run packet evidence bundle with command identity, output tails, metrics, artifacts, checks, and fingerprint.",
   ),
+  packetDiagnostics: objectSchema("Diagnostic taxonomy for unresolved packet evidence loss."),
   packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
   parsedMetrics: objectSchema("Parsed METRIC values keyed by metric name."),
   port: numberSchema("Local dashboard port."),
@@ -68,6 +72,9 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   recommendedRecipe: objectSchema("Recommended benchmark recipe."),
   run: objectSchema("Benchmark run packet."),
   runs: objectSchema("Run-count summary."),
+  laneLifecycle: objectSchema("Parallel lane lifecycle and stale-lane summary."),
+  loopContract: objectSchema("Loop-governance contract blockers, warnings, and packet permission."),
+  runtimeProvenance: objectSchema("Source, local, installed runtime, and drift provenance."),
   setup: objectSchema("Setup readiness packet."),
   slug: stringSchema("Research slug."),
   stage: stringSchema("Setup or resume stage."),
@@ -152,7 +159,25 @@ const CONTRACTS = {
     whenToUse: "Use when the operator asks what to do now or an agent needs one next command.",
     contrast: "Use onboarding_packet for broader handoff context.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "action", "whySafe", "nextStep", "commands"]),
+    outputSchema: outputSchemaWithOverrides(
+      [
+        "ok",
+        "workDir",
+        "action",
+        "whySafe",
+        "nextStep",
+        "commands",
+        "operatorChecklist",
+        "loopContract",
+        "runtimeProvenance",
+        "laneLifecycle",
+        "packetDiagnostics",
+      ],
+      {
+        action: unionSchema(["string", "object"], "Safe next action summary or action object."),
+        commands: unionSchema(["array", "object"], "Copyable command list or named command map."),
+      },
+    ),
   },
   codex_goal_bridge: {
     purpose: "Bridge Autoresearch state into Codex Goal objective and completion-audit language.",
@@ -295,7 +320,18 @@ const CONTRACTS = {
     whenToUse: "Use to resume, inspect progress, or feed dashboards.",
     contrast: "Use doctor_session for readiness checks.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "runs", "best", "warnings", "memory"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "runs",
+      "best",
+      "warnings",
+      "memory",
+      "loopContract",
+      "runtimeProvenance",
+      "laneLifecycle",
+      "packetDiagnostics",
+    ]),
   },
   measure_quality_gap: {
     purpose: "Measure open and closed research checklist gaps.",
@@ -545,6 +581,18 @@ function basicOutputSchema(required: string[]): JsonSchema {
   };
 }
 
+function outputSchemaWithOverrides(
+  required: string[],
+  overrides: Record<string, JsonSchema>,
+): JsonSchema {
+  const schema = basicOutputSchema(required);
+  schema.properties = {
+    ...schema.properties,
+    ...overrides,
+  };
+  return schema;
+}
+
 function schemaForOutputField(field: string): JsonSchema {
   return (
     OUTPUT_FIELD_SCHEMAS[field] || {
@@ -564,6 +612,10 @@ function numberSchema(description: string): JsonSchema {
 
 function booleanSchema(description: string): JsonSchema {
   return { type: "boolean", description };
+}
+
+function unionSchema(types: string[], description: string): JsonSchema {
+  return { type: types, description, additionalProperties: types.includes("object") };
 }
 
 function objectSchema(description: string): JsonSchema {

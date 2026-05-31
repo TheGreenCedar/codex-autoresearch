@@ -196,10 +196,15 @@ const testGitConfigEntries = [
   ["commit.gpgsign", "false"],
   ["tag.gpgsign", "false"],
   ["core.autocrlf", "false"],
+  ["user.email", "codex@example.invalid"],
+  ["user.name", "Codex Test"],
 ];
 
+export const testGitArgs = (args) =>
+  testGitConfigEntries.flatMap(([key, value]) => ["-c", `${key}=${value}`]).concat(args);
+
 export const runGit = async (cwd, args) => {
-  const result = await runProcess("git", args, cwd);
+  const result = await runProcess("git", testGitArgs(args), cwd);
   assert.equal(result.code, 0, `git ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
   if (args[0] === "init") await configureTestGitRepo(cwd);
   return result.stdout.trim();

@@ -242,6 +242,11 @@ async function isDirty(cwd: string): Promise<boolean> {
   return result.stdout.trim().length > 0;
 }
 
+async function restoreSourceBranch(sourceBranch: string, cwd: string): Promise<void> {
+  await git(["switch", sourceBranch], cwd, true);
+  await git(["reset", "--hard", "HEAD"], cwd, true);
+}
+
 async function changedFiles(fromRef: string, toRef: string, cwd: string): Promise<string[]> {
   const result = await git(["diff", "--name-only", fromRef, toRef], cwd);
   return normalizePlanFiles(cleanLines(result.stdout), cwd);
@@ -759,7 +764,7 @@ async function verifyUnion(
       (file) => !isAutoresearchSessionArtifact(file, "finalization"),
     );
   } finally {
-    await git(["switch", sourceBranch], cwd, true);
+    await restoreSourceBranch(sourceBranch, cwd);
     await git(["branch", "-D", verifyBranch], cwd, true);
   }
   if (nonSession.length > 0) {
@@ -1019,7 +1024,7 @@ async function main() {
     for (const branch of created) {
       await git(["branch", "-D", branch], cwd, true);
     }
-    await git(["switch", sourceBranch], cwd, true);
+    await restoreSourceBranch(sourceBranch, cwd);
     throw error;
   }
 
@@ -1049,7 +1054,7 @@ async function main() {
         await verifyNoSessionArtifacts(created, cwd, planExcludesSessionArtifacts(config));
       },
     );
-    await git(["switch", sourceBranch], cwd, true);
+    await restoreSourceBranch(sourceBranch, cwd);
     await writeReviewSummary(summaryPath, {
       config,
       groups,
@@ -1058,7 +1063,7 @@ async function main() {
       status: "verified",
     });
   } catch (error) {
-    await git(["switch", sourceBranch], cwd, true);
+    await restoreSourceBranch(sourceBranch, cwd);
     await writeReviewSummary(summaryPath, {
       config,
       groups,

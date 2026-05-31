@@ -3,6 +3,7 @@ import { runCommand } from "./check-runner.js";
 
 type ShardResult = {
   code: number | null;
+  count: number | null;
   durationSeconds: number;
   label: string;
   stderr: string;
@@ -15,6 +16,7 @@ type ShardSpec = {
 };
 
 type ShardTask = {
+  count: number | null;
   label: string;
   range: { end: number; start: number } | null;
   spec: ShardSpec;
@@ -63,6 +65,7 @@ function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
   return runCommand([label, process.execPath, args], { cwd: process.cwd(), env }).then(
     (result) => ({
       code: result.code,
+      count: null,
       durationSeconds: (Date.now() - startedAt) / 1000,
       label,
       stdout: result.stdout,
@@ -86,19 +89,24 @@ async function discoverTestCount(file: string): Promise<number | null> {
 
 function buildTasks(spec: ShardSpec, count: number | null): ShardTask[] {
   if (!count || spec.shards === 1) {
-    return [{ label: `${path.basename(spec.file)} 1/1`, range: null, spec }];
+    return [{ count, label: `${path.basename(spec.file)} 1/1`, range: null, spec }];
   }
   const shards = Math.min(spec.shards, count);
   const size = Math.ceil(count / shards);
-  return Array.from({ length: shards }, (_, index) => {
+  const tasks = Array.from({ length: shards }, (_, index) => {
     const start = index * size;
     const end = Math.min(count, start + size);
     return {
-      label: `${path.basename(spec.file)} ${index + 1}/${shards} (${start + 1}-${end})`,
+      count: end - start,
+      label: "",
       range: { end, start },
       spec,
     };
   }).filter((task) => task.range && task.range.start < task.range.end);
+  return tasks.map((task, index) => ({
+    ...task,
+    label: `${path.basename(spec.file)} ${index + 1}/${tasks.length} (${task.range.start + 1}-${task.range.end})`,
+  }));
 }
 
 async function runShard(task: ShardTask): Promise<ShardResult> {
@@ -111,6 +119,7 @@ async function runShard(task: ShardTask): Promise<ShardResult> {
   });
   return {
     ...result,
+    count: task.count,
     durationSeconds: (Date.now() - startedAt) / 1000,
     label: task.label,
   };
@@ -133,7 +142,8 @@ async function runWithLimit<T>(tasks: Array<() => Promise<T>>, limit: number): P
 function summarize(result: ShardResult): string {
   const status = result.code === 0 ? "PASS" : "FAIL";
   const code = result.code === 0 ? "" : ` code=${result.code}`;
-  return `${status} ${result.label}${code} (${result.durationSeconds.toFixed(1)}s)`;
+  const count = result.count == null ? "" : ` tests=${result.count}`;
+  return `${status} ${result.label}${code}${count} (${result.durationSeconds.toFixed(1)}s)`;
 }
 
 const startedAt = Date.now();
