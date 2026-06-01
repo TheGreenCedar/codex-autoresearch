@@ -84,6 +84,48 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
 });
 
+test("dashboard styles latest rejected evidence as rejected, not kept", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "rejected latest", metricName: "score", bestDirection: "higher" }),
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      description: "Baseline",
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 10,
+      status: "discard",
+      description: "Rejected metric-neutral change",
+      asi: {
+        hypothesis: "Try a neutral ranker change.",
+        evidence: "Prompt recall stayed flat.",
+        rollback_reason: "No primary metric improvement.",
+      },
+      confidence: 1,
+    },
+  ];
+
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const metricDetails = getById("metric-details");
+  const dashboardCss = dom.window.document.querySelector("style")?.textContent || "";
+
+  assert.equal(metricDetails.getAttribute("data-status"), "discard");
+  assert.match(getById("metric-details-selected").textContent || "", /Rejected/);
+  assert.match(dashboardCss, /\.latest-halo-ui\.discard/);
+  assert.match(dashboardCss, /\.experiment-modal\.status-discard/);
+  assert.ok(
+    dashboardCss.lastIndexOf(".dark-theme .latest-halo-ui.discard") >
+      dashboardCss.lastIndexOf(".dark-theme .latest-halo-ui {"),
+    "Dark theme discard halo rule must outrank the generic dark halo.",
+  );
+  dom.window.close();
+});
+
 test("dashboard renders structured ASI evidence without object coercion", async () => {
   const structuredEvidence = [
     { label: "Command", detail: "node scripts/check.mjs" },

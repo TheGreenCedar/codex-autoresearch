@@ -59,7 +59,8 @@ export function ExperimentModal({
     <div className="modal-backdrop" role="presentation" onMouseDown={requestClose}>
       <section
         ref={dialogRef}
-        className="experiment-modal"
+        className={`experiment-modal status-${point.status}`}
+        data-status={point.status}
         role="dialog"
         aria-modal="true"
         aria-labelledby="experiment-modal-title"

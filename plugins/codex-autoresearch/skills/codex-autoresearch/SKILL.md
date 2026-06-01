@@ -37,6 +37,7 @@ UX, the user experience:
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
 - At session start and resume, run `guide`, start/reuse the live dashboard with `serve`, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
 - Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, dashboard URL, and verification.
+- If the user is clearly frustrated, a loop keeps failing in the same product-shaped way, or Autoresearch itself appears confusing, broken, stale, or under-documented, do not bury that under another generic retry. Identify the failing layer, collect the smallest useful evidence packet, and suggest opening a GitHub issue at `https://github.com/TheGreenCedar/codex-autoresearch/issues/new/choose` when it looks like a product bug, docs gap, template gap, runtime-drift trap, or UX paper cut. Include the command, cwd, plugin version/cache path when known, output tail, expected behavior, actual behavior, and any safe `autoresearch.*` or dashboard artifacts. For security issues, point to `SECURITY.md` instead of public issues.
 
 ## Documentation Awareness
 
