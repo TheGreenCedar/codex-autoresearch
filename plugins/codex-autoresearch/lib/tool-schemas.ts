@@ -112,6 +112,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
+        operator_checklist: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -151,6 +152,7 @@ export const toolSchemas = applyToolContracts([
         dry_run: { type: "boolean" },
         apply: { type: "boolean" },
         allow_snippets: { type: "boolean" },
+        allow_outside_workdir: { type: "boolean" },
         max_snippets: { type: "integer" },
         max_snippet_chars: { type: "integer" },
       },
@@ -235,6 +237,51 @@ export const toolSchemas = applyToolContracts([
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir", "slug", "goal"],
+    },
+  },
+  {
+    name: "research_fanout",
+    description:
+      "Create a generic parallel research lane plan from current session memory without mutating source files unless --yes is passed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        lanes: { type: "integer" },
+        lane_count: { type: "integer" },
+        dry_run: { type: "boolean" },
+        yes: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
+    name: "lane_runner",
+    description:
+      "Run or record one coordinated research lane with conservative isolation and a single synthesized next packet recommendation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        lane_id: { type: "string" },
+        lane: { type: "string" },
+        mode: { type: "string", enum: ["read_only_scout", "implementation"] },
+        command: { type: "string" },
+        worktree: { type: "string" },
+        worktree_path: { type: "string" },
+        write_scope: { type: "array", items: { type: "string" } },
+        commit_paths: { type: "array", items: { type: "string" } },
+        result_status: { type: "string", enum: ["completed", "blocked", "failed", "planned"] },
+        summary: { type: "string" },
+        recommendation: { type: "string" },
+        next_action: { type: "string" },
+        time_budget_seconds: { type: "integer" },
+        timeout_seconds: { type: "integer" },
+        dry_run: { type: "boolean" },
+        yes: { type: "boolean" },
+        allow_non_git_command: { type: "boolean" },
+      },
+      required: ["working_dir"],
     },
   },
   {
@@ -348,7 +395,14 @@ export const toolSchemas = applyToolContracts([
         },
         description: { type: "string" },
         metrics: { type: "object" },
+        metrics_file: { type: "string" },
         asi: { type: "object" },
+        asi_json_file: { type: "string" },
+        asi_file: { type: "string" },
+        evidence_status: {
+          type: "string",
+          enum: ["accepted", "rejected", "provisional", "superseded"],
+        },
         commit_paths: { type: "array", items: { type: "string" } },
         revert_paths: { type: "array", items: { type: "string" } },
         allow_add_all: { type: "boolean" },
@@ -595,6 +649,8 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
   "session-forensics": "session_forensics",
   recipes: "list_recipes",
   "research-setup": "setup_research_session",
+  "research-fanout": "research_fanout",
+  "lane-runner": "lane_runner",
   config: "configure_session",
   "quality-gap": "measure_quality_gap",
   "gap-candidates": "gap_candidates",
@@ -620,8 +676,12 @@ const CLI_COMMAND_TO_TOOL: Record<string, string> = {
 
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
+  allow_non_git_command: "allowNonGitCommand",
+  allow_outside_workdir: "allowOutsideWorkdir",
   allow_dirty_revert: "allowDirtyRevert",
   allow_snippets: "allowSnippets",
+  asi_json_file: "asiJsonFile",
+  asi_file: "asiFile",
   autonomy_mode: "autonomyMode",
   benchmark_command: "benchmarkCommand",
   benchmark_prints_metric: "benchmarkPrintsMetric",
@@ -648,9 +708,13 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   files_in_scope: "filesInScope",
   from_last: "fromLast",
   gate_name: "gateName",
+  evidence_status: "evidenceStatus",
   json_full: "jsonFull",
   keep_policy: "keepPolicy",
+  lane_id: "laneId",
+  lane_count: "laneCount",
   max_iterations: "maxIterations",
+  metrics_file: "metricsFile",
   max_snippet_chars: "maxSnippetChars",
   max_snippets: "maxSnippets",
   metric_name: "metricName",
@@ -658,6 +722,7 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   model_command: "modelCommand",
   model_timeout_seconds: "modelTimeoutSeconds",
   off_limits: "offLimits",
+  operator_checklist: "operatorChecklist",
   packet_env_file: "packetEnvFile",
   query_count: "queryCount",
   recipe_id: "recipeId",
@@ -665,15 +730,19 @@ const RUNTIME_ARG_ALIASES: Record<string, string> = {
   session_jsonl: "sessionJsonl",
   revert_paths: "revertPaths",
   secondary_metrics: "secondaryMetrics",
+  result_status: "resultStatus",
   skip_init: "skipInit",
   start_dashboard: "startDashboard",
   timeout_seconds: "timeoutSeconds",
+  time_budget_seconds: "timeBudgetSeconds",
   trust_catalog: "trustCatalog",
+  worktree_path: "worktreePath",
   working_dir: "cwd",
+  write_scope: "writeScope",
 };
 
 export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {
-  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  const schema = schemaForTool(name);
   if (!schema) throw new Error(`Unknown tool: ${name}`);
   const normalized = normalizeToolArguments(name, args);
   for (const required of schema.required || []) {
@@ -695,21 +764,9 @@ export function validateToolArguments(name: string, args: ToolArgs = {}, options
 }
 
 export function normalizeToolArguments(name: string, args: ToolArgs = {}): ToolArgs {
-  const schema = toolSchemas.find((tool) => tool.name === name)?.inputSchema;
+  const schema = schemaForTool(name);
   if (!schema) return args || {};
-  const aliases = new Map<string, string>();
-  for (const key of Object.keys(schema.properties || {})) {
-    aliases.set(key, key);
-    aliases.set(toCamel(key), key);
-  }
-  if (schema.properties?.working_dir) {
-    aliases.set("workingDir", "working_dir");
-    aliases.set("cwd", "working_dir");
-  }
-  if (schema.properties?.recipe_id) aliases.set("recipe", "recipe_id");
-  if (schema.properties?.research_slug) aliases.set("slug", "research_slug");
-  if (schema.properties?.confirm) aliases.set("yes", "confirm");
-  if (schema.properties?.json_full) aliases.set("full", "json_full");
+  const aliases = aliasesForSchema(schema);
 
   const normalized: ToolArgs = {};
   for (const [key, value] of Object.entries(args || {})) {
@@ -738,7 +795,8 @@ export function requireUnsafeCommandGate(
   args: ToolArgs = {},
   boolOption = defaultBoolOption,
 ) {
-  const normalized: ToolArgs = normalizeToolArguments(toolName, args);
+  const schema = schemaForTool(toolName);
+  const normalized: ToolArgs = schema ? normalizeToolArguments(toolName, args) : args || {};
   const setupCatalogCanMaterializeCommands =
     (toolName === "setup_plan" ||
       toolName === "guided_setup" ||
@@ -760,6 +818,27 @@ export function requireUnsafeCommandGate(
       `${toolName} custom shell commands require allow_unsafe_command=true. Prefer a configured autoresearch script when possible.`,
     );
   }
+}
+
+function schemaForTool(name: string): JsonSchema | null {
+  return toolSchemas.find((tool) => tool.name === name)?.inputSchema || null;
+}
+
+function aliasesForSchema(schema: JsonSchema) {
+  const aliases = new Map<string, string>();
+  for (const key of Object.keys(schema.properties || {})) {
+    aliases.set(key, key);
+    aliases.set(toCamel(key), key);
+  }
+  if (schema.properties?.working_dir) {
+    aliases.set("workingDir", "working_dir");
+    aliases.set("cwd", "working_dir");
+  }
+  if (schema.properties?.recipe_id) aliases.set("recipe", "recipe_id");
+  if (schema.properties?.research_slug) aliases.set("slug", "research_slug");
+  if (schema.properties?.confirm) aliases.set("yes", "confirm");
+  if (schema.properties?.json_full) aliases.set("full", "json_full");
+  return aliases;
 }
 
 function inferActiveResearchSlug(name: string, normalized: ToolArgs) {

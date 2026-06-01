@@ -47,7 +47,7 @@ export function DecisionRail({
           {readout.nextAction ? "Next action" : action.title || "Choose next hypothesis"}
         </h2>
         <div className="decision-envelope-card" id="decision-envelope-summary">
-          <span>Decision envelope</span>
+          <span>Decision basis</span>
           <strong>{String(envelope.title || action.title || "Next action")}</strong>
           <em>
             {[
@@ -68,7 +68,7 @@ export function DecisionRail({
         <p id="next-action-detail" className="next-action-text">
           {readout.nextAction ||
             action.detail ||
-            "Add ASI next_action_hint to make the next session obvious."}
+            "No next step recorded yet. Run a packet to generate one."}
         </p>
         {showCommandCopy ? (
           <div className="next-command-copy" id="decision-next-command">
@@ -79,7 +79,7 @@ export function DecisionRail({
                       .label as string)
                   : "Next command"}
               </span>
-              <code>{command}</code>
+              <code translate="no">{command}</code>
             </div>
             <button
               type="button"
@@ -98,7 +98,8 @@ export function DecisionRail({
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
-              className={`evidence-chip ${chip.tone || "neutral"}`}
+              className={`evidence-chip ${chip.tone || "neutral"} evidence-${chip.status}`}
+              data-evidence-status={chip.status}
               key={`${chip.label}-${chip.value}`}
             >
               <strong>{chip.label}</strong>
@@ -107,11 +108,11 @@ export function DecisionRail({
           ))}
         </div>
         <div className="readout-facts">
-          <span className="readout-label">Best kept change</span>
+          <span className="readout-label">Best result so far</span>
           <strong id="best-kept-detail">
-            {readout.bestRun?.description || "No kept anchor yet."}
+            {readout.bestRun?.description || "No kept result yet."}
           </strong>
-          <span className="readout-label">Recent failures</span>
+          <span className="readout-label">Most recent setback</span>
           <strong id="recent-failure-detail">
             {readout.latestFailure?.description || "No recent failure."}
           </strong>
@@ -196,12 +197,14 @@ function evidenceChipsFor(
     evidenceReadout.label && {
       label: "Evidence label",
       value: String(evidenceReadout.title || evidenceReadout.label),
-      tone: evidenceReadout.promotable ? "good" : "warn",
+      tone: evidenceReadout.promotable ? "good" : "neutral",
+      status: evidenceStatusKey(evidenceReadout.label || evidenceReadout.title),
     },
     proofGap.detail && {
       label: proofGap.label || "Proof gap",
       value: [proofGap.detail, proofGap.nextAction].filter(Boolean).join(" -> "),
       tone: "warn",
+      status: "suspicious",
     },
     ...modeled,
     ...actionModeled,
@@ -213,23 +216,51 @@ function evidenceChipsFor(
         label: String(chip.label || chip.title || chip.kind || "Evidence"),
         value: String(chip.value || chip.detail || chip.text || chip.message || ""),
         tone: String(chip.tone || chip.state || "neutral"),
+        status: evidenceStatusKey(chip.evidenceStatus || chip.status || chip.tone || chip.state),
       };
     })
     .filter((item) => item.value);
   if (chips.length) return chips.slice(0, 5);
   const explanation = action.explanation || {};
   return [
-    explanation.evidence && { label: "Evidence", value: explanation.evidence, tone: "good" },
-    explanation.avoids && { label: "Avoids", value: explanation.avoids, tone: "warn" },
-    explanation.proof && { label: "Proof", value: explanation.proof, tone: "neutral" },
+    explanation.evidence && {
+      label: "Evidence",
+      value: explanation.evidence,
+      tone: "good",
+      status: "accepted",
+    },
+    explanation.avoids && {
+      label: "Avoids",
+      value: explanation.avoids,
+      tone: "warn",
+      status: "rejected",
+    },
+    explanation.proof && {
+      label: "Proof",
+      value: explanation.proof,
+      tone: "neutral",
+      status: "provisional",
+    },
     readout.confidenceText && {
       label: "Confidence",
       value: readout.confidenceText,
       tone: "neutral",
+      status: "provisional",
     },
   ]
     .filter(Boolean)
-    .slice(0, 4) as { label: string; value: string; tone: string }[];
+    .slice(0, 4) as { label: string; value: string; tone: string; status: string }[];
+}
+
+function evidenceStatusKey(value: unknown) {
+  const key = String(value || "").toLowerCase();
+  if (["accepted", "current", "promotion_eligible", "good"].includes(key)) return "accepted";
+  if (["rejected", "invalidated", "superseded", "danger"].includes(key)) return "rejected";
+  if (["quarantined", "suspicious", "warn", "warning"].includes(key)) return "suspicious";
+  if (["provisional", "exploratory", "pending_repeat", "neutral"].includes(key)) {
+    return "provisional";
+  }
+  return "provisional";
 }
 
 function toList(value: unknown) {

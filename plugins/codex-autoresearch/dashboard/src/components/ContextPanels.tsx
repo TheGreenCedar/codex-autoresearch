@@ -5,6 +5,7 @@ import type {
   FinalizePreviewModel,
   SessionSegment,
 } from "../types";
+import { laneActive, laneCompleted, laneStatusKey, laneStatusTone } from "./laneStatus";
 
 export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewModel }) {
   const gap = viewModel.qualityGap || {};
@@ -100,38 +101,60 @@ export function CodexBrief({
 
 export function StrategyMemory({ viewModel }: { viewModel: DashboardViewModel }) {
   const memory = viewModel.experimentMemory || {};
-  const lanes = Array.isArray(memory.lanePortfolio) ? memory.lanePortfolio.slice(0, 4) : [];
+  const lanes = (
+    Array.isArray(viewModel.parallelLanes) && viewModel.parallelLanes.length
+      ? viewModel.parallelLanes
+      : Array.isArray(memory.lanePortfolio)
+        ? memory.lanePortfolio
+        : []
+  ).slice(0, 6);
+  const fanoutStatus =
+    typeof viewModel.fanoutPlan?.status === "string" ? viewModel.fanoutPlan.status : "";
+  const completed = lanes.filter(laneCompleted).length;
+  const active = lanes.filter(laneActive).length;
   return (
     <section
       className="panel memory-panel"
       id="strategy-memory"
-      aria-label="Session memory"
+      aria-label="Strategy lanes"
       tabIndex={-1}
     >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Session memory</p>
-          <h2>Experiment portfolio</h2>
+          <p className="eyebrow">Strategy lanes</p>
+          <h2>Parallel exploration board</h2>
         </div>
         <span className="panel-note">
-          {memory.plateau?.detected ? "Plateau detected" : "No plateau"}
+          {lanes.length
+            ? `${active} active / ${completed} done`
+            : fanoutStatus || (memory.plateau?.detected ? "Plateau detected" : "No lanes")}
         </span>
       </div>
-      <div className="memory-list">
+      <div className="lane-board">
         {lanes.length ? (
           lanes.map((lane) => (
-            <div className="memory-lane" key={lane.id || lane.title}>
-              <strong>{lane.title || lane.id || "Lane"}</strong>
-              <span>{lane.status || "tracking"}</span>
+            <article className="strategy-lane-card" key={lane.id || lane.title}>
+              <div className="strategy-lane-card__head">
+                <strong>{lane.title || lane.label || lane.id || "Lane"}</strong>
+                <span className={`status-pill ${laneStatusTone(laneStatusKey(lane))}`}>
+                  {lane.status || "tracking"}
+                </span>
+              </div>
+              <div className="strategy-lane-meta">
+                <span>{lane.mode || "mode unknown"}</span>
+                <span className={`evidence-state ${evidenceStateKey(lane.evidenceStatus)}`}>
+                  {lane.evidenceStatus || "evidence pending"}
+                </span>
+              </div>
               <p>
                 {lane.nextActionHint ||
                   lane.recommendation ||
                   "Use ASI to choose the next measured hypothesis."}
               </p>
-            </div>
+            </article>
           ))
         ) : (
-          <div className="empty">No strategy lanes embedded in this export.</div>
+          <div className="empty">No strategy lanes are embedded in this export.</div>
         )}
       </div>
     </section>
@@ -225,6 +248,64 @@ export function FinalizationChecklist({ viewModel }: { viewModel: DashboardViewM
       </div>
     </section>
   );
+}
+
+export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel }) {
+  const hygiene = (viewModel.processHygiene || {}) as Record<string, unknown>;
+  const watchdog = (viewModel.watchdogSummary || {}) as Record<string, unknown>;
+  const warnings = toList(hygiene.warnings);
+  const status = String(hygiene.status || "unknown");
+  return (
+    <section
+      className="panel process-panel"
+      id="process-hygiene"
+      aria-label="Process hygiene"
+      tabIndex={-1}
+    >
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Process hygiene</p>
+          <h2 id="process-hygiene-title">
+            {status === "needs-attention" ? "Runtime needs attention" : "Runtime provenance"}
+          </h2>
+        </div>
+        <span className="panel-note">{String(hygiene.mode || "unknown")}</span>
+      </div>
+      <div className="memory-list" id="process-hygiene-detail">
+        <div className="memory-lane">
+          <strong>Active cwd</strong>
+          <span>{String(hygiene.activeCwd || "unknown")}</span>
+          <p>{String(hygiene.pluginVersion || "unknown")}</p>
+        </div>
+        <div className="memory-lane">
+          <strong>Server checks</strong>
+          <span>{String(hygiene.duplicateServerDetection || "unavailable")}</span>
+          <p>{String(hygiene.staleServerDetection || "unavailable")}</p>
+        </div>
+        <div className="memory-lane">
+          <strong>Watchdog</strong>
+          <span>{String(watchdog.status || "unknown")}</span>
+          <p>{String(watchdog.recommendation || "No watchdog summary embedded.")}</p>
+        </div>
+        {warnings.length ? (
+          <div className="memory-lane">
+            <strong>Warnings</strong>
+            <span>{warnings.length}</span>
+            <p>{warnings[0]}</p>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function evidenceStateKey(value: unknown) {
+  const key = String(value || "pending").toLowerCase();
+  if (["accepted", "current", "promotion_eligible"].includes(key)) return "accepted";
+  if (["rejected", "superseded"].includes(key)) return "rejected";
+  if (["quarantined", "suspicious"].includes(key)) return "warning";
+  if (["provisional", "pending", "exploratory"].includes(key)) return "provisional";
+  return "provisional";
 }
 
 function normalizeChecklist(

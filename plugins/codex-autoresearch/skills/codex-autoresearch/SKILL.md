@@ -58,12 +58,13 @@ The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the so
 3. If this repo is the target, use the repo-local plugin. From the wrapper root, call `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`; the package root is `plugins/codex-autoresearch`.
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
-6. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
-7. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
-8. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
-9. Start the live dashboard with `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
-10. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
-11. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
+6. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
+7. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
+8. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
+9. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
+10. Start the live dashboard with `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
+11. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
+12. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
 
 Explicit benchmark commands are assumed to print `METRIC name=value` lines. They may also print `ARTIFACT name=path` for manifests or reports the dashboard/last-run packet should link. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 
@@ -95,12 +96,14 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - If `log --from-last` reports no loggable packet or a stale packet, recover with `next --cwd <project>` or record a manual measurement with `log --cwd <project> --metric <value> --status measure --description "<what was measured>"`.
 - If the last packet crashed or timed out after writing artifacts, run `partial-results --cwd <project> --from-last` before rerunning. Only `partial-results --record <candidate-id>` may turn a selected row into diagnostic `measure` evidence; it must not become promotion-grade evidence.
 - Read the last-run `packetEvidence` before logging: packet id, command identity, timeout, exit status, output tails, metrics, artifacts, checks, and freshness fingerprint.
-- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-file <path>` on PowerShell or any shell where inline JSON quoting is fragile.
+- Include ASI every time: `hypothesis`, `evidence`, `rollback_reason` for rejected paths, `next_action_hint`, and when useful `lane`, `family`, `risk`, and `expected_delta`. Prefer `--asi-json-file <path>` and `--metrics-file <path>` on PowerShell or any shell where inline JSON quoting is fragile; `--asi-file` remains a compatibility alias.
 - `keep`, ordinary `discard`, and `measure` require a finite primary metric.
+- Use `--evidence-status accepted|rejected|provisional|superseded` only when the default status label would hide the actual evidence role. Quarantined artifacts may appear in audit readouts, but `quarantined` is not a CLI evidence-status value. Do not make rejected, superseded, provisional, or quarantined evidence promotable.
 - Use `measure` for non-promotional evidence such as baselines, no-change checks, environment probes, and diagnostic measurements. It updates trend/latest/baseline readouts, but it never stages, commits, reverts, counts as `keep`, or becomes finalizer evidence.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - Treat parsed metrics and promotion readiness separately. New keeps default to `exploratory`; discards are `invalidated`; crashes and failed checks are `blocked`; only repeat, holdout, breadth, or explicit promotion metadata should make evidence promotable.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
+- If the loop is serially burning time, run `research-fanout --cwd <project> --dry-run` to create a generic parallel lane plan. Fanout plans are segment-scoped; after `new-segment`, record a fresh plan for that segment. Dispatch read-only scout lanes first with `lane-runner`; they do not need a worktree, must not edit files, and cannot run commands outside Git without `--allow-non-git-command`. Implementation lanes need `lane-runner --mode implementation` plus a worktree or explicit owned write scope before mutating commands run. Use the coordinator recommendation as the single next measured packet.
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer. A finite active budget counts: do not stop at a report while iterations remain and there is no blocker.
 - Prefer `next --compact` for live-loop reporting; the full decision packet stays in `lastRunPath` for `log --from-last` and audit.
 - Use `--command-file <path>` plus `--packet-env-file <path>` for Windows/PowerShell packets that would otherwise need fragile inline quoting.
@@ -121,6 +124,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next` before logging.
 - The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, progress/economics, partial-result candidates, workflow friction, benchmark/config drift, dirty source drift, quality round, experiment memory, and finalization readiness before naming `nextAction`.
+- Read `watchdog` in `state`, `recommend-next`, and the dashboard before continuing a long run. A stale watchdog means no metric movement, logged decision, kept commit, or completed lane result has appeared inside the configured quiet window; inspect the process, finalize kept work, or rescope instead of spending another packet by reflex.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
@@ -150,15 +154,17 @@ Prefer the served dashboard:
 - Use `export` only for offline snapshots.
 - Static exports are read-only; use the served dashboard when packet freshness matters.
 - Treat the dashboard as a visual aid, not a control surface. It should not expose inert live controls, mutation buttons, or command receipts.
+- The dashboard opens in audit view: the metric trend, chart-led readiness strip, scores, mission control, strategy lanes, research truth, finalization, process hygiene, and quality gap are visible by default. Switch to operate (Focus view) from the header toggle for a chart-first surface with audit panels removed from the DOM; operate keeps lane detail summarized as readiness only. View, selected segment, and chart value/axis preferences are stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`), so a served dashboard link can be shared with that exact state.
 
 Read dashboard evidence in this order:
 
 1. Decision envelope summary: packet freshness, blockers, segment transition, plateau, finalization readiness, and the one authoritative next action.
-2. Metric trend: baseline, best, latest, measurement points, confidence, weighted formula when present.
-3. Codex brief and session memory: what happened, what matters, plateau, lanes, novelty, repeated families.
+2. Metric trend and readiness strip: baseline, best, latest, measurement points, confidence, weighted formula when present, next action, evidence status, lanes, watchdog, and finalization pressure.
+3. Codex brief and strategy lanes: what happened, what matters, plateau, lane mode, evidence status, novelty, repeated families.
 4. Current decision: next safe action, why it is safe, evidence, best kept change, recent failure.
 5. Ledger and ASI: what was kept, measured, rejected, crashed, or blocked by checks.
 6. Finalization, quality-gap, runtime drift, and other supporting diagnostics.
+7. Process hygiene: active cwd, plugin version, live/export mode, stale snapshot hints, duplicate-server hints when the current serve process can know them, and explicit "unavailable" labels when it cannot.
 
 Use the CLI for setup, packet runs, logging, gap review, export, `finalize-preview`, and finalization preview. The dashboard should support judgment; it should not become the workflow driver.
 
@@ -182,13 +188,14 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize-preview --cwd <project>` before branch creation.
-2. Keep only `status: "keep"` evidence.
+2. Keep only accepted/current `status: "keep"` evidence; rejected, provisional, superseded, and quarantined evidence stays audit-visible but must not drive review branches.
 3. Treat previews and plans as read-only.
 4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings. A ready preview must cover the final non-session tree.
-5. Ask before creating branches unless the user already approved finalization.
-6. Run the finalizer from the autoresearch source branch.
-7. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
-8. Report created review branches, files, metric improvement, verification, and remaining risk.
+5. Treat finalization pressure as a stop-and-review signal when kept runs, preview warnings, missing commit metadata, or watchdog pressure accumulate.
+6. Ask before creating branches unless the user already approved finalization.
+7. Run the finalizer from the autoresearch source branch.
+8. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
+9. Report created review branches, files, metric improvement, verification, and remaining risk.
 
 Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project>` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain that the current tree, not old kept commits, is the review unit.
 

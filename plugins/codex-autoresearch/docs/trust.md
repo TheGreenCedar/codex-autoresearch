@@ -20,7 +20,7 @@ Missing, null, crashed, clipped, or ineligible metrics are unknown. Do not repor
 
 `crash` and `checks_failed` can be logged without inventing sentinel metrics. A normal `keep`, `discard`, or `measure` needs a finite primary metric.
 
-Use `measure` for non-promotional evidence: baselines, no-change checks, environment probes, and diagnostics. It can inform latest/trend/baseline readouts, but it is never a keep, never a finalizer input, and never a sneaky little promotion certificate wearing a hat.
+Use `measure` for non-promotional evidence: baselines, no-change checks, environment probes, and diagnostics. It can inform latest/trend/baseline readouts, but it is never a keep and never a finalizer input.
 
 `benchmark-lint` reports two layers:
 
@@ -63,6 +63,12 @@ Fresh packets also carry a packet evidence bundle: packet id, command identity, 
 `doctor --check-benchmark` compares the current command output against the configured primary metric and can warn when current output is far worse than the historical best.
 
 When that happens, treat the old best as historical evidence. Do not claim it is current runtime proof until a fresh packet confirms it.
+
+## Runtime Provenance And Packet Diagnostics
+
+Runtime provenance is a trust gate, not decoration. Read `runtimeProvenance` before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence; inspect the active runtime path/version before saying the behavior is live. If installed runtime cannot be inspected, call it unavailable instead of fresh.
+
+Packet diagnostics are also trust gates. Read `packetDiagnostics` before rerunning or promoting a packet that lost evidence. A packet that retrieved evidence but failed citation carry, lost claims during synthesis, missed a quality score, or marked itself sufficient while the benchmark failed is diagnostic evidence. It can explain the next fix, but it is not a product win.
 
 ## Promotion Evidence
 

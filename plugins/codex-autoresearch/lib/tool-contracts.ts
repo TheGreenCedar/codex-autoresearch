@@ -10,6 +10,88 @@ type JsonSchema = {
   additionalProperties?: boolean | JsonSchema;
 };
 
+const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
+  action: stringSchema("Safe next action summary."),
+  best: objectSchema("Best kept run summary."),
+  candidates: arraySchema(objectSchema("Candidate quality-gap item."), "Candidate items."),
+  checkedAt: stringSchema("ISO timestamp for a liveness check."),
+  closed: numberSchema("Closed quality-gap item count."),
+  commands: arraySchema(stringSchema("Command line."), "Copyable command list."),
+  config: objectSchema("Autoresearch session config."),
+  continuation: objectSchema("Active-loop continuation contract."),
+  decision: objectSchema("Allowed logging decision packet."),
+  deferredViewModel: objectSchema("Deferred live dashboard diagnostics endpoint."),
+  deleted: arraySchema(stringSchema("Deleted artifact path."), "Deleted artifact paths."),
+  doctor: objectSchema("Doctor readiness result."),
+  drift: objectSchema("Runtime/source drift report."),
+  dryRun: booleanSchema("Whether the mutation was previewed only."),
+  dashboard: objectSchema("Live dashboard startup status for guided setup."),
+  entry: objectSchema("Ledger/config entry."),
+  experiment: objectSchema("Logged experiment entry."),
+  failedTests: arraySchema(stringSchema("Failed test or check."), "Failed tests or checks."),
+  files: arraySchema(stringSchema("Created or touched file path."), "Created or touched files."),
+  finalizePreview: objectSchema("Finalization readiness preview."),
+  guidedFlow: arraySchema(objectSchema("Guided workflow step."), "Guided workflow steps."),
+  healthUrl: stringSchema("Dashboard health-check URL."),
+  hints: arraySchema(stringSchema("Operator hint."), "Operator hints."),
+  init: objectSchema("Initial ledger entry result."),
+  intent: objectSchema("Inferred prompt intent."),
+  issues: arraySchema(stringSchema("Validation or readiness issue."), "Issues."),
+  lastRun: objectSchema("Pending last-run packet summary and freshness metadata."),
+  logHint: objectSchema("Suggested log command or payload."),
+  memory: objectSchema("Experiment memory summary."),
+  missing: arraySchema(stringSchema("Missing required setup field."), "Missing setup fields."),
+  missingEssentials: arraySchema(
+    stringSchema("Missing required setup field."),
+    "Missing essentials for the first valid loop.",
+  ),
+  modeGuidance: objectSchema("Dashboard mode guidance."),
+  nextAction: stringSchema("Recommended next operator action."),
+  nextStep: objectSchema(
+    "Shared next safe action contract with stage, reason, command/tool, safety, and gaps.",
+  ),
+  operatorChecklist: objectSchema(
+    "Compact Codex handoff with one command, safety reason, blocker, evidence role, and source.",
+  ),
+  ok: booleanSchema("True when the tool completed successfully."),
+  open: numberSchema("Open quality-gap item count."),
+  openItems: arraySchema(stringSchema("Open quality-gap item."), "Open quality-gap items."),
+  output: stringSchema("Output file path or command output."),
+  outputPreview: stringSchema("Bounded command output preview."),
+  packetEvidence: objectSchema(
+    "Last-run packet evidence bundle with command identity, output tails, metrics, artifacts, checks, and fingerprint.",
+  ),
+  packetDiagnostics: objectSchema("Diagnostic taxonomy for unresolved packet evidence loss."),
+  packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
+  parsedMetrics: objectSchema("Parsed METRIC values keyed by metric name."),
+  port: numberSchema("Local dashboard port."),
+  protocol: objectSchema("Operator protocol guidance."),
+  qualityGap: objectSchema("Quality-gap scratchpad summary."),
+  promotion: objectSchema("Promotion state label and reasons for evidence readiness."),
+  ready: booleanSchema("True when the preview is ready to apply."),
+  recipes: arraySchema(objectSchema("Recipe summary."), "Available recipes."),
+  recommendedRecipe: objectSchema("Recommended benchmark recipe."),
+  run: objectSchema("Benchmark run packet."),
+  runs: objectSchema("Run-count summary."),
+  laneLifecycle: objectSchema("Parallel lane lifecycle and stale-lane summary."),
+  loopContract: objectSchema("Loop-governance contract blockers, warnings, and packet permission."),
+  runtimeProvenance: objectSchema("Source, local, installed runtime, and drift provenance."),
+  setup: objectSchema("Setup readiness packet."),
+  slug: stringSchema("Research slug."),
+  stage: stringSchema("Setup or resume stage."),
+  stopRecommended: booleanSchema("True when candidate extraction recommends stopping."),
+  stopStatus: stringSchema("Recommended stop status."),
+  summary: objectSchema("Dashboard export summary."),
+  templates: arraySchema(objectSchema("Report template."), "Report templates."),
+  updates: arraySchema(stringSchema("Applied config update."), "Applied updates."),
+  url: stringSchema("Served local dashboard URL."),
+  verified: booleanSchema("True when the dashboard health check passed."),
+  warnings: arraySchema(stringSchema("Warning message."), "Warnings."),
+  whySafe: stringSchema("Evidence explaining why the next action is safe."),
+  workDir: stringSchema("Resolved project working directory."),
+  wouldDelete: arraySchema(stringSchema("Artifact path to delete."), "Previewed deletion targets."),
+};
+
 const CONTRACTS = {
   setup_plan: {
     purpose: "Read-only setup readiness and first-run command plan.",
@@ -78,7 +160,25 @@ const CONTRACTS = {
     whenToUse: "Use when the operator asks what to do now or an agent needs one next command.",
     contrast: "Use onboarding_packet for broader handoff context.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "action", "whySafe", "nextStep", "commands"]),
+    outputSchema: outputSchemaWithOverrides(
+      [
+        "ok",
+        "workDir",
+        "action",
+        "whySafe",
+        "nextStep",
+        "commands",
+        "operatorChecklist",
+        "loopContract",
+        "runtimeProvenance",
+        "laneLifecycle",
+        "packetDiagnostics",
+      ],
+      {
+        action: unionSchema(["string", "object"], "Safe next action summary or action object."),
+        commands: unionSchema(["array", "object"], "Copyable command list or named command map."),
+      },
+    ),
   },
   codex_goal_bridge: {
     purpose: "Bridge Autoresearch state into Codex Goal objective and completion-audit language.",
@@ -98,7 +198,8 @@ const CONTRACTS = {
     purpose: "Parse Codex rollout JSONL into bounded session and waste signals.",
     whenToUse: "Use to import a long Codex session before more Autoresearch packets.",
     contrast: "Use read_state for the current Autoresearch ledger only.",
-    safety: "Dry-run is read-only; apply writes only validated research capsule files.",
+    safety:
+      "Dry-run is read-only; apply writes only validated research capsule files. Session JSONL reads are limited to --cwd unless allow_outside_workdir is explicit.",
     outputSchema: basicOutputSchema([
       "ok",
       "workDir",
@@ -131,6 +232,29 @@ const CONTRACTS = {
     contrast: "Use setup_session for direct numeric benchmark loops.",
     safety: "Writes research scratchpad and session artifacts.",
     outputSchema: basicOutputSchema(["ok", "workDir", "slug", "qualityGap"]),
+  },
+  research_fanout: {
+    purpose: "Plan bounded parallel research lanes from current session memory.",
+    whenToUse: "Use when the loop is spending too long serially exploring one hypothesis path.",
+    contrast:
+      "Use next_experiment to run a measured packet after a lane has produced a concrete hypothesis.",
+    safety:
+      "Dry-run/default is read-only; yes=true appends only a fanout plan to the Autoresearch ledger.",
+    outputSchema: basicOutputSchema(["ok", "workDir", "dryRun", "fanoutPlan", "parallelLanes"]),
+  },
+  lane_runner: {
+    purpose: "Run or record one planned lane and synthesize a single coordinator next action.",
+    whenToUse: "Use after research_fanout when a lane needs bounded execution or a handoff.",
+    contrast: "Use research_fanout to create lanes; use next_experiment for the measured packet.",
+    safety: "Read-only scout by default; implementation requires --worktree or --write-scope.",
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "dryRun",
+      "lane",
+      "result",
+      "coordinatorRecommendation",
+    ]),
   },
   configure_session: {
     purpose: "Update runtime settings such as autonomy mode, policies, paths, and limits.",
@@ -197,7 +321,18 @@ const CONTRACTS = {
     whenToUse: "Use to resume, inspect progress, or feed dashboards.",
     contrast: "Use doctor_session for readiness checks.",
     safety: "Read-only.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "runs", "best", "warnings", "memory"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "runs",
+      "best",
+      "warnings",
+      "memory",
+      "loopContract",
+      "runtimeProvenance",
+      "laneLifecycle",
+      "packetDiagnostics",
+    ]),
   },
   measure_quality_gap: {
     purpose: "Measure open and closed research checklist gaps.",
@@ -311,7 +446,15 @@ const CONTRACTS = {
       "Use after setup or resume before running experiments so the operator gets the live link.",
     contrast: "Use export_dashboard only for an offline fallback snapshot.",
     safety: "Starts a local server bound to 127.0.0.1.",
-    outputSchema: basicOutputSchema(["ok", "workDir", "url", "modeGuidance"]),
+    outputSchema: basicOutputSchema([
+      "ok",
+      "workDir",
+      "url",
+      "healthUrl",
+      "verified",
+      "deferredViewModel",
+      "modeGuidance",
+    ]),
   },
   doctor_session: {
     purpose: "Check readiness, git state, benchmark metrics, and version drift.",
@@ -357,6 +500,7 @@ const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
   "checks_inspect",
   "doctor_session",
   "gap_candidates",
+  "lane_runner",
 ]);
 
 type ToolName = keyof typeof CONTRACTS;
@@ -446,88 +590,21 @@ function basicOutputSchema(required: string[]): JsonSchema {
   };
 }
 
-function outputFieldSchemas(): Record<string, JsonSchema> {
-  return {
-    action: stringSchema("Safe next action summary."),
-    best: objectSchema("Best kept run summary."),
-    candidates: arraySchema(objectSchema("Candidate quality-gap item."), "Candidate items."),
-    checkedAt: stringSchema("ISO timestamp for a liveness check."),
-    closed: numberSchema("Closed quality-gap item count."),
-    commands: arraySchema(stringSchema("Command line."), "Copyable command list."),
-    config: objectSchema("Autoresearch session config."),
-    continuation: objectSchema("Active-loop continuation contract."),
-    decision: objectSchema("Allowed logging decision packet."),
-    deleted: arraySchema(stringSchema("Deleted artifact path."), "Deleted artifact paths."),
-    doctor: objectSchema("Doctor readiness result."),
-    drift: objectSchema("Runtime/source drift report."),
-    dryRun: booleanSchema("Whether the mutation was previewed only."),
-    dashboard: objectSchema("Live dashboard startup status for guided setup."),
-    entry: objectSchema("Ledger/config entry."),
-    experiment: objectSchema("Logged experiment entry."),
-    failedTests: arraySchema(stringSchema("Failed test or check."), "Failed tests or checks."),
-    files: arraySchema(stringSchema("Created or touched file path."), "Created or touched files."),
-    finalizePreview: objectSchema("Finalization readiness preview."),
-    guidedFlow: arraySchema(objectSchema("Guided workflow step."), "Guided workflow steps."),
-    healthUrl: stringSchema("Dashboard health-check URL."),
-    hints: arraySchema(stringSchema("Operator hint."), "Operator hints."),
-    init: objectSchema("Initial ledger entry result."),
-    intent: objectSchema("Inferred prompt intent."),
-    issues: arraySchema(stringSchema("Validation or readiness issue."), "Issues."),
-    lastRun: objectSchema("Pending last-run packet summary and freshness metadata."),
-    logHint: objectSchema("Suggested log command or payload."),
-    memory: objectSchema("Experiment memory summary."),
-    missing: arraySchema(stringSchema("Missing required setup field."), "Missing setup fields."),
-    missingEssentials: arraySchema(
-      stringSchema("Missing required setup field."),
-      "Missing essentials for the first valid loop.",
-    ),
-    modeGuidance: objectSchema("Dashboard mode guidance."),
-    nextAction: stringSchema("Recommended next operator action."),
-    nextStep: objectSchema(
-      "Shared next safe action contract with stage, reason, command/tool, safety, and gaps.",
-    ),
-    ok: booleanSchema("True when the tool completed successfully."),
-    open: numberSchema("Open quality-gap item count."),
-    openItems: arraySchema(stringSchema("Open quality-gap item."), "Open quality-gap items."),
-    output: stringSchema("Output file path or command output."),
-    outputPreview: stringSchema("Bounded command output preview."),
-    packetEvidence: objectSchema(
-      "Last-run packet evidence bundle with command identity, output tails, metrics, artifacts, checks, and fingerprint.",
-    ),
-    packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
-    parsedMetrics: objectSchema("Parsed METRIC values keyed by metric name."),
-    port: numberSchema("Local dashboard port."),
-    protocol: objectSchema("Operator protocol guidance."),
-    qualityGap: objectSchema("Quality-gap scratchpad summary."),
-    promotion: objectSchema("Promotion state label and reasons for evidence readiness."),
-    ready: booleanSchema("True when the preview is ready to apply."),
-    recipes: arraySchema(objectSchema("Recipe summary."), "Available recipes."),
-    recommendedRecipe: objectSchema("Recommended benchmark recipe."),
-    run: objectSchema("Benchmark run packet."),
-    runs: objectSchema("Run-count summary."),
-    setup: objectSchema("Setup readiness packet."),
-    slug: stringSchema("Research slug."),
-    stage: stringSchema("Setup or resume stage."),
-    stopRecommended: booleanSchema("True when candidate extraction recommends stopping."),
-    stopStatus: stringSchema("Recommended stop status."),
-    summary: objectSchema("Dashboard export summary."),
-    templates: arraySchema(objectSchema("Report template."), "Report templates."),
-    updates: arraySchema(stringSchema("Applied config update."), "Applied updates."),
-    url: stringSchema("Served local dashboard URL."),
-    verified: booleanSchema("True when the dashboard health check passed."),
-    warnings: arraySchema(stringSchema("Warning message."), "Warnings."),
-    whySafe: stringSchema("Evidence explaining why the next action is safe."),
-    workDir: stringSchema("Resolved project working directory."),
-    wouldDelete: arraySchema(
-      stringSchema("Artifact path to delete."),
-      "Previewed deletion targets.",
-    ),
+function outputSchemaWithOverrides(
+  required: string[],
+  overrides: Record<string, JsonSchema>,
+): JsonSchema {
+  const schema = basicOutputSchema(required);
+  schema.properties = {
+    ...schema.properties,
+    ...overrides,
   };
+  return schema;
 }
 
 function schemaForOutputField(field: string): JsonSchema {
   return (
-    outputFieldSchemas()[field] || {
+    OUTPUT_FIELD_SCHEMAS[field] || {
       description: `${field} value.`,
       type: ["string", "number", "boolean", "object", "array", "null"],
     }
@@ -544,6 +621,10 @@ function numberSchema(description: string): JsonSchema {
 
 function booleanSchema(description: string): JsonSchema {
   return { type: "boolean", description };
+}
+
+function unionSchema(types: string[], description: string): JsonSchema {
+  return { type: types, description, additionalProperties: types.includes("object") };
 }
 
 function objectSchema(description: string): JsonSchema {

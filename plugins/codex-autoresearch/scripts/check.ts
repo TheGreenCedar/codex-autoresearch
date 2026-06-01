@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
+import {
+  runCommand as runCheckCommand,
+  type CommandResult,
+  type CommandSpec,
+} from "./check-runner.js";
 
 const ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const node = process.execPath;
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
-
-type CommandSpec = [label: string, command: string, args: string[]];
 
 const syntaxChecks: CommandSpec[] = [
   ["syntax:autoresearch", node, ["--check", "scripts/autoresearch.mjs"]],
@@ -23,23 +25,10 @@ const syntaxChecks: CommandSpec[] = [
 
 const productChecks: CommandSpec[] = [
   ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
+  ["command-surface-map", node, ["dist/scripts/command-surface-map.mjs"]],
   ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
   ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
-  [
-    "tests",
-    node,
-    [
-      "--test",
-      "--test-concurrency",
-      "dist/tests/autoresearch-cli.test.mjs",
-      "dist/tests/dashboard-verification.test.mjs",
-      "dist/tests/evidence-core.test.mjs",
-      "dist/tests/experiment-memory.test.mjs",
-      "dist/tests/finalize-report.test.mjs",
-      "dist/tests/full-product.test.mjs",
-      "dist/tests/perfection-benchmark.test.mjs",
-    ],
-  ],
+  ["tests", npm, ["run", "test:compiled"]],
 ];
 
 const dashboardBuildChecks: CommandSpec[] = [
@@ -67,13 +56,6 @@ const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
 ];
 
-interface CommandResult {
-  label: string;
-  code: number | null;
-  stdout: string;
-  stderr: string;
-}
-
 interface PackageEntry {
   path?: string;
   size?: number;
@@ -94,17 +76,24 @@ const ok =
   (await runSourceCheckoutLauncherCheck()) &&
   (await runPackageArtifactCheck()) &&
   (await runDogfoodHealthCheck()) &&
-  (await runPhase("product", productChecks));
+  (await runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 }));
 
 process.exit(ok ? 0 : 1);
 
-async function runPhase(name: string, commands: CommandSpec[]): Promise<boolean> {
+async function runPhase(
+  name: string,
+  commands: CommandSpec[],
+  options: { streamOutput?: boolean; timeoutSeconds?: number } = {},
+): Promise<boolean> {
   console.log(`\n== ${name} ==`);
-  const results = await Promise.all(commands.map(runCommand));
+  const results = await Promise.all(commands.map((command) => runCommand(command, options)));
   for (const result of results) {
     const marker = result.code === 0 ? "ok" : "fail";
     console.log(`${marker} ${result.label}`);
-    if (result.code !== 0 || process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1") {
+    if (
+      !options.streamOutput &&
+      (result.code !== 0 || process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1")
+    ) {
       const output = `${result.stdout}${result.stderr}`.trim();
       if (output) console.log(indent(output));
     }
@@ -183,6 +172,7 @@ async function runPackageArtifactCheck() {
       "dist/scripts/autoresearch.mjs",
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
+      "scripts/finalize-autoresearch.mjs",
       "skills/codex-autoresearch/SKILL.md",
     ];
     const forbiddenPackagePaths = [
@@ -284,6 +274,11 @@ async function runDemoTrustCheck() {
     { label: "dashboard action route", pattern: /\/actions\// },
     { label: "live actions panel", pattern: /live-actions-panel/ },
     { label: "action receipt", pattern: /action-receipt/ },
+    {
+      label: "branch-specific excluded commits",
+      pattern: /Excluded \d+ unkept non-session commit/,
+    },
+    { label: "branch-specific final tree coverage", pattern: /Final tree coverage is missing/ },
   ].filter((entry) => entry.pattern.test(html));
   if (!html.includes(`"pluginVersion":"${pkg.version}"`) || forbidden.length) {
     console.log("fail demo:export");
@@ -344,7 +339,10 @@ function normalizedPackagePath(entry: PackageEntry) {
 }
 
 async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {
-  const wrappers = [["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"']];
+  const wrappers = [
+    ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
+    ["scripts/finalize-autoresearch.mjs", 'ensureRuntime("finalize-autoresearch.mjs"'],
+  ];
   const problems: string[] = [];
 
   for (const [file, target] of wrappers) {
@@ -358,6 +356,10 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
 
     const byteLength = Buffer.byteLength(content, "utf8");
     const packedSize = packedEntries.get(file)?.size;
+    if (!packedEntries.has(file)) {
+      problems.push(`${file} is missing from the package`);
+      continue;
+    }
     if (!content.includes("./bootstrap-runtime.mjs") || !content.includes(target)) {
       problems.push(`${file} should call ${target} through bootstrap-runtime.mjs`);
     }
@@ -435,26 +437,53 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
     return false;
   }
 
-  const smoke = await runCommand([
-    "package-runtime-smoke",
-    node,
-    [path.join(extractDir, "package", "scripts", "autoresearch.mjs"), "--help"],
-  ]);
-  if (smoke.code !== 0) {
+  const smoke = await runPackageSmokeCommands(extractDir);
+  if (!smoke.ok) {
     console.log("fail package-runtime-smoke");
-    const output = `${smoke.stdout}${smoke.stderr}`.trim();
-    if (output) console.log(indent(output));
+    console.log(indent(smoke.error));
     return false;
   }
 
-  if (smoke.stdout.includes("Codex Autoresearch") && smoke.stdout.includes("Usage:")) {
-    console.log("ok package-runtime-smoke");
-    return true;
+  console.log("ok package-runtime-smoke");
+  return true;
+}
+
+async function runPackageSmokeCommands(extractDir: string) {
+  const commands = [
+    {
+      label: "autoresearch",
+      script: "autoresearch.mjs",
+      args: ["--help"],
+      expected: ["Codex Autoresearch", "Usage:"],
+    },
+    {
+      label: "finalize-autoresearch",
+      script: "finalize-autoresearch.mjs",
+      args: ["--help"],
+      expected: ["Finalize an autoresearch branch", "Usage:"],
+    },
+  ];
+
+  for (const command of commands) {
+    const result = await runCommand([
+      `package-runtime-smoke:${command.label}`,
+      node,
+      [path.join(extractDir, "package", "scripts", command.script), ...command.args],
+    ]);
+    if (result.code !== 0) {
+      const output = `${result.stdout}${result.stderr}`.trim();
+      return { ok: false, error: output || `${command.label} smoke failed.` };
+    }
+    const missing = command.expected.filter((text) => !result.stdout.includes(text));
+    if (missing.length) {
+      return {
+        ok: false,
+        error: `${command.label} smoke output missed: ${missing.join(", ")}`,
+      };
+    }
   }
 
-  console.log("fail package-runtime-smoke");
-  console.log(indent(smoke.stdout.trim() || "Package smoke output did not include CLI help."));
-  return false;
+  return { ok: true, error: "" };
 }
 
 async function runDogfoodHealthCheck() {
@@ -686,30 +715,11 @@ async function runSourceCheckoutLauncherCheck() {
   return true;
 }
 
-function runCommand([label, command, args]: CommandSpec): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
-      cwd: ROOT,
-      shell: needsShell,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      resolve({ label, code: -1, stdout, stderr: `${stderr}${error.message}\n` });
-    });
-    child.on("close", (code) => {
-      resolve({ label, code, stdout, stderr });
-    });
-  });
+function runCommand(
+  command: CommandSpec,
+  options: { streamOutput?: boolean; timeoutSeconds?: number } = {},
+): Promise<CommandResult> {
+  return runCheckCommand(command, { cwd: ROOT, ...options });
 }
 
 function indent(text: string): string {

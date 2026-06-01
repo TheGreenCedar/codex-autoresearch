@@ -1,5 +1,6 @@
 import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
+import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -15,11 +16,27 @@ type RunLike = LooseObject & {
 };
 type CommandMap = Map<string, string>;
 
+const PACKET_BRAKE_KINDS = new Set([
+  "context-distillation",
+  "lane-cleanup",
+  "runtime-provenance",
+  "packet-diagnostic",
+  "workflow-friction",
+  "finalization",
+  "stale-packet",
+  "setup",
+  "benchmark-command",
+  "log-decision",
+  "segment-transition",
+  "watchdog",
+]);
+
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
   liveUrl?: string;
   pluginVersion?: string;
   runtimeDrift?: LooseObject | null;
+  dashboardServerRegistry?: LooseObject | null;
   generatedAt?: string;
   sourceCwd?: string;
 }
@@ -45,13 +62,25 @@ export function buildDashboardViewModel(context: DashboardContext) {
   const current = (state.current || []) as RunLike[];
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
   const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
-  const kept = current.filter((run) => run.status === "keep");
+  const kept = acceptedCurrentRuns(current);
   const failures = current.filter((run) =>
     ["discard", "crash", "checks_failed"].includes(String(run.status)),
   );
   const measurements = current.filter((run) => run.status === "measure");
   const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
   const latestFailure = failures.at(-1) || null;
+  const parallelLanes = Array.isArray(state.parallelLanes)
+    ? state.parallelLanes
+    : Array.isArray(experimentMemory?.lanePortfolio)
+      ? experimentMemory.lanePortfolio
+      : [];
+  const watchdogSummary = buildWatchdogSummary({
+    state,
+    settings,
+    current,
+    parallelLanes,
+    fanoutPlan: state.fanoutPlan || null,
+  });
   const decisionEnvelope = normalizeDecisionEnvelope({
     state,
     settings,
@@ -67,6 +96,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory,
     segmentTransition: segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }),
     setupState: setupStateFromDashboardInput({ guidedSetup, setupPlan }),
+    watchdog: watchdogSummary,
     warnings,
   });
   const decisionEnvelopeSummary = summarizeDecisionEnvelope({
@@ -160,11 +190,23 @@ export function buildDashboardViewModel(context: DashboardContext) {
     researchIntegrity,
     trustState: trustContext.trustState,
   });
+  const finalizationPressure = buildFinalizationPressure({
+    kept,
+    finalizePreview,
+    watchdogSummary,
+  });
   const finalizationChecklist = buildFinalizationChecklist({
     current,
     kept,
     finalizePreview,
+    finalizationPressure,
   });
+  const processHygiene = buildProcessHygiene({
+    settings,
+    trustState: trustContext.trustState,
+    watchdogSummary,
+  });
+  const evidenceLedger = buildEvidenceLedger(current);
   const evidenceReadout = buildEvidenceReadout({
     researchIntegrity,
     researchTruth,
@@ -210,13 +252,19 @@ export function buildDashboardViewModel(context: DashboardContext) {
     finalizePreview,
     recipes,
     experimentMemory,
+    fanoutPlan: state.fanoutPlan || null,
+    parallelLanes,
     portfolio,
     trustState: trustContext.trustState,
     researchTruth,
     evidenceChips,
+    evidenceLedger,
     evidenceReadout,
     proofGaps,
     finalizationChecklist,
+    finalizationPressure,
+    watchdogSummary,
+    processHygiene,
     missionControl,
     aiSummary,
     trustBlockers,
@@ -301,6 +349,7 @@ function normalizeDashboardSettings(
       settings.pluginVersion || settings.version || state?.config?.pluginVersion,
     ),
     runtimeDrift: (settings.runtimeDrift as LooseObject) || drift || null,
+    dashboardServerRegistry: recordOrNull(settings.dashboardServerRegistry),
     generatedAt: cleanText(
       settings.generatedAt || settings.exportedAt || settings.snapshotGeneratedAt,
     ),
@@ -326,6 +375,7 @@ function normalizeDecisionEnvelope({
   segmentTransition = null,
   setupState = null,
   warnings = [],
+  watchdog = null,
 }: LooseObject) {
   const supplied = firstRecord(
     state?.decisionEnvelope,
@@ -357,6 +407,7 @@ function normalizeDecisionEnvelope({
     experimentMemory,
     segmentTransition,
     setupState,
+    watchdog,
   });
 }
 
@@ -405,18 +456,7 @@ function summarizeDecisionEnvelope({
   experimentMemory = null,
 }: LooseObject) {
   const freshness = envelope?.latestPacketFreshness || {};
-  const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
-  const setupBlockers = [
-    ...scaffoldBlockers,
-    ...stringList(setupPlan?.missing),
-    ...stringList(setupPlan?.missingEssentials),
-  ];
-  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
-  const limitReached =
-    limit.limitReached === true ||
-    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
   const finalization = envelope?.finalizationReadiness || {};
-  const qualityRound = envelope?.qualityRound || {};
   const canonicalSummary = summaryFromCanonicalNextAction(envelope?.canonicalNextAction, {
     current,
     measurements,
@@ -437,89 +477,121 @@ function summarizeDecisionEnvelope({
     finalizationReady: finalization.ready ?? null,
   };
 
-  if (freshness.fresh === false) {
-    summary = {
-      ...summary,
-      kind: "stale-packet",
-      priority: "Critical",
-      title: "Replace the stale packet",
-      detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
-      source: "packet",
-    };
-  } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
-    summary = {
-      ...summary,
-      kind: "setup",
-      priority: "Critical",
-      title: "Complete setup",
-      detail:
-        setupBlockers[0] ||
-        guidedSetup?.nextAction ||
-        "Repair setup blockers before trusting another packet.",
-      source: "setup",
-    };
-  } else if (guidedSetup?.stage === "needs-benchmark-command") {
-    summary = {
-      ...summary,
-      kind: "benchmark-command",
-      priority: "Critical",
-      title: "Add a benchmark command",
-      detail:
-        guidedSetup?.nextAction ||
-        "This session has logged metrics, but next has no default benchmark script to run.",
-      source: "setup",
-    };
-  } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
-    const suggested =
-      guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
-    summary = {
-      ...summary,
-      kind: "log-decision",
-      priority: "Critical",
-      title: "Log the last packet",
-      detail: suggested
-        ? `Record the last packet as ${suggested}, then run a new packet.`
-        : "Record the fresh last-run packet before starting another packet.",
-      source: "packet",
-    };
-  } else if (limitReached || guidedSetup?.stage === "limit-reached" || qualityRound.done === true) {
-    summary = {
-      ...summary,
-      kind: "segment-transition",
-      priority: "Transition",
-      title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
-      detail:
-        guidedSetup?.nextAction ||
-        (qualityRound.done === true
-          ? "The active quality round is closed; refresh gaps or preview finalization."
-          : "The active segment reached its limit; extend the limit or start a new segment."),
-      source: "segment",
-    };
-  } else if (experimentMemory?.plateau?.detected) {
-    summary = {
-      ...summary,
-      kind: "plateau",
-      priority: "Critical",
-      title: "Break the plateau",
-      detail:
-        experimentMemory?.diversityGuidance?.nextActionHint ||
-        experimentMemory?.plateau?.recommendation ||
-        "Recent runs are clustering without a new best.",
-      source: "plateau",
-    };
-  } else if (finalization.ready === true || finalizePreview?.ready === true) {
-    summary = {
-      ...summary,
-      kind: "finalize-preview",
-      priority: "Review",
-      title: "Preview finalization",
-      detail:
-        finalization.nextAction ||
-        finalizePreview?.nextAction ||
-        "Inspect the branch packet before creating review branches.",
-      source: "finalize",
-    };
-  } else if (!current.length) {
+  if (!canonicalSummary) {
+    const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
+    const setupBlockers = [
+      ...scaffoldBlockers,
+      ...stringList(setupPlan?.missing),
+      ...stringList(setupPlan?.missingEssentials),
+    ];
+    const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
+    const limitReached =
+      limit.limitReached === true ||
+      (Number.isFinite(Number(limit.remainingIterations)) &&
+        Number(limit.remainingIterations) <= 0);
+    const watchdog = envelope?.watchdog || {};
+    const qualityRound = envelope?.qualityRound || {};
+
+    if (freshness.fresh === false) {
+      summary = {
+        ...summary,
+        kind: "stale-packet",
+        priority: "Critical",
+        title: "Replace the stale packet",
+        detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
+        source: "packet",
+      };
+    } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
+      summary = {
+        ...summary,
+        kind: "setup",
+        priority: "Critical",
+        title: "Complete setup",
+        detail:
+          setupBlockers[0] ||
+          guidedSetup?.nextAction ||
+          "Repair setup blockers before trusting another packet.",
+        source: "setup",
+      };
+    } else if (guidedSetup?.stage === "needs-benchmark-command") {
+      summary = {
+        ...summary,
+        kind: "benchmark-command",
+        priority: "Critical",
+        title: "Add a benchmark command",
+        detail:
+          guidedSetup?.nextAction ||
+          "This session has logged metrics, but next has no default benchmark script to run.",
+        source: "setup",
+      };
+    } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
+      const suggested =
+        guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
+      summary = {
+        ...summary,
+        kind: "log-decision",
+        priority: "Critical",
+        title: "Log the last packet",
+        detail: suggested
+          ? `Record the last packet as ${suggested}, then run a new packet.`
+          : "Record the fresh last-run packet before starting another packet.",
+        source: "packet",
+      };
+    } else if (
+      limitReached ||
+      guidedSetup?.stage === "limit-reached" ||
+      qualityRound.done === true
+    ) {
+      summary = {
+        ...summary,
+        kind: "segment-transition",
+        priority: "Transition",
+        title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
+        detail:
+          guidedSetup?.nextAction ||
+          (qualityRound.done === true
+            ? "The active quality round is closed; refresh gaps or preview finalization."
+            : "The active segment reached its limit; extend the limit or start a new segment."),
+        source: "segment",
+      };
+    } else if (experimentMemory?.plateau?.detected) {
+      summary = {
+        ...summary,
+        kind: "plateau",
+        priority: "Critical",
+        title: "Break the plateau",
+        detail:
+          experimentMemory?.diversityGuidance?.nextActionHint ||
+          experimentMemory?.plateau?.recommendation ||
+          "Recent runs are clustering without a new best.",
+        source: "plateau",
+      };
+    } else if (watchdog.stale === true) {
+      summary = {
+        ...summary,
+        kind: "watchdog",
+        priority: "Critical",
+        title: "Investigate the quiet window",
+        detail:
+          watchdog.recommendation || "No progress signal has appeared within the watchdog window.",
+        source: "watchdog",
+      };
+    } else if (finalization.ready === true || finalizePreview?.ready === true) {
+      summary = {
+        ...summary,
+        kind: "finalize-preview",
+        priority: "Review",
+        title: "Preview finalization",
+        detail:
+          finalization.nextAction ||
+          finalizePreview?.nextAction ||
+          "Inspect the branch packet before creating review branches.",
+        source: "finalize",
+      };
+    }
+  }
+
+  if (summary.kind === "continue" && !current.length) {
     summary = {
       ...summary,
       kind: "baseline",
@@ -583,6 +655,7 @@ function canonicalTitle(kind: string): string {
     "segment-transition": "Start a new segment",
     "quality-gap": "Close accepted quality gaps",
     "plateau-pivot": "Pivot before repeating the plateau",
+    watchdog: "Investigate the quiet window",
     finalization: "Preview finalization",
     "next-packet": "Run the next measured hypothesis",
   };
@@ -702,6 +775,190 @@ function summarizeRuntimeDrift(drift: LooseObject | null | undefined) {
     installedPath: cleanText(drift.installed?.path) || null,
     installedAvailable:
       typeof drift.installed?.available === "boolean" ? drift.installed.available : null,
+  };
+}
+
+export function buildWatchdogSummary({
+  state,
+  settings = {},
+  current = [],
+  parallelLanes = [],
+  fanoutPlan = null,
+}: LooseObject) {
+  const thresholdSeconds = watchdogThresholdSeconds(settings, state?.config);
+  const thresholdHours = round(thresholdSeconds / 3600);
+  const nowMs = timestampMs(settings.now || settings.generatedAt) || Date.now();
+  const cutoffMs = nowMs - thresholdSeconds * 1000;
+  const currentRuns = Array.isArray(current) ? current : [];
+  const completedLanes = Array.isArray(parallelLanes)
+    ? parallelLanes.filter((lane: LooseObject) => laneCompleted(lane))
+    : [];
+  const progressEvents = [
+    ...metricMovementEvents(currentRuns, state?.config?.bestDirection || "lower"),
+    ...currentRuns.filter(watchdogDecisionRun).map((run: LooseObject) => ({
+      kind: "decision",
+      at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+      label: `Logged run #${run.run ?? "?"} as ${run.status || "decision"}.`,
+    })),
+    ...currentRuns
+      .filter((run: LooseObject) => run.status === "keep" && cleanText(run.commit))
+      .map((run: LooseObject) => ({
+        kind: "kept_commit",
+        at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+        label: `Kept commit ${String(run.commit).slice(0, 12)} from run #${run.run ?? "?"}.`,
+      })),
+    ...completedLanes.map((lane: LooseObject) => ({
+      kind: "completed_lane",
+      at: timestampMs(lane.completedAt || lane.finishedAt || lane.updatedAt || lane.timestamp),
+      label: `Lane ${lane.title || lane.id || "unknown"} completed.`,
+    })),
+  ].filter((event) => event.at != null) as Array<{ kind: string; at: number; label: string }>;
+  const recentEvents = progressEvents.filter((event) => event.at >= cutoffMs);
+  const latestEvent = progressEvents.sort((a, b) => b.at - a.at)[0] || null;
+  const quietHours = latestEvent ? round((nowMs - latestEvent.at) / 3600000) : null;
+  const stale = currentRuns.length > 0 && recentEvents.length === 0 && quietHours != null;
+  const reasons = stale
+    ? [
+        `No metric movement, logged decision, kept commit, or completed lane in ${thresholdHours}h.`,
+        latestEvent
+          ? `Last progress signal: ${latestEvent.label}`
+          : "No dated progress signal found.",
+      ]
+    : recentEvents.length
+      ? [
+          `${recentEvents.length} progress signal${recentEvents.length === 1 ? "" : "s"} inside the watchdog window.`,
+        ]
+      : currentRuns.length
+        ? ["Run history has no dated progress signal; watchdog cannot prove a quiet window."]
+        : ["No run history yet; capture a baseline before watchdog pressure applies."];
+  const recommendation = stale
+    ? "Intervene before running more packets: inspect the active process, finalize kept work, or rescope the segment."
+    : currentRuns.length
+      ? "Continue from the decision envelope; watchdog has no stale no-progress window."
+      : "Run and log the baseline so the watchdog can compare future progress.";
+  return {
+    status: stale ? "stale" : currentRuns.length ? "tracking" : "idle",
+    stale,
+    thresholdSeconds,
+    thresholdHours,
+    quietHours,
+    latestProgressAt: latestEvent ? new Date(latestEvent.at).toISOString() : null,
+    recentProgressCount: recentEvents.length,
+    progressEventCount: progressEvents.length,
+    fanoutPlanId: cleanText(fanoutPlan?.id) || null,
+    completedLaneCount: completedLanes.length,
+    reasons,
+    recommendation,
+  };
+}
+
+function watchdogThresholdSeconds(settings: LooseObject, config: LooseObject = {}) {
+  const direct =
+    settings.watchdogNoProgressSeconds ??
+    settings.watchdogThresholdSeconds ??
+    config.watchdogNoProgressSeconds ??
+    config.watchdogThresholdSeconds;
+  const hours = settings.watchdogNoProgressHours ?? config.watchdogNoProgressHours;
+  const raw = direct ?? (hours != null ? Number(hours) * 3600 : 8 * 3600);
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 8 * 3600;
+}
+
+function metricMovementEvents(current: LooseObject[], direction: Direction) {
+  const events = [];
+  let previous: number | null = null;
+  for (const run of current) {
+    const metric = finiteMetric(run.metric);
+    if (metric == null) continue;
+    if (previous != null && metric !== previous) {
+      events.push({
+        kind: "metric_movement",
+        at: timestampMs(run.timestamp || run.loggedAt || run.createdAt),
+        label: `Metric moved on run #${run.run ?? "?"} (${previous} -> ${metric}; ${direction}).`,
+      });
+    }
+    previous = metric;
+  }
+  return events;
+}
+
+function laneCompleted(lane: LooseObject) {
+  const status = String(lane.status || lane.state || lane.evidenceStatus || "").toLowerCase();
+  return ["complete", "completed", "done", "kept", "accepted", "finished"].includes(status);
+}
+
+function watchdogDecisionRun(run: LooseObject) {
+  if (run?.type === "lane_result") return false;
+  const status = String(run?.status || "").toLowerCase();
+  return ["keep", "discard", "crash", "checks_failed", "measure"].includes(status);
+}
+
+function timestampMs(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function buildProcessHygiene({
+  settings = {},
+  trustState = {},
+  watchdogSummary = null,
+}: LooseObject) {
+  const mode = normalizeMode(settings.deliveryMode);
+  const generatedAt = timestampMs(settings.generatedAt);
+  const nowMs = timestampMs(settings.now || settings.generatedAt) || Date.now();
+  const staleExportHours = Number(settings.staleExportHours ?? settings.dashboardStaleHours ?? 8);
+  const exportAgeHours = generatedAt ? round((nowMs - generatedAt) / 3600000) : null;
+  const activeServerCount =
+    Number.isFinite(Number(settings.activeServerCount)) && Number(settings.activeServerCount) >= 0
+      ? Number(settings.activeServerCount)
+      : null;
+  const dashboardServerRegistry = recordOrNull(settings.dashboardServerRegistry);
+  const registryMessage = cleanText(dashboardServerRegistry?.message);
+  const registryStale = dashboardServerRegistry?.stale === true;
+  const warnings = [];
+  if (mode === "static-export" && exportAgeHours != null && exportAgeHours >= staleExportHours) {
+    warnings.push(
+      "Static export is a snapshot and cannot prove current runtime freshness; serve a live dashboard before acting.",
+    );
+  } else if (mode === "static-export") {
+    warnings.push(
+      "Static export is a snapshot and cannot prove current runtime freshness; serve a live dashboard before acting.",
+    );
+  }
+  if (activeServerCount != null && activeServerCount > 1) {
+    warnings.push(
+      `${activeServerCount} dashboard servers are active in this process; close stale tabs or restart serve if URLs disagree.`,
+    );
+  }
+  if (registryStale && registryMessage) warnings.push(registryMessage);
+  if (watchdogSummary?.stale) warnings.push(watchdogSummary.recommendation);
+  return {
+    status: warnings.length ? "needs-attention" : "ok",
+    mode,
+    activeCwd: cleanText(settings.sourceCwd) || trustState.sourceCwd || UNKNOWN,
+    pluginVersion: cleanText(settings.pluginVersion) || trustState.pluginVersion || UNKNOWN,
+    liveUrl: cleanText(settings.liveUrl) || trustState.liveUrl || null,
+    generatedAt: cleanText(settings.generatedAt) || null,
+    exportAgeHours,
+    runtimeDrift: trustState.runtimeDrift || summarizeRuntimeDrift(settings.runtimeDrift),
+    dashboardServerRegistry,
+    activeServerCount,
+    duplicateServerDetection:
+      activeServerCount == null
+        ? "unavailable from this snapshot"
+        : activeServerCount > 1
+          ? "duplicates detected in this process"
+          : "single server in this process",
+    staleServerDetection:
+      registryMessage ||
+      (mode === "live-server"
+        ? "live URL health is checked by the serve command; older external servers are not enumerable here"
+        : "static exports cannot prove live server health"),
+    warnings,
   };
 }
 
@@ -938,6 +1195,29 @@ function buildEvidenceReadout({
   };
 }
 
+function buildEvidenceLedger(current: RunLike[] = []) {
+  const registry = buildEvidenceRegistry({ runs: current });
+  const latest = [...registry.audit]
+    .reverse()
+    .map((entry) => ({
+      run: entry.run,
+      status: entry.status,
+      kind: entry.kind,
+      name: entry.name || "",
+      path: entry.path || "",
+      evidenceStatus: entry.evidenceStatus,
+      current: entry.current,
+      description: entry.description || "",
+    }))
+    .slice(0, 5);
+  return {
+    counts: registry.counts,
+    latest,
+    acceptedCurrent: registry.acceptedCurrent.length,
+    rule: "Accepted evidence can promote; rejected and quarantined evidence stays visible but does not drive promotion.",
+  };
+}
+
 function buildProofGaps({
   setupPlan = null,
   guidedSetup = null,
@@ -992,6 +1272,7 @@ export function buildFinalizationChecklist({
   current = [],
   kept = [],
   finalizePreview = null,
+  finalizationPressure = null,
 }: LooseObject) {
   const warnings = Array.isArray(finalizePreview?.warnings)
     ? finalizePreview.warnings.map((warning: unknown) => warningMessage(warning)).filter(Boolean)
@@ -1037,7 +1318,58 @@ export function buildFinalizationChecklist({
         ? "Preview is ready; branch creation still stays outside the dashboard."
         : "Branch creation should wait for a ready preview packet.",
     }),
+    checklistItem({
+      label: "Finalization pressure",
+      state:
+        finalizationPressure?.status === "high"
+          ? "blocked"
+          : finalizationPressure?.status === "medium"
+            ? "ready"
+            : "idle",
+      detail:
+        finalizationPressure?.recommendation ||
+        "No finalization pressure has accumulated in this segment.",
+    }),
   ];
+}
+
+export function buildFinalizationPressure({
+  kept = [],
+  finalizePreview = null,
+  watchdogSummary = null,
+}: LooseObject) {
+  const warnings = Array.isArray(finalizePreview?.warnings)
+    ? finalizePreview.warnings.map((warning: unknown) => warningMessage(warning)).filter(Boolean)
+    : [];
+  const missingCommitCount = Number(finalizePreview?.missingCommitCount || 0);
+  const backlog = Math.max(0, kept.length - Number(finalizePreview?.groups?.length || 0));
+  const warningPressure = warnings.length + missingCommitCount + backlog;
+  const high = kept.length >= 3 || warningPressure >= 3 || watchdogSummary?.stale === true;
+  const medium = kept.length > 0 || warningPressure > 0;
+  const reasons = [
+    kept.length
+      ? `${kept.length} kept run${kept.length === 1 ? "" : "s"} in the active segment.`
+      : "",
+    backlog ? `${backlog} kept run${backlog === 1 ? "" : "s"} are not in preview groups.` : "",
+    missingCommitCount
+      ? `${missingCommitCount} kept run${missingCommitCount === 1 ? "" : "s"} lack commit metadata.`
+      : "",
+    warnings[0] || "",
+    watchdogSummary?.stale ? "Watchdog reports a stale no-progress window." : "",
+  ].filter(Boolean);
+  return {
+    status: high ? "high" : medium ? "medium" : "low",
+    keptCount: kept.length,
+    warningCount: warnings.length,
+    missingCommitCount,
+    backlog,
+    reasons,
+    recommendation: high
+      ? "Stop accumulating packets and run finalize-preview or rescope before more experiments."
+      : medium
+        ? "Preview finalization soon so kept work and warnings do not drift."
+        : "Keep collecting evidence until reviewable work exists.",
+  };
 }
 
 export function buildTrustBlockers({
@@ -1691,6 +2023,11 @@ function actionFromDecisionEnvelope(
     "context-distillation": cleanText(summary.command) || "",
     "quality-gap": commandMap.get("gap candidates") || "",
     "plateau-pivot": commandMap.get("next run") || "",
+    watchdog:
+      commandMap.get("finalize preview") ||
+      commandMap.get("serve dashboard") ||
+      commandMap.get("doctor") ||
+      "",
     finalization: commandMap.get("finalize preview") || "",
     "next-packet": commandMap.get("next run") || "",
     setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
@@ -1718,6 +2055,7 @@ function actionFromDecisionEnvelope(
     "context-distillation": "Context",
     "quality-gap": "Gaps",
     "plateau-pivot": "Next",
+    watchdog: commandMap.get("finalize preview") ? "Preview" : "Inspect",
     finalization: "Preview",
     "next-packet": "Next",
     setup: "Setup",
@@ -1737,6 +2075,7 @@ function actionFromDecisionEnvelope(
     "context-distillation": "session-forensics",
     "quality-gap": "gap-candidates",
     "plateau-pivot": "next",
+    watchdog: commandMap.get("finalize preview") ? "finalize-preview" : "inspect",
     finalization: "finalize-preview",
     "next-packet": "next",
     setup: "setup-plan",
@@ -1745,6 +2084,7 @@ function actionFromDecisionEnvelope(
     "finalize-preview": "finalize-preview",
     baseline: "next",
   };
+  const packetBrake = PACKET_BRAKE_KINDS.has(kind);
   return actionItem({
     kind,
     priority: cleanText(summary.priority) || "Next",
@@ -1752,7 +2092,10 @@ function actionFromDecisionEnvelope(
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
     utilityCopy: decisionEnvelopeUtility(kind),
     safeAction: safeActionByKind[kind] || "",
-    command: cleanText(summary.command) || commandByKind[kind] || commandMap.get("next run") || "",
+    command:
+      cleanText(summary.command) ||
+      commandByKind[kind] ||
+      (packetBrake ? "" : commandMap.get("next run") || ""),
     commandLabel: labelByKind[kind] || "Next",
     tone: ["finalize-preview", "finalization"].includes(kind)
       ? "good"
@@ -1764,6 +2107,7 @@ function actionFromDecisionEnvelope(
             "setup",
             "benchmark-command",
             "log-decision",
+            "watchdog",
             "plateau",
             "plateau-pivot",
           ].includes(kind)
@@ -1777,6 +2121,11 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
   if (kind === "workflow-friction")
     return "Workflow friction should be removed before spending another packet.";
+  if (kind === "lane-cleanup") return "Lane cleanup comes before another measured packet.";
+  if (kind === "runtime-provenance")
+    return "Runtime provenance should be refreshed before trusting another packet.";
+  if (kind === "packet-diagnostic")
+    return "Packet diagnostics should explain the last run before another packet.";
   if (kind === "benchmark-mismatch")
     return "Benchmark timeout and command-shape mismatches come before reruns.";
   if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
@@ -1787,6 +2136,7 @@ function decisionEnvelopeUtility(kind: string): string {
   if (kind === "quality-gap")
     return "Accepted quality gaps should drive the next implementation step.";
   if (kind === "plateau-pivot") return "Plateau evidence should redirect the next hypothesis.";
+  if (kind === "watchdog") return "A quiet progress window should trigger intervention.";
   if (kind === "finalization") return "Finalization is ready after higher-priority loop checks.";
   if (kind === "next-packet") return "The next packet should produce metric evidence and ASI.";
   if (kind === "setup") return "Setup blockers come before trustworthy metrics.";
@@ -1996,6 +2346,7 @@ function actionItem({
     title,
     detail,
     utilityCopy,
+    packetBrake: PACKET_BRAKE_KINDS.has(kind),
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
@@ -2243,6 +2594,11 @@ function unique<T>(items: T[]): T[] {
 function recordValue(value: unknown): LooseObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
+}
+
+function recordOrNull(value: unknown): LooseObject | null {
+  const record = recordValue(value);
+  return Object.keys(record).length ? record : null;
 }
 
 function firstRecord(...values: unknown[]): LooseObject {

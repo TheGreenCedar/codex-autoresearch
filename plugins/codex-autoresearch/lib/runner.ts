@@ -272,45 +272,47 @@ export async function runShell(
       if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
       const errorText = String(error.stack || error.message || error);
       const retainedMetricOutput = retainedMetricText(retainedMetricLines);
-      resolve({
-        command,
-        exitCode: null,
-        timedOut,
-        durationSeconds: (Date.now() - startedAt) / 1000,
-        startedAt: startedAtIso,
-        finishedAt: new Date().toISOString(),
-        lastOutputAt,
-        output: errorText,
-        fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
-        metricOutput,
-        retainedMetricOutput,
-        metricOutputTruncated,
-        outputTruncated,
-        fullOutputTruncated,
-        parsedMetrics: metricCollector.finish(),
-      });
+      resolve(
+        shellRunResult({
+          command,
+          exitCode: null,
+          timedOut,
+          startedAt,
+          startedAtIso,
+          lastOutputAt,
+          output: errorText,
+          fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
+          metricOutput,
+          retainedMetricOutput,
+          metricOutputTruncated,
+          outputTruncated,
+          fullOutputTruncated,
+          parsedMetrics: metricCollector.finish(),
+        }),
+      );
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
       const retainedMetricOutput = retainedMetricText(retainedMetricLines);
-      resolve({
-        command,
-        exitCode: code,
-        timedOut,
-        durationSeconds: (Date.now() - startedAt) / 1000,
-        startedAt: startedAtIso,
-        finishedAt: new Date().toISOString(),
-        lastOutputAt,
-        output,
-        fullOutput,
-        metricOutput,
-        retainedMetricOutput,
-        metricOutputTruncated,
-        outputTruncated,
-        fullOutputTruncated,
-        parsedMetrics: metricCollector.finish(),
-      });
+      resolve(
+        shellRunResult({
+          command,
+          exitCode: code,
+          timedOut,
+          startedAt,
+          startedAtIso,
+          lastOutputAt,
+          output,
+          fullOutput,
+          metricOutput,
+          retainedMetricOutput,
+          metricOutputTruncated,
+          outputTruncated,
+          fullOutputTruncated,
+          parsedMetrics: metricCollector.finish(),
+        }),
+      );
     });
   });
 }
@@ -419,6 +421,56 @@ function appendBoundedOutput(current: string, text: string, maxBytes: number) {
   return {
     text: buf.subarray(Math.max(0, buf.length - maxBytes)).toString("utf8"),
     truncated: true,
+  };
+}
+
+function shellRunResult({
+  command,
+  exitCode,
+  timedOut,
+  startedAt,
+  startedAtIso,
+  lastOutputAt,
+  output,
+  fullOutput,
+  metricOutput,
+  retainedMetricOutput,
+  metricOutputTruncated,
+  outputTruncated,
+  fullOutputTruncated,
+  parsedMetrics,
+}: {
+  command: string;
+  exitCode: number | null;
+  fullOutput: string;
+  fullOutputTruncated: boolean;
+  lastOutputAt?: string | null;
+  metricOutput: string;
+  metricOutputTruncated: boolean;
+  output: string;
+  outputTruncated: boolean;
+  parsedMetrics: Record<string, number>;
+  retainedMetricOutput: string;
+  startedAt: number;
+  startedAtIso?: string;
+  timedOut: boolean;
+}): ShellRunResult {
+  return {
+    command,
+    exitCode,
+    timedOut,
+    durationSeconds: (Date.now() - startedAt) / 1000,
+    startedAt: startedAtIso || new Date(startedAt).toISOString(),
+    finishedAt: new Date().toISOString(),
+    lastOutputAt: lastOutputAt || null,
+    output,
+    fullOutput,
+    metricOutput,
+    retainedMetricOutput,
+    metricOutputTruncated,
+    outputTruncated,
+    fullOutputTruncated,
+    parsedMetrics,
   };
 }
 

@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { JSDOM } from "jsdom";
-import { build as viteBuild } from "vite";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -11,6 +10,12 @@ const dashboardTemplatePath = path.join(pluginRoot, "assets", "template.html");
 const dashboardBuildPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js");
 const dashboardCssPath = path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css");
 const dashboardReadyMessage = "Dashboard React app did not finish rendering.";
+const rebuildDashboardEnv = "CODEX_AUTORESEARCH_TEST_REBUILD_DASHBOARD";
+
+type DashboardAssets = {
+  app: string;
+  css: string;
+};
 
 export const dashboardConfigEntry = ({
   name,
@@ -37,7 +42,7 @@ export async function waitFor(predicate, message) {
 
 export function createDashboardHarness() {
   let tempBuildDir = "";
-  let dashboardAssets = null;
+  let dashboardAssets: DashboardAssets | null = null;
   const dashboardWindows = [];
 
   const closeDashboardWindows = () => {
@@ -51,7 +56,17 @@ export function createDashboardHarness() {
     }
   };
 
+  const readCheckedInDashboardAssets = async (): Promise<DashboardAssets> => ({
+    app: await readFile(dashboardBuildPath, "utf8"),
+    css: await readFile(dashboardCssPath, "utf8"),
+  });
+
   const buildDashboardAssets = async () => {
+    if (process.env[rebuildDashboardEnv] !== "1") {
+      dashboardAssets = await readCheckedInDashboardAssets();
+      return;
+    }
+    const { build: viteBuild } = await import("vite");
     tempBuildDir = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-test-"));
     await viteBuild({
       configFile: path.join(pluginRoot, "vite.dashboard.config.ts"),
@@ -72,10 +87,10 @@ export function createDashboardHarness() {
     if (tempBuildDir) await rm(tempBuildDir, { recursive: true, force: true });
   };
 
-  const readDashboardAssets = async () => ({
-    app: dashboardAssets?.app || (await readFile(dashboardBuildPath, "utf8")),
-    css: dashboardAssets?.css || (await readFile(dashboardCssPath, "utf8")),
-  });
+  const readDashboardAssets = async () => {
+    dashboardAssets ||= await readCheckedInDashboardAssets();
+    return dashboardAssets;
+  };
 
   const dashboardUrl = (meta, options) =>
     options.url ||

@@ -1,5 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
+import {
+  readServeRegistry,
+  summarizeServeRegistry,
+  writeServeRegistry,
+} from "../dashboard-server-registry.js";
 
 type LooseObject = Record<string, any>;
 
@@ -45,20 +50,20 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         pluginRoot: deps.pluginRoot,
         includeInstalled: false,
       })
-      .catch((error) => ({
-        ok: false,
-        warnings: [error.message],
-      }));
+      .catch(unavailableRuntimeDrift);
+    const dashboardServerRegistry = await dashboardServerRegistryStatus(workDir);
     const dashboardContext = {
       deliveryMode: "static-export",
       generatedAt,
       sourceCwd,
       pluginVersion: deps.pluginVersion,
       runtimeDrift,
+      dashboardServerRegistry,
       publicExport: showcaseExport,
       suppressEnvironmentWarnings: showcaseExport,
     };
-    const viewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
+    const rawViewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
+    const viewModel = showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel;
     const html = deps.dashboardHtml(entries, {
       workDir,
       generatedAt,
@@ -115,15 +120,13 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const startedAt = Date.now();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     let liveUrl = "";
+    let dashboardServerRegistry: LooseObject | null = null;
     const runtimeDrift = await deps
       .buildDriftReport({
         pluginRoot: deps.pluginRoot,
         includeInstalled: true,
       })
-      .catch((error) => ({
-        ok: false,
-        warnings: [error.message],
-      }));
+      .catch(unavailableRuntimeDrift);
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
       port: args.port,
@@ -138,6 +141,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           sourceCwd: workDir,
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
+          activeServerCount: liveDashboardServers.size,
+          dashboardServerRegistry,
         };
         return deps.dashboardHtml(entries, {
           workDir,
@@ -153,7 +158,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
           commands: deps.dashboardCommands(workDir),
           settings: deps.dashboardSettings(config, dashboardContext),
-          viewModel: await deps.dashboardViewModel(workDir, config, dashboardContext),
+          viewModel: {},
         });
       },
       viewModel: async () =>
@@ -164,19 +169,25 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           sourceCwd: workDir,
           pluginVersion: deps.pluginVersion,
           runtimeDrift,
+          activeServerCount: liveDashboardServers.size,
+          dashboardServerRegistry,
         }),
     });
     liveUrl = serveResult.url;
-    const health = await verifyLiveDashboardUrl(liveUrl);
-    const responseViewModel = await deps.dashboardViewModel(workDir, config, {
-      deliveryMode: "live-server",
-      liveUrl,
-      generatedAt: new Date().toISOString(),
-      sourceCwd: workDir,
-      pluginVersion: deps.pluginVersion,
-      runtimeDrift,
-    });
     liveDashboardServers.add(serveResult.server);
+    const health = await verifyLiveDashboardUrl(liveUrl);
+    const registryWrite = await writeServeRegistry(workDir, {
+      pid: process.pid,
+      port: Number(serveResult.port),
+      cwd: workDir,
+      startedAt: new Date(startedAt).toISOString(),
+      version: deps.pluginVersion,
+      healthUrl: health.url,
+    });
+    dashboardServerRegistry = summarizeServeRegistry(registryWrite.record, {
+      currentPid: process.pid,
+      currentCwd: workDir,
+    });
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
     });
@@ -188,7 +199,17 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       verified: health.ok,
       healthUrl: health.url,
       checkedAt: health.checkedAt,
-      decisionEnvelopeSummary: responseViewModel.decisionEnvelopeSummary || null,
+      registry: {
+        path: registryWrite.path,
+        status: dashboardServerRegistry,
+        previous: registryWrite.previous,
+      },
+      decisionEnvelopeSummary: null,
+      deferredViewModel: {
+        availableAt: new URL("view-model.json", serveResult.url).toString(),
+        reason:
+          "Live dashboard startup returns after health verification; heavier decision diagnostics load from /view-model.json.",
+      },
       modeGuidance: {
         deliveryMode: "live-server",
         difference: health.ok
@@ -206,6 +227,34 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   }
 
   return { exportDashboard, serveDashboard };
+}
+
+function sanitizePublicShowcaseViewModel(value: LooseObject): LooseObject {
+  return sanitizePublicShowcaseValue(value) as LooseObject;
+}
+
+function sanitizePublicShowcaseValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => !containsShowcaseOnlyWarning(item))
+      .map((item) => sanitizePublicShowcaseValue(item));
+  }
+  if (!value || typeof value !== "object") return value;
+  const out: LooseObject = {};
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (containsShowcaseOnlyWarning(child)) continue;
+    out[key] = sanitizePublicShowcaseValue(child);
+  }
+  return out;
+}
+
+function containsShowcaseOnlyWarning(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /Excluded \d+ unkept non-session commit|Final tree coverage is missing/i.test(value);
+  }
+  if (Array.isArray(value)) return value.some((item) => containsShowcaseOnlyWarning(item));
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value as LooseObject).some((item) => containsShowcaseOnlyWarning(item));
 }
 
 async function verifyLiveDashboardUrl(url: string) {
@@ -236,4 +285,19 @@ async function verifyLiveDashboardUrl(url: string) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function dashboardServerRegistryStatus(workDir: string) {
+  const record = await readServeRegistry(workDir);
+  const summary = summarizeServeRegistry(record, { currentCwd: workDir });
+  return summary.available ? summary : null;
+}
+
+function unavailableRuntimeDrift(error: unknown): LooseObject {
+  return {
+    ok: null,
+    status: "unavailable",
+    probeFailed: true,
+    warnings: [error instanceof Error ? error.message : String(error)],
+  };
 }

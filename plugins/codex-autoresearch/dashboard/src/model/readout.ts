@@ -16,7 +16,7 @@ export function buildReadout(
   const runs = session.runs || [];
   const metricDefinition = resolveMetricDefinition(session);
   const kept = runs.filter(
-    (run) => run.status === "keep" && finiteMetric(metricValueForRun(run, metricDefinition)),
+    (run) => isAcceptedCurrentKeep(run) && finiteMetric(metricValueForRun(run, metricDefinition)),
   );
   const evidence = runs.filter(
     (run) => run.status !== "crash" && finiteMetric(metricValueForRun(run, metricDefinition)),
@@ -87,4 +87,13 @@ export function bestRunFor(
       best = run;
   }
   return best;
+}
+
+function isAcceptedCurrentKeep(run: SessionRun): boolean {
+  if (run.status !== "keep") return false;
+  if (run.quarantined === true) return false;
+  const evidenceStatus = String(run.evidenceStatus || "")
+    .trim()
+    .toLowerCase();
+  return !evidenceStatus || evidenceStatus === "accepted";
 }

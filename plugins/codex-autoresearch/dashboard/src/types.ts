@@ -206,7 +206,11 @@ export interface MissionControlModel {
 export interface StrategyLane {
   id?: string;
   title?: string;
+  label?: string;
   status?: string;
+  mode?: string;
+  isolation?: string;
+  evidenceStatus?: string;
   nextActionHint?: string;
   recommendation?: string;
   [key: string]: unknown;
@@ -307,6 +311,8 @@ export interface DashboardViewModel {
   nextBestAction?: NextBestAction;
   missionControl?: MissionControlModel;
   experimentMemory?: ExperimentMemoryModel;
+  fanoutPlan?: Record<string, unknown> | null;
+  parallelLanes?: StrategyLane[];
   aiSummary?: AiSummaryModel;
   qualityGap?: QualityGapModel;
   researchTruth?: ResearchTruthModel;
@@ -320,12 +326,16 @@ export interface DashboardViewModel {
         [key: string]: unknown;
       }
     | ChecklistItemModel[];
+  finalizationPressure?: Record<string, unknown>;
+  watchdogSummary?: Record<string, unknown>;
+  processHygiene?: Record<string, unknown>;
   finalizePreview?: FinalizePreviewModel;
   trustState?: TrustStateModel;
   trust?: TrustStateModel;
   trustWarnings?: unknown;
   warnings?: unknown;
   evidenceChips?: EvidenceChip[];
+  evidenceLedger?: Record<string, unknown>;
   evidenceReadout?: EvidenceReadoutModel;
   proofGaps?: ProofGapModel[];
   readout?: {

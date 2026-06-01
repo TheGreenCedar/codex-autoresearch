@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import {
@@ -7,6 +9,7 @@ import {
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -65,10 +68,10 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   const nextActionTitle = getById("next-action-title").textContent.trim();
   const metricDetails = getById("metric-details");
 
-  assert.match(rail, /#1/);
-  assert.match(rail, /Keep|Discard|crash|checks_failed/i);
+  assert.match(rail, /Cache manifest|Noisy baseline|startup overhead/i);
   assert.notEqual(rail.includes("No decisions yet"), true);
-  assert.match(nextActionTitle, /Next action/i);
+  assert.ok(nextActionTitle.length > 0);
+  assert.doesNotMatch(nextActionTitle, /No decisions yet/i);
   assert.equal(nextActionDetail, "Try reducing startup overhead.");
   assert.equal(getById("metric-details-title").textContent, "Selected run evidence");
   assert.equal(metricDetails.contains(getById("metric-construction")), true);
@@ -77,6 +80,51 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(getById("metric-construction-formula").textContent, /METRIC seconds=<number>/);
   assert.match(getById("metric-fallback-note").textContent, /Metric metadata is incomplete/);
   assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
+});
+
+test("dashboard weighted score readout uses configured metric weights", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "weighted path",
+      metricName: "seconds",
+      metricUnit: "s",
+      bestDirection: "lower",
+      metricMode: "weighted_cost",
+      metricWeights: { time: 2, memory: 1 },
+      metricMemoryKey: "memory_mb",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      description: "Baseline weighted cost",
+      metrics: { memory_mb: 100 },
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 8,
+      status: "keep",
+      description: "Faster with more memory",
+      metrics: { memory_mb: 120 },
+      confidence: 1,
+    },
+  ];
+
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
+
+  assert.equal(getById("metric-construction-status").textContent, "Weighted formula");
+  assert.match(
+    getById("metric-construction-formula").textContent,
+    /score = 0\.67 \* time_score \+ 0\.33 \* memory_score/,
+  );
+  assert.match(getById("metric-construction-components").textContent, /time 0\.67/);
+  assert.match(getById("metric-construction-components").textContent, /memory 0\.33/);
+  assert.match(getById("metric-detail-equation").textContent, /\(0\.67 \* 0\.80\)/);
+  assert.match(getById("metric-detail-equation").textContent, /\(0\.33 \* 1\.20\)/);
 });
 
 test("dashboard ledger and truth meter do not coerce unknown evidence to zero", async () => {
@@ -92,7 +140,9 @@ test("dashboard ledger and truth meter do not coerce unknown evidence to zero", 
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta());
+  const { getById } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
   const ledger = getById("ledger").textContent;
   assert.doesNotMatch(ledger, /0%/);
   assert.match(ledger, /-/);
@@ -288,9 +338,202 @@ test("dashboard view model and rail expose the authoritative decision envelope",
 
   const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
   assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
+  assert.match(getById("v2-release-signals").textContent, /Do not run another packet/);
   assert.match(getById("decision-envelope-summary").textContent, /1 measurement/);
   assert.match(getById("ledger-body").textContent, /Measurement/);
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
+});
+
+test("dashboard view model warns after a watchdog no-progress window", () => {
+  const now = Date.UTC(2026, 4, 26, 12, 0, 0);
+  const old = now - 10 * 60 * 60 * 1000;
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "watchdog path",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+        watchdogNoProgressHours: 8,
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          description: "Baseline",
+          timestamp: old,
+          segment: 0,
+          metrics: {},
+          asi: {},
+        },
+        {
+          run: 2,
+          metric: 10,
+          status: "discard",
+          description: "No movement",
+          timestamp: old + 60_000,
+          segment: 0,
+          metrics: {},
+          asi: {},
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      confidence: null,
+    },
+    settings: {
+      deliveryMode: "live-server",
+      generatedAt: new Date(now).toISOString(),
+      now,
+      sourceCwd: "C:/repo/watchdog",
+      pluginVersion: "0.test",
+    },
+  });
+
+  assert.equal(viewModel.watchdogSummary.stale, true);
+  assert.equal(viewModel.decisionEnvelope.watchdog.stale, true);
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "watchdog");
+  assert.match(viewModel.nextBestAction.detail, /Intervene|finalize|rescope/i);
+  assert.notEqual(viewModel.nextBestAction.safeAction, "next");
+  assert.doesNotMatch(String(viewModel.nextBestAction.command || ""), /\bnext\b/);
+  assert.match(viewModel.processHygiene.warnings.join("\n"), /Intervene|quiet/i);
+});
+
+test("dashboard view model exposes finalization pressure before more packets accumulate", () => {
+  const now = Date.UTC(2026, 4, 26, 12, 0, 0);
+  const runs = [1, 2, 3].map((run) => ({
+    run,
+    metric: 10 - run,
+    status: "keep",
+    description: `Kept ${run}`,
+    timestamp: now - run * 60_000,
+    segment: 0,
+    commit: `abc${run}`,
+    metrics: {},
+    asi: {},
+  }));
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "pressure path",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: runs,
+      baseline: 9,
+      best: 7,
+      confidence: 1,
+    },
+    settings: {
+      deliveryMode: "static-export",
+      generatedAt: new Date(now).toISOString(),
+      now,
+      sourceCwd: "C:/repo/pressure",
+      pluginVersion: "0.test",
+    },
+    finalizePreview: {
+      ready: false,
+      groups: [],
+      warnings: ["Final tree has unreviewed backlog."],
+      nextAction: "Run finalize-preview before more packets.",
+    },
+  });
+
+  assert.equal(viewModel.finalizationPressure.status, "high");
+  assert.match(
+    viewModel.processHygiene.warnings.join("\n"),
+    /Static export is a snapshot and cannot prove current runtime freshness/i,
+  );
+  assert.match(viewModel.finalizationPressure.recommendation, /finalize-preview|rescope/i);
+  assert.ok(
+    viewModel.finalizationChecklist.some(
+      (item) => item.label === "Finalization pressure" && item.state === "blocked",
+    ),
+  );
+});
+
+test("dashboard keeps rejected keep evidence out of best and finalization pressure", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "rejected keep",
+        metricName: "score",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          evidenceStatus: "accepted",
+          description: "Accepted keep",
+        },
+        {
+          run: 2,
+          metric: 1,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected keep",
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      confidence: 1,
+    },
+    settings: { deliveryMode: "static-export" },
+  });
+
+  assert.equal(viewModel.readout.bestKept?.run, 1);
+  assert.equal(viewModel.readout.bestKept?.metric, 10);
+  assert.equal(viewModel.finalizationPressure.keptCount, 1);
+  assert.doesNotMatch(JSON.stringify(viewModel.nextBestAction), /Rejected keep/);
+});
+
+test("dashboard readout keeps rejected keeps out of visible best surfaces", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "rejected keep UI",
+      metricName: "score",
+      bestDirection: "lower",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      evidenceStatus: "accepted",
+      description: "Accepted keep",
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 1,
+      status: "keep",
+      evidenceStatus: "rejected",
+      description: "Rejected keep",
+      confidence: 1,
+    },
+  ];
+
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const bestRows = [...dom.window.document.querySelectorAll(".ledger-row.best-row")];
+
+  assert.equal(getById("best-value").textContent, "10");
+  assert.equal(bestRows.length, 1);
+  assert.match(bestRows[0].textContent || "", /#1/);
+  assert.doesNotMatch(bestRows[0].textContent || "", /#2/);
+  assert.match(getById("decision-rail").textContent || "", /Best result so farAccepted keep/);
+  assert.doesNotMatch(
+    getById("decision-rail").textContent || "",
+    /Best result so farRejected keep/,
+  );
 });
 
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
@@ -769,13 +1012,17 @@ test("dashboard promotes Codex brief and session memory instead of command contr
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
   ];
 
-  const { getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-    commands: [],
-  });
+  const { getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+      commands: [],
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.match(getById("codex-brief").textContent, /Run #1 created the baseline/);
   assert.match(getById("strategy-memory").textContent, /Test manifest cache reuse/);
@@ -815,7 +1062,9 @@ test("dashboard explains that zero quality gaps still need a fresh research roun
     },
   ];
 
-  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
+  const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }), {
+    url: "file:///autoresearch-dashboard.html?view=audit",
+  });
 
   assert.equal(getById("quality-gap-title").textContent, "0 open / 3 total");
   assert.match(getById("quality-gap-detail").textContent, /Accepted gaps closed/);
@@ -1256,6 +1505,42 @@ test("dashboard action rail prioritizes stale packets before normal next actions
   assert.equal(rail[0].priority, "Critical");
   assert.match(rail[0].detail, /stale/);
   assert.match(rail[0].explanation.avoids, /old metric/);
+});
+
+test("dashboard action rail marks governance actions as packet brakes", () => {
+  const brakeKinds = [
+    "context-distillation",
+    "lane-cleanup",
+    "runtime-provenance",
+    "packet-diagnostic",
+    "workflow-friction",
+    "finalization",
+    "stale-packet",
+    "setup",
+    "benchmark-command",
+    "log-decision",
+    "segment-transition",
+    "watchdog",
+  ];
+
+  for (const kind of brakeKinds) {
+    const rail = buildActionRail({
+      current: [],
+      bestKept: null,
+      latestFailure: null,
+      nextAction: "",
+      decisionEnvelopeSummary: {
+        kind,
+        priority: "Critical",
+        title: kind,
+        detail: "Resolve this governance action before spending another packet.",
+      },
+      commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+    });
+
+    assert.equal(rail[0].packetBrake, true, kind);
+    assert.doesNotMatch(String(rail[0].command || ""), /\bnext\b/, kind);
+  }
 });
 
 test("dashboard decision envelope priority ladder is stable across competing signals", () => {
@@ -1738,12 +2023,16 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
 
-  const { dom, getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "live-server",
-    liveRefreshAvailable: true,
-    liveActionsAvailable: false,
-    viewModel,
-  });
+  const { dom, getById, queryById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
 
   assert.equal(queryById("trust-strip"), null);
   assert.equal(dom.window.document.getElementById("trust-warnings"), null);
@@ -1755,6 +2044,209 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
   assert.match(getById("finalization-checklist-title").textContent, /Review packet gated/);
   assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
+});
+
+test("dashboard keeps the chart first while rendering v2 readiness signals", async () => {
+  const viewModel = {
+    nextBestAction: {
+      priority: "Next move",
+      title: "Repeat the best packet",
+      detail: "Confirm the kept path before promotion.",
+    },
+    evidenceReadout: { label: "promotion_eligible", title: "Promotion eligible", promotable: true },
+    evidenceLedger: {
+      counts: { accepted: 2, provisional: 1, rejected: 1, superseded: 0 },
+      acceptedCurrent: 2,
+    },
+    parallelLanes: [
+      {
+        id: "scout",
+        title: "Scout lane",
+        status: "active",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+        recommendation: "Repeat the winning packet.",
+      },
+    ],
+    fanoutPlan: { status: "planned" },
+    watchdogSummary: { status: "tracking", recommendation: "Continue from the decision envelope." },
+    finalizationPressure: {
+      status: "medium",
+      recommendation: "Preview finalization soon.",
+    },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "signal path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  for (const view of ["audit", "operate"]) {
+    const { dom, getById, queryById } = await runDashboard(
+      entries,
+      {
+        deliveryMode: "live-server",
+        liveRefreshAvailable: true,
+        liveActionsAvailable: false,
+        viewModel,
+      },
+      { url: `http://127.0.0.1/?view=${view}` },
+    );
+    const chart = getById("trend-chart");
+    const signalStrip = getById("v2-release-signals");
+    const details = getById("metric-details");
+
+    assert.equal(signalStrip.getAttribute("aria-label"), "Run readiness signals");
+    assert.equal(signalStrip.querySelectorAll(".signal-item").length, 5);
+    assert.match(signalStrip.textContent, /Repeat the best packet/);
+    assert.match(signalStrip.textContent, /2 current \/ 1 provisional \/ 1 audit-only/);
+    assert.match(signalStrip.textContent, /1 active \/ 0 done/);
+    assert.equal(signalStrip.querySelector("button"), null);
+    assert.ok(
+      chart.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "signal strip should render after the chart",
+    );
+    assert.ok(
+      signalStrip.compareDocumentPosition(details) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "signal strip should render before metric details",
+    );
+    if (view === "operate") {
+      assert.equal(queryById("workspace-grid"), null);
+      assert.equal(queryById("strategy-memory"), null);
+    } else {
+      assert.ok(getById("strategy-memory"));
+    }
+  }
+});
+
+test("dashboard renders strategy lanes and evidence status classes", async () => {
+  const viewModel = {
+    evidenceChips: [
+      { label: "Accepted", value: "Kept packet is current", evidenceStatus: "accepted" },
+      { label: "Rejected", value: "Rollback evidence remains visible", evidenceStatus: "rejected" },
+      {
+        label: "Quarantined",
+        value: "Artifact cannot promote",
+        evidenceStatus: "quarantined",
+      },
+    ],
+    evidenceReadout: { label: "exploratory", title: "Exploratory", promotable: false },
+    parallelLanes: [
+      {
+        id: "read-only-scout",
+        title: "Read-only scout",
+        status: " completed ",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+        nextActionHint: "Use the scout result for one measured packet.",
+      },
+      {
+        id: "implementation-candidate",
+        title: "Implementation candidate",
+        status: "planned",
+        mode: "implementation",
+        evidenceStatus: "provisional",
+        recommendation: "Isolate before mutating source.",
+      },
+    ],
+    fanoutPlan: { status: "planned" },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "lane path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
+
+  const lanes = getById("strategy-memory");
+  assert.match(lanes.textContent, /Strategy lanes/);
+  assert.match(lanes.textContent, /Read-only scout/);
+  assert.match(lanes.textContent, /Implementation candidate/);
+  assert.match(lanes.textContent, /1 active \/ 1 done/);
+  assert.equal(lanes.querySelectorAll(".strategy-lane-card").length, 2);
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="accepted"]').length >= 1,
+    true,
+  );
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="rejected"]').length >= 1,
+    true,
+  );
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-evidence-status="suspicious"]').length >= 1,
+    true,
+  );
+});
+
+test("dashboard reports completed-only lanes without inflating active readiness", async () => {
+  const viewModel = {
+    parallelLanes: [
+      {
+        id: "completed-lane",
+        title: "Completed lane",
+        status: "completed",
+        mode: "read_only_scout",
+        evidenceStatus: "accepted",
+      },
+      {
+        id: "blocked-lane",
+        title: "Blocked lane",
+        status: " Blocked ",
+        mode: "implementation",
+        evidenceStatus: "quarantined",
+      },
+    ],
+    fanoutPlan: { status: "paused" },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "lane count path", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      viewModel,
+    },
+    { url: "http://127.0.0.1/?view=audit" },
+  );
+
+  assert.match(getById("v2-release-signals").textContent, /0 active \/ 1 done/);
+  assert.match(getById("strategy-memory").textContent, /0 active \/ 1 done/);
+});
+
+test("dashboard responsive styles keep readiness strip two-up until mobile", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const tabletBlock = extractCssBlock(css, "@media (max-width: 1080px)");
+  const mobileBlock = extractCssBlock(css, "@media (max-width: 720px)");
+
+  assert.match(
+    tabletBlock,
+    /\.dashboard-toolbar,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+  );
+  assert.doesNotMatch(
+    tabletBlock,
+    /\.metric-evidence-list,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*1fr/,
+  );
+  assert.match(
+    mobileBlock,
+    /\.toolbar-controls,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*1fr/,
+  );
 });
 
 test("dashboard surfaces generated suspicious research reasons", async () => {
@@ -1818,10 +2310,6 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
-    item.textContent?.trim(),
-  );
-
   assert.deepEqual(hrefs, [
     "#trend-panel",
     "#decision-rail",
@@ -1829,6 +2317,9 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     "#strategy-memory",
     "#ledger",
   ]);
+  const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
+    item.textContent?.trim(),
+  );
   assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
@@ -1844,15 +2335,14 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Current decision should render directly below the run chart.",
+    "Operate view should show the run chart before the next action.",
   );
   assert.equal(
     Boolean(
-      decisionRail.compareDocumentPosition(scoreStrip) &
-      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      trendPanel.compareDocumentPosition(scoreStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Score strip should not sit between the chart and current decision.",
+    "Operate view should show the run chart before the score strip.",
   );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
@@ -1892,6 +2382,8 @@ test("served dashboard live refresh starts by default and can be stopped", async
     {
       beforeParse(window) {
         window.__refreshFetches = [];
+        window.__liveIntervalCalls = 0;
+        window.__clearedLiveIntervals = [];
         window.fetch = async (url) => {
           window.__refreshFetches.push(String(url));
           if (String(url).includes("view-model")) {
@@ -1903,10 +2395,12 @@ test("served dashboard live refresh starts by default and can be stopped", async
           };
         };
         window.setInterval = (callback, ms) => {
-          window.__liveInterval = { callback, ms };
-          return 42;
+          window.__liveIntervalCalls += 1;
+          window.__liveInterval = { callback, id: window.__liveIntervalCalls, ms };
+          return window.__liveIntervalCalls;
         };
         window.clearInterval = (id) => {
+          window.__clearedLiveIntervals.push(id);
           window.__clearedLiveInterval = id;
         };
       },
@@ -1927,9 +2421,14 @@ test("served dashboard live refresh starts by default and can be stopped", async
     "autoresearch.jsonl",
     "view-model.json",
   ]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(dom.window.__liveIntervalCalls, 1);
+  assert.equal(dom.window.__refreshFetches.length, 2);
+  assert.deepEqual(dom.window.__clearedLiveIntervals, []);
+
   getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await waitFor(
-    () => dom.window.__clearedLiveInterval === 42,
+    () => dom.window.__clearedLiveInterval === 1,
     "Live toggle did not clear the interval.",
   );
   dom.window.close();
@@ -2029,48 +2528,82 @@ test("dashboard readout uses the selected segment baseline", async () => {
   });
 
   assert.equal(getById("baseline-value").textContent, "100s");
-  assert.equal(queryById("segment-select"), null);
-  const tab = getById("segment-tab-0") as HTMLButtonElement;
-  assert.equal(tab.getAttribute("role"), "tab");
-  assert.match(tab.textContent || "", /S1/);
-  tab.click();
+  assert.equal(queryById("segment-tab-0"), null);
+  const select = getById("segment-select") as HTMLSelectElement;
+  assert.equal(select.value, "1");
+  assert.match(select.options[0]?.textContent || "", /S1 - first segment/);
+  assert.match(select.options[1]?.textContent || "", /S2 - second segment/);
+  select.value = "0";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "10s",
     "Selected segment baseline did not update.",
   );
   assert.equal(getById("best-value").textContent, "8s");
-  assert.match(getById("segment-panel").textContent, /first segment/);
-  assert.equal(getById("segment-panel").getAttribute("role"), "tabpanel");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-0");
-  tab.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+  assert.match(getById("segment-summary").textContent || "", /first segment/);
+  select.value = "1";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "100s",
-    "Keyboard segment selection did not update.",
+    "Second segment selection did not update.",
   );
-  assert.equal(getById("segment-tab-1").getAttribute("aria-selected"), "true");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-1");
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
-  );
+  assert.match(getById("segment-summary").textContent || "", /second segment/);
+  dom.window.close();
+});
+
+test("dashboard defaults to audit view and can switch to operate", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "audit default", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { getById, queryById, dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+    commands: [],
+  });
+  const toggle = getById("view-toggle") as HTMLButtonElement;
+
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.ok(getById("workspace-grid"));
+  assert.ok(getById("research-truth-meter"));
+  assert.ok(getById("strategy-memory"));
+  assert.ok(getById("codex-brief"));
+
+  toggle.click();
   await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "Home segment shortcut did not update.",
+    () => queryById("workspace-grid") == null,
+    "Operate view did not collapse audit context.",
   );
-  getById("segment-tab-0").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "End" }),
+  assert.equal(queryById("research-truth-meter"), null);
+  assert.equal(queryById("strategy-memory"), null);
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.match(dom.window.location.search, /view=operate/);
+  dom.window.close();
+});
+
+test("dashboard restores audit view and chart preferences from the URL", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "url state", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  const { getById, dom } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///autoresearch-dashboard.html?view=audit&value=percent",
+  });
+
+  assert.ok(getById("workspace-grid"));
+  assert.equal(getById("view-toggle").getAttribute("aria-pressed"), "true");
+  const percentButtons = Array.from(dom.window.document.querySelectorAll("button")).filter(
+    (button) => button.getAttribute("aria-pressed") === "true",
   );
-  await waitFor(
-    () => getById("baseline-value").textContent === "100s",
-    "End segment shortcut did not update.",
+  assert.ok(
+    percentButtons.some((button) => /%|percent/i.test(button.textContent || "")),
+    "Percent value mode was not restored from the URL.",
   );
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "ArrowLeft segment shortcut did not update.",
-  );
-  assert.equal(getById("segment-tab-0").getAttribute("aria-selected"), "true");
   dom.window.close();
 });
 
@@ -2096,10 +2629,30 @@ test("dashboard decision rail shows newest runs first", async () => {
     liveActionsAvailable: false,
   });
 
-  const railText = getById("decision-rail").textContent;
-  assert.match(railText, /#6/);
-  assert.match(railText, /Run six/);
-  assert.match(railText, /#5/);
-  assert.doesNotMatch(railText, /Run one/);
+  const ledgerHtml = getById("ledger-body").innerHTML;
+  assert.match(ledgerHtml, /#6/);
+  assert.match(ledgerHtml, /Run six/);
+  assert.match(ledgerHtml, /#5/);
+  assert.ok(
+    ledgerHtml.indexOf("#6") < ledgerHtml.indexOf("#1"),
+    "Ledger should list newest runs before older runs.",
+  );
   dom.window.close();
 });
+
+function extractCssBlock(css: string, marker: string) {
+  const start = css.indexOf(marker);
+  assert.notEqual(start, -1, `Missing CSS marker: ${marker}`);
+  const open = css.indexOf("{", start);
+  assert.notEqual(open, -1, `Missing CSS block for marker: ${marker}`);
+  let depth = 0;
+  for (let index = open; index < css.length; index += 1) {
+    const char = css[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return css.slice(open + 1, index);
+    }
+  }
+  throw new Error(`Unclosed CSS block for marker: ${marker}`);
+}

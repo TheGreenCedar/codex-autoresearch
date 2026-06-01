@@ -2,11 +2,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isAcceptedCurrentRun, isRejectedRun } from "./evidence-registry.js";
+import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { finiteMetric, isPromotionGradeRun, promotionGradeValue } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
-
-const FAILURE_STATUSES = new Set(["discard", "crash", "checks_failed"]);
 
 export async function buildScaffoldHealth({
   workDir,
@@ -101,7 +101,10 @@ export function buildResearchIntegrity({
   const current = Array.isArray(state.current) ? state.current : [];
   const results = Array.isArray(state.results) ? state.results : current;
   const latest = current.at(-1) || null;
-  const bestDevelopment = state.development?.bestRun || bestKeptRun(current, state.config);
+  const precomputedBestDevelopment = state.development?.bestRun || null;
+  const bestDevelopment = isAcceptedCurrentRun(precomputedBestDevelopment)
+    ? precomputedBestDevelopment
+    : bestKeptRun(current, state.config);
   const promotionBest = state.promotion?.bestRun || null;
   const metrics = parsedMetrics || latest?.metrics || {};
   const primaryMetricName = metricName || state.config?.metricName || config.metricName || "metric";
@@ -171,16 +174,16 @@ function buildResearchEvidenceLabels({
   const evidenceLabels = new Set<string>();
   if (results.some((run) => run.segment !== segment)) evidenceLabels.add("historical");
   if (!current.length) evidenceLabels.add("blocked");
-  if (latest && FAILURE_STATUSES.has(latest.status)) {
+  if (latest && isRejectedRun(latest)) {
     evidenceLabels.add(invalidationText(latest) ? "invalidated" : "blocked");
   }
-  if (bestDevelopment && bestDevelopment.status === "keep") {
+  if (bestDevelopment && isAcceptedCurrentRun(bestDevelopment)) {
     if (isPromotionGradeRun(bestDevelopment)) evidenceLabels.add("promotion_eligible");
     else evidenceLabels.add("dev_best");
   }
   if (promotionBest) evidenceLabels.add("promotion_eligible");
   if (latest && pendingRepeat(latest)) evidenceLabels.add("pending_repeat");
-  if (results.some((run) => run.status === "discard" && invalidationText(run))) {
+  if (results.some((run) => isRejectedRun(run) && invalidationText(run))) {
     evidenceLabels.add("invalidated");
   }
   return [...evidenceLabels];
@@ -231,7 +234,7 @@ function buildResearchIntegrityMessages({
       `Perfect metric signal (${perfectSignals.join(", ")}) is dev-only until repeat, freshness, breadth, and holdout/promotion metadata are present.`,
     );
   }
-  if (bestDevelopment && bestDevelopment.status === "keep" && promotionGrade !== true) {
+  if (bestDevelopment && isAcceptedCurrentRun(bestDevelopment) && promotionGrade !== true) {
     warnings.push(
       "Current best is development-only; it is not promotable without promotion-grade metadata.",
     );
@@ -360,7 +363,7 @@ async function classifyDirtyFiles(workDir: string, config: LooseObject = {}) {
   const unrelatedFiles: string[] = [];
   for (const line of status.stdout.split(/\r?\n/).filter(Boolean)) {
     const file = slashPath(line.slice(3).replace(/^"|"$/g, ""));
-    if (isSessionFile(file)) sessionArtifacts.push(file);
+    if (isAutoresearchSessionArtifact(file, "dirty-tree")) sessionArtifacts.push(file);
     else if (commitPaths.some((scope) => file === scope || file.startsWith(`${scope}/`))) {
       scopedExperimentFiles.push(file);
     } else {
@@ -373,7 +376,7 @@ async function classifyDirtyFiles(workDir: string, config: LooseObject = {}) {
 function bestKeptRun(current: LooseObject[], config: LooseObject = {}) {
   const direction = config?.bestDirection === "higher" ? "higher" : "lower";
   let best: LooseObject | null = null;
-  for (const run of current.filter((item) => item.status === "keep")) {
+  for (const run of current.filter((item) => isAcceptedCurrentRun(item))) {
     const metric = finiteMetric(run.metric);
     if (metric == null) continue;
     if (!best) best = run;
@@ -478,16 +481,6 @@ async function gitOk(args: string[], cwd: string) {
     );
     child.on("close", (code) => resolve({ code, ok: code === 0, stdout, stderr }));
   });
-}
-
-function isSessionFile(file: string) {
-  const normalized = slashPath(file);
-  return (
-    normalized.startsWith("autoresearch.") ||
-    normalized.startsWith("autoresearch-") ||
-    normalized.startsWith("autoresearch.research/") ||
-    normalized === ".gitattributes"
-  );
 }
 
 function listOption(value: unknown): string[] {

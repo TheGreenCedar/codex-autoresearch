@@ -612,15 +612,16 @@ const checks = [
   },
   {
     id: "finalizer-excludes-research-artifacts",
-    file: "scripts/finalize-autoresearch.mjs, scripts/finalize-autoresearch.ts",
+    file: "scripts/finalize-autoresearch.mjs, scripts/finalize-autoresearch.ts, lib/session-artifacts.ts",
     description: "Finalization excludes deep research scratchpads from review branches.",
     run: async () => {
       const finalizer = await readText("scripts/finalize-autoresearch.ts");
+      const artifacts = await readText("lib/session-artifacts.ts");
       return includesAll(finalizer, [
-        "autoresearch.research",
-        "startsWith(`${RESEARCH_DIR}/`)",
+        "isAutoresearchSessionArtifact",
         "session artifact verification",
-      ])
+      ]) &&
+        includesAll(artifacts, ["autoresearch.research", 'startsWith("autoresearch.research/")'])
         ? pass()
         : fail("Finalizer does not exclude autoresearch.research scratchpads.");
     },
@@ -660,22 +661,18 @@ const checks = [
     id: "dashboard-semantic-labels",
     file: "assets/template.html, dashboard/src/main.tsx",
     description:
-      "The dashboard uses semantic labels/tabs for controls and avoids decorative label tags.",
+      "The dashboard uses semantic labels and native controls without decorative label tags.",
     run: async () => {
       const template = await readDashboardSurface();
       const labelCount = (template.match(/<label\b/g) || []).length;
-      const hasSegmentTabs = includesAll(template, [
-        "segment-tablist",
-        'role="tablist"',
-        'role="tab"',
-        "aria-selected",
-        "segment-navigator-label",
+      const hasSegmentSelect = includesAll(template, [
+        'htmlFor="segment-select"',
+        'id="segment-select"',
+        'className="segment-select"',
+        'aria-describedby="segment-summary"',
       ]);
       if (
-        (hasSegmentTabs ||
-          template.includes('<label for="segment-select">') ||
-          template.includes('htmlFor="segment-select"') ||
-          template.includes("htmlFor:`segment-select`")) &&
+        hasSegmentSelect &&
         template.includes('role="group"') &&
         template.includes("aria-label={label}") &&
         template.includes("score-label") &&
@@ -686,7 +683,7 @@ const checks = [
         return pass();
       }
       return fail(
-        `Expected segment tabs/control labels without decorative label tags; found ${labelCount}.`,
+        `Expected semantic segment select and control labels without decorative label tags; found ${labelCount}.`,
       );
     },
   },
@@ -764,7 +761,7 @@ const checks = [
         "aiSummary",
         "Next action",
         "nextBestAction",
-        "Session memory",
+        "Strategy lanes",
         "lanePortfolio",
         "plateau",
       ])
@@ -874,6 +871,27 @@ const checks = [
       ])
         ? pass()
         : fail("Docs are missing full-product workflow terms.");
+    },
+  },
+  {
+    id: "loop-governance-docs",
+    file: "skills/codex-autoresearch/SKILL.md, docs/operate.md, docs/trust.md, docs/architecture.md",
+    description:
+      "Docs and skill describe the loop-governance fields Codex must read before another packet.",
+    run: async () => {
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const operate = await readText("docs/operate.md");
+      const trust = await readText("docs/trust.md");
+      const architecture = await readText("docs/architecture.md");
+      return includesAll(`${skill}\n${operate}\n${trust}\n${architecture}`, [
+        "operatorChecklist",
+        "loopContract",
+        "runtimeProvenance",
+        "laneLifecycle",
+        "packetDiagnostics",
+      ])
+        ? pass()
+        : fail("Loop-governance docs are missing required compact-readout fields.");
     },
   },
   {

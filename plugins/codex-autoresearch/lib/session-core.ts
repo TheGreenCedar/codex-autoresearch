@@ -4,9 +4,30 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
-export const STATUS_VALUES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
-export const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
-export const NON_PROMOTIONAL_STATUSES = new Set(["crash", "checks_failed", "measure"]);
+import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
+import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
+import {
+  FAILURE_STATUSES,
+  NON_PROMOTIONAL_STATUSES,
+  STATUS_VALUES,
+  isFailureStatus,
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+} from "./run-status.js";
+
+export {
+  FAILURE_STATUSES,
+  NON_METRIC_ELIGIBLE_STATUSES,
+  NON_PROMOTIONAL_STATUSES,
+  REJECTED_RUN_STATUSES,
+  STATUS_VALUES,
+  isFailureStatus,
+  isKeepStatus,
+  isMetricEligibleStatus,
+  isPromotionalStatus,
+  isRejectedRunStatus,
+  normalizeRunStatus,
+} from "./run-status.js";
 export const RESEARCH_DIR = "autoresearch.research";
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher";
@@ -68,14 +89,6 @@ export function finiteMetric(value: unknown): number | null {
 
 export function hasFiniteMetric(run: RunRecord | null | undefined): boolean {
   return finiteMetric(run?.metric) != null;
-}
-
-export function isFailureStatus(status: unknown): boolean {
-  return FAILURE_STATUSES.has(String(status));
-}
-
-export function isPromotionalStatus(status: unknown): boolean {
-  return !NON_PROMOTIONAL_STATUSES.has(String(status));
 }
 
 export function isBaselineEligibleMetricRun(run: RunRecord | null | undefined): boolean {
@@ -185,7 +198,7 @@ export function bestMetric(runs: RunRecord[], direction: Direction | string): nu
 
 export function bestKeptMetric(runs: RunRecord[], direction: Direction | string): number | null {
   return bestMetric(
-    runs.filter((run) => run.status === "keep"),
+    runs.filter((run) => isAcceptedCurrentRun(run)),
     direction,
   );
 }
@@ -245,7 +258,7 @@ export function isPromotionGradeRun(run: RunRecord | null | undefined): boolean 
 }
 
 function evidenceTrack(runs: RunRecord[], direction: Direction | string) {
-  const kept = runs.filter((run) => run.status === "keep");
+  const kept = runs.filter((run) => isAcceptedCurrentRun(run));
   const bestRun = bestMetricRun(kept, direction);
   return {
     count: runs.length,
@@ -316,7 +329,10 @@ export function currentState(workDir: string): SessionState {
   const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
-  const promotionRuns = current.filter((run) => run.status === "keep" && isPromotionGradeRun(run));
+  const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
+  const promotionRuns = evidenceRegistry.currentRuns.filter(
+    (run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run),
+  );
   return {
     config,
     segment,
@@ -327,6 +343,7 @@ export function currentState(workDir: string): SessionState {
     confidence,
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
+    evidenceRegistry,
   };
 }
 
@@ -384,16 +401,17 @@ export function buildDecisionEnvelope({
   experimentMemory = null,
   segmentTransition = null,
   setupState = null,
+  watchdog = null,
 }: LooseObject): LooseObject {
   const current: RunRecord[] = Array.isArray(state?.current) ? state.current : [];
   const all: RunRecord[] = Array.isArray(state?.results) ? state.results : current;
   const direction = state?.config?.bestDirection || "lower";
   const historicalBest = bestMetricRun(
-    all.filter((run) => run.status === "keep"),
+    all.filter((run) => isAcceptedCurrentRun(run)),
     direction,
   );
   const promotionBest = bestMetricRun(
-    current.filter((run) => run.status === "keep" && isPromotionGradeRun(run)),
+    current.filter((run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run)),
     direction,
   );
   const codes = warningCodes(warningDetails);
@@ -509,19 +527,66 @@ export function buildDecisionEnvelope({
             (qualityRound.done === true ? ["qualityRound"] : ["limit"]),
         }
       : null,
+    watchdog: watchdog
+      ? {
+          status: watchdog.status || "",
+          stale: watchdog.stale === true,
+          thresholdHours: watchdog.thresholdHours ?? null,
+          quietHours: watchdog.quietHours ?? null,
+          recommendation: watchdog.recommendation || "",
+          reasons: Array.isArray(watchdog.reasons) ? watchdog.reasons : [],
+        }
+      : null,
+    contextDistillation,
+    laneLifecycle: state?.laneLifecycle || null,
+    runtimeProvenance: state?.runtimeProvenance || null,
+    packetDiagnostics: state?.packetDiagnostics || null,
     nextAction: nextAction || "Run doctor, then next.",
   };
+  const loopContract = buildLoopContractStatus(envelope);
+  const legacyAction = canonicalNextActionForEnvelope(envelope);
+  const governanceAction = canonicalNextActionForLoop(envelope);
+  const canonicalNextAction =
+    loopContract.blockers.length > 0 ||
+    (legacyAction?.kind === "next-packet" && loopContract.canRunNextPacket === false)
+      ? governanceAction
+      : legacyAction;
   return {
     ...envelope,
-    canonicalNextAction: canonicalNextActionForEnvelope({
-      ...envelope,
-      contextDistillation,
-      nextAction: nextAction || "Run doctor, then next.",
-    }),
+    loopContract,
+    canonicalNextAction,
   };
 }
 
+type CanonicalRule = (envelope: LooseObject) => LooseObject | null;
+
+const CANONICAL_NEXT_ACTION_RULES: CanonicalRule[] = [
+  scaffoldBlockerAction,
+  dirtySourceDriftAction,
+  timeoutMismatchAction,
+  workflowBlockerAction,
+  workflowWarningAction,
+  stalePacketAction,
+  setupAction,
+  benchmarkCommandAction,
+  logDecisionAction,
+  segmentTransitionAction,
+  plateauAction,
+  watchdogAction,
+  finalizationAction,
+  baselineAction,
+  nextPacketAction,
+];
+
 function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
+  for (const rule of CANONICAL_NEXT_ACTION_RULES) {
+    const action = rule(envelope);
+    if (action) return action;
+  }
+  return nextPacketAction(envelope);
+}
+
+function scaffoldBlockerAction(envelope: LooseObject): LooseObject | null {
   const scaffoldBlockers = envelope.scaffoldHealth?.blockers || [];
   if (Array.isArray(scaffoldBlockers) && scaffoldBlockers.length > 0) {
     return {
@@ -532,6 +597,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["scaffoldHealth"],
     };
   }
+  return null;
+}
+
+function dirtySourceDriftAction(envelope: LooseObject): LooseObject | null {
   if (envelope.dirtySourceDrift?.dirty === true) {
     return {
       kind: "workflow-friction",
@@ -541,6 +610,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["dirtySourceDrift"],
     };
   }
+  return null;
+}
+
+function timeoutMismatchAction(envelope: LooseObject): LooseObject | null {
   const timeoutMismatch = firstEconomicsWarning(
     envelope.experimentEconomics,
     "outer_timeout_shorter_than_inner",
@@ -554,6 +627,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", timeoutMismatch.code],
     };
   }
+  return null;
+}
+
+function workflowBlockerAction(envelope: LooseObject): LooseObject | null {
   const workflowBlocker = firstWorkflowFriction(envelope.workflowFriction, "blocker");
   if (workflowBlocker) {
     return {
@@ -564,6 +641,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: workflowBlocker.suggestedAction?.triggeredBy || [workflowBlocker.kind],
     };
   }
+  return null;
+}
+
+function workflowWarningAction(envelope: LooseObject): LooseObject | null {
   const workflowWarning = firstWorkflowFriction(envelope.workflowFriction, "warning");
   if (workflowWarning) {
     return {
@@ -587,6 +668,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", repeatedSmallProbe.code],
     };
   }
+  return null;
+}
+
+function stalePacketAction(envelope: LooseObject): LooseObject | null {
   if (envelope.latestPacketFreshness?.fresh === false) {
     return {
       kind: "stale-packet",
@@ -612,6 +697,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["experimentEconomics", "progress"],
     };
   }
+  return null;
+}
+
+function setupAction(envelope: LooseObject): LooseObject | null {
   const setupBlockers = Array.isArray(envelope.setupState?.blockers)
     ? envelope.setupState.blockers
     : [];
@@ -627,6 +716,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["setup"],
     };
   }
+  return null;
+}
+
+function benchmarkCommandAction(envelope: LooseObject): LooseObject | null {
   if (envelope.setupState?.stage === "needs-benchmark-command") {
     return {
       kind: "benchmark-command",
@@ -636,6 +729,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["setup", "benchmarkCommand"],
     };
   }
+  return null;
+}
+
+function logDecisionAction(envelope: LooseObject): LooseObject | null {
   const salvage = firstDiagnosticSalvage(envelope.salvageCandidates);
   if (salvage) {
     return {
@@ -655,6 +752,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["latestPacketFreshness"],
     };
   }
+  return null;
+}
+
+function segmentTransitionAction(envelope: LooseObject): LooseObject | null {
   if (envelope.contextDistillation?.required === true) {
     return {
       kind: "context-distillation",
@@ -682,6 +783,10 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: envelope.segmentTransition.triggeredBy || ["segmentTransition"],
     };
   }
+  return null;
+}
+
+function plateauAction(envelope: LooseObject): LooseObject | null {
   if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {
     return {
       kind: "quality-gap",
@@ -706,6 +811,25 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: exhausted ? ["experimentMemory", "exhaustedFamily"] : ["experimentMemory"],
     };
   }
+  return null;
+}
+
+function watchdogAction(envelope: LooseObject): LooseObject | null {
+  if (envelope.watchdog?.stale === true) {
+    return {
+      kind: "watchdog",
+      priority: 8,
+      reason:
+        envelope.watchdog.recommendation ||
+        "No progress signal has appeared within the watchdog window.",
+      command: "",
+      triggeredBy: ["watchdog"],
+    };
+  }
+  return null;
+}
+
+function finalizationAction(envelope: LooseObject): LooseObject | null {
   if (envelope.finalizationReadiness?.ready === true) {
     return {
       kind: "finalization",
@@ -715,6 +839,14 @@ function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
       triggeredBy: ["finalizationReadiness"],
     };
   }
+  return null;
+}
+
+function baselineAction(_envelope: LooseObject): LooseObject | null {
+  return null;
+}
+
+function nextPacketAction(envelope: LooseObject): LooseObject {
   return {
     kind: "next-packet",
     priority: 10,

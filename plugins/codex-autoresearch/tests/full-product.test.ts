@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import test from "./helpers/sharded-test.js";
 import {
   appendJsonl,
   currentState,
@@ -1154,8 +1154,11 @@ test("live server exposes health and view-model endpoints", async () => {
     await withLiveServer(dir, async (payload) => {
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
       assert.equal(payload.verified, true);
-      assert.equal(payload.decisionEnvelopeSummary.kind, "benchmark-command");
-      assert.equal(payload.decisionEnvelopeSummary.runs, 1);
+      assert.equal(payload.decisionEnvelopeSummary, null);
+      assert.match(
+        payload.deferredViewModel.availableAt,
+        /^http:\/\/127\.0\.0\.1:\d+\/view-model\.json$/,
+      );
       assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
       assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());
@@ -1303,7 +1306,7 @@ test("live server log actions stay disabled and leave last-run packets untouched
 
 async function waitForServerPayload(stdoutFn, stderrFn) {
   const started = Date.now();
-  while (Date.now() - started < 15000) {
+  while (Date.now() - started < 45000) {
     const stdout = stdoutFn();
     if (stdout.trim().endsWith("}")) return JSON.parse(stdout);
     await new Promise((resolve) => setTimeout(resolve, 50));

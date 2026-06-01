@@ -1,6 +1,6 @@
 # Recipes
 
-Recipes give a new loop a benchmark shape before anyone starts hand-carving shell commands out of panic.
+Recipes give a new loop a benchmark shape before anyone writes custom shell commands.
 
 ## List Recipes
 

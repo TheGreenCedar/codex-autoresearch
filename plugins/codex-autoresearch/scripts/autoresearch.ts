@@ -6,10 +6,18 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
-import { writeContextCapsule } from "../lib/context-capsule.js";
+import { fileURLToPath } from "node:url";
+import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
+import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
+import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
+import {
+  buildRecommendNextResponse,
+  selectRecommendNextRuntimeAuthority,
+} from "../lib/commands/recommend-next.js";
+import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
+import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
@@ -19,17 +27,22 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
+import {
+  EVIDENCE_STATUSES,
+  artifactEvidenceList,
+  artifactList,
+  defaultEvidenceStatusForRun,
+} from "../lib/evidence-registry.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { mergeEvidenceClaims } from "../lib/evidence-index.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
-import {
-  buildPartialResultEvidenceClaim,
-  discoverPartialResultCandidates,
-} from "../lib/partial-results.js";
+import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
+import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
+import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -45,7 +58,6 @@ import {
   revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import { serveAutoresearch } from "../lib/live-server.js";
-import { parseSessionForensics } from "../lib/session-forensics.js";
 import {
   parseMetricLines,
   runProcess as runBoundedProcess,
@@ -70,7 +82,7 @@ import {
   safeSlug,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
-  isPromotionalStatus,
+  isMetricEligibleStatus,
   promotionGradeValue,
 } from "../lib/session-core.js";
 import {
@@ -181,6 +193,54 @@ const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands
   validateMetricName,
 });
 
+const sessionForensics = createSessionForensicsCommand({
+  boolOption,
+  pluginRoot: PLUGIN_ROOT,
+  positiveIntegerOption,
+  resolveWorkDir,
+  shellQuote,
+});
+
+const partialResultsCommand = createPartialResultsCommand({
+  appendJsonl,
+  assertFreshLastRunPacket,
+  boolOption,
+  computeConfidence,
+  currentState,
+  deleteLastRunPacket,
+  finiteMetric,
+  loopContinuation,
+  readConfig,
+  readLastRunPacket,
+  researchSlugFromArgs,
+  resolveWorkDir,
+});
+
+const laneRunner = createLaneRunnerCommand({
+  appendJsonl,
+  assertNoDirtyPathsOutsideWriteScope,
+  assertWriteScopeIntegrity,
+  boolOption,
+  buildParallelOrchestrationContext,
+  commandLooksMutating,
+  commandLooksUnsafeForWriteScope,
+  currentState,
+  dashboardSettings,
+  gitStatusPorcelain,
+  insideGitRepo,
+  latestLaneResults,
+  normalizeLaneMode,
+  normalizeParallelLane,
+  normalizeRelativePaths,
+  positiveIntegerOption,
+  resolveLaneWorktree,
+  resolveWorkDir,
+  runShell,
+  synthesizeLaneDecision,
+  tailText,
+  writeScopeSnapshot,
+});
+
 function usage() {
   return `Codex Autoresearch
 
@@ -191,9 +251,9 @@ Usage:
   node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
   node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
   node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
-  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact]
+  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]
   node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
-  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets]
+  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir]
   node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
   node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
   node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
@@ -201,13 +261,15 @@ Usage:
   node scripts/autoresearch.mjs partial-results --cwd <project> [--from-last|--artifact <path>] [--record <candidate-id>] [--research-slug <slug>]
   node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
   node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
+  node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]
+  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--allow-non-git-command] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
   node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
   node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>] [--asi <json>|--asi-file <path>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
+  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
   node scripts/autoresearch.mjs state --cwd <project> [--compact]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
@@ -336,6 +398,15 @@ function enumOption<T extends string>(
     throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
   }
   return normalized as T;
+}
+
+function evidenceStatusOption(value: unknown, status: string) {
+  return enumOption(
+    value,
+    EVIDENCE_STATUSES,
+    defaultEvidenceStatusForRun({ status }),
+    "--evidence-status",
+  );
 }
 
 function shellQuote(value: unknown): string {
@@ -1704,11 +1775,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     pluginVersion: PLUGIN_VERSION,
   });
   const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
-  const canonicalNextAction =
-    compact.canonicalNextAction ||
-    compact.decisionEnvelope?.canonicalNextAction ||
-    compact.resumeAudit?.canonicalNextAction ||
-    null;
+  const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
+  const canonicalNextAction = authority.canonicalNextAction || null;
   const action = canonicalNextAction
     ? canonicalActionForRecommendNext(
         canonicalNextAction,
@@ -1721,7 +1789,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     action.detail ||
     viewModel.readout?.nextAction ||
     compact.nextAction;
-  const baseEnvelope = compact.decisionEnvelope || compact.resumeAudit || null;
+  const baseEnvelope = authority.decisionEnvelope || null;
   const decisionEnvelope = baseEnvelope
     ? {
         ...baseEnvelope,
@@ -1743,7 +1811,16 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
           : baseEnvelope.canonicalNextAction,
       }
     : null;
-  return {
+  const loopContract = decisionEnvelope?.loopContract || authority.loopContract || null;
+  const operatorChecklist = boolOption(args.operatorChecklist ?? args.operator_checklist, false)
+    ? buildOperatorChecklist(action, {
+        workDir,
+        pluginRoot: PLUGIN_ROOT,
+        loopContract,
+        source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
+      })
+    : undefined;
+  return buildRecommendNextResponse({
     ok: true,
     workDir,
     action,
@@ -1767,7 +1844,27 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     compactState: boolOption(args.compact, false) ? compact : undefined,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
-  };
+    operatorChecklist,
+    runtimeProvenance: authority.runtimeProvenance,
+    loopContract,
+    laneLifecycle: compact.laneLifecycle,
+    packetDiagnostics: compact.packetDiagnostics,
+  });
+}
+
+function recommendNextChecklistSource(
+  action: LooseObject,
+  canonicalNextAction: LooseObject | null,
+  loopContract: LooseObject | null,
+) {
+  const actionSource = String(action.source || "");
+  return (
+    (actionSource === "decision-envelope" ? "" : actionSource) ||
+    String(canonicalNextAction?.triggeredBy || "") ||
+    String(loopContract?.strongestAction?.triggeredBy || "") ||
+    actionSource ||
+    "recommend-next"
+  );
 }
 
 function canonicalActionForRecommendNext(
@@ -1800,80 +1897,15 @@ function canonicalTitle(kind: unknown, fallback: unknown): string {
     "stale-packet": "Replace the stale packet",
     "partial-salvage": "Review partial results",
     "context-distillation": "Refresh context",
+    "lane-cleanup": "Close stale lanes",
+    "runtime-provenance": "Inspect runtime provenance",
+    "packet-diagnostic": "Inspect packet diagnostics",
     "quality-gap": "Close accepted quality gaps",
     "plateau-pivot": "Pivot before repeating the plateau",
     finalization: "Preview finalization",
     "next-packet": "Run the next measured packet",
   };
   return titles[text] || String(fallback || "Next action");
-}
-
-async function sessionForensics(args: LooseObject): Promise<LooseObject> {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const apply = boolOption(args.apply, false);
-  const dryRun = boolOption(args.dryRun, !apply);
-  const sessionJsonl = String(args.sessionJsonl || "");
-  const researchSlug = String(args.researchSlug || "");
-  const parsed = await parseSessionForensics({
-    sessionJsonl,
-    allowSnippets: boolOption(args.allowSnippets, false),
-    maxSnippets: positiveIntegerOption(args.maxSnippets, 8, "--max-snippets") ?? 8,
-    maxSnippetChars: positiveIntegerOption(args.maxSnippetChars, 320, "--max-snippet-chars") ?? 320,
-  });
-  if (!parsed.ok) {
-    return {
-      ...parsed,
-      wrote: false,
-    };
-  }
-  const capsule = await writeContextCapsule({
-    cwd: workDir,
-    researchSlug,
-    summary: parsed,
-    apply: apply && !dryRun,
-  });
-  const contextSignal = parsed.productSignals.find(
-    (signal: any) => signal.kind === "context_distillation_required",
-  );
-  const canonicalNextAction = contextSignal
-    ? {
-        kind: "context-distillation",
-        priority: 6,
-        reason: contextSignal.message,
-        command: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${shellQuote(workDir)} --session-jsonl ${shellQuote(sessionJsonl)} --research-slug ${shellQuote(researchSlug)} --apply`,
-        triggeredBy: ["sessionForensics"],
-      }
-    : {
-        kind: "next-packet",
-        priority: 10,
-        reason: "Review imported signals, then continue with the safest next Autoresearch action.",
-        command: "",
-        triggeredBy: ["sessionForensics"],
-      };
-  return {
-    ok: true,
-    workDir,
-    dryRun: capsule.dryRun,
-    wrote: !capsule.dryRun,
-    outputDir: capsule.outputDir,
-    plannedFiles: capsule.files,
-    sourcePath: parsed.sourcePath,
-    timeWindow: parsed.timeWindow,
-    counts: parsed.counts,
-    responseCounts: parsed.responseCounts,
-    toolCounts: parsed.toolCounts,
-    commandClasses: parsed.commandClasses,
-    compactions: parsed.compactions,
-    goal: parsed.goal,
-    userCorrections: parsed.userCorrections,
-    productSignals: parsed.productSignals,
-    workflowWaste: parsed.workflowWaste,
-    blockers: parsed.blockers,
-    snippets: parsed.snippets,
-    evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
-    canonicalNextAction,
-    nextAction: canonicalNextAction.reason,
-  };
 }
 
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
@@ -2962,11 +2994,45 @@ async function hasStagedChanges(cwd: string) {
   return result.code === 1;
 }
 
-async function isGitClean(cwd: string) {
-  if (!(await insideGitRepo(cwd))) return null;
-  const result = await git(["status", "--porcelain"], cwd);
-  if (result.code !== 0) return false;
-  return result.stdout.trim() === "";
+async function gitDirtyPathDetails(cwd: string) {
+  if (!(await insideGitRepo(cwd))) return [];
+  const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
+  if (result.code !== 0) return [];
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const status = line.slice(0, 2);
+      const rawPath = line.slice(3).trim();
+      const normalizedPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").pop() || rawPath
+        : rawPath;
+      return {
+        status,
+        path: normalizeGitStatusPath(normalizedPath),
+        raw: line,
+      };
+    })
+    .filter((entry) => entry.path);
+}
+
+function normalizeGitStatusPath(value: string) {
+  const trimmed = String(value || "").trim();
+  const unquoted =
+    trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+  return unquoted.replace(/\\\\/g, "/").replace(/\\/g, "/");
+}
+
+function isAutoresearchOwnedDirtyPath(relativePath: string) {
+  const normalized = normalizeGitStatusPath(relativePath);
+  return (
+    SESSION_FILES.includes(normalized) ||
+    normalized === "autoresearch-dashboard.html" ||
+    normalized.startsWith(`${RESEARCH_DIR}/`) ||
+    normalized.startsWith("target/autoresearch/") ||
+    normalized.startsWith(".autoresearch-cache/")
+  );
 }
 
 function emptyCommitPathsWarning() {
@@ -3424,6 +3490,55 @@ async function appendRuntimeConfigFile(files: any[], sessionCwd: any, updates: a
   files.push(await writeSessionFile(configPath, content, { overwrite: true }));
 }
 
+async function appendRuntimeConfigUpdates(files: any[], sessionCwd: any, updates: LooseObject) {
+  if (Object.keys(updates).length > 0) {
+    await appendRuntimeConfigFile(files, sessionCwd, updates);
+  }
+}
+
+async function appendSetupRuntimeConfig(
+  files: any[],
+  sessionCwd: any,
+  args: LooseObject,
+  options: {
+    includeRecipe?: boolean;
+    includeRecipeCatalogProvenance?: boolean;
+    grouped?: boolean;
+  } = {},
+) {
+  const maxIterations = positiveIntegerOption(
+    args.max_iterations ?? args.maxIterations,
+    null,
+    "maxIterations",
+  );
+  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
+  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
+
+  if (options.grouped) {
+    const nextConfig: LooseObject = { ...runtimeUpdates };
+    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
+    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
+    await appendRuntimeConfigUpdates(files, sessionCwd, nextConfig);
+    return;
+  }
+
+  const setupConfig: LooseObject = {};
+  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
+  if (options.includeRecipe && (args.recipe_id || args.recipeId || args.recipe)) {
+    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, setupConfig);
+  if (options.includeRecipeCatalogProvenance && args.recipeCatalogProvenance) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, {
+      recipeCatalogProvenance: args.recipeCatalogProvenance,
+    });
+  }
+  if (commitPaths.length > 0) {
+    await appendRuntimeConfigUpdates(files, sessionCwd, { commitPaths });
+  }
+  await appendRuntimeConfigUpdates(files, sessionCwd, runtimeUpdates);
+}
+
 function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
   const paths = [
     ...new Set(
@@ -3444,6 +3559,39 @@ function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
         ]
       : [],
     note: "Checkpoint these generated session files before the first experiment commit if this project is in Git.",
+  };
+}
+
+async function setupCommandResponseFields({
+  args,
+  benchmarkMode,
+  checkpoint,
+  metricName,
+  sessionCwd,
+  shellKind,
+  workDir,
+}: LooseObject) {
+  const benchmarkCommand =
+    shellKind === "bash"
+      ? "bash ./autoresearch.sh"
+      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
+  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  return {
+    scaffoldHealth: await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) }),
+    benchmarkMode,
+    benchmarkLintCommand,
+    scopeWarnings: scopeWarningsFromArgs(args),
+    firstRunChecklist: firstRunChecklist({
+      setupCommand: "already completed",
+      benchmarkLintCommand,
+      doctorCommand,
+      checkpoint,
+      baselineCommand,
+      logCommand,
+    }),
   };
 }
 
@@ -3568,30 +3716,10 @@ async function setupSession(args: LooseObject) {
     ideasContent: () => renderIdeasDocument(args),
   });
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const setupConfig: LooseObject = {};
-  if (maxIterations != null) setupConfig.maxIterations = maxIterations;
-  if (args.recipe_id || args.recipeId || args.recipe)
-    setupConfig.recipeId = args.recipe_id || args.recipeId || args.recipe;
-  if (Object.keys(setupConfig).length > 0)
-    await appendRuntimeConfigFile(files, sessionCwd, setupConfig);
-  if (args.recipeCatalogProvenance) {
-    await appendRuntimeConfigFile(files, sessionCwd, {
-      recipeCatalogProvenance: args.recipeCatalogProvenance,
-    });
-  }
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  if (commitPaths.length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, { commitPaths });
-  }
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (Object.keys(runtimeUpdates).length > 0) {
-    await appendRuntimeConfigFile(files, sessionCwd, runtimeUpdates);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, {
+    includeRecipe: true,
+    includeRecipeCatalogProvenance: true,
+  });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3599,10 +3727,6 @@ async function setupSession(args: LooseObject) {
   }
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name);
   const metricName = validateMetricName(args.metric_name || args.metricName);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
   const benchmarkMode = {
     explicitCommand: Boolean(args.benchmark_command || args.benchmarkCommand),
     printsMetric: explicitBenchmarkPrintsMetric(args),
@@ -3610,11 +3734,15 @@ async function setupSession(args: LooseObject) {
       ? "The benchmark command/script is expected to print METRIC lines."
       : "The generated benchmark script wraps the command and emits the primary metric from elapsed time.",
   };
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode,
+    checkpoint,
+    metricName,
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
 
   return {
     ok: true,
@@ -3623,18 +3751,7 @@ async function setupSession(args: LooseObject) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode,
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
   };
 }
@@ -3700,19 +3817,7 @@ async function setupResearchSession(args: any) {
   });
   const researchDir = researchDirPath(workDir, slug);
 
-  const maxIterations = positiveIntegerOption(
-    args.max_iterations ?? args.maxIterations,
-    null,
-    "maxIterations",
-  );
-  const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
-  const runtimeUpdates = runtimeConfigUpdatesFromArgs(args);
-  if (maxIterations != null || commitPaths.length > 0 || Object.keys(runtimeUpdates).length > 0) {
-    const nextConfig: LooseObject = { ...runtimeUpdates };
-    if (maxIterations != null) nextConfig.maxIterations = maxIterations;
-    if (commitPaths.length > 0) nextConfig.commitPaths = commitPaths;
-    await appendRuntimeConfigFile(files, sessionCwd, nextConfig);
-  }
+  await appendSetupRuntimeConfig(files, sessionCwd, args, { grouped: true });
 
   let init = null;
   if (!boolOption(args.skip_init ?? args.skipInit, false)) {
@@ -3728,15 +3833,19 @@ async function setupResearchSession(args: any) {
 
   const gap = await measureQualityGap({ cwd: workDir, researchSlug: slug });
   const checkpoint = setupCheckpointGuidance(workDir, files, args.name || `Deep research: ${goal}`);
-  const benchmarkCommand =
-    shellKind === "bash"
-      ? "bash ./autoresearch.sh"
-      : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
-  const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote("quality_gap")} --command ${shellQuote(benchmarkCommand)}`;
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) });
+  const responseFields = await setupCommandResponseFields({
+    args,
+    benchmarkMode: {
+      explicitCommand: true,
+      printsMetric: true,
+      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
+    },
+    checkpoint,
+    metricName: "quality_gap",
+    sessionCwd,
+    shellKind,
+    workDir,
+  });
   return {
     ok: true,
     workDir,
@@ -3746,22 +3855,7 @@ async function setupResearchSession(args: any) {
     shell: shellKind,
     files,
     checkpoint,
-    scaffoldHealth,
-    benchmarkMode: {
-      explicitCommand: true,
-      printsMetric: true,
-      note: "The generated research benchmark emits quality_gap METRIC lines from the scratchpad.",
-    },
-    benchmarkLintCommand,
-    scopeWarnings: scopeWarningsFromArgs(args),
-    firstRunChecklist: firstRunChecklist({
-      setupCommand: "already completed",
-      benchmarkLintCommand,
-      doctorCommand,
-      checkpoint,
-      baselineCommand,
-      logCommand,
-    }),
+    ...responseFields,
     init,
     qualityGap: {
       open: gap.open,
@@ -3868,7 +3962,9 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       pluginRoot: PLUGIN_ROOT,
       includeInstalled: Boolean(context.includeInstalledRuntime),
     }).catch((error: any) => ({
-      ok: false,
+      ok: null,
+      status: "unavailable",
+      probeFailed: true,
       warnings: [error.message],
     })));
   const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
@@ -3892,12 +3988,40 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     ok: false,
     warnings: [error.message],
   }));
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
     settings,
   });
-  const stateWithQualityGap = { ...state, qualityGap };
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance(drift);
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -3913,7 +4037,11 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+    progress:
+      activeProgress ||
+      (await readActiveProgressSnapshot(workDir, config)) ||
+      lastRun?.packetEvidence?.progressSnapshot ||
+      null,
   });
   const commands = dashboardCommands(workDir, qualityGap);
   const guidedCommands = (guidedSetupResult as LooseObject).commands || {};
@@ -3925,7 +4053,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   };
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...state, limit: iterationLimitInfo(state, config) },
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails: warnings,
@@ -3938,6 +4066,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       workflowFriction,
       experimentMemory: memory,
       setupState: decisionSetupState(guidedSetupResult, setupPlanResult),
+      watchdog: watchdogSummary,
     }),
     canonicalCommandHints,
   );
@@ -3946,6 +4075,13 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     scaffoldHealth,
     researchIntegrity,
     warningDetails: warnings,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    watchdogSummary,
     experimentEconomics,
     partialResults,
     workflowFriction,
@@ -3972,14 +4108,30 @@ async function operatorWarningsForWorkDir(workDir: string) {
   const config = readConfig(workDir);
   const state = currentState(workDir);
   const warnings = [];
-  if (inGit && (await isGitClean(workDir)) === false) {
-    warnings.push({
-      code: "git_dirty",
-      severity: "warning",
-      message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
-      action:
-        "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
-    });
+  if (inGit) {
+    const dirtyPaths = await gitDirtyPathDetails(workDir);
+    const sourceDirtyPaths = dirtyPaths.filter(
+      (entry: any) => !isAutoresearchOwnedDirtyPath(entry.path),
+    );
+    if (sourceDirtyPaths.length > 0) {
+      warnings.push({
+        code: "git_dirty",
+        severity: "warning",
+        message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
+        action:
+          "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
+        paths: sourceDirtyPaths.map((entry: any) => entry.path).slice(0, 12),
+      });
+    } else if (dirtyPaths.length > 0) {
+      warnings.push({
+        code: "autoresearch_session_dirty",
+        severity: "info",
+        message:
+          "Only Autoresearch session artifacts are dirty; source drift checks will not block the next action.",
+        action: "Continue the loop, then include or exclude session artifacts during finalization.",
+        paths: dirtyPaths.map((entry: any) => entry.path).slice(0, 12),
+      });
+    }
   }
   const missingCommitPaths = [];
   for (const item of listOption(config.commitPaths || config.commit_paths)) {
@@ -4157,7 +4309,7 @@ async function runExperiment(args: LooseObject) {
         ),
       }),
     };
-    void writeActiveProgressSnapshot(workDir, progressSnapshot);
+    void writeActiveProgressSnapshot(workDir, progressSnapshot).catch(() => {});
   };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
@@ -4437,14 +4589,28 @@ async function logExperiment(args: any) {
   }
   const description = args.description || lastPacket?.run?.description || "";
   if (!description) throw new Error("description is required");
-  const metrics = args.metrics ?? lastPacket?.decision?.metrics ?? {};
-  const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
-  const asiFilePath = args.asi_file ?? args.asiFile;
-  if (asiFilePath && args.asi != null) {
-    throw new Error("Use either --asi or --asi-file, not both.");
+  const metricsFilePath = args.metrics_file ?? args.metricsFile;
+  if (metricsFilePath && args.metrics != null) {
+    throw new Error("Use either --metrics or --metrics-file, not both.");
   }
-  const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, "--asi-file");
+  const metricsFromFile = await parseJsonFileOption(metricsFilePath, workDir, "--metrics-file");
+  const metrics = metricsFromFile ?? args.metrics ?? lastPacket?.decision?.metrics ?? {};
+  const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
+  const legacyAsiFilePath = args.asi_file ?? args.asiFile;
+  const asiJsonFilePath = args.asi_json_file ?? args.asiJsonFile;
+  if (legacyAsiFilePath && asiJsonFilePath) {
+    throw new Error("Use either --asi-json-file or --asi-file, not both.");
+  }
+  const asiFilePath = asiJsonFilePath ?? legacyAsiFilePath;
+  const asiFileOptionName = asiJsonFilePath ? "--asi-json-file" : "--asi-file";
+  if (asiFilePath && args.asi != null) {
+    throw new Error(`Use either --asi or ${asiFileOptionName}, not both.`);
+  }
+  const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, asiFileOptionName);
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
+  const evidenceStatus =
+    evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
+    defaultEvidenceStatusForRun({ status });
 
   const stateBefore = currentState(workDir);
   const inGit = await insideGitRepo(workDir);
@@ -4525,8 +4691,9 @@ async function logExperiment(args: any) {
     commit: String(commit || "").slice(0, 12),
     metric,
     metrics,
-    metricEligible: isPromotionalStatus(status) && finiteMetric(metric) != null,
+    metricEligible: isMetricEligibleStatus(status) && finiteMetric(metric) != null,
     status,
+    evidenceStatus,
     description,
     timestamp: Date.now(),
     segment: stateBefore.segment,
@@ -4542,7 +4709,10 @@ async function logExperiment(args: any) {
     packetPromotion: lastPacket?.decision?.promotion,
   });
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
-  if (artifacts && Object.keys(artifacts).length > 0) experiment.artifacts = artifacts;
+  if (artifacts && Object.keys(artifacts).length > 0) {
+    experiment.artifacts = artifacts;
+    experiment.artifactEvidence = artifactEvidenceList(artifacts, workDir, evidenceStatus);
+  }
   const benchmarkContract =
     lastPacket?.history?.benchmarkContract ||
     (await benchmarkContractSnapshot(workDir, {
@@ -4774,7 +4944,7 @@ async function resolveProgressPath(workDir: string) {
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(
     target,
     `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
@@ -4785,9 +4955,26 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
 
 async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
   const target = await resolveProgressPath(workDir);
-  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await mkdirWithRetries(path.dirname(target));
   await fsp.writeFile(target, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   return target;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function mkdirWithRetries(dir: string) {
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(String(error?.code || ""))) throw error;
+      await sleep(40 * (attempt + 1));
+    }
+  }
+  if (lastError) throw lastError;
 }
 
 async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
@@ -5097,180 +5284,11 @@ function partialResultEligiblePacket(packet: LooseObject | null): boolean {
   return exitCode != null && exitCode !== 0;
 }
 
-async function partialResultsCommand(args: LooseObject) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = currentState(workDir);
-  const artifact = args.artifact ? String(args.artifact) : "";
-  const recordId = args.record ? String(args.record).trim() : "";
-  const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
-  const lastRun = fromLast || recordId ? await readLastRunPacket(workDir) : null;
-  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun);
-  const lastRunPacket =
-    lastRun ||
-    partialResultPacketFromArtifact({
-      artifact,
-      commandHash: args.command_hash ?? args.commandHash,
-      state,
-      workDir,
-    });
-  const discovery = await discoverPartialResultCandidates({
-    workDir,
-    primaryMetricName: state.config?.metricName || "metric",
-    lastRunPacket,
-  });
-  if (!recordId) {
-    return {
-      ok: true,
-      workDir,
-      source: lastRun ? "last-run" : "artifact",
-      candidates: discovery.candidates,
-      skippedArtifacts: discovery.skippedArtifacts,
-      nextAction: discovery.candidates.length
-        ? "Review a candidate, then record it as diagnostic measure evidence with --record <candidate-id>."
-        : "No partial-result candidates were found.",
-    };
-  }
-  if (!lastRun) {
-    throw new Error(
-      "--record requires a fresh last-run packet so salvaged evidence links to its source packet.",
-    );
-  }
-  const candidate = discovery.candidates.find((item: any) => item.id === recordId);
-  if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
-  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args });
-}
-
-function partialResultPacketFromArtifact({
-  artifact,
-  commandHash,
-  state,
-  workDir,
-}: LooseObject): LooseObject {
-  if (!artifact) throw new Error("--artifact is required unless --from-last is used.");
-  const artifactPath = path.isAbsolute(artifact) ? path.resolve(artifact) : artifact;
-  return {
-    ok: false,
-    workDir,
-    history: {
-      segment: state.segment,
-      config: lastRunConfigSnapshot(state.config),
-      nextRun: state.results.length + 1,
-    },
-    packetEvidence: {
-      packetId: `artifact-${createHash("sha256").update(String(artifactPath)).digest("hex").slice(0, 12)}`,
-      metricName: state.config?.metricName || "metric",
-      commandIdentity: {
-        commandHash: commandHash ? String(commandHash) : "",
-      },
-      artifacts: [
-        {
-          name: path.basename(String(artifactPath)) || "partial-result",
-          path: String(artifactPath),
-          exists: true,
-          quarantined: false,
-        },
-      ],
-    },
-  };
-}
-
-async function recordPartialResultCandidate({
-  workDir,
-  state,
-  lastRun,
-  candidate,
-  args,
-}: LooseObject) {
-  const metricName = candidate.metricName || state.config?.metricName || "metric";
-  const metric = finiteMetric(candidate.metricValue);
-  if (metric == null) {
-    throw new Error(
-      `partial result candidate ${candidate.id} has no finite metric and must stay manual-review only.`,
-    );
-  }
-  const sourcePacketId = lastRun?.packetEvidence?.packetId || "";
-  const researchSlug = researchSlugFromArgs({
-    slug: args.research_slug ?? args.researchSlug ?? "partial-results",
-  });
-  const evidenceClaim = buildPartialResultEvidenceClaim(candidate);
-  const evidenceIndex = await mergeEvidenceClaims(workDir, researchSlug, [evidenceClaim]);
-  const experiment: LooseObject = {
-    run: state.results.length + 1,
-    commit: "",
-    metric,
-    metrics: {
-      [metricName]: metric,
-    },
-    metricEligible: false,
-    status: "measure",
-    description:
-      args.description ||
-      `Diagnostic partial result from ${candidate.artifactName} row ${candidate.rowIndex}.`,
-    timestamp: Date.now(),
-    segment: state.segment,
-    confidence: null,
-    promotion: {
-      label: "measurement",
-      reasons: ["Recorded from a partial-result salvage candidate; diagnostic measure only."],
-    },
-    asi: {
-      hypothesis: "Recover diagnostic evidence from a partial benchmark artifact.",
-      evidence: `${metricName}=${metric} from ${candidate.artifactPath} row ${candidate.rowIndex}.`,
-      rollback_reason:
-        "Source packet crashed or timed out, so this evidence cannot be treated as promotion-grade.",
-      next_action_hint:
-        "Use this diagnostic row to choose the next packet; rerun fresh before promotion.",
-      partial_result: {
-        candidateId: candidate.id,
-        status: candidate.status,
-        reason: candidate.reason,
-        sourcePacketId,
-        artifactName: candidate.artifactName,
-        artifactPath: candidate.artifactPath,
-        rowIndex: candidate.rowIndex,
-        provenance: candidate.provenance,
-        evidenceClaimId: evidenceClaim.id,
-        researchSlug,
-      },
-      promotionGrade: false,
-    },
-    artifacts: {
-      [candidate.artifactName]: candidate.artifactPath,
-    },
-    partialResult: {
-      candidateId: candidate.id,
-      sourcePacketId,
-      evidenceClaimId: evidenceClaim.id,
-      researchSlug,
-      validationStatus: candidate.status,
-    },
-  };
-  experiment.confidence = computeConfidence(
-    [...state.current, experiment],
-    state.config?.bestDirection || "lower",
-  );
-  appendJsonl(workDir, experiment);
-  await deleteLastRunPacket(workDir);
-  const stateAfter = currentState(workDir);
-  return {
-    ok: true,
-    workDir,
-    experiment,
-    evidenceClaim,
-    evidenceIndex: {
-      slug: researchSlug,
-      claims: evidenceIndex.claims.length,
-    },
-    lastRunCleared: true,
-    baseline: stateAfter.baseline,
-    best: stateAfter.best,
-    confidence: stateAfter.confidence,
-    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
-  };
-}
-
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const compact = boolOption(args.compact, false);
+  if (compact) return await publicCompactState({ workDir, config });
+
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
@@ -5285,12 +5303,41 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     warnings: [error.message],
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
-    settings: dashboardSettings(config),
+  const settings = dashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
   });
-  const stateWithQualityGap = { ...state, qualityGap };
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance();
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -5306,7 +5353,11 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+    progress:
+      activeProgress ||
+      (await readActiveProgressSnapshot(workDir, config)) ||
+      lastRun?.packetEvidence?.progressSnapshot ||
+      null,
   });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
@@ -5317,7 +5368,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const continuation = loopContinuation(workDir, state, config, "state");
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...state, limit: iterationLimitInfo(state, config) },
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails,
@@ -5329,6 +5380,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       salvageCandidates: partialResults.candidates,
       workflowFriction,
       experimentMemory: memory,
+      watchdog: watchdogSummary,
     }),
     continuation.commands,
   );
@@ -5348,10 +5400,11 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     best: state.best,
     development: state.development,
     promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
-    runtimeProvenance: runtimeProvenance(),
+    runtimeProvenance: currentRuntimeProvenance,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -5363,6 +5416,12 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     commands: dashboardCommands(workDir),
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    laneLifecycle,
+    packetDiagnostics,
+    watchdogSummary,
     memory,
     experimentEconomics,
     partialResults,
@@ -5371,21 +5430,155 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
-  return boolOption(args.compact, false) ? compactPublicState(fullState) : fullState;
+  return compact ? compactPublicState(fullState) : fullState;
+}
+
+async function publicCompactState({
+  workDir,
+  config,
+}: {
+  workDir: string;
+  config: LooseObject;
+}): Promise<LooseObject> {
+  const state = currentState(workDir);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const qualityGap = await currentQualityGapSummary(workDir);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
+  const warningDetails = await operatorWarningsForWorkDir(workDir);
+  const settings = dashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
+  });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records: readJsonl(workDir),
+    fanoutPlan,
+    parallelLanes,
+    laneResults: latestLaneResults(workDir, state.segment),
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const stateWithQualityGap = {
+    ...state,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: runtimeProvenance(),
+  };
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
+  const statusCounts = Object.fromEntries(
+    [...STATUS_VALUES].map((status: string) => [
+      status,
+      state.current.filter((run: any) => run.status === status).length,
+    ]),
+  );
+  const continuation = loopContinuation(workDir, state, config, "state");
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization: null,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction: [],
+      experimentMemory: memory,
+      watchdog: watchdogSummary,
+    }),
+    continuation.commands,
+  );
+  decisionEnvelope.finalizationReadiness = compactFinalizationPreview(workDir);
+  return compactPublicState({
+    ok: true,
+    workDir,
+    config: state.config,
+    segment: state.segment,
+    runs: state.current.length,
+    totalRuns: state.results.length,
+    kept: statusCounts.keep,
+    discarded: statusCounts.discard,
+    measured: statusCounts.measure,
+    crashed: statusCounts.crash,
+    checksFailed: statusCounts.checks_failed,
+    baseline: state.baseline,
+    best: state.best,
+    development: state.development,
+    promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
+    confidence: state.confidence,
+    scaffoldHealth,
+    researchIntegrity,
+    runtimeProvenance: stateWithQualityGap.runtimeProvenance,
+    limit: iterationLimitInfo(state, config),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+      dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
+      commitPaths: config.commitPaths || [],
+    },
+    commands: dashboardCommands(workDir),
+    warnings: warningDetails.map((warning: any) => warning.message),
+    warningDetails,
+    qualityGap,
+    memory,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    watchdogSummary,
+    laneLifecycle,
+    packetDiagnostics,
+    experimentEconomics,
+    partialResults,
+    workflowFriction: [],
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+    continuation,
+  });
 }
 
 function compactPublicState(state: LooseObject) {
   const limit = state.limit || {};
   const continuation = state.continuation || {};
+  const compactDecisionEnvelope = compactEnvelope(state.decisionEnvelope || state.resumeAudit);
   const canonicalNextAction =
-    state.decisionEnvelope?.canonicalNextAction || state.resumeAudit?.canonicalNextAction || null;
+    compactDecisionEnvelope?.canonicalNextAction ||
+    state.decisionEnvelope?.canonicalNextAction ||
+    state.resumeAudit?.canonicalNextAction ||
+    null;
   const blockers = [
     ...(Array.isArray(state.warningDetails)
       ? state.warningDetails.map((warning: any) => warning.message || warning.code)
       : []),
     ...(Array.isArray(state.warnings) ? state.warnings : []),
   ].filter(Boolean);
-  return {
+  return buildCompactStateResponse({
     ok: state.ok,
     workDir: state.workDir,
     name: state.config?.name || "Autoresearch",
@@ -5401,6 +5594,17 @@ function compactPublicState(state: LooseObject) {
     best: state.best,
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
+    evidenceRegistry: state.evidenceRegistry
+      ? {
+          counts: state.evidenceRegistry.counts,
+          acceptedCurrent: Array.isArray(state.evidenceRegistry.acceptedCurrent)
+            ? state.evidenceRegistry.acceptedCurrent.length
+            : 0,
+          currentArtifacts: Array.isArray(state.evidenceRegistry.currentArtifacts)
+            ? state.evidenceRegistry.currentArtifacts.slice(0, 5)
+            : [],
+        }
+      : null,
     evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
     scaffoldHealth: state.scaffoldHealth
       ? {
@@ -5428,8 +5632,35 @@ function compactPublicState(state: LooseObject) {
     requiresLogDecision: continuation.requiresLogDecision === true,
     afterLogAction: continuation.afterLogAction || "",
     finalAnswerPolicy: continuation.finalAnswerPolicy || "",
+    parallelLanes: Array.isArray(state.parallelLanes)
+      ? state.parallelLanes.slice(0, 6).map((lane: any) => ({
+          id: lane.id,
+          title: lane.title || lane.label,
+          status: lane.status,
+          mode: lane.mode,
+          evidenceStatus: lane.evidenceStatus,
+          nextActionHint: lane.nextActionHint,
+        }))
+      : [],
+    fanoutPlan: state.fanoutPlan
+      ? {
+          id: state.fanoutPlan.id,
+          status: state.fanoutPlan.status,
+          segment: state.fanoutPlan.segment ?? state.segment,
+          nextAction: state.fanoutPlan.nextAction,
+        }
+      : null,
+    fanoutProvenance: state.fanoutProvenance || null,
+    watchdogSummary: state.watchdogSummary
+      ? {
+          stale: state.watchdogSummary.stale === true,
+          status: state.watchdogSummary.status || "",
+          recommendation: state.watchdogSummary.recommendation || "",
+          quietHours: state.watchdogSummary.quietHours ?? null,
+        }
+      : state.decisionEnvelope?.watchdog || null,
     blockers: [...new Set(blockers)].slice(0, 6),
-    goalAdvice: state.decisionEnvelope?.goalAdvice || state.resumeAudit?.goalAdvice || null,
+    goalAdvice: compactDecisionEnvelope?.goalAdvice || null,
     report: {
       happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.measured} measured, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
       decision:
@@ -5476,9 +5707,114 @@ function compactPublicState(state: LooseObject) {
       ? state.workflowFriction.slice(0, 5)
       : [],
     commands: continuation.commands || state.commands || {},
-    resumeAudit: state.resumeAudit || null,
-    decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+    resumeAudit: compactDecisionEnvelope,
+    decisionEnvelope: compactDecisionEnvelope,
     canonicalNextAction,
+    runtimeProvenance: state.runtimeProvenance,
+    loopContract: compactDecisionEnvelope?.loopContract,
+    laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
+    packetDiagnostics: state.packetDiagnostics,
+  });
+}
+
+function compactFinalizationPreview(workDir: string): LooseObject {
+  return {
+    available: false,
+    ready: null,
+    compact: true,
+    nextAction: `Run finalize-preview when review readiness is needed: ${continuationCommands(workDir).finalizePreview}`,
+    warnings: ["Finalization readiness is not checked in compact state."],
+  };
+}
+
+function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject | null {
+  if (!envelope) return null;
+  return {
+    activeSegment: envelope.activeSegment || null,
+    historicalBest: envelope.historicalBest || null,
+    promotionGradeBest: envelope.promotionGradeBest || null,
+    latestPacketFreshness: envelope.latestPacketFreshness || null,
+    benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
+    dirtySourceDrift: envelope.dirtySourceDrift || null,
+    qualityRound: envelope.qualityRound || null,
+    scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
+    researchIntegrity: envelope.researchIntegrity || null,
+    goalAdvice: envelope.goalAdvice || null,
+    finalizationReadiness: compactFinalizationReadiness(envelope.finalizationReadiness),
+    experimentEconomics: compactExperimentEconomics(envelope.experimentEconomics),
+    workflowFriction: Array.isArray(envelope.workflowFriction)
+      ? envelope.workflowFriction.slice(0, 5)
+      : [],
+    watchdog: envelope.watchdog || null,
+    contextDistillation: envelope.contextDistillation || null,
+    laneLifecycle: compactLaneLifecycle(envelope.laneLifecycle),
+    runtimeProvenance: envelope.runtimeProvenance || null,
+    packetDiagnostics: envelope.packetDiagnostics || null,
+    nextAction: envelope.nextAction || "",
+    loopContract: envelope.loopContract || null,
+    canonicalNextAction: envelope.canonicalNextAction || null,
+  };
+}
+
+function compactScaffoldHealth(scaffoldHealth: LooseObject | null | undefined): LooseObject | null {
+  if (!scaffoldHealth) return null;
+  return {
+    ok: scaffoldHealth.ok,
+    status: scaffoldHealth.status,
+    blockers: Array.isArray(scaffoldHealth.blockers)
+      ? scaffoldHealth.blockers.slice(0, 6)
+      : Array.isArray(scaffoldHealth.checks)
+        ? scaffoldHealth.checks
+            .filter((check: any) => check.severity === "blocker")
+            .map((check: any) => check.message || check.code)
+            .slice(0, 6)
+        : [],
+  };
+}
+
+function compactFinalizationReadiness(readiness: LooseObject | null | undefined): LooseObject {
+  return {
+    available: readiness?.available !== false,
+    ready: readiness?.ready === null ? null : readiness?.ready === true,
+    nextAction: readiness?.nextAction || readiness?.recommendation || "",
+    warnings: Array.isArray(readiness?.warnings) ? readiness.warnings.slice(0, 3) : [],
+  };
+}
+
+function compactExperimentEconomics(economics: LooseObject | null | undefined): LooseObject | null {
+  if (!economics) return null;
+  return {
+    runtimeClass: economics.runtimeClass,
+    expectedRuntimeSeconds: economics.expectedRuntimeSeconds ?? null,
+    baselineFreshness: economics.baselineFreshness,
+    freshRunRequired: economics.freshRunRequired === true,
+    freshRunReason: economics.freshRunReason || "",
+    warnings: Array.isArray(economics.warnings) ? economics.warnings.slice(0, 3) : [],
+    progress: economics.progress || null,
+  };
+}
+
+function compactLaneLifecycle(laneLifecycle: LooseObject | null | undefined): LooseObject | null {
+  if (!laneLifecycle) return null;
+  const lanes = Array.isArray(laneLifecycle.lanes) ? laneLifecycle.lanes : [];
+  return {
+    stale: laneLifecycle.stale === true,
+    counts: {
+      planned: Array.isArray(laneLifecycle.plannedLanes) ? laneLifecycle.plannedLanes.length : 0,
+      running: Array.isArray(laneLifecycle.runningLanes) ? laneLifecycle.runningLanes.length : 0,
+      result: Array.isArray(laneLifecycle.resultLanes) ? laneLifecycle.resultLanes.length : 0,
+      stale: Array.isArray(laneLifecycle.staleLanes) ? laneLifecycle.staleLanes.length : 0,
+    },
+    lanes: lanes.slice(0, 6).map((lane: any) => ({
+      id: lane.id,
+      title: lane.title || lane.label,
+      status: lane.status,
+      mode: lane.mode,
+      evidenceStatus: lane.evidenceStatus,
+      nextActionHint: lane.nextActionHint,
+    })),
+    recommendation: laneLifecycle.recommendation || "",
+    command: laneLifecycle.command || "",
   };
 }
 
@@ -5534,14 +5870,65 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
 }
 
 function runtimeProvenance(drift: LooseObject | null = null) {
+  const unavailable = runtimeDriftUnavailable(drift);
+  const drifted = confirmedRuntimeDrift(drift);
   return {
     pluginVersion: PLUGIN_VERSION,
     sourceRoot: PLUGIN_ROOT,
     repoRoot: REPO_ROOT,
+    localVersion: PLUGIN_VERSION,
+    installedVersion:
+      drift?.installed?.version || drift?.installed?.pluginVersion || drift?.routing?.version || "",
     installedCachePath:
       drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
-    driftConfidence: drift ? (drift.ok === false ? "drift-detected" : "checked") : "source-only",
+    drifted,
+    status: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "unavailable",
+    driftConfidence: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "source-only",
+    reason: drifted
+      ? "Source and installed runtime drift needs inspection before public claims."
+      : "",
+    inspectCommand: "",
   };
+}
+
+function runtimeDriftUnavailable(drift: LooseObject | null): boolean {
+  if (!drift) return true;
+  if (drift.probeFailed === true || drift.unavailable === true) return true;
+  const status = String(drift.status || drift.driftStatus || "").toLowerCase();
+  return ["unavailable", "probe-failed", "probe_failed", "error", "unknown"].includes(status);
+}
+
+function confirmedRuntimeDrift(drift: LooseObject | null): boolean {
+  if (!drift || runtimeDriftUnavailable(drift)) return false;
+  if (
+    drift.drifted === true ||
+    drift.mismatched === true ||
+    drift.stale === true ||
+    drift.needsInspection === true
+  ) {
+    return true;
+  }
+  const warnings = Array.isArray(drift.warnings) ? drift.warnings.map(String) : [];
+  if (
+    warnings.some((warning) =>
+      /version_surface_mismatch|runtime.*drift|source.*differs/i.test(warning),
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function loopContinuation(
@@ -5657,6 +6044,456 @@ function loopContinuation(
   };
 }
 
+function resolveFanoutForSegment(workDir: string, segment: number) {
+  const entry = [...readJsonl(workDir)]
+    .reverse()
+    .find(
+      (item: any) =>
+        item?.type === "research_fanout" &&
+        item.fanoutPlan &&
+        Number(item.segment) === Number(segment),
+    );
+  if (!entry) {
+    return {
+      fanoutPlan: null,
+      fanoutProvenance: {
+        source: "memory_or_defaults",
+        segment,
+        matchedSegment: false,
+      },
+    };
+  }
+  return {
+    fanoutPlan: entry.fanoutPlan,
+    fanoutProvenance: {
+      source: "segment_plan",
+      segment,
+      matchedSegment: true,
+      planId: entry.fanoutPlan.id || null,
+      createdAt: entry.fanoutPlan.createdAt || null,
+    },
+  };
+}
+
+function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: LooseObject[]) {
+  const latestByLane = new Map<string, LooseObject>();
+  for (const entry of laneResults) {
+    const laneId = entry?.lane?.id;
+    if (!laneId) continue;
+    const existing = latestByLane.get(laneId);
+    if (!existing || Number(entry.timestamp || 0) >= Number(existing.timestamp || 0)) {
+      latestByLane.set(laneId, entry);
+    }
+  }
+  return lanes.map((lane) => {
+    const entry = latestByLane.get(lane.id);
+    if (!entry?.result) return lane;
+    const resultStatus = String(entry.result.status || "").toLowerCase();
+    const completed = resultStatus === "completed";
+    const accepted = completed && laneResultHasAcceptedEvidence(entry.result);
+    return {
+      ...lane,
+      status: completed ? "completed" : entry.result.status || lane.status,
+      evidenceStatus: accepted ? "accepted" : entry.result.evidenceStatus || lane.evidenceStatus,
+      completedAt:
+        accepted && entry.timestamp ? new Date(entry.timestamp).toISOString() : lane.completedAt,
+      lastLaneResult: {
+        status: entry.result.status,
+        summary: entry.result.summary || "",
+        recommendation: entry.result.recommendation || "",
+      },
+    };
+  });
+}
+
+function laneResultHasAcceptedEvidence(result: LooseObject) {
+  return result?.evidenceAccepted === true;
+}
+
+function buildParallelOrchestrationContext({
+  workDir,
+  state,
+  config,
+  settings = {},
+  memory = null,
+}: {
+  workDir: string;
+  state: LooseObject;
+  config: LooseObject;
+  settings?: LooseObject;
+  memory?: LooseObject | null;
+}) {
+  const resolvedMemory =
+    memory ||
+    buildExperimentMemory({
+      runs: state.current,
+      direction: state.config.bestDirection,
+      settings: Object.keys(settings).length ? settings : dashboardSettings(config),
+    });
+  const { fanoutPlan, fanoutProvenance } = resolveFanoutForSegment(workDir, state.segment);
+  const laneResults = latestLaneResults(workDir, state.segment);
+  const baseLanes = buildParallelLanes({
+    memory: resolvedMemory,
+    fanoutPlan,
+    config,
+  });
+  const parallelLanes = enrichParallelLanesWithLaneResults(baseLanes, laneResults);
+  const watchdogSummary = buildWatchdogSummary({
+    state,
+    settings,
+    current: state.current,
+    parallelLanes,
+    fanoutPlan,
+  });
+  return {
+    memory: resolvedMemory,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    laneResults,
+    watchdogSummary,
+  };
+}
+
+function buildParallelLanes({
+  memory,
+  fanoutPlan = null,
+  config = {},
+}: {
+  memory: LooseObject;
+  fanoutPlan?: LooseObject | null;
+  config?: LooseObject;
+}) {
+  const planned = Array.isArray(fanoutPlan?.lanes) ? fanoutPlan.lanes : [];
+  if (planned.length > 0) return planned;
+  const memoryLanes = Array.isArray(memory?.lanePortfolio) ? memory.lanePortfolio : [];
+  const lanes = memoryLanes.map((lane: LooseObject, index: number) =>
+    normalizeParallelLane(lane, index, config),
+  );
+  const existingIds = new Set(lanes.map((lane) => lane.id));
+  for (const seed of defaultParallelLaneSeeds(config)) {
+    const normalized = normalizeParallelLane(seed, lanes.length, config);
+    if (existingIds.has(normalized.id)) continue;
+    lanes.push(normalized);
+    existingIds.add(normalized.id);
+  }
+  return lanes;
+}
+
+function defaultParallelLaneSeeds(config: LooseObject) {
+  const metricName = config.metricName || "primary metric";
+  return [
+    {
+      id: "read-only-scout",
+      label: "Read-only scout",
+      priority: "high",
+      nextActionHint: `Find one evidence-backed hypothesis that could move ${metricName}.`,
+    },
+    {
+      id: "benchmark-contract",
+      label: "Benchmark contract",
+      priority: "high",
+      nextActionHint:
+        "Check whether the benchmark, parsed metric, and checks still measure the intended outcome.",
+    },
+    {
+      id: "implementation-candidate",
+      label: "Implementation candidate",
+      priority: "medium",
+      nextActionHint:
+        "Prepare one isolated edit lane only after a scout produces a concrete hypothesis.",
+    },
+    {
+      id: "promotion-readiness",
+      label: "Promotion readiness",
+      priority: "medium",
+      nextActionHint:
+        "Identify repeat, holdout, or finalization evidence still needed before a keep can promote.",
+    },
+  ];
+}
+
+function normalizeParallelLane(lane: LooseObject, index: number, config: LooseObject) {
+  const rawId = lane.id || lane.label || lane.title || `lane-${index + 1}`;
+  const id = safeSlug(String(rawId)) || `lane-${index + 1}`;
+  const label = lane.label || lane.title || `Lane ${index + 1}`;
+  const readOnly =
+    !/implementation|edit|candidate|worktree/i.test(String(id)) &&
+    !/implementation|edit|candidate|worktree/i.test(String(label));
+  return {
+    id,
+    title: label,
+    label,
+    status: lane.status || "planned",
+    priority: lane.priority || (index === 0 ? "high" : "medium"),
+    mode: readOnly ? "read_only_scout" : "isolated_worktree",
+    isolation: readOnly
+      ? "read-only; do not edit files"
+      : "use a separate worktree or owned file set",
+    evidenceStatus: lane.evidenceStatus || "provisional",
+    owner: lane.owner || "subagent",
+    writeScope: readOnly ? [] : listOption(config.commitPaths || config.commit_paths),
+    reason: lane.reason || lane.evidence || "Parallel lane planned from current session memory.",
+    nextActionHint:
+      lane.nextActionHint ||
+      lane.recommendation ||
+      "Return a concise hypothesis, evidence, and next measured action.",
+  };
+}
+
+function latestLaneResults(workDir: string, segment: number | null = null) {
+  return readJsonl(workDir).filter(
+    (entry: any) =>
+      entry?.type === "lane_result" && (segment == null || Number(entry.segment) === segment),
+  );
+}
+
+function normalizeLaneMode(value: unknown, fallback: string) {
+  const raw = String(value || fallback || "read_only_scout")
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (["read_only", "readonly", "scout", "read_only_scout"].includes(raw)) return "read_only_scout";
+  if (["implementation", "isolated_worktree", "mutating"].includes(raw)) return "implementation";
+  throw new Error("--mode must be read_only_scout or implementation.");
+}
+
+type LaneCommandSafety = {
+  mutating: boolean;
+  unsafeForWriteScope: boolean;
+};
+
+const LANE_GIT_MUTATING_SUBCOMMANDS =
+  "add|am|apply|bisect|checkout|cherry-pick|clean|commit|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|tag|worktree";
+const LANE_GIT_WRITE_SCOPE_UNSAFE =
+  "am|apply|bisect|checkout|cherry-pick|clean|commit|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag|worktree";
+const LANE_PACKAGE_MANAGER_MUTATING =
+  "(?:npm\\s+(?:ci|install|i|update|uninstall|remove|add)|pnpm\\s+(?:add|install|remove|update|uninstall)|yarn\\s+(?:add|install|remove|upgrade|uninstall)|bun\\s+(?:add|install|remove))";
+
+function classifyLaneCommandSafety(command: string): LaneCommandSafety {
+  const gitMutating = new RegExp(
+    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_MUTATING_SUBCOMMANDS})\\b`,
+    "i",
+  ).test(command);
+  const packageMutating = new RegExp(
+    `(^|[\\s;&|])${LANE_PACKAGE_MANAGER_MUTATING}(\\s|$)`,
+    "i",
+  ).test(command);
+  const fileMutating =
+    /(^|[\s;&|])(rm\s+|del\s+|erase\s+|remove-item|set-content|out-file|new-item|move-item|copy-item|apply_patch)(\s|$)/i.test(
+      command,
+    ) || /(^|[^<])>>?[^&]/.test(command);
+  const mutating = gitMutating || packageMutating || fileMutating;
+  const gitUnsafeForWriteScope = new RegExp(
+    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_WRITE_SCOPE_UNSAFE})\\b`,
+    "i",
+  ).test(command);
+  return {
+    mutating,
+    unsafeForWriteScope: gitUnsafeForWriteScope || packageMutating,
+  };
+}
+
+function commandLooksMutating(command: string) {
+  return classifyLaneCommandSafety(command).mutating;
+}
+
+function commandLooksUnsafeForWriteScope(command: string) {
+  return classifyLaneCommandSafety(command).unsafeForWriteScope;
+}
+
+async function gitStatusPorcelain(cwd: string) {
+  if (!(await insideGitRepo(cwd).catch(() => false))) return null;
+  const result = await git(["status", "--porcelain"], cwd);
+  return result.code === 0 ? result.stdout : null;
+}
+
+async function gitTopLevel(cwd: string) {
+  const result = await git(["rev-parse", "--show-toplevel"], cwd);
+  if (result.code !== 0) throw new Error(`Git worktree lookup failed: ${gitOutput(result, cwd)}`);
+  return path.resolve(cwd, result.stdout.trim());
+}
+
+async function gitCommonDirectory(cwd: string) {
+  const result = await git(["rev-parse", "--git-common-dir"], cwd);
+  if (result.code !== 0) throw new Error(`Git common-dir lookup failed: ${gitOutput(result, cwd)}`);
+  const value = result.stdout.trim();
+  return path.resolve(cwd, value);
+}
+
+async function gitRef(cwd: string, ref: string) {
+  const result = await git(["rev-parse", "--verify", ref], cwd);
+  return result.code === 0 ? result.stdout.trim() : "";
+}
+
+async function resolveLaneWorktree(workDir: string, worktreePath: string) {
+  const runCwd = path.resolve(workDir, worktreePath);
+  const [baseTopLevel, laneInsideGit] = await Promise.all([
+    gitTopLevel(workDir),
+    insideGitRepo(runCwd).catch(() => false),
+  ]);
+  if (!laneInsideGit) {
+    throw new Error(`Implementation lane worktree must be an existing Git worktree: ${runCwd}`);
+  }
+  const laneTopLevel = await gitTopLevel(runCwd);
+  if (path.resolve(baseTopLevel) === path.resolve(laneTopLevel)) {
+    throw new Error("Implementation lane --worktree must point at a separate Git worktree.");
+  }
+  const [baseCommonDir, laneCommonDir] = await Promise.all([
+    gitCommonDirectory(baseTopLevel),
+    gitCommonDirectory(laneTopLevel),
+  ]);
+  if (path.resolve(baseCommonDir) !== path.resolve(laneCommonDir)) {
+    throw new Error("Implementation lane --worktree must belong to the same Git repository.");
+  }
+  return laneTopLevel;
+}
+
+function dirtyPathWithinScope(relativePath: string, writeScope: string[]) {
+  const normalized = normalizeGitStatusPath(relativePath);
+  return writeScope.some((scope) => normalized === scope || normalized.startsWith(`${scope}/`));
+}
+
+async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: string[]) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  const dirty = await gitDirtyPathDetails(workDir);
+  const outside = dirty
+    .map((entry: any) => entry.path)
+    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane changed files outside --write-scope: ${outside.slice(0, 8).join(", ")}`,
+    );
+  }
+}
+
+async function assertNoDirtyPathsOutsideWriteScope(workDir: string, writeScope: string[]) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  const dirty = await gitDirtyPathDetails(workDir);
+  const outside = dirty
+    .map((entry: any) => entry.path)
+    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside.slice(0, 8).join(", ")}`,
+    );
+  }
+}
+
+async function writeScopeSnapshot(workDir: string) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  return {
+    head: await gitRef(workDir, "HEAD"),
+    stash: await gitRef(workDir, "refs/stash"),
+  };
+}
+
+async function assertWriteScopeIntegrity(
+  workDir: string,
+  writeScope: string[],
+  before: LooseObject,
+) {
+  const after = await writeScopeSnapshot(workDir);
+  if (before.head !== after.head) {
+    throw new Error(
+      "Implementation lane --write-scope cannot move HEAD; use a separate --worktree for commits or history changes.",
+    );
+  }
+  if (before.stash !== after.stash) {
+    throw new Error(
+      "Implementation lane --write-scope cannot create or change git stash entries; use a separate --worktree for hidden cleanup.",
+    );
+  }
+  await assertDirtyPathsWithinWriteScope(workDir, writeScope);
+}
+
+function synthesizeLaneDecision({
+  workDir,
+  laneResults,
+  fallbackLane,
+}: {
+  workDir: string;
+  laneResults: LooseObject[];
+  fallbackLane?: LooseObject | null;
+}) {
+  const completed = laneResults
+    .filter((entry) => entry?.result?.status === "completed")
+    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  const selected = completed.find((entry) => entry.result?.recommendation || entry.result?.summary);
+  const nextAction =
+    selected?.result?.recommendation ||
+    selected?.result?.summary ||
+    fallbackLane?.nextActionHint ||
+    "Run one read-only scout lane, then choose one isolated implementation candidate for the next measured packet.";
+  return {
+    status: selected ? "ready" : "needs_lane_result",
+    sourceLane: selected?.lane?.id || fallbackLane?.id || "",
+    nextAction,
+    measuredPacket:
+      "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
+    commandHint: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`,
+  };
+}
+
+async function researchFanout(args: LooseObject) {
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const state = currentState(workDir);
+  const memory = buildExperimentMemory({
+    runs: state.current,
+    direction: state.config.bestDirection,
+    settings: dashboardSettings(config),
+  });
+  const laneLimit = Math.min(
+    positiveIntegerOption(args.lanes ?? args.laneCount, 6, "--lanes") || 6,
+    12,
+  );
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
+  const lanes = buildParallelLanes({ memory, config }).slice(0, laneLimit);
+  const plan = {
+    id: `fanout-${Date.now()}`,
+    status: dryRun ? "preview" : "planned",
+    createdAt: new Date().toISOString(),
+    segment: state.segment,
+    runs: state.current.length,
+    metric: {
+      name: state.config.metricName || config.metricName || "metric",
+      direction: state.config.bestDirection || config.bestDirection || "lower",
+      contract:
+        "Use the configured benchmark METRIC output as the primary decision value; derive composite meaning in project benchmark code, not by adding one-off Autoresearch metrics.",
+    },
+    lanes,
+    dispatchPolicy: {
+      defaultMode: "read_only_scout",
+      implementationIsolation:
+        "Implementation lanes must use a separate worktree or explicit write scope before editing.",
+      mergeRule:
+        "Only accepted evidence from logged keep or promotion-grade measurement may drive finalization.",
+    },
+    nextAction:
+      "Dispatch the read-only scout lanes in parallel, compare evidence, then choose one isolated implementation lane for the next measured packet.",
+  };
+  if (!dryRun) {
+    appendJsonl(workDir, {
+      type: "research_fanout",
+      timestamp: Date.now(),
+      segment: state.segment,
+      fanoutPlan: plan,
+    });
+  }
+  return {
+    ok: true,
+    workDir,
+    dryRun,
+    fanoutPlan: plan,
+    parallelLanes: lanes,
+  };
+}
+
 function continuationCommands(workDir: string) {
   const cwd = shellQuote(workDir);
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
@@ -5667,6 +6504,7 @@ function continuationCommands(workDir: string) {
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
+    laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,
     gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(currentQualityGapSlug(workDir) || "research")}`,
     liveDashboard: `node ${script} serve --cwd ${cwd}`,
     exportDashboard: `node ${script} export --cwd ${cwd}`,
@@ -5679,6 +6517,7 @@ function continuationCommands(workDir: string) {
     checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
     newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
     promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
+    finalizePreview: `node ${script} finalize-preview --cwd ${cwd}`,
     finalizeCurrentTree: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
   };
 }
@@ -5709,7 +6548,13 @@ function commandForCanonicalKind(kind: unknown, commands: unknown): string {
     case "partial-salvage":
       return lookup.partialResults || "";
     case "context-distillation":
-      return "";
+      return lookup.onboardingPacket || lookup.state || "";
+    case "lane-cleanup":
+      return lookup.state || lookup.laneRunner || "";
+    case "runtime-provenance":
+      return lookup.doctorExplain || lookup.doctor || "";
+    case "packet-diagnostic":
+      return lookup.partialResults || lookup.state || "";
     case "quality-gap":
       return lookup.gapCandidates || "";
     case "plateau-pivot":
@@ -5758,14 +6603,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const warnings = [];
   const warningDetails = [];
   const inGit = await insideGitRepo(workDir);
-  const clean = await isGitClean(workDir);
 
   if (!state.config.metricName) issues.push("No primary metric is configured.");
   if (state.runs === 0)
     warnings.push("No runs are logged yet. Run a baseline before experimenting.");
   warnings.push(...(state.memory?.warnings || []));
-  if (inGit && clean === false)
-    warnings.push("Git worktree is dirty; review unrelated changes before logging a keep result.");
   if (!inGit)
     warnings.push(
       "Working directory is not a Git repository; keep commits and discard reverts are unavailable.",
@@ -5878,7 +6720,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     state,
     git: {
       inside: inGit,
-      clean,
+      clean: state.decisionEnvelope?.dirtySourceDrift?.dirty === true ? false : true,
     },
     benchmark,
     drift,
@@ -6122,29 +6964,6 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
   };
 }
 
-function artifactList(artifacts: LooseObject = {}, workDir = "") {
-  return Object.entries(artifacts || {}).map(([name, artifactPath]) => {
-    const quarantined = String(artifactPath || "") === "<outside-workdir>";
-    return {
-      name,
-      path: quarantined
-        ? "<outside-workdir>"
-        : redactPathDisplay(String(artifactPath || ""), workDir),
-      exists: quarantined ? false : artifactExists(String(artifactPath || ""), workDir),
-      quarantined,
-      warning: quarantined ? "Artifact path is outside the working directory." : "",
-    };
-  });
-}
-
-function artifactExists(artifactPath: string, workDir: string) {
-  if (!artifactPath) return false;
-  const resolved = path.isAbsolute(artifactPath)
-    ? artifactPath
-    : path.resolve(workDir || process.cwd(), artifactPath);
-  return fs.existsSync(resolved);
-}
-
 function promotionStateForLoggedDecision({
   status,
   metric,
@@ -6366,11 +7185,32 @@ function compactNextExperimentPacket(packet: LooseObject) {
   };
 }
 
-async function main() {
-  const args = parseCliArgs(process.argv.slice(2));
+export async function runAutoresearchCli(
+  argv: string[] = process.argv.slice(2),
+  io: {
+    stderr?: (text: string) => void;
+    stdout?: (text: string) => void;
+  } = {},
+): Promise<number> {
+  const writeStdout = io.stdout || console.log;
+  const writeStderr = io.stderr || console.error;
+  try {
+    await executeAutoresearchCli(argv, writeStdout);
+    return 0;
+  } catch (error: any) {
+    writeStderr(error.stack || error.message || String(error));
+    return 1;
+  }
+}
+
+async function executeAutoresearchCli(
+  argv: string[],
+  writeStdout: (text: string) => void,
+): Promise<void> {
+  const args = parseCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
-    console.log(usage());
+    writeStdout(usage());
     return;
   }
   const handlers = createCliCommandHandlers({
@@ -6412,6 +7252,8 @@ async function main() {
     sessionForensics,
     readJsonl,
     recipeCommand,
+    researchFanout,
+    laneRunner,
     resolveWorkDir,
     runExperiment,
     serveDashboard,
@@ -6421,14 +7263,18 @@ async function main() {
   });
   const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
   if (outcome.text != null) {
-    console.log(outcome.text);
+    writeStdout(outcome.text);
     return;
   }
-  console.log(JSON.stringify(outcome.result, null, 2));
+  writeStdout(JSON.stringify(outcome.result, null, 2));
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 
-main().catch((error: any) => {
-  console.error(error.stack || error.message || String(error));
-  process.exitCode = 1;
-});
+async function main() {
+  const code = await runAutoresearchCli(process.argv.slice(2));
+  if (code !== 0) process.exitCode = code;
+}
+
+if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+  void main();
+}

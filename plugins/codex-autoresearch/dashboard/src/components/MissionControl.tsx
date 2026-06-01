@@ -68,7 +68,9 @@ function MissionStepItem({
         <span className="mission-detail">{step.detail || ""}</span>
         {active && showCommand && cmd && (
           <div className="mission-command">
-            <code className="mission-cmd-text">{cmd}</code>
+            <code className="mission-cmd-text" translate="no">
+              {cmd}
+            </code>
             <button type="button" className="tool-button subtle" onClick={() => copy(cmd)}>
               {copied ? "Copied" : primary?.label || "Copy"}
             </button>

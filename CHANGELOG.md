@@ -4,6 +4,58 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.0.0
+
+### Added
+
+- Added `research-fanout` / `research_fanout`, a generic parallel lane planner that turns current session memory into read-only scout lanes and isolated implementation lanes without creating project-specific metrics.
+- Added `lane-runner` / `lane_runner`, a conservative coordinator path for recording or running one lane with read-only defaults, implementation isolation checks, time budgets, and one synthesized next measured packet recommendation.
+- Added `--metrics-file` for `log` so PowerShell and Windows sessions can record structured metric metadata without brittle inline JSON quoting.
+- Added `--asi-json-file` for `log` so PowerShell and Windows sessions can record ASI without fragile inline JSON quoting while preserving inline `--asi` and legacy `--asi-file`.
+- Added run-level `evidenceStatus` labels and artifact evidence summaries so accepted, rejected, provisional, superseded, and quarantined evidence stay visible without becoming promotion signals by accident.
+- Added watchdog, process-hygiene, and finalization-pressure dashboard readouts so long quiet windows, stale snapshots, runtime provenance, and accumulating kept work become visible before the loop sleepwalks into more packets.
+- Added loop-governance readouts, operator checklist mode, stale lane lifecycle, runtime provenance, packet diagnostic taxonomy, and dashboard packet brake status so long Codex loops are harder to continue unsafely.
+- Added a central EvidenceRegistry so accepted/current evidence is separated from rejected, provisional, superseded, and quarantined audit evidence before state and dashboard consumers read it.
+- Hardened finalization and best-run readouts so only accepted/current keeps drive promotion surfaces and review branches; rejected, provisional, superseded, and quarantined evidence remains audit-only.
+
+### Changed
+
+- Redesigned the dashboard with an audit/operate split: the served dashboard now opens in audit view (full traceability); operate (Focus view) is a chart-first surface with audit panels omitted from the DOM. The run chart leads after the header in both views (taller in operate). URL-backed view and chart preferences are included.
+- The served dashboard now returns its verified local URL before loading heavier decision diagnostics; the live page refreshes the full view model from `/view-model.json`.
+- Dashboard segment navigation now uses a native dropdown again.
+- Added a quiet chart-adjacent readiness strip for next action, evidence status, lane readiness, watchdog state, and finalization pressure without adding dashboard mutation controls.
+- Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
+- Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
+- Dashboard view models now expose `fanoutPlan`, `parallelLanes`, and an `evidenceLedger`, and the Strategy Lanes board shows lane mode, lane status, evidence status, and next recommendations.
+- The decision envelope can now prioritize watchdog intervention when no metric movement, logged decision, kept commit, or completed lane appears inside the configured quiet-window threshold.
+- `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.
+- `research-fanout` plans are segment-scoped: a new segment ignores prior fanout plans and falls back to memory/default lanes until a fresh plan is recorded for that segment.
+- Completed `lane-runner` results now enrich parallel lane status and count as watchdog progress signals.
+- Dashboard best-kept and finalization surfaces now ignore rejected, superseded, non-accepted, and quarantined keeps across both server view-model and client readout paths.
+- Lane lifecycle readouts now ignore completed lane results from older segments even when passed through direct lane-result inputs.
+- Empty `lane-runner --yes` records are planning breadcrumbs, not completed accepted evidence, and do not reset watchdog progress.
+- Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
+- `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.
+- Autoresearch-owned dirty files such as `autoresearch.jsonl`, notes, dashboards, and research scratchpads no longer count as dirty source drift; unrelated source dirtiness still blocks trust.
+- Added narrower package test scripts for CLI, dashboard, finalization, and core evidence slices; the compiled CLI regression path now runs bounded shards instead of one giant serial file.
+- Stabilized served-dashboard live refresh so successful metadata updates do not recreate the refresh interval or trigger an extra immediate fetch.
+- Hardened bounded test sharding so invalid job counts fail with usage errors, unsharded files run once, and sharded files must emit an explicit test-count marker.
+- Tightened `session-forensics` privacy defaults: outside-workdir JSONL reads now require an explicit gate, snippets stay opt-in, and returned source/command paths are redacted or relative.
+- Made `finalize-preview` fail closed on corrupt `autoresearch.jsonl` ledgers instead of treating them as an empty finalization history.
+- Aligned the dashboard dev entry with the TypeScript source entrypoint (`/src/main.tsx`).
+- Simplified internal tool schema lookups, CLI projection helpers, runner/setup response assembly, finalization progress metadata, evidence predicates, next-action policy rules, and dashboard component/live-refresh surfaces without changing public JSON contracts.
+- Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.
+
+### Fixed
+
+- Refreshed the v2 documentation map, glossary, workflow diagrams, finalization wording, troubleshooting rows, and public README so they describe the current operator checklist, watchdog, lane, runtime-provenance, packet-diagnostic, evidence-status, and audit/operate dashboard behavior.
+- Scrubbed branch-specific finalization warnings from public showcase dashboard exports and added release-gate checks so demo snapshots cannot ship with transient source-branch warnings.
+- Made the documented `scripts/finalize-autoresearch.mjs` launcher hydrate the matching release runtime like the main CLI launcher, and added package smoke coverage for it.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, built assets, and local cache runtime surfaces to `2.0.0`.
+
 ## 1.5.1
 
 ### Fixed

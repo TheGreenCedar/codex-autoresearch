@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import { pathToFileURL } from "node:url";
+import test from "./helpers/sharded-test.js";
 import { JSDOM } from "jsdom";
+import { redactCommandDisplay } from "../lib/evidence-redaction.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import {
   createCliRunner,
+  createSpawnedCliRunner,
   quoteForShell,
   runGit,
   withTempDir as withNamedTempDir,
@@ -16,11 +19,37 @@ import {
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
+const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
+
+async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
+  return await new Promise((resolve) => {
+    const childEnv = { ...env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, args, {
+      cwd,
+      env: childEnv,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
+    );
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
 
 async function renderExportedDashboard(html) {
   const dom = new JSDOM(html, {
@@ -37,6 +66,27 @@ async function renderExportedDashboard(html) {
   return dom;
 }
 
+test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
+  await withTempDir("spawned-contract", async (dir) => {
+    const help = await runSpawnedCli(["--help"]);
+    assert.equal(help.code, 0, help.stderr);
+    assert.match(help.stdout, /Usage:/);
+
+    const env = { ...process.env, CODEX_AUTORESEARCH_WORKDIR: dir };
+    const init = await runSpawnedCli(["init", "--name", "spawned", "--metric-name", "seconds"], {
+      cwd: pluginRoot,
+      env,
+    });
+    assert.equal(init.code, 0, init.stderr);
+
+    const state = await runSpawnedCli(["state"], { cwd: pluginRoot, env });
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.config.name, "spawned");
+    assert.equal(payload.config.metricName, "seconds");
+  });
+});
+
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "missing metric", "--metric-name", "seconds"]);
@@ -51,6 +101,75 @@ test("run reports missing primary metric as a failed experiment", async () => {
     assert.match(payload.metricError, /seconds/);
     assert.equal(payload.logHint.status, "crash");
     assert.deepEqual(payload.logHint.allowedStatuses, ["crash"]);
+  });
+});
+
+test("test shard runner validates jobs and fails closed on discovery gaps", async () => {
+  await withTempDir("test-shard-runner", async (dir) => {
+    const shardRunner = path.join(pluginRoot, "dist", "scripts", "run-test-shards.mjs");
+    const unshardedFile = path.join(dir, "unsharded.test.mjs");
+    await writeFile(
+      unshardedFile,
+      [
+        "import test from 'node:test';",
+        "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+        "  console.log('DISCOVERY_WITHOUT_COUNT');",
+        "} else {",
+        "  console.log('UNSHARDED_EXECUTION_MARKER');",
+        "}",
+        "test('plain file runs once', () => {});",
+      ].join("\n"),
+    );
+
+    const invalidJobs = await runNode([shardRunner, unshardedFile, "1"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_JOBS: "not-a-number",
+      },
+    });
+    assert.notEqual(invalidJobs.code, 0);
+    assert.match(`${invalidJobs.stdout}\n${invalidJobs.stderr}`, /positive integer/);
+
+    const unsharded = await runNode([shardRunner, unshardedFile, "1"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE: "1",
+      },
+    });
+    assert.equal(unsharded.code, 0, unsharded.stderr);
+    const unshardedOutput = `${unsharded.stdout}\n${unsharded.stderr}`;
+    assert.equal(
+      (unshardedOutput.match(/UNSHARDED_EXECUTION_MARKER/g) || []).length,
+      1,
+      unshardedOutput,
+    );
+    assert.equal(unshardedOutput.includes("DISCOVERY_WITHOUT_COUNT"), false, unshardedOutput);
+
+    const missingDiscovery = await runNode([shardRunner, unshardedFile, "2"]);
+    assert.notEqual(missingDiscovery.code, 0);
+    assert.match(
+      `${missingDiscovery.stdout}\n${missingDiscovery.stderr}`,
+      /AUTORESEARCH_TEST_COUNT/,
+    );
+
+    const unevenShardedFile = path.join(dir, "uneven-sharded.test.mjs");
+    await writeFile(
+      unevenShardedFile,
+      [
+        "import test from 'node:test';",
+        "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+        "  console.log('AUTORESEARCH_TEST_COUNT 25');",
+        "}",
+        "test('plain file runs as a shard target', () => {});",
+      ].join("\n"),
+    );
+
+    const uneven = await runNode([shardRunner, "--jobs", "1", unevenShardedFile, "12"]);
+    assert.equal(uneven.code, 0, uneven.stderr);
+    const unevenOutput = `${uneven.stdout}\n${uneven.stderr}`;
+    assert.match(unevenOutput, /uneven-sharded\.test\.mjs 1\/9 \(1-3\)/);
+    assert.match(unevenOutput, /uneven-sharded\.test\.mjs 9\/9 \(25-25\)/);
+    assert.equal(unevenOutput.includes("/12"), false, unevenOutput);
   });
 });
 
@@ -133,9 +252,20 @@ test("state surfaces active runner progress while next is still executing", asyn
   await withTempDir("active-progress", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "active progress", "--metric-name", "seconds"]);
     const script = path.join(dir, "slow-packet.mjs");
+    const releaseFile = path.join(dir, "release-packet");
     await writeFile(
       script,
-      ["setTimeout(() => {", "  console.log('METRIC seconds=1');", "}, 1500);"].join("\n"),
+      [
+        "import { existsSync } from 'node:fs';",
+        "const releaseFile = process.argv[2];",
+        "const started = Date.now();",
+        "const timer = setInterval(() => {",
+        "  if (existsSync(releaseFile) || Date.now() - started > 30000) {",
+        "    clearInterval(timer);",
+        "    console.log('METRIC seconds=1');",
+        "  }",
+        "}, 100);",
+      ].join("\n"),
     );
 
     const child = spawn(process.execPath, [
@@ -144,7 +274,7 @@ test("state surfaces active runner progress while next is still executing", asyn
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      `${quoteForShell(process.execPath)} ${quoteForShell(script)} ${quoteForShell(releaseFile)}`,
     ]);
     let stdout = "";
     let stderr = "";
@@ -157,7 +287,7 @@ test("state surfaces active runner progress while next is still executing", asyn
 
     let progress = null;
     const started = Date.now();
-    while (Date.now() - started < 5000) {
+    while (Date.now() - started < 10000) {
       const state = await runCli(["state", "--cwd", dir, "--compact"]);
       assert.equal(state.code, 0, state.stderr);
       const payload = JSON.parse(state.stdout);
@@ -165,6 +295,7 @@ test("state surfaces active runner progress while next is still executing", asyn
       if (progress?.exitState === "running") break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await writeFile(releaseFile, "go\n", "utf8");
     assert.equal(progress?.exitState, "running");
     assert.match(progress?.packetId || "", /active/);
 
@@ -307,6 +438,21 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
               "Chunk ID: abc\nProcess exited with code 0\nOriginal token count: 25000\nTotal output lines: 600\nOutput:\ntoken=abcdefghijklmnop",
           },
         }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:03.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:04.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:05.000Z",
+          type: "compacted",
+          payload: {},
+        }),
       ].join("\n"),
     );
 
@@ -325,6 +471,12 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.equal(dryPayload.ok, true);
     assert.equal(dryPayload.dryRun, true);
     assert.equal(dryPayload.wrote, false);
+    assert.equal(dryPayload.sourcePath, "rollout.jsonl");
+    assert.equal((dryPayload.canonicalNextAction.command || "").includes(sessionPath), false);
+    assert.match(
+      dryPayload.canonicalNextAction.command || "",
+      /--session-jsonl "?rollout\.jsonl"?/,
+    );
     assert.equal(dryPayload.plannedFiles.length, 4);
     await assert.rejects(() =>
       access(path.join(dir, "autoresearch.research", "session-019e", "session-digest.md")),
@@ -355,6 +507,103 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.match(gaps, /\[evidence:ev-/);
     assert.equal(evidence.schemaVersion, 1);
     assert.equal(JSON.stringify(evidence).includes("abcdefghijklmnop"), false);
+
+    const reapplied = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "session-019e",
+      "--apply",
+    ]);
+    assert.equal(reapplied.code, 0, reapplied.stderr);
+    const evidenceAfter = JSON.parse(
+      await readFile(path.join(researchRoot, "evidence-index.json"), "utf8"),
+    );
+    const claimIds = new Set(
+      (evidenceAfter.claims || []).map((claim: { id?: string }) => claim.id).filter(Boolean),
+    );
+    const gapsAfter = await readFile(path.join(researchRoot, "quality-gaps.md"), "utf8");
+    const referencedIds = [...gapsAfter.matchAll(/\[evidence:(ev-[^\]]+)\]/g)].map(
+      (match) => match[1],
+    );
+    assert.equal(referencedIds.length > 0, true);
+    for (const evidenceId of referencedIds) {
+      assert.equal(claimIds.has(evidenceId), true, evidenceId);
+    }
+    assert.equal((evidenceAfter.claims || []).length >= (evidence.claims || []).length, true);
+  });
+});
+
+test("session-forensics requires an explicit gate for outside-workdir JSONL", async () => {
+  await withTempDir("session-forensics-boundary", async (dir) => {
+    const projectDir = path.join(dir, "project");
+    await mkdir(projectDir, { recursive: true });
+    const sessionPath = path.join(dir, "outside-rollout.jsonl");
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Segments UX is not the best." }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:02.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:03.000Z",
+          type: "compacted",
+          payload: {},
+        }),
+      ].join("\n"),
+    );
+
+    const blocked = await runCli([
+      "session-forensics",
+      "--cwd",
+      projectDir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "outside-session",
+      "--dry-run",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /--allow-outside-workdir/);
+
+    const allowed = await runCli([
+      "session-forensics",
+      "--cwd",
+      projectDir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "outside-session",
+      "--dry-run",
+      "--allow-outside-workdir",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    const payload = JSON.parse(allowed.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sourcePath, "<outside-workdir>/outside-rollout.jsonl");
+    assert.equal(payload.canonicalNextAction.kind, "context-distillation");
+    assert.equal((payload.canonicalNextAction.command || "").includes(sessionPath), false);
+    assert.match(payload.canonicalNextAction.command || "", /--allow-outside-workdir/);
+    assert.deepEqual(payload.snippets, []);
   });
 });
 
@@ -400,6 +649,49 @@ test("state and dashboard math keep zero-valued metrics visible", async () => {
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.match(dashboard, /Reach zero failures/);
+  });
+});
+
+test("log accepts metrics from a JSON file for PowerShell-safe logging", async () => {
+  await withTempDir("metrics-file", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "metrics file", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "metrics.json"),
+      JSON.stringify(
+        {
+          promotionGrade: true,
+          queryCount: 12,
+          evidenceLabel: 'holdout "quoted" path',
+          windowsPath: "C:\\tmp\\artifact.json",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "File-backed metrics",
+      "--metrics-file",
+      "metrics.json",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+    const payload = JSON.parse(log.stdout);
+
+    assert.equal(payload.experiment.metrics.promotionGrade, true);
+    assert.equal(payload.experiment.metrics.queryCount, 12);
+    assert.equal(payload.experiment.metrics.evidenceLabel, 'holdout "quoted" path');
+    assert.equal(payload.experiment.metrics.windowsPath, "C:\\tmp\\artifact.json");
+    assert.equal(payload.experiment.evidenceStatus, "accepted");
+    assert.equal(payload.experiment.promotion.label, "promotion_eligible");
   });
 });
 
@@ -727,6 +1019,63 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
     ]);
     assert.equal(logged.code, 0, logged.stderr);
     assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
+    assert.equal(statePayload.evidenceRegistry.counts.rejected, 1);
+  });
+});
+
+test("accepted logged artifacts become current evidence in state registry", async () => {
+  await withTempDir("accepted-artifact-registry", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "accepted artifact registry",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await mkdir(path.join(dir, "out"), { recursive: true });
+    await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
+    await writeFile(
+      path.join(dir, "packet-runner.mjs"),
+      "console.log('METRIC score=7');\nconsole.log('ARTIFACT manifest=out/manifest.json');\n",
+      "utf8",
+    );
+
+    const packet = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} packet-runner.mjs`,
+    ]);
+    assert.equal(packet.code, 0, packet.stderr);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep accepted artifact evidence",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 1);
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts[0].name, "manifest");
+    assert.equal(statePayload.evidenceRegistry.currentArtifacts[0].evidenceStatus, "accepted");
+    assert.equal(statePayload.evidenceRegistry.counts.accepted, 2);
   });
 });
 
@@ -882,6 +1231,568 @@ test("state separates development best from promotion-grade best", async () => {
   });
 });
 
+test("research-fanout records generic parallel lanes without creating a bespoke metric", async () => {
+  await withTempDir("research-fanout", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "fanout", "--metric-name", "quality_gap"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "measure",
+      "--description",
+      "Baseline measurement",
+      "--asi",
+      JSON.stringify({
+        hypothesis: "Measure current research gaps",
+        lane: "benchmark-contract",
+        next_action_hint: "Scout benchmark validity before editing.",
+      }),
+    ]);
+
+    const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    assert.equal(fanout.code, 0, fanout.stderr);
+    const plan = JSON.parse(fanout.stdout);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.dryRun, false);
+    assert.ok(plan.parallelLanes.length >= 4);
+    assert.ok(plan.parallelLanes.length <= 6);
+    assert.match(plan.fanoutPlan.metric.contract, /configured benchmark METRIC output/);
+    assert.equal(plan.parallelLanes[0].evidenceStatus, "provisional");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.ok(payload.parallelLanes.length > 0);
+    assert.equal(payload.fanoutPlan.status, "planned");
+    assert.equal(payload.metric, "quality_gap");
+
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const exportPayload = JSON.parse(exportResult.stdout);
+    assert.ok(exportPayload.viewModel.parallelLanes.length > 0);
+    assert.equal(exportPayload.viewModel.fanoutPlan.status, "planned");
+    assert.equal(exportPayload.viewModel.evidenceLedger.counts.provisional, 1);
+  });
+});
+
+test("lane-runner allows read-only lanes without worktree isolation", async () => {
+  await withTempDir("lane-runner-read-only", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--summary",
+      "Scout found one benchmark-contract hypothesis.",
+      "--recommendation",
+      "Run one benchmark-contract packet next.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.dryRun, false);
+    assert.equal(payload.lane.mode, "read_only_scout");
+    assert.equal(payload.result.status, "completed");
+    assert.equal(payload.result.evidenceAccepted, true);
+    assert.equal(payload.result.isolation.worktree, "");
+    assert.deepEqual(payload.result.isolation.writeScope, []);
+
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.match(ledger, /"type":"lane_result"/);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    const lane = statePayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(lane.status, "completed");
+    assert.equal(lane.evidenceStatus, "accepted");
+  });
+});
+
+test("empty lane-runner records are planned breadcrumbs, not watchdog progress", async () => {
+  await withTempDir("lane-runner-empty-planned", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lane watchdog",
+      "--metric-name",
+      "quality_gap",
+      "--max-iterations",
+      "100",
+    ]);
+    const oldTimestamp = Date.now() - 10 * 60 * 60 * 1000;
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "lane watchdog",
+          metricName: "quality_gap",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 4,
+          status: "measure",
+          description: "Old baseline.",
+          timestamp: oldTimestamp,
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const emptyResult = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--yes",
+    ]);
+    assert.equal(emptyResult.code, 0, emptyResult.stderr);
+    const emptyPayload = JSON.parse(emptyResult.stdout);
+    assert.equal(emptyPayload.result.status, "planned");
+    assert.equal(emptyPayload.result.evidenceAccepted, false);
+
+    const staleState = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(staleState.code, 0, staleState.stderr);
+    const stalePayload = JSON.parse(staleState.stdout);
+    const plannedLane = stalePayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(plannedLane.status, "planned");
+    assert.equal(plannedLane.evidenceStatus, "provisional");
+    assert.equal(stalePayload.watchdogSummary.stale, true);
+
+    const commandResult = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e ""`,
+      "--allow-non-git-command",
+      "--yes",
+    ]);
+    assert.equal(commandResult.code, 0, commandResult.stderr);
+    const commandPayload = JSON.parse(commandResult.stdout);
+    assert.equal(commandPayload.result.status, "completed");
+    assert.equal(commandPayload.result.evidenceAccepted, true);
+
+    const freshState = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(freshState.code, 0, freshState.stderr);
+    const freshPayload = JSON.parse(freshState.stdout);
+    const completedLane = freshPayload.parallelLanes.find((item) => item.id === "read-only-scout");
+    assert.equal(completedLane.status, "completed");
+    assert.equal(completedLane.evidenceStatus, "accepted");
+    assert.equal(freshPayload.watchdogSummary.stale, false);
+  });
+});
+
+test("lane-runner blocks implementation lanes without explicit isolation", async () => {
+  await withTempDir("lane-runner-isolation", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--summary",
+      "Try an implementation candidate.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Implementation lanes require explicit isolation/);
+  });
+});
+
+test("lane-runner rejects missing and foreign implementation worktrees", async () => {
+  await withTempDir("lane-runner-worktree-edges", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "README.md"), "base\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const missing = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      "missing-worktree-path",
+      "--command",
+      "git status --short",
+      "--summary",
+      "Missing worktree.",
+      "--yes",
+    ]);
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.stderr, /existing Git worktree/i);
+
+    const foreignRepo = path.join(dir, "foreign-repo");
+    await mkdir(foreignRepo, { recursive: true });
+    await git(foreignRepo, ["init"]);
+    await git(foreignRepo, ["config", "user.email", "codex@example.test"]);
+    await git(foreignRepo, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(foreignRepo, "README.md"), "foreign\n", "utf8");
+    await git(foreignRepo, ["add", "-A"]);
+    await git(foreignRepo, ["commit", "-m", "foreign"]);
+
+    const foreign = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      foreignRepo,
+      "--command",
+      "git status --short",
+      "--summary",
+      "Foreign worktree.",
+      "--yes",
+    ]);
+    assert.notEqual(foreign.code, 0);
+    assert.match(foreign.stderr, /same Git repository/i);
+  });
+});
+
+test("lane-runner allows a sibling implementation worktree", async () => {
+  await withTempDir("lane-runner-worktree-pass", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "README.md"), "base\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const worktreePath = path.join(dir, "lane-worktree");
+    await git(dir, ["worktree", "add", worktreePath, "-b", "lane-impl"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      worktreePath,
+      "--command",
+      "git status --short",
+      "--summary",
+      "Sibling worktree command.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result.commandResult.code, 0);
+  });
+});
+
+test("lane-runner rejects the main checkout as an implementation worktree", async () => {
+  await withTempDir("lane-runner-main-worktree", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--worktree",
+      ".",
+      "--summary",
+      "Unsafe main checkout.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /separate Git worktree/);
+  });
+});
+
+test("lane-runner blocks implementation commands that escape write scope", async () => {
+  await withTempDir("lane-runner-write-scope", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('outside.txt','escape')\"",
+      "--summary",
+      "Unsafe write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /outside --write-scope/);
+  });
+});
+
+test("lane-runner blocks write-scope commands that hide changes in commits", async () => {
+  await withTempDir("lane-runner-write-scope-commit", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('outside.txt','escape')\" && git add outside.txt && git commit -m escape",
+      "--summary",
+      "Hidden unsafe write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /cannot run git cleanup|cannot move HEAD/);
+  });
+});
+
+test("lane-runner blocks write-scope mutators before execution", async () => {
+  const blockedCommands = [
+    ["git stash push -m blocked", /cannot run git cleanup|look mutating/i],
+    ["git cherry-pick HEAD", /cannot run git cleanup|look mutating/i],
+    ["git revert --no-edit HEAD", /cannot run git cleanup|look mutating/i],
+    ["npm ci", /cannot run git cleanup|dependency|look mutating/i],
+  ];
+  for (const [command, pattern] of blockedCommands) {
+    await withTempDir("lane-runner-write-scope-mutator", async (dir) => {
+      await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+      await git(dir, ["init"]);
+      await git(dir, ["config", "user.email", "codex@example.test"]);
+      await git(dir, ["config", "user.name", "Codex Test"]);
+      await git(dir, ["add", "-A"]);
+      await git(dir, ["commit", "-m", "initial"]);
+      const marker = path.join(dir, "lane-ran.marker");
+      const guardedCommand = `${command} && node -e "require('fs').writeFileSync('lane-ran.marker','ran')"`;
+
+      const result = await runCli([
+        "lane-runner",
+        "--cwd",
+        dir,
+        "--lane-id",
+        "implementation-candidate",
+        "--mode",
+        "implementation",
+        "--write-scope",
+        "src",
+        "--command",
+        guardedCommand,
+        "--summary",
+        "Unsafe mutator.",
+        "--yes",
+      ]);
+      assert.notEqual(result.code, 0, command);
+      assert.match(result.stderr, pattern, command);
+      await assert.rejects(() => access(marker));
+    });
+  }
+});
+
+test("lane-runner blocks write-scope cleanup commands in the main checkout", async () => {
+  await withTempDir("lane-runner-write-scope-cleanup", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "git -C . reset --hard",
+      "--summary",
+      "Unsafe cleanup.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /cannot run git cleanup/);
+  });
+});
+
+test("lane-runner refuses write-scope when unrelated dirty files already exist", async () => {
+  await withTempDir("lane-runner-write-scope-pre-dirty", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    await writeFile(path.join(dir, "outside.txt"), "before\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await writeFile(path.join(dir, "outside.txt"), "user edit\n", "utf8");
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('src/owned.txt','after')\"",
+      "--summary",
+      "Owned write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /dirty files outside scope/);
+  });
+});
+
+test("lane-runner ignores completed lane results from older segments", async () => {
+  await withTempDir("lane-runner-segment-results", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "quality_gap"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "7",
+      "--status",
+      "measure",
+      "--description",
+      "First segment measurement.",
+    ]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    const first = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--summary",
+      "Old segment result.",
+      "--recommendation",
+      "Do not reuse this after a segment change.",
+      "--yes",
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+
+    await runCli(["new-segment", "--cwd", dir, "--reason", "New lane decision round.", "--yes"]);
+    const second = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--dry-run",
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    const payload = JSON.parse(second.stdout);
+    assert.equal(payload.coordinatorRecommendation.status, "needs_lane_result");
+    assert.notEqual(
+      payload.coordinatorRecommendation.nextAction,
+      "Do not reuse this after a segment change.",
+    );
+  });
+});
+
+test("lane-runner synthesizes completed lane results into one next action", async () => {
+  await withTempDir("lane-runner-synthesis", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "benchmark-contract",
+      "--summary",
+      "Benchmark contract is the riskiest assumption.",
+      "--recommendation",
+      "Run one measured packet that validates benchmark contract parsing.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.coordinatorRecommendation.status, "ready");
+    assert.equal(
+      payload.coordinatorRecommendation.nextAction,
+      "Run one measured packet that validates benchmark contract parsing.",
+    );
+    assert.equal(typeof payload.coordinatorRecommendation.nextAction, "string");
+  });
+});
+
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
     await runCli([
@@ -938,6 +1849,13 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.scaffoldHealth.ok, false);
     assert.match(doctorPayload.warnings.join("\n"), /self-recursive|commitPaths/i);
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.scaffoldHealth.ok, false);
+    assert.equal(compactPayload.canonicalNextAction.kind, "safety-blocker");
+    assert.ok(compactPayload.decisionEnvelope.scaffoldHealth.blockers.length > 0);
   });
 });
 
@@ -1181,6 +2099,286 @@ test("benchmark contract changes block the next packet until a new segment", asy
   });
 });
 
+test("new segment does not treat its own ledger append as dirty source drift", async () => {
+  await withTempDir("segment-self-dirty", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await runCli(["init", "--cwd", dir, "--name", "segment", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "measure",
+      "--description",
+      "Initial segment measurement",
+    ]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial session"]);
+
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "fresh metric phase",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.segment, 1);
+    assert.equal(payload.decisionEnvelope.dirtySourceDrift.dirty, false);
+    assert.ok(
+      payload.warningDetails.every((warning) => warning.code !== "git_dirty"),
+      "session-only dirtiness should not be reported as source drift",
+    );
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.doesNotMatch(doctorPayload.warnings.join("\n"), /Git worktree is dirty/);
+    assert.ok(
+      doctorPayload.warningDetails.every((warning) => warning.code !== "git_dirty"),
+      "doctor should use the same session-only dirtiness filter as state",
+    );
+
+    await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
+    const dirty = await runCli(["state", "--cwd", dir]);
+    assert.equal(dirty.code, 0, dirty.stderr);
+    const dirtyPayload = JSON.parse(dirty.stdout);
+    assert.equal(dirtyPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.ok(dirtyPayload.warningDetails.some((warning) => warning.code === "git_dirty"));
+
+    const dirtyCompact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(dirtyCompact.code, 0, dirtyCompact.stderr);
+    const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
+    assert.equal(dirtyCompactPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.ok(
+      dirtyCompactPayload.blockers.some((blocker) =>
+        String(blocker).includes("Git worktree is dirty"),
+      ),
+    );
+  });
+});
+
+test("state and recommend-next share watchdog canonical next-action parity", async () => {
+  await withTempDir("watchdog-cli-parity", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "watchdog parity", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "discard",
+      "--description",
+      "No movement",
+    ]);
+
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const oldMs = Date.now() - 10 * 60 * 60 * 1000;
+    const lines = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    for (const entry of lines) {
+      if (entry.run != null) entry.timestamp = oldMs;
+    }
+    await writeFile(
+      ledgerPath,
+      `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 100 }, null, 2),
+      "utf8",
+    );
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.watchdogSummary?.stale, true);
+    assert.equal(statePayload.decisionEnvelope?.watchdog?.stale, true);
+    assert.equal(statePayload.limitReached, false);
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.decisionEnvelope?.watchdog?.stale, true);
+    assert.equal(
+      recommendPayload.decisionEnvelope?.canonicalNextAction?.kind,
+      statePayload.canonicalNextAction?.kind,
+    );
+    assert.equal(
+      recommendPayload.decisionEnvelope?.watchdog?.recommendation,
+      statePayload.decisionEnvelope?.watchdog?.recommendation,
+    );
+    assert.match(
+      String(statePayload.decisionEnvelope?.watchdog?.recommendation || ""),
+      /Intervene|finalize|rescope/i,
+    );
+  });
+});
+
+test("fanout plans are scoped to the active segment", async () => {
+  await withTempDir("fanout-segment-scope", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "fanout scope", "--metric-name", "quality_gap"]);
+    const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
+    assert.equal(fanout.code, 0, fanout.stderr);
+    const plan = JSON.parse(fanout.stdout).fanoutPlan;
+    assert.ok(plan.id);
+
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "measure",
+      "--description",
+      "Segment zero measurement",
+    ]);
+    await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "fresh segment for fanout scope",
+      "--yes",
+    ]);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.segment, 1);
+    assert.equal(payload.fanoutProvenance?.matchedSegment, false);
+    assert.equal(payload.fanoutProvenance?.source, "memory_or_defaults");
+    assert.notEqual(payload.fanoutPlan?.id, plan.id);
+    assert.equal(payload.fanoutPlan, null);
+  });
+});
+
+test("read-only lane-runner rejects commands outside git without explicit opt-in", async () => {
+  await withTempDir("lane-runner-non-git", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "non git lane", "--metric-name", "quality_gap"]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
+
+    const blocked = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
+      "--yes",
+    ]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /Git worktree|porcelain verification/i);
+
+    const allowed = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
+      "--allow-non-git-command",
+      "--yes",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+  });
+});
+
+test("completed lane results count as watchdog progress signals", async () => {
+  await withTempDir("watchdog-lane-result", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lane watchdog",
+      "--metric-name",
+      "seconds",
+      "--max-iterations",
+      "100",
+    ]);
+    await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
+    const oldMs = Date.now() - 10 * 60 * 60 * 1000;
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Old baseline",
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const lines = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    for (const entry of lines) {
+      if (entry.run != null) entry.timestamp = oldMs;
+    }
+    await writeFile(
+      ledgerPath,
+      `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const before = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(JSON.parse(before.stdout).watchdogSummary?.stale, true);
+
+    await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "read-only-scout",
+      "--summary",
+      "Scout completed.",
+      "--recommendation",
+      "Run one measured packet next.",
+      "--yes",
+    ]);
+
+    const after = await runCli(["state", "--cwd", dir, "--compact"]);
+    const afterPayload = JSON.parse(after.stdout);
+    assert.equal(afterPayload.watchdogSummary?.stale, false);
+    assert.ok(
+      afterPayload.parallelLanes.some(
+        (lane) => lane.id === "read-only-scout" && lane.status === "completed",
+      ),
+    );
+  });
+});
+
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
@@ -1215,7 +2413,12 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
     const doc = dom.window.document;
     const rendered = doc.body.innerHTML;
 
-    assert.ok(doc.getElementById("segment-select"));
+    assert.ok(doc.getElementById("segment-navigator"));
+    const segmentSelect = doc.getElementById("segment-select") as HTMLSelectElement | null;
+    assert.ok(segmentSelect);
+    assert.equal(segmentSelect.options.length, 2);
+    assert.match(segmentSelect.options[0].textContent || "", /S1 - first segment/);
+    assert.match(segmentSelect.options[1].textContent || "", /S2 - second segment/);
     assert.ok(doc.getElementById("live-toggle"));
     assert.doesNotMatch(dashboard, /id="command-grid"/);
     assert.match(doc.body.textContent, /Run log/);
@@ -1315,7 +2518,10 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
     assert.match(packet.packetEvidence.packetId, /^packet-/);
-    assert.equal(packet.packetEvidence.commandIdentity.command, command);
+    assert.equal(
+      packet.packetEvidence.commandIdentity.command,
+      redactCommandDisplay(command, { workDir: dir }),
+    );
     assert.equal(packet.packetEvidence.exitStatus, 0);
     assert.equal(packet.packetEvidence.metrics.seconds, 3);
     assert.match(packet.packetEvidence.stdoutTail, /METRIC seconds=3/);
@@ -2016,7 +3222,12 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.decisionEnvelope.activeSegment.segment, 0);
     assert.equal(statePayload.resumeAudit.latestPacketFreshness.fresh, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, null);
+    assert.match(
+      statePayload.decisionEnvelope.finalizationReadiness.nextAction,
+      /finalize-preview/,
+    );
     assert.equal(typeof statePayload.decisionEnvelope.nextAction, "string");
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
@@ -2805,7 +4016,9 @@ test("keep logs fail instead of recording success when git commit fails", async 
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
     await mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
-    await writeFile(path.join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", "utf8");
+    const hookPath = path.join(dir, ".git", "hooks", "pre-commit");
+    await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+    await chmod(hookPath, 0o755);
 
     await runCli(["init", "--cwd", dir, "--name", "commit failure", "--metric-name", "seconds"]);
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
@@ -3282,6 +4495,68 @@ test("log accepts ASI from a JSON file", async () => {
   });
 });
 
+test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
+  await withTempDir("asi-json-file", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "asi json file", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "asi.json"),
+      JSON.stringify(
+        {
+          hypothesis: "avoid powershell quoting",
+          evidence: 'file parsed with "quotes"',
+          next_action_hint: "continue",
+          windowsPath: "C:\\tmp\\asi.json",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi-json-file",
+      "asi.json",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    const ledger = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const run = ledger.find((entry) => entry.run === 1);
+    assert.equal(run.asi.hypothesis, "avoid powershell quoting");
+    assert.equal(run.asi.evidence, 'file parsed with "quotes"');
+    assert.equal(run.asi.windowsPath, "C:\\tmp\\asi.json");
+
+    const conflict = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "4",
+      "--status",
+      "keep",
+      "--description",
+      "Conflict",
+      "--asi-json-file",
+      "asi.json",
+      "--asi",
+      "{}",
+    ]);
+    assert.notEqual(conflict.code, 0);
+    assert.match(conflict.stderr, /Use either --asi or --asi-json-file/);
+  });
+});
+
 test("broad discard cleanup preserves deep research scratchpads", async () => {
   await withTempDir("preserve-research", async (dir) => {
     await git(dir, ["init"]);
@@ -3342,7 +4617,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const [
     { toolSchemas },
     { validateToolContracts },
-    { cliCommandForTool, toolMutates, validateToolRegistry },
+    { actionPolicyForTool, cliCommandForTool, toolMutates, validateToolRegistry },
   ] = await Promise.all([
     import("../lib/tool-schemas.js"),
     import("../lib/tool-contracts.js"),
@@ -3357,11 +4632,17 @@ test("tool schemas expose guidance and output contracts", async () => {
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
+  const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
+  const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
+  const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
 
   assert.ok(guided);
+  assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
+  assert.ok(onboardingPacket);
+  assert.ok(recommendNext);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -3376,6 +4657,8 @@ test("tool schemas expose guidance and output contracts", async () => {
     "Read-only by default; starts a local dashboard only when start_dashboard=true.",
   );
   assert.equal(guided.annotations.readOnlyHint, false);
+  assert.equal(researchFanout.annotations.readOnlyHint, false);
+  assert.equal(researchFanout.annotations.openWorldHint, false);
   assert.equal(guided.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
@@ -3385,6 +4668,12 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
   assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
   assert.equal(guided.inputSchema.properties.port.type, "number");
+  assert.equal(onboardingPacket.inputSchema.properties.operator_checklist, undefined);
+  assert.equal(recommendNext.inputSchema.properties.operator_checklist.type, "boolean");
+  assert.deepEqual(recommendNext.outputSchema.properties.action.type, ["string", "object"]);
+  assert.deepEqual(recommendNext.outputSchema.properties.commands.type, ["array", "object"]);
+  assert.equal(recommendNext.outputSchema.properties.laneLifecycle.type, "object");
+  assert.equal(recommendNext.outputSchema.properties.packetDiagnostics.type, "object");
   assert.equal(guided.outputSchema.properties.commands.type, "array");
   assert.equal(guided.outputSchema.properties.commands.items.type, "string");
   assert.equal(guided.outputSchema.properties.dashboard.type, "object");
@@ -3408,8 +4697,12 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(richDoctor.annotations.readOnlyHint, false);
   assert.equal(richDoctor.annotations.openWorldHint, true);
   assert.equal(cliCommandForTool("next_experiment"), "next");
+  assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
   assert.equal(toolMutates("next_experiment"), true);
+  assert.equal(toolMutates("research_fanout"), false);
+  assert.equal(actionPolicyForTool("research_fanout"), "read");
+  assert.equal(actionPolicyForTool("research_fanout", { yes: true }), "state_mutation");
   assert.equal(toolMutates("read_state"), false);
 });
 
@@ -3477,6 +4770,19 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     trustCatalog: true,
     allow_unsafe_command: true,
   });
+  const logArgs = validateToolArguments("log_experiment", {
+    workingDir: "C:/repo",
+    status: "keep",
+    description: "ASI file",
+    asiJsonFile: "asi.json",
+  });
+  assert.equal(logArgs.asi_json_file, "asi.json");
+  assert.deepEqual(normalizeRuntimeToolArguments("log_experiment", logArgs), {
+    cwd: "C:/repo",
+    status: "keep",
+    description: "ASI file",
+    asiJsonFile: "asi.json",
+  });
   const promptPlanArgs = validateToolArguments("prompt_plan", {
     workingDir: "C:/repo",
     prompt: "Optimize the external recipe.",
@@ -3505,6 +4811,99 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     }),
   );
   assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
+
+  const laneRunnerArgs = validateToolArguments("lane_runner", {
+    workingDir: "C:/repo",
+    laneId: "read-only-scout",
+    mode: "read_only_scout",
+    command: "git status --short",
+    yes: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("lane_runner", laneRunnerArgs), {
+    cwd: "C:/repo",
+    laneId: "read-only-scout",
+    mode: "read_only_scout",
+    command: "git status --short",
+    yes: true,
+  });
+
+  const forensicsArgs = validateToolArguments("session_forensics", {
+    workingDir: "C:/repo",
+    sessionJsonl: "rollout.jsonl",
+    researchSlug: "study",
+    apply: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("session_forensics", forensicsArgs), {
+    cwd: "C:/repo",
+    sessionJsonl: "rollout.jsonl",
+    researchSlug: "study",
+    apply: true,
+  });
+
+  const partialResultsArgs = validateToolArguments("partial_results", {
+    workingDir: "C:/repo",
+    fromLast: true,
+    record: "rows=out/rows.json",
+    description: "Salvage rows",
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("partial_results", partialResultsArgs), {
+    cwd: "C:/repo",
+    fromLast: true,
+    record: "rows=out/rows.json",
+    description: "Salvage rows",
+  });
+
+  const goalBridgeArgs = validateToolArguments("codex_goal_bridge", {
+    workingDir: "C:/repo",
+    codexGoalObjective: "Close the loop",
+    codexGoalStatus: "active",
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("codex_goal_bridge", goalBridgeArgs), {
+    cwd: "C:/repo",
+    codexGoalObjective: "Close the loop",
+    codexGoalStatus: "active",
+  });
+});
+
+test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
+  await withTempDir("log-contract-edges", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "log contract", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const packet = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(packet.code, 0, packet.stderr);
+
+    const metricsConflict = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "conflict",
+      "--metrics",
+      '{"seconds":1}',
+      "--metrics-file",
+      "metrics.json",
+    ]);
+    assert.notEqual(metricsConflict.code, 0);
+    assert.match(metricsConflict.stderr, /either --metrics or --metrics-file/i);
+
+    const invalidEvidence = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "bad evidence",
+      "--evidence-status",
+      "mystery",
+    ]);
+    assert.notEqual(invalidEvidence.code, 0);
+    assert.match(invalidEvidence.stderr, /evidence-status/i);
+  });
 });
 
 test("plugin manifest does not declare an MCP server", async () => {
@@ -3789,9 +5188,9 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
 
     assert.match(dashboard, /Codex brief/);
     assert.match(dashboard, /Best kept change/);
-    assert.match(dashboard, /Recent failures/);
+    assert.match(dashboard, /Recent failure/);
     assert.match(dashboard, /Next action/);
-    assert.match(dashboard, /Experiment portfolio/);
+    assert.match(dashboard, /Parallel exploration board/);
     assert.match(dashboard, /lower is better/);
     assert.ok(payload.viewModel.nextBestAction.detail);
     assert.ok(payload.viewModel.nextBestAction.explanation.why);
@@ -3946,7 +5345,11 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     readFile(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs"), "utf8"),
     readFile(path.join(pluginRoot, "lib", "runner.ts"), "utf8"),
   ]);
-  assert.match(cliShim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(
+    cliShim,
+    /import \{ ensureRuntime, isDirectScript \} from "\.\/bootstrap-runtime\.mjs"/,
+  );
+  assert.match(cliShim, /isDirectScript\(import\.meta\.url\)/);
   assert.match(
     cliShim,
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
@@ -3954,4 +5357,28 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
   assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
+});
+
+test("source launcher direct-script detection survives normalized paths", async () => {
+  await withTempDir("launcher-direct", async (dir) => {
+    const script = path.join(dir, "autoresearch.mjs");
+    const other = path.join(dir, "other.mjs");
+    await writeFile(script, "");
+    await writeFile(other, "");
+
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+    assert.equal(typeof bootstrap.isDirectScript, "function");
+    assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, script), true);
+    assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, other), false);
+
+    const link = path.join(dir, "autoresearch-link.mjs");
+    try {
+      await symlink(script, link);
+      assert.equal(bootstrap.isDirectScript(pathToFileURL(script).href, link), true);
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+    }
+  });
 });
