@@ -157,7 +157,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
           commands: deps.dashboardCommands(workDir),
           settings: deps.dashboardSettings(config, dashboardContext),
-          viewModel: await deps.dashboardViewModel(workDir, config, dashboardContext),
+          viewModel: {},
         });
       },
       viewModel: async () =>
@@ -187,16 +187,6 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       currentPid: process.pid,
       currentCwd: workDir,
     });
-    const responseViewModel = await deps.dashboardViewModel(workDir, config, {
-      deliveryMode: "live-server",
-      liveUrl,
-      generatedAt: new Date().toISOString(),
-      sourceCwd: workDir,
-      pluginVersion: deps.pluginVersion,
-      runtimeDrift,
-      activeServerCount: liveDashboardServers.size,
-      dashboardServerRegistry,
-    });
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
     });
@@ -213,7 +203,12 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         status: dashboardServerRegistry,
         previous: registryWrite.previous,
       },
-      decisionEnvelopeSummary: responseViewModel.decisionEnvelopeSummary || null,
+      decisionEnvelopeSummary: null,
+      deferredViewModel: {
+        availableAt: new URL("view-model.json", serveResult.url).toString(),
+        reason:
+          "Live dashboard startup returns after health verification; heavier decision diagnostics load from /view-model.json.",
+      },
       modeGuidance: {
         deliveryMode: "live-server",
         difference: health.ok

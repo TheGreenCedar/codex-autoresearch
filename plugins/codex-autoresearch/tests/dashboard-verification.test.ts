@@ -456,6 +456,86 @@ test("dashboard view model exposes finalization pressure before more packets acc
   );
 });
 
+test("dashboard keeps rejected keep evidence out of best and finalization pressure", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "rejected keep",
+        metricName: "score",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          evidenceStatus: "accepted",
+          description: "Accepted keep",
+        },
+        {
+          run: 2,
+          metric: 1,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected keep",
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      confidence: 1,
+    },
+    settings: { deliveryMode: "static-export" },
+  });
+
+  assert.equal(viewModel.readout.bestKept?.run, 1);
+  assert.equal(viewModel.readout.bestKept?.metric, 10);
+  assert.equal(viewModel.finalizationPressure.keptCount, 1);
+  assert.doesNotMatch(JSON.stringify(viewModel.nextBestAction), /Rejected keep/);
+});
+
+test("dashboard readout keeps rejected keeps out of visible best surfaces", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "rejected keep UI",
+      metricName: "score",
+      bestDirection: "lower",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      evidenceStatus: "accepted",
+      description: "Accepted keep",
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 1,
+      status: "keep",
+      evidenceStatus: "rejected",
+      description: "Rejected keep",
+      confidence: 1,
+    },
+  ];
+
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const bestRows = [...dom.window.document.querySelectorAll(".ledger-row.best-row")];
+
+  assert.equal(getById("best-value").textContent, "10");
+  assert.equal(bestRows.length, 1);
+  assert.match(bestRows[0].textContent || "", /#1/);
+  assert.doesNotMatch(bestRows[0].textContent || "", /#2/);
+  assert.match(getById("decision-rail").textContent || "", /Best result so farAccepted keep/);
+  assert.doesNotMatch(
+    getById("decision-rail").textContent || "",
+    /Best result so farRejected keep/,
+  );
+});
+
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
   const entries = [
     {
