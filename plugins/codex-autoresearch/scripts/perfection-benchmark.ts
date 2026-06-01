@@ -841,6 +841,7 @@ const checks = [
         "lib/finalize-preview.ts",
         "lib/live-server.ts",
         "lib/integrations.ts",
+        "lib/session-decision-capsule.ts",
       ];
       for (const file of files) await readText(file);
       return pass();
@@ -886,9 +887,12 @@ const checks = [
       return includesAll(`${skill}\n${operate}\n${trust}\n${architecture}`, [
         "operatorChecklist",
         "loopContract",
+        "sessionDecisionCapsule",
+        "decision-capsule",
         "runtimeProvenance",
         "laneLifecycle",
         "packetDiagnostics",
+        "benchmark-lint` must prove the primary `METRIC`",
       ])
         ? pass()
         : fail("Loop-governance docs are missing required compact-readout fields.");

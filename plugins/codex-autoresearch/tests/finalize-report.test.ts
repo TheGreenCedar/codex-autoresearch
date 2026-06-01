@@ -368,6 +368,89 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalize preview refuses hard decision capsules",
+  "autoresearch-finalize-capsule-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    await git(["switch", "-c", "codex/autoresearch-capsule"], repo);
+
+    await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+    await git(["add", "src/value.txt"], repo);
+    await git(["commit", "-m", "kept metric improvement"], repo);
+    const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          timestamp: "2026-06-01T13:00:00.000Z",
+          name: "preview",
+          metricName: "score",
+          bestDirection: "higher",
+        }),
+        JSON.stringify({
+          run: 1,
+          timestamp: "2026-06-01T13:05:00.000Z",
+          status: "keep",
+          metric: 1,
+          description: "kept metric improvement",
+          commit: kept.slice(0, 12),
+        }),
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(repo, "autoresearch.research", "benchmark-contract", "decision-capsule.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "session-decision-capsule",
+        status: "active",
+        enforcement: {
+          mode: "hard-block",
+          canRunNextPacket: false,
+          allowBoundedNext: false,
+          blocksFinalization: true,
+          clearingCondition: "Run benchmark-lint successfully before finalization.",
+          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
+        },
+        bottleneck: "Benchmark wrapper cannot prove the primary METRIC.",
+        evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
+        nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+        wrongNextActions: ["Do not run next or finalize."],
+        doNotRepeat: [],
+        commandBudgetWarnings: [],
+        generatedFrom: {
+          compactions: 0,
+          first: "2026-06-01T13:00:00.000Z",
+          last: "2026-06-01T13:10:00.000Z",
+          toolCounts: {},
+          topCommandHeads: [],
+        },
+        importedAt: "2026-06-01T13:10:00.000Z",
+      }),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log autoresearch session"], repo);
+
+    const payload = await finalizePreview({ cwd: repo, trunk: "main" });
+    assert.equal(payload.ready, false);
+    assert.equal(payload.sessionDecisionCapsule.kind, "session-decision-capsule");
+    assert.match(payload.nextAction, /Repair benchmark-lint/);
+    assert.match(payload.warnings.join("\n"), /primary METRIC/);
+  },
+);
+
+testWithTempRoot(
   "finalize preview blocks kept commits that were later explicitly invalidated",
   "autoresearch-finalize-discard-",
   async (root) => {

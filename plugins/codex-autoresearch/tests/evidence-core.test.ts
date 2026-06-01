@@ -57,6 +57,12 @@ import {
 } from "../lib/research-path-guard.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
+import {
+  benchmarkContractFixtureEntries,
+  fixtureJsonl,
+  outputBudgetFixtureEntries,
+  searchLatencyFixtureEntries,
+} from "./helpers/session-forensics-fixtures.js";
 import { quoteForShell, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch-e1", name, fn);
@@ -963,6 +969,8 @@ test("session forensics parses bounded signals without raw body persistence", as
       result.workflowWaste.some((signal) => signal.kind === "verification_churn"),
       true,
     );
+    assert.equal(result.decisionCapsule.kind, "session-decision-capsule");
+    assert.match(result.decisionCapsule.nextExperiment, /context capsule/i);
     assert.equal(JSON.stringify(result).includes("sk-test"), false);
   });
 });
@@ -985,6 +993,121 @@ test("parseSessionForensics returns unreadable_file when the read stream fails",
     assert.equal(result.code, "unreadable_file");
     assert.match(result.message, /stream broke/i);
     assert.equal(result.path, sessionPath);
+  });
+});
+
+test("session forensics prioritizes broken benchmark contracts over more packets", async () => {
+  await withTempDir("session-forensics-benchmark-contract", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(sessionPath, fixtureJsonl(benchmarkContractFixtureEntries()));
+
+    const result = await parseSessionForensics({ sessionJsonl: sessionPath });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(
+      result.productSignals.some((signal) => signal.kind === "benchmark_contract_broken"),
+      true,
+    );
+    assert.match(result.decisionCapsule.bottleneck, /benchmark wrapper/i);
+    assert.equal(result.decisionCapsule.enforcement.mode, "hard-block");
+    assert.equal(result.decisionCapsule.enforcement.canRunNextPacket, false);
+    assert.equal(result.decisionCapsule.enforcement.blocksFinalization, true);
+    assert.match(result.decisionCapsule.evidence.join("\n"), /benchmark lint contract broken/i);
+    assert.match(result.decisionCapsule.nextExperiment, /benchmark-lint emits the primary METRIC/i);
+    assert.equal(
+      result.decisionCapsule.wrongNextActions.some((action) =>
+        /run next or finalize/i.test(action),
+      ),
+      true,
+    );
+  });
+});
+
+test("session forensics turns 019e5d3a search latency into bounded-next governance", async () => {
+  await withTempDir("session-forensics-search-latency", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(sessionPath, fixtureJsonl(searchLatencyFixtureEntries()));
+
+    const result = await parseSessionForensics({ sessionJsonl: sessionPath });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.decisionCapsule.schemaVersion, 1);
+    assert.equal(result.decisionCapsule.enforcement.mode, "bounded-next");
+    assert.equal(result.decisionCapsule.enforcement.canRunNextPacket, false);
+    assert.equal(result.decisionCapsule.enforcement.allowBoundedNext, true);
+    assert.match(result.decisionCapsule.bottleneck, /retrieval\/search latency/i);
+    assert.match(result.decisionCapsule.nextExperiment, /initial retrieval\/search phase/i);
+    assert.equal(
+      result.decisionCapsule.wrongNextActions.some((action) => /generic packet/i.test(action)),
+      true,
+    );
+  });
+});
+
+test("session forensics converts repeated command output into budget warnings without raw leaks", async () => {
+  await withTempDir("session-forensics-output-budget", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(sessionPath, fixtureJsonl(outputBudgetFixtureEntries()));
+
+    const result = await parseSessionForensics({
+      sessionJsonl: sessionPath,
+      thresholds: { repeatedCommandHeadCount: 3 },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.decisionCapsule.enforcement.mode, "bounded-next");
+    assert.match(result.decisionCapsule.bottleneck, /command-output cost/i);
+    assert.match(result.decisionCapsule.commandBudgetWarnings.join("\n"), /Largest reported/);
+    assert.match(result.decisionCapsule.doNotRepeat.join("\n"), /rg -n important/);
+    assert.equal(JSON.stringify(result).includes("<bounded fixture output omitted>"), false);
+  });
+});
+
+test("currentState reads the latest active decision capsule and clears it from later ledger events", async () => {
+  await withTempDir("active-decision-capsule-reader", async (dir) => {
+    const invalidDir = path.join(dir, "autoresearch.research", "invalid");
+    const activeDir = path.join(dir, "autoresearch.research", "active");
+    await mkdir(invalidDir, { recursive: true });
+    await mkdir(activeDir, { recursive: true });
+    await writeFile(path.join(invalidDir, "decision-capsule.json"), "{not json");
+    await writeFile(
+      path.join(activeDir, "decision-capsule.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "session-decision-capsule",
+        status: "active",
+        enforcement: {
+          mode: "hard-block",
+          canRunNextPacket: false,
+          allowBoundedNext: false,
+          blocksFinalization: true,
+          clearingCondition: "Repair benchmark-lint.",
+          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          triggeredBy: ["sessionDecisionCapsule"],
+        },
+        bottleneck: "Benchmark wrapper is broken.",
+        evidence: ["benchmark-lint parsed no primary METRIC."],
+        nextExperiment: "Repair benchmark-lint.",
+        wrongNextActions: ["Do not run next."],
+        doNotRepeat: [],
+        commandBudgetWarnings: [],
+        generatedFrom: {
+          compactions: 0,
+          first: "2026-06-01T13:00:00.000Z",
+          last: "2026-06-01T13:10:00.000Z",
+          toolCounts: {},
+          topCommandHeads: [],
+        },
+        importedAt: "2026-06-01T13:10:00.000Z",
+      }),
+    );
+
+    assert.equal(currentState(dir).sessionDecisionCapsule?.researchSlug, "active");
+    appendJsonl(dir, {
+      type: "session_decision_capsule_ack",
+      timestamp: "2026-06-01T13:15:00.000Z",
+    });
+    assert.equal(currentState(dir).sessionDecisionCapsule, null);
   });
 });
 

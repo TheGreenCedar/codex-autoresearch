@@ -7,6 +7,11 @@ import {
   resolveDecisionThresholds,
   type DecisionThresholdConfig,
 } from "./decision-thresholds.js";
+import {
+  buildSessionDecisionCapsule,
+  matchDecisionRules,
+  type SessionDecisionCapsule,
+} from "./session-decision-capsule.js";
 
 type LooseObject = Record<string, any>;
 
@@ -57,6 +62,7 @@ export interface SessionForensicsSummary {
   repeatedFamilies: ForensicsSignal[];
   workflowWaste: ForensicsSignal[];
   blockers: ForensicsSignal[];
+  decisionCapsule: SessionDecisionCapsule;
   snippets: RedactedSnippet[];
   thresholds: DecisionThresholdConfig;
 }
@@ -142,6 +148,7 @@ function createAccumulator(sourcePath: string, thresholds: DecisionThresholdConf
     repeatedFamilies: [] as ForensicsSignal[],
     workflowWaste: [] as ForensicsSignal[],
     blockers: [] as ForensicsSignal[],
+    decisionHints: [] as ForensicsSignal[],
   };
 }
 
@@ -183,6 +190,7 @@ function observeMessage(
   snippetOptions: { allowSnippets: boolean; maxSnippetChars: number; maxSnippets: number },
 ) {
   const text = messageText(payload);
+  scanDecisionHints(state, text, "message");
   if (
     payload.role === "user" &&
     /\b(no|not|rather|actually|instead|wrong|don't|do not)\b/i.test(text)
@@ -224,6 +232,7 @@ function observeFunctionOutput(
   snippetOptions: { allowSnippets: boolean; maxSnippetChars: number; maxSnippets: number },
 ) {
   const output = String(payload.output || "");
+  scanDecisionHints(state, output.slice(0, 12_000), String(payload.call_id || "tool-output"));
   const tokenCount = Number(output.match(/Original token count:\s*(\d+)/)?.[1] || 0);
   const lineCount = Number(output.match(/Total output lines:\s*(\d+)/)?.[1] || 0);
   state.totalOutputTokens += Number.isFinite(tokenCount) ? tokenCount : 0;
@@ -307,28 +316,59 @@ function finalizeSummary(state: ReturnType<typeof createAccumulator>): SessionFo
       count: state.toolCounts.get("exec_command"),
     });
   }
+  const userCorrections = dedupeSignals(state.userCorrections);
+  const productSignals = dedupeSignals([...state.productSignals, ...state.decisionHints]);
+  const repeatedFamilies = dedupeSignals(state.repeatedFamilies);
+  const workflowWaste = dedupeSignals(state.workflowWaste);
+  const blockers = dedupeSignals(state.blockers);
+  const toolCounts = toObject(state.toolCounts);
+  const commandClasses = toObject(state.commandClasses);
   return {
     ok: true,
     sourcePath: state.sourcePath,
     timeWindow: { first: state.first, last: state.last },
     counts: toObject(state.counts),
     responseCounts: toObject(state.responseCounts),
-    toolCounts: toObject(state.toolCounts),
-    commandClasses: toObject(state.commandClasses),
+    toolCounts,
+    commandClasses,
     compactions: state.compactions,
     goal: {
       status: state.goalStatus,
       tokensUsed: state.goalTokensUsed,
       timeUsedSeconds: state.goalTimeUsedSeconds,
     },
-    userCorrections: dedupeSignals(state.userCorrections),
-    productSignals: dedupeSignals(state.productSignals),
-    repeatedFamilies: dedupeSignals(state.repeatedFamilies),
-    workflowWaste: dedupeSignals(state.workflowWaste),
-    blockers: dedupeSignals(state.blockers),
+    userCorrections,
+    productSignals,
+    repeatedFamilies,
+    workflowWaste,
+    blockers,
+    decisionCapsule: buildSessionDecisionCapsule({
+      compactions: state.compactions,
+      first: state.first,
+      last: state.last,
+      userCorrections,
+      productSignals,
+      workflowWaste,
+      blockers,
+      toolCounts,
+      commandClasses,
+      thresholds: state.thresholds,
+    }),
     snippets: state.snippets,
     thresholds: state.thresholds,
   };
+}
+
+function scanDecisionHints(
+  state: ReturnType<typeof createAccumulator>,
+  text: string,
+  source: string,
+) {
+  for (const finding of matchDecisionRules(text, source)) {
+    state.decisionHints.push(
+      signal(finding.kind, finding.severity, finding.message, finding.source),
+    );
+  }
 }
 
 function scanGoalSnapshot(state: ReturnType<typeof createAccumulator>, value: unknown) {

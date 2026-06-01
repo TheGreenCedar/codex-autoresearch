@@ -53,6 +53,19 @@ The documentation is in `docs/` (or `plugins/codex-autoresearch/docs/` in the so
 
 ## Start Or Resume
 
+### Packet Brake
+
+Before running `next` or any heavy benchmark, answer these in the operator update:
+
+- What is the authoritative next action from `recommend-next --compact` or the operator checklist?
+- Is the benchmark the real goal benchmark, not a generic recipe fallback, and does `benchmark-lint` prove the primary `METRIC` line inside the lint budget?
+- Is this command bounded by timeout, narrowed scope, query/task slice, command file, or read-only scout lane?
+- Did the last failed or timed-out packet leave partial results that should be inspected first?
+- Is the key lesson from the previous segment or session written into ASI, `autoresearch.ideas.md`, or a session-forensics decision capsule?
+- Does `state --compact`, `recommend-next`, or the onboarding packet expose an active `sessionDecisionCapsule` whose canonical action is `decision-capsule`?
+
+If any answer is missing, do the cheap read-only action first: inspect state, run `benchmark-inspect` or `benchmark-lint`, run `partial-results --from-last`, import bounded session forensics, or run `research-fanout --dry-run`. Do not spend the next heavy packet by reflex. If a hard `decision-capsule` is active, generic `next` and finalization are unsafe until benchmark repair, a fresh segment, or explicit capsule acknowledgement clears it. Measurement-contract repair is not product progress.
+
 1. Identify the owning repo or child package before Git, installs, tests, builds, or autoresearch commands.
 2. Check Git status and work around unrelated dirty files.
 3. If this repo is the target, use the repo-local plugin. From the wrapper root, call `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`; the package root is `plugins/codex-autoresearch`.

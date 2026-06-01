@@ -18,6 +18,7 @@ type CommandMap = Map<string, string>;
 
 const PACKET_BRAKE_KINDS = new Set([
   "context-distillation",
+  "decision-capsule",
   "lane-cleanup",
   "runtime-provenance",
   "packet-diagnostic",
@@ -652,6 +653,7 @@ function canonicalTitle(kind: string): string {
     "partial-salvage": "Review partial results",
     "log-decision": "Log the last packet",
     "context-distillation": "Refresh context",
+    "decision-capsule": "Resolve the decision capsule",
     "segment-transition": "Start a new segment",
     "quality-gap": "Close accepted quality gaps",
     "plateau-pivot": "Pivot before repeating the plateau",
@@ -2021,6 +2023,12 @@ function actionFromDecisionEnvelope(
       stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
     "partial-salvage": commandMap.get("partial results") || "",
     "context-distillation": cleanText(summary.command) || "",
+    "decision-capsule":
+      cleanText(summary.command) ||
+      commandMap.get("benchmark lint") ||
+      commandMap.get("recommend next") ||
+      commandMap.get("state") ||
+      "",
     "quality-gap": commandMap.get("gap candidates") || "",
     "plateau-pivot": commandMap.get("next run") || "",
     watchdog:
@@ -2053,6 +2061,7 @@ function actionFromDecisionEnvelope(
     "stale-packet": stalePacketCommand ? "Next" : "Setup",
     "partial-salvage": "Partial",
     "context-distillation": "Context",
+    "decision-capsule": "Capsule",
     "quality-gap": "Gaps",
     "plateau-pivot": "Next",
     watchdog: commandMap.get("finalize preview") ? "Preview" : "Inspect",
@@ -2073,6 +2082,7 @@ function actionFromDecisionEnvelope(
     "stale-packet": stalePacketCommand ? "" : "setup-plan",
     "partial-salvage": "partial-results",
     "context-distillation": "session-forensics",
+    "decision-capsule": "decision-capsule",
     "quality-gap": "gap-candidates",
     "plateau-pivot": "next",
     watchdog: commandMap.get("finalize preview") ? "finalize-preview" : "inspect",
@@ -2106,6 +2116,7 @@ function actionFromDecisionEnvelope(
             "stale-packet",
             "setup",
             "benchmark-command",
+            "decision-capsule",
             "log-decision",
             "watchdog",
             "plateau",
@@ -2133,6 +2144,8 @@ function decisionEnvelopeUtility(kind: string): string {
     return "Review completed artifact rows before rerunning an expensive failed packet.";
   if (kind === "context-distillation")
     return "Refresh bounded context before context loss repeats the same work.";
+  if (kind === "decision-capsule")
+    return "Imported session evidence can brake unsafe packets until its next experiment is cleared.";
   if (kind === "quality-gap")
     return "Accepted quality gaps should drive the next implementation step.";
   if (kind === "plateau-pivot") return "Plateau evidence should redirect the next hypothesis.";
