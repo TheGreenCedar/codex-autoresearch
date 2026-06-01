@@ -64,6 +64,15 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
+async function readPngDimensions(file: string): Promise<{ width: number; height: number } | null> {
+  const buffer = await fsp.readFile(path.join(pluginRoot, file));
+  const pngSignature = "89504e470d0a1a0a";
+  if (buffer.length < 24 || buffer.subarray(0, 8).toString("hex") !== pngSignature) {
+    return null;
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
 async function markdownFilesUnder(dir: string): Promise<string[]> {
   const absolute = path.join(pluginRoot, dir);
   try {
@@ -260,12 +269,20 @@ const checks = [
       ]);
       const joined = docs.join("\n");
       const screenshotExists = await fileExists("assets/showcase/dashboard-demo.png");
+      const screenshotDimensions = screenshotExists
+        ? await readPngDimensions("assets/showcase/dashboard-demo.png")
+        : null;
+      const screenshotIsCompact =
+        !!screenshotDimensions &&
+        screenshotDimensions.width >= 900 &&
+        screenshotDimensions.height / screenshotDimensions.width <= 0.8;
       const demoExport = await readText("examples/demo-session/autoresearch-dashboard.html");
       const demoJsonl = await readText("examples/demo-session/autoresearch.jsonl");
       const demoRuns = demoJsonl
         .split(/\r?\n/)
         .filter((line) => line.trim().startsWith('{"run":')).length;
       return screenshotExists &&
+        screenshotIsCompact &&
         demoRuns === 100 &&
         demoExport.includes(`"pluginVersion":"${PLUGIN_VERSION}"`) &&
         !demoExport.includes("C:\\Users\\alber") &&
@@ -289,7 +306,9 @@ const checks = [
           "CLI commands return structured content",
         ])
         ? pass()
-        : fail("Docs split, visual docs, live demo, or scrubbed demo export is incomplete.");
+        : fail(
+            "Docs split, compact README snapshot, visual docs, live demo, or scrubbed demo export is incomplete.",
+          );
     },
   },
   {
