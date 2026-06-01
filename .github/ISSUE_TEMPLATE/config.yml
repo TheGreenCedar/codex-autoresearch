@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/TheGreenCedar/codex-autoresearch/blob/main/SECURITY.md
+    about: Report vulnerabilities, secrets, or sensitive workflow issues privately.
+  - name: Troubleshooting guide
+    url: https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/troubleshooting.md
+    about: Check common failure layers before opening a new issue.

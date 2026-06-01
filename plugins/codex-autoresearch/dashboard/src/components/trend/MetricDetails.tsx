@@ -21,7 +21,12 @@ export function MetricDetails({
 }) {
   const breakdown = point?.breakdown || undefined;
   return (
-    <section className="metric-details-panel" id="metric-details" aria-label="Metric details">
+    <section
+      className={`metric-details-panel status-${point?.status || "none"}`}
+      data-status={point?.status || "none"}
+      id="metric-details"
+      aria-label="Metric details"
+    >
       <div className="metric-details-summary">
         <span className="metric-details-summary-copy">
           <span className="eyebrow">Metric details</span>

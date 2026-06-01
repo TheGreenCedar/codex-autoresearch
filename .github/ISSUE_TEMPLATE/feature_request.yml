@@ -1,0 +1,40 @@
+name: Feature or improvement
+description: Suggest a product, docs, dashboard, or workflow improvement.
+title: "[Improvement]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What work is harder, riskier, or more confusing than it should be?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: What should change?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or examples
+      description: Link issues, paste command output, describe a loop, or include screenshots.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Skill guidance
+        - CLI command surface
+        - Dashboard
+        - Finalization
+        - Benchmark setup
+        - Docs
+        - Packaging or install
+        - Other
+    validations:
+      required: true

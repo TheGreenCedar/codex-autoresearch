@@ -1,0 +1,75 @@
+name: Autoresearch problem
+description: Report a crash, confusing workflow, stale runtime issue, dashboard problem, or docs gap.
+title: "[Problem]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The most useful issue is small, reproducible, and honest about what was expected versus what happened.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem in plain language.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: What should Autoresearch or Codex have done instead?
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and cwd
+      description: Paste the command, working directory, and whether this was source checkout, installed plugin, or marketplace cache.
+      render: text
+      placeholder: |
+        cwd:
+        command:
+        plugin/source version:
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output tail or screenshot
+      description: Paste the smallest useful output tail, error, or screenshot. Remove secrets and private data.
+      render: text
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Session artifacts
+      description: Mention safe `autoresearch.*`, dashboard export, JSONL, or research files that help explain the issue.
+      placeholder: |
+        autoresearch.md:
+        autoresearch.jsonl:
+        autoresearch-dashboard.html:
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Suspected layer
+      options:
+        - Not sure
+        - Source checkout
+        - Installed plugin cache
+        - Benchmark contract
+        - Dashboard serve/export
+        - Git state or commit paths
+        - Docs or skill guidance
+        - Runtime environment
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secrets, tokens, private customer data, and unrelated local paths.
+          required: true
+        - label: This is not a vulnerability or sensitive disclosure. Security reports go through SECURITY.md.
+          required: true

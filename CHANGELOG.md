@@ -4,6 +4,24 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.0.2
+
+### Added
+
+- Added GitHub community-standard files for contribution guidance, conduct, security reporting, issue templates, and pull request review shape.
+
+### Changed
+
+- Updated the Codex-facing Autoresearch skill to suggest opening a GitHub issue when user frustration or repeated failures point to an Autoresearch product bug, docs gap, stale runtime trap, or UX paper cut.
+
+### Fixed
+
+- Rejected latest dashboard runs now keep rejected styling in the chart halo, selected metric details, and experiment modal instead of borrowing kept-run teal emphasis.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, built assets, and runtime drift surfaces to `2.0.2`.
+
 ## 2.0.1
 
 ### Changed
