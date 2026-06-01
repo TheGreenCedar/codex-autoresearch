@@ -72,6 +72,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         cwd: args.cwd,
         compact: args.compact,
         operatorChecklist: args.operatorChecklist,
+        codexGoalObjective: args.codexGoalObjective,
       }),
     }),
     "codex-goal-brief": async (args) => ({
@@ -280,7 +281,11 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       }),
     }),
     state: async (args) => ({
-      result: await deps.publicState({ cwd: args.cwd, compact: args.compact }),
+      result: await deps.publicState({
+        cwd: args.cwd,
+        compact: args.compact,
+        codexGoalObjective: args.codexGoalObjective,
+      }),
     }),
     doctor: async (args) => ({
       result: await (args._[1] === "hooks" || args.hooks

@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildCompactRecommendNextResponse } from "../lib/commands/recommend-next.js";
+import { buildGoalFrame } from "../lib/goal-frame.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "../lib/loop-governance.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import {
+  buildSessionDecisionCapsule,
+  matchDecisionRules,
+} from "../lib/session-decision-capsule.js";
 
 test("context distillation outranks next packet", () => {
   const action = canonicalNextActionForLoop({
@@ -153,6 +159,142 @@ test("operator checklist returns exactly the compact handoff keys", () => {
   assert.match(checklist.command, /partial-results/);
   assert.equal(checklist.blocker, "Citation carry failed.");
   assert.equal(checklist.evidenceRole, "diagnostic-measure");
+});
+
+test("compact recommend-next uses compact state without dashboard-only fields", () => {
+  const compactState = {
+    ok: true,
+    workDir: "C:/repo",
+    nextAction: "Compact says continue from state.",
+    commands: {
+      state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
+      next: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+    },
+    canonicalNextAction: {
+      kind: "decision-capsule",
+      reason: "Run the compact benchmark lint handoff.",
+      command: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+    },
+    resumeAudit: {
+      canonicalNextAction: {
+        kind: "decision-capsule",
+      },
+      finalizationReadiness: {
+        available: false,
+        ready: null,
+        nextAction: "Run finalize-preview when review readiness is needed.",
+      },
+    },
+    decisionEnvelope: {
+      canonicalNextAction: {
+        kind: "decision-capsule",
+      },
+      loopContract: {
+        ok: false,
+      },
+      finalizationReadiness: {
+        available: false,
+        ready: null,
+        nextAction: "Run finalize-preview when review readiness is needed.",
+      },
+    },
+    runtimeProvenance: { status: "checked" },
+    loopContract: { ok: false },
+    laneLifecycle: { staleLanes: [] },
+    packetDiagnostics: { latest: "ok" },
+    sessionDecisionCapsule: { status: "active" },
+  };
+
+  const response = buildCompactRecommendNextResponse({
+    workDir: "C:/repo",
+    compactState,
+  });
+  const action = response.action as { kind?: string };
+  const decisionEnvelope = response.decisionEnvelope as {
+    finalizationReadiness?: { available?: boolean };
+  };
+
+  assert.equal(action.kind, "decision-capsule");
+  assert.equal(
+    response.commands.primary,
+    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+  );
+  assert.match(response.whySafe, /compact state/);
+  assert.match(response.whySafe, /without dashboard-grade rendering/);
+  assert.equal(response.compactState, compactState);
+  assert.equal(response.decisionEnvelope, compactState.decisionEnvelope);
+  assert.equal(response.resumeAudit, compactState.resumeAudit);
+  assert.deepEqual(response.runtimeProvenance, compactState.runtimeProvenance);
+  assert.deepEqual(response.loopContract, compactState.loopContract);
+  assert.deepEqual(response.laneLifecycle, compactState.laneLifecycle);
+  assert.deepEqual(response.packetDiagnostics, compactState.packetDiagnostics);
+  assert.deepEqual(response.sessionDecisionCapsule, compactState.sessionDecisionCapsule);
+  assert.equal(decisionEnvelope.finalizationReadiness?.available, false);
+});
+
+test("goal frame keeps the durable Autoresearch goal authoritative", () => {
+  const frame = buildGoalFrame({
+    autoresearchGoal:
+      "Use a cheap local agent-value gap to steer CodeStory grounding improvements before spending live A/B or broad-suite budget.",
+    codexGoalObjective:
+      "Please continue with the autoresearch. Start by stating and starting the goal of the research.",
+  });
+
+  assert.equal(
+    frame.authoritativeGoal,
+    "Use a cheap local agent-value gap to steer CodeStory grounding improvements before spending live A/B or broad-suite budget.",
+  );
+  assert.equal(frame.codexObjectiveRole, "operator_instruction");
+  assert.equal(frame.mismatch, true);
+  assert.match(frame.warning, /Codex prompt is not the research goal/);
+});
+
+test("goal frame stays quiet when Codex and Autoresearch goals match", () => {
+  const frame = buildGoalFrame({
+    autoresearchGoal: "Reduce packet latency while preserving quality.",
+    codexGoalObjective: "Reduce packet latency while preserving quality.",
+  });
+
+  assert.equal(frame.authoritativeGoal, "Reduce packet latency while preserving quality.");
+  assert.equal(frame.codexObjectiveRole, "matching_research_goal");
+  assert.equal(frame.mismatch, false);
+  assert.equal(frame.warning, "");
+});
+
+test("session decision rules capture Codex prompt versus research goal corrections", () => {
+  const text =
+    "That's not the goal of the autoresearch, that's my prompt. The research goal is still the cheap local agent-value gap.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "goal_frame_mismatch"),
+    true,
+  );
+
+  const capsule = buildSessionDecisionCapsule({
+    compactions: 0,
+    first: "2026-06-01T13:00:00.000Z",
+    last: "2026-06-01T13:05:00.000Z",
+    productSignals: matches,
+    workflowWaste: [],
+    blockers: [],
+    userCorrections: [],
+    toolCounts: {},
+    commandClasses: {},
+    thresholds: {
+      functionCalls: 30,
+      outputSegmentTokenBudget: 20_000,
+      repeatedCommandHeadCount: 3,
+      shellPolls: 12,
+    },
+  });
+
+  assert.equal(capsule.enforcement.mode, "bounded-next");
+  assert.equal(capsule.enforcement.canRunNextPacket, false);
+  assert.equal(capsule.enforcement.allowBoundedNext, true);
+  assert.match(capsule.bottleneck, /goal-frame drift/i);
+  assert.match(capsule.nextExperiment, /durable Autoresearch goal/i);
+  assert.match(capsule.evidence.join("\n"), /Codex prompt was mistaken/);
 });
 
 test("lane lifecycle marks stale planned lanes and records latest results", () => {

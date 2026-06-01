@@ -37,6 +37,7 @@ UX, the user experience:
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
 - At session start and resume, run `guide`, start/reuse the live dashboard with `serve`, verify `GET /health` or equivalent liveness, and directly provide the live dashboard URL after it is verified, normally `http://127.0.0.1:<port>/`. If a prior localhost URL fails, restart `serve` and say the old URL was stale.
 - Report the operator story instead of helper mechanics: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, dashboard URL, and verification.
+- If the user is clearly frustrated, a loop keeps failing in the same product-shaped way, or Autoresearch itself appears confusing, broken, stale, or under-documented, do not bury that under another generic retry. Identify the failing layer, collect the smallest useful evidence packet, and suggest opening a GitHub issue at `https://github.com/TheGreenCedar/codex-autoresearch/issues/new/choose` when it looks like a product bug, docs gap, template gap, runtime-drift trap, or UX paper cut. Include the command, cwd, plugin version/cache path when known, output tail, expected behavior, actual behavior, and any safe `autoresearch.*` or dashboard artifacts. For security issues, point to `https://github.com/TheGreenCedar/codex-autoresearch/security/policy` instead of public issues.
 
 ## Documentation Awareness
 
@@ -71,13 +72,14 @@ If any answer is missing, do the cheap read-only action first: inspect state, ru
 3. If this repo is the target, use the repo-local plugin. From the wrapper root, call `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`; the package root is `plugins/codex-autoresearch`.
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
-6. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
-7. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
-8. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
-9. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
-10. Start the live dashboard with `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
-11. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
-12. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
+6. Read `goalFrame` and `operatorHandoff` from compact state before stating the goal. The durable Autoresearch goal is authoritative; a fresh Codex prompt such as "continue" or "start by stating the goal" is an operator instruction unless the goal frame says it matches.
+7. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
+8. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
+9. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
+10. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
+11. Start the live dashboard with `scripts/autoresearch.mjs serve --cwd <project>`. Keep the process alive and hand the user the URL.
+12. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
+13. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
 
 Explicit benchmark commands are assumed to print `METRIC name=value` lines. They may also print `ARTIFACT name=path` for manifests or reports the dashboard/last-run packet should link. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 

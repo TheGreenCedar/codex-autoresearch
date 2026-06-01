@@ -296,7 +296,9 @@ function ChartDot({
         aria-label={chartPointAriaLabel(payload.runNumber)}
         onClick={(event) => onSelect?.(payload, event.currentTarget)}
       >
-        {payload.latest && <span className="latest-halo-ui" aria-hidden="true" />}
+        {payload.latest && (
+          <span className={`latest-halo-ui ${payload.status}`} aria-hidden="true" />
+        )}
         <span
           className={`chart-point-dot ${payload.status}${payload.best ? " best" : ""}`}
           aria-hidden="true"

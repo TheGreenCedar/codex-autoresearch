@@ -13,6 +13,7 @@ import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
 import {
+  buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
@@ -38,6 +39,7 @@ import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
+import { buildGoalFrame } from "../lib/goal-frame.js";
 import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
@@ -1772,6 +1774,32 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
+    const compact = await publicState({
+      cwd: workDir,
+      compact: true,
+      codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
+    });
+    const response = buildCompactRecommendNextResponse({ workDir, compactState: compact });
+    if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
+      const action = (response.action || {}) as LooseObject;
+      const canonicalNextAction = (compact.canonicalNextAction || {}) as LooseObject;
+      return {
+        ...response,
+        operatorChecklist: buildOperatorChecklist(action, {
+          workDir,
+          pluginRoot: PLUGIN_ROOT,
+          loopContract: (response.loopContract || null) as LooseObject | null,
+          source: recommendNextChecklistSource(
+            action,
+            canonicalNextAction,
+            (response.loopContract || null) as LooseObject | null,
+          ),
+        }),
+      };
+    }
+    return response;
+  }
   const viewModel = await dashboardViewModel(workDir, config, {
     deliveryMode: "cli",
     sourceCwd: workDir,
@@ -5292,7 +5320,8 @@ function partialResultEligiblePacket(packet: LooseObject | null): boolean {
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const compact = boolOption(args.compact, false);
-  if (compact) return await publicCompactState({ workDir, config });
+  const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
+  if (compact) return await publicCompactState({ workDir, config, codexGoalObjective });
 
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -5442,9 +5471,11 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
 async function publicCompactState({
   workDir,
   config,
+  codexGoalObjective,
 }: {
   workDir: string;
   config: LooseObject;
+  codexGoalObjective?: unknown;
 }): Promise<LooseObject> {
   const state = currentState(workDir);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
@@ -5564,6 +5595,7 @@ async function publicCompactState({
     experimentEconomics,
     partialResults,
     workflowFriction: [],
+    codexGoalObjective,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
     continuation,
@@ -5585,6 +5617,16 @@ function compactPublicState(state: LooseObject) {
       : []),
     ...(Array.isArray(state.warnings) ? state.warnings : []),
   ].filter(Boolean);
+  const goalFrame = buildGoalFrame({
+    autoresearchGoal: state.config?.goal,
+    codexGoalObjective: state.codexGoalObjective,
+  });
+  const operatorHandoff = {
+    goal: goalFrame.operatorLine,
+    next: canonicalNextAction?.reason || continuation.nextAction || "Run doctor, then next.",
+    blocker: blockers[0] || "",
+    command: canonicalNextAction?.command || continuation.commands?.next || "",
+  };
   return buildCompactStateResponse({
     ok: state.ok,
     workDir: state.workDir,
@@ -5601,6 +5643,8 @@ function compactPublicState(state: LooseObject) {
     best: state.best,
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
+    goalFrame,
+    operatorHandoff,
     evidenceRegistry: state.evidenceRegistry
       ? {
           counts: state.evidenceRegistry.counts,
@@ -6562,6 +6606,8 @@ function commandForCanonicalKind(kind: unknown, commands: unknown): string {
       return lookup.doctorExplain || lookup.doctor || lookup.state || "";
     case "benchmark-mismatch":
       return lookup.benchmarkLint || lookup.doctorExplain || lookup.doctor || "";
+    case "log-decision":
+      return lookup.keepLast || lookup.state || "";
     case "stale-packet":
       return lookup.replaceLast || lookup.next || lookup.nextRun || "";
     case "partial-salvage":

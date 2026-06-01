@@ -4,6 +4,28 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.0.2
+
+### Added
+
+- Added GitHub community-standard files for contribution guidance, conduct, security reporting, issue templates, and pull request review shape.
+- Added compact `goalFrame` and `operatorHandoff` fields so Codex resumes from the durable Autoresearch goal instead of treating the latest operator prompt as the objective.
+- Added session-forensics detection for prompt-vs-research-goal corrections through the `goal_frame_mismatch` decision capsule.
+
+### Changed
+
+- Updated the Codex-facing Autoresearch skill to suggest opening a GitHub issue when user frustration or repeated failures point to an Autoresearch product bug, docs gap, stale runtime trap, or UX paper cut.
+- Changed compact `recommend-next` to use state-first handoff data instead of dashboard-grade rendering work during Codex resume.
+
+### Fixed
+
+- Rejected latest dashboard runs now keep rejected styling in the chart halo, selected metric details, and experiment modal instead of borrowing kept-run teal emphasis.
+- Fixed `benchmark-lint --sample` so configured holdout guards count during parser-only integrity checks.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, built assets, and runtime drift surfaces to `2.0.2`.
+
 ## 2.0.1
 
 ### Changed
