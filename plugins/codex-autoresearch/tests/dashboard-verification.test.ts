@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
+import { asiText } from "../dashboard/src/model/asi.js";
+import type { SessionRun } from "../dashboard/src/types.js";
 import {
   buildActionRail,
   buildDashboardViewModel,
@@ -80,6 +82,43 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(getById("metric-construction-formula").textContent, /METRIC seconds=<number>/);
   assert.match(getById("metric-fallback-note").textContent, /Metric metadata is incomplete/);
   assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
+});
+
+test("dashboard renders structured ASI evidence without object coercion", async () => {
+  const structuredEvidence = [
+    { label: "Command", detail: "node scripts/check.mjs" },
+    { path: "reports/probe.json", line: 42 },
+  ];
+  const entries = [
+    dashboardConfigEntry({ name: "structured evidence", metricName: "quality_gap" }),
+    {
+      type: "run",
+      run: 1,
+      metric: 0.444,
+      status: "keep",
+      description: "Structured evidence packet",
+      asi: {
+        hypothesis: { summary: "Derive exact probes from sidecar results." },
+        evidence: structuredEvidence,
+        next_action_hint: { title: "Next probe", detail: "Run exact command-derived probes." },
+      },
+      confidence: 1,
+    },
+  ];
+
+  assert.equal(
+    asiText({ asi: { evidence: structuredEvidence } } as unknown as SessionRun, ["evidence"]),
+    "Command: node scripts/check.mjs; path=reports/probe.json, line=42",
+  );
+
+  const { dom } = await runDashboard(entries, emptyCommandMeta());
+  const dashboardText = dom.window.document.querySelector("main")?.textContent || "";
+
+  assert.match(dashboardText, /Command: node scripts\/check\.mjs/);
+  assert.match(dashboardText, /path=reports\/probe\.json, line=42/);
+  assert.match(dashboardText, /Next probe: Run exact command-derived probes/);
+  assert.doesNotMatch(dashboardText, /\[object Object\]/);
+  dom.window.close();
 });
 
 test("dashboard weighted score readout uses configured metric weights", async () => {

@@ -27,7 +27,7 @@ test("stale lanes and runtime drift block before finalization pressure", () => {
     },
     runtimeProvenance: {
       drifted: true,
-      reason: "Source version 2.0.0 differs from installed version 1.5.1.",
+      reason: "Source version 2.0.1 differs from installed version 1.5.1.",
     },
     finalizationReadiness: { ready: true, nextAction: "Finalize reviewable kept work." },
   });
