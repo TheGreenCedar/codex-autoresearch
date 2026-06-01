@@ -128,7 +128,6 @@ export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
       /benchmark-lint.*(timeout|timed out|zero `?METRIC|parses zero|no primary metric)/i,
       /primary benchmark contract.*broken/i,
       /wrapper.*too expensive.*contract/i,
-      /run next packet.*unsafe/i,
       /scorer works.*wrapper/i,
     ],
     message:
@@ -365,7 +364,7 @@ export function isBoundedNextAllowedByCapsule(
   const hasCommandFile = Boolean(args.command_file || args.commandFile);
   const timeout = Number(args.timeout_seconds ?? args.timeoutSeconds);
   const hasExplicitTimeout = Number.isFinite(timeout) && timeout > 0;
-  return hasCommandFile || (hasCommand && hasExplicitTimeout) || hasExplicitTimeout;
+  return hasCommandFile || (hasCommand && hasExplicitTimeout);
 }
 
 function selectRule(
@@ -378,9 +377,6 @@ function selectRule(
     "benchmark_contract_broken",
     "search_latency_bottleneck",
     "metric_reframe_feedback",
-    "probe_churn_feedback",
-    "skill_preflight_feedback",
-    "carry_forward_request",
   ]) {
     const rule = ruleByKind(kind);
     if (rule && kinds.has(kind)) return rule;
@@ -389,6 +385,14 @@ function selectRule(
     return ruleByKind("context_distillation_required")!;
   }
   if (outputBudget.length) return ruleByKind("output_budget_exceeded")!;
+  for (const kind of [
+    "probe_churn_feedback",
+    "skill_preflight_feedback",
+    "carry_forward_request",
+  ]) {
+    const rule = ruleByKind(kind);
+    if (rule && kinds.has(kind)) return rule;
+  }
   return {
     kind: "review_imported_session",
     severity: "warning",

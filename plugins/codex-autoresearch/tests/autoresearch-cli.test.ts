@@ -715,6 +715,20 @@ test("next allows explicitly bounded packet work for bounded-next capsules", asy
       wrongNextActions: ["Do not run a broad packet."],
     });
 
+    const defaultTimeoutOnly = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--timeout-seconds",
+      "5",
+      "--compact",
+    ]);
+    assert.equal(defaultTimeoutOnly.code, 0, defaultTimeoutOnly.stderr);
+    const blockedPayload = JSON.parse(defaultTimeoutOnly.stdout);
+    assert.equal(blockedPayload.ok, false);
+    assert.equal(blockedPayload.refused, true);
+    assert.equal(blockedPayload.blockingAction.kind, "decision-capsule");
+
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const result = await runCli([
       "next",

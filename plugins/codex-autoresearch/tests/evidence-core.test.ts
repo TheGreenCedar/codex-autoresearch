@@ -1023,6 +1023,42 @@ test("session forensics prioritizes broken benchmark contracts over more packets
   });
 });
 
+test("session forensics does not hard-block generic unsafe-next wording as benchmark repair", async () => {
+  await withTempDir("session-forensics-generic-unsafe-next", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(
+      sessionPath,
+      fixtureJsonl([
+        { timestamp: "2026-06-01T13:02:13.000Z", type: "session_meta", payload: { id: "s3" } },
+        {
+          timestamp: "2026-06-01T13:10:26.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Run next packet is unsafe until stale context is refreshed and dirty source drift is inspected.",
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    const result = await parseSessionForensics({ sessionJsonl: sessionPath });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(
+      result.productSignals.some((signal) => signal.kind === "benchmark_contract_broken"),
+      false,
+    );
+    assert.notEqual(result.decisionCapsule.enforcement.mode, "hard-block");
+    assert.doesNotMatch(result.decisionCapsule.bottleneck, /benchmark wrapper/i);
+  });
+});
+
 test("session forensics turns 019e5d3a search latency into bounded-next governance", async () => {
   await withTempDir("session-forensics-search-latency", async (dir) => {
     const sessionPath = path.join(dir, "rollout.jsonl");

@@ -48,6 +48,20 @@ export function outputBudgetFixtureEntries(): RolloutEntry[] {
   return [
     { timestamp: "2026-05-31T21:00:00.000Z", type: "session_meta", payload: { id: "budget" } },
     {
+      timestamp: "2026-05-31T21:00:30.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "There were too many small probes, but command output volume is now the blocker.",
+          },
+        ],
+      },
+    },
+    {
       timestamp: "2026-05-31T21:01:00.000Z",
       type: "response_item",
       payload: {
