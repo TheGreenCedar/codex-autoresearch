@@ -8,6 +8,7 @@ Start with read-only context:
 
 ```bash
 node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
+node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
@@ -17,6 +18,8 @@ For broad new requests, start with `prompt-plan`, then `onboarding-packet`, `rec
 CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
 
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
+
+On resume, treat `goalFrame.authoritativeGoal` and `operatorHandoff.goal` as the research objective. The latest Codex/user prompt is an operator instruction unless `goalFrame.codexObjectiveRole` says it matches the durable research goal. When `goalFrame.warning` is present, say the warning out loud before running packet work. `recommend-next --compact` exposes the same data under `compactState.goalFrame` and `compactState.operatorHandoff`.
 
 `state --compact`, `recommend-next --compact`, and the dashboard should agree on the same watchdog summary and canonical next-action kind. If they diverge, treat that as a bug rather than a dashboard-only signal.
 

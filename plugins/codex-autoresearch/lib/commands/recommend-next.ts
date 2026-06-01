@@ -22,6 +22,11 @@ export interface RecommendNextResponseInput {
   sessionDecisionCapsule?: unknown;
 }
 
+export interface CompactRecommendNextResponseInput {
+  workDir: string;
+  compactState: unknown;
+}
+
 interface RecommendNextAuthorityInput {
   viewModel?: JsonObject | null;
   compact?: JsonObject | null;
@@ -61,6 +66,12 @@ const DEFAULT_WHY_SAFE =
 const DEFAULT_AVOIDS =
   "Avoids running a packet before setup, stale-last-run, or trust blockers are resolved.";
 const DEFAULT_PROOF = "The next command should update state or clear the blocker.";
+const COMPACT_WHY_SAFE =
+  "Derived from compact state without dashboard-grade rendering or live finalization preview.";
+const COMPACT_AVOIDS =
+  "Avoids loading dashboard-only fields while handing off the compact loop contract.";
+const COMPACT_PROOF =
+  "The primary command comes from compact canonical next action, falling back to compact state.";
 
 export function buildRecommendNextResponse(
   input: RecommendNextResponseInput,
@@ -89,6 +100,50 @@ export function buildRecommendNextResponse(
   copyIfProvided(response, "sessionDecisionCapsule", input.sessionDecisionCapsule);
 
   return response;
+}
+
+export function buildCompactRecommendNextResponse({
+  workDir,
+  compactState,
+}: CompactRecommendNextResponseInput): RecommendNextResponse {
+  const compact = recordOrNull(compactState) || {};
+  const canonicalNextAction = recordOrNull(compact.canonicalNextAction);
+  const commands = recordOrNull(compact.commands) || {};
+  const primaryCommand =
+    stringOrEmpty(canonicalNextAction?.command) || stringOrEmpty(commands.state);
+  const nextAction =
+    stringOrEmpty(canonicalNextAction?.reason) ||
+    stringOrEmpty(compact.nextAction) ||
+    "Continue from compact state.";
+  const action = canonicalNextAction
+    ? { ...canonicalNextAction, command: primaryCommand }
+    : {
+        kind: "compact-state",
+        reason: nextAction,
+        command: primaryCommand,
+      };
+  const decisionEnvelope = compact.decisionEnvelope ?? compact.resumeAudit ?? null;
+
+  return buildRecommendNextResponse({
+    ok: compact.ok === false ? false : true,
+    workDir,
+    action,
+    nextAction,
+    whySafe: COMPACT_WHY_SAFE,
+    avoids: COMPACT_AVOIDS,
+    proof: COMPACT_PROOF,
+    blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
+    commands: { ...commands, primary: primaryCommand },
+    nextStep: null,
+    compactState,
+    resumeAudit: compact.resumeAudit ?? decisionEnvelope,
+    decisionEnvelope,
+    runtimeProvenance: compact.runtimeProvenance,
+    loopContract: compact.loopContract,
+    laneLifecycle: compact.laneLifecycle,
+    packetDiagnostics: compact.packetDiagnostics,
+    sessionDecisionCapsule: compact.sessionDecisionCapsule,
+  });
 }
 
 export function selectRecommendNextRuntimeAuthority({
@@ -122,6 +177,10 @@ function copyIfProvided<T extends object>(target: T, key: string, value: unknown
 
 function recordOrNull(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
+}
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function hasRuntimeProvenanceBlocker(

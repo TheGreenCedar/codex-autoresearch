@@ -161,6 +161,28 @@ export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
     ],
   },
   {
+    kind: "goal_frame_mismatch",
+    severity: "warning",
+    enforcement: BOUNDED_NEXT_REQUIRED,
+    patterns: [
+      /not (the )?goal of (the )?autoresearch/i,
+      /not (the )?(autoresearch|research) goal/i,
+      /that'?s not.*goal.*(prompt|instruction)/i,
+      /(codex|operator|user) prompt.*not.*(autoresearch|research) goal/i,
+      /prompt is not the (autoresearch|research) goal/i,
+    ],
+    message:
+      "The session contains explicit feedback that the Codex prompt was mistaken for the durable Autoresearch goal.",
+    bottleneck:
+      "The immediate loop risk is goal-frame drift: the Codex prompt is an operator instruction, not the research goal.",
+    nextExperiment:
+      "Restate the durable Autoresearch goal from project state, then run only a bounded packet that targets that goal.",
+    wrongNextActions: [
+      "Do not treat the latest Codex prompt as the research goal.",
+      "Do not run a broad packet until the durable Autoresearch goal is restated.",
+    ],
+  },
+  {
     kind: "metric_reframe_feedback",
     severity: "warning",
     enforcement: BOUNDED_NEXT_REQUIRED,
@@ -375,6 +397,7 @@ function selectRule(
   const kinds = new Set(signals.map((signal) => signal.kind));
   for (const kind of [
     "benchmark_contract_broken",
+    "goal_frame_mismatch",
     "search_latency_bottleneck",
     "metric_reframe_feedback",
   ]) {
@@ -412,14 +435,15 @@ function prioritizedDecisionEvidence(
 ): CapsuleSignal[] {
   const priority = new Map([
     ["benchmark_contract_broken", 0],
-    ["search_latency_bottleneck", 1],
-    ["metric_reframe_feedback", 2],
-    ["probe_churn_feedback", 3],
-    ["skill_preflight_feedback", 4],
-    ["carry_forward_request", 5],
-    ["context_distillation_required", 6],
-    ["output_budget_exceeded", 7],
-    ["quality_gap_wording", 8],
+    ["goal_frame_mismatch", 1],
+    ["search_latency_bottleneck", 2],
+    ["metric_reframe_feedback", 3],
+    ["probe_churn_feedback", 4],
+    ["skill_preflight_feedback", 5],
+    ["carry_forward_request", 6],
+    ["context_distillation_required", 7],
+    ["output_budget_exceeded", 8],
+    ["quality_gap_wording", 9],
   ]);
   return [...productSignals, ...workflowWaste].sort(
     (left, right) => (priority.get(left.kind) ?? 99) - (priority.get(right.kind) ?? 99),
