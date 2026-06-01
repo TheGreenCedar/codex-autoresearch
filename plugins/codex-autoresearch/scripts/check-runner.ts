@@ -15,8 +15,9 @@ export function runCommand(
   {
     cwd,
     env,
+    streamOutput = false,
     timeoutSeconds = 300,
-  }: { cwd: string; env?: NodeJS.ProcessEnv; timeoutSeconds?: number },
+  }: { cwd: string; env?: NodeJS.ProcessEnv; streamOutput?: boolean; timeoutSeconds?: number },
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
@@ -52,8 +53,16 @@ export function runCommand(
       },
       Math.max(1, timeoutSeconds) * 1000,
     );
-    child.stdout.on("data", (chunk) => (stdout += chunk.toString("utf8")));
-    child.stderr.on("data", (chunk) => (stderr += chunk.toString("utf8")));
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString("utf8");
+      stdout += text;
+      if (streamOutput) process.stdout.write(text);
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString("utf8");
+      stderr += text;
+      if (streamOutput) process.stderr.write(text);
+    });
     child.on("error", (error) =>
       finish({ label, code: -1, stdout, stderr: `${stderr}${error.message}\n`, timedOut }),
     );

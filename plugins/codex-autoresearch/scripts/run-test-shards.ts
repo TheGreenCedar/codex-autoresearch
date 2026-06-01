@@ -125,14 +125,20 @@ async function runShard(task: ShardTask): Promise<ShardResult> {
   };
 }
 
-async function runWithLimit<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+async function runWithLimit<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number,
+  onResult?: (result: T, index: number) => void,
+): Promise<T[]> {
   const results: T[] = [];
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
     while (next < tasks.length) {
       const current = next;
       next += 1;
-      results[current] = await tasks[current]();
+      const result = await tasks[current]();
+      results[current] = result;
+      onResult?.(result, current);
     }
   });
   await Promise.all(workers);
@@ -144,6 +150,14 @@ function summarize(result: ShardResult): string {
   const code = result.code === 0 ? "" : ` code=${result.code}`;
   const count = result.count == null ? "" : ` tests=${result.count}`;
   return `${status} ${result.label}${code}${count} (${result.durationSeconds.toFixed(1)}s)`;
+}
+
+function printResult(result: ShardResult): void {
+  console.log(summarize(result));
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.code !== 0 || process.env.CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE === "1") {
+    console.log(output.trim());
+  }
 }
 
 const startedAt = Date.now();
@@ -165,15 +179,8 @@ const tasks = (
 const results = await runWithLimit(
   tasks.map((task) => () => runShard(task)),
   jobs,
+  printResult,
 );
-
-for (const result of results) {
-  console.log(summarize(result));
-  const output = `${result.stdout}${result.stderr}`;
-  if (result.code !== 0 || process.env.CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE === "1") {
-    console.log(output.trim());
-  }
-}
 
 console.log(`Shard wall time: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 if (results.some((result) => result.code !== 0)) process.exitCode = 1;

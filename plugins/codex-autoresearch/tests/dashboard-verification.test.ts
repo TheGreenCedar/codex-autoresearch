@@ -2528,48 +2528,26 @@ test("dashboard readout uses the selected segment baseline", async () => {
   });
 
   assert.equal(getById("baseline-value").textContent, "100s");
-  assert.equal(queryById("segment-select"), null);
-  const tab = getById("segment-tab-0") as HTMLButtonElement;
-  assert.equal(tab.getAttribute("role"), "tab");
-  assert.match(tab.textContent || "", /S1/);
-  tab.click();
+  assert.equal(queryById("segment-tab-0"), null);
+  const select = getById("segment-select") as HTMLSelectElement;
+  assert.equal(select.value, "1");
+  assert.match(select.options[0]?.textContent || "", /S1 - first segment/);
+  assert.match(select.options[1]?.textContent || "", /S2 - second segment/);
+  select.value = "0";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "10s",
     "Selected segment baseline did not update.",
   );
   assert.equal(getById("best-value").textContent, "8s");
-  assert.match(getById("segment-panel").textContent, /first segment/);
-  assert.equal(getById("segment-panel").getAttribute("role"), "tabpanel");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-0");
-  tab.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+  assert.match(getById("segment-summary").textContent || "", /first segment/);
+  select.value = "1";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "100s",
-    "Keyboard segment selection did not update.",
+    "Second segment selection did not update.",
   );
-  assert.equal(getById("segment-tab-1").getAttribute("aria-selected"), "true");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-1");
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "Home segment shortcut did not update.",
-  );
-  getById("segment-tab-0").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "End" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "100s",
-    "End segment shortcut did not update.",
-  );
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "ArrowLeft segment shortcut did not update.",
-  );
-  assert.equal(getById("segment-tab-0").getAttribute("aria-selected"), "true");
+  assert.match(getById("segment-summary").textContent || "", /second segment/);
   dom.window.close();
 });
 
