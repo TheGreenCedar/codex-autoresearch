@@ -6,6 +6,13 @@ This project uses a root-only changelog because the root README is the public do
 
 ## 2.0.1
 
+### Changed
+
+- `session-forensics` now emits and writes a structured decision capsule so long-session imports preserve the bottleneck, evidence, next experiment, wrong next actions, and repeated command families before another expensive packet is spent.
+- Decision capsules now recognize broken benchmark contracts, including `benchmark-lint` timeouts or missing primary `METRIC` lines, as setup repair work rather than product packet progress.
+- Active decision capsules now appear as `sessionDecisionCapsule` in state-style outputs and can surface `decision-capsule` as the canonical next action; hard blockers refuse generic `next` and finalization until repaired or acknowledged.
+- Added packet-brake guidance to the Codex-facing skill and operator docs so agents check the resume contract, benchmark-lint contract, partial results, and carry-forward lesson before heavy reruns.
+
 ### Fixed
 
 - Dashboard ASI readouts now render structured evidence arrays and objects as readable text instead of leaking `[object Object]` into chart details, modal evidence, ledger previews, and next-action surfaces.

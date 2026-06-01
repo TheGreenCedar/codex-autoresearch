@@ -93,6 +93,7 @@ import {
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
 
 type LooseObject = Record<string, any>;
 type CliArgs = LooseObject & { _: string[] };
@@ -1725,6 +1726,8 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "autoresearch.last-run.json when present",
     ],
     state,
+    sessionDecisionCapsule:
+      decisionEnvelope?.sessionDecisionCapsule || state.sessionDecisionCapsule || null,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
     guidedSetup: guidePacket,
@@ -1849,6 +1852,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     loopContract,
     laneLifecycle: compact.laneLifecycle,
     packetDiagnostics: compact.packetDiagnostics,
+    sessionDecisionCapsule:
+      decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
   });
 }
 
@@ -5401,6 +5406,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
@@ -5531,6 +5537,7 @@ async function publicCompactState({
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
@@ -5605,6 +5612,8 @@ function compactPublicState(state: LooseObject) {
             : [],
         }
       : null,
+    sessionDecisionCapsule:
+      state.sessionDecisionCapsule || compactDecisionEnvelope?.sessionDecisionCapsule || null,
     evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
     scaffoldHealth: state.scaffoldHealth
       ? {
@@ -5750,6 +5759,7 @@ function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject 
     laneLifecycle: compactLaneLifecycle(envelope.laneLifecycle),
     runtimeProvenance: envelope.runtimeProvenance || null,
     packetDiagnostics: envelope.packetDiagnostics || null,
+    sessionDecisionCapsule: envelope.sessionDecisionCapsule || null,
     nextAction: envelope.nextAction || "",
     loopContract: envelope.loopContract || null,
     canonicalNextAction: envelope.canonicalNextAction || null,
@@ -6525,7 +6535,10 @@ function continuationCommands(workDir: string) {
 function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
   const action = envelope?.canonicalNextAction;
   if (!action) return envelope;
-  const command = action.command || commandForCanonicalKind(action.kind, commands);
+  const command = concreteCanonicalCommand(
+    action.command,
+    commandForCanonicalKind(action.kind, commands),
+  );
   return {
     ...envelope,
     canonicalNextAction: {
@@ -6533,6 +6546,12 @@ function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): L
       command,
     },
   };
+}
+
+function concreteCanonicalCommand(command: unknown, fallback: string): string {
+  const text = String(command || "");
+  if (!text) return fallback;
+  return /<[^>]+>/.test(text) ? fallback || text : text;
 }
 
 function commandForCanonicalKind(kind: unknown, commands: unknown): string {
@@ -6555,6 +6574,8 @@ function commandForCanonicalKind(kind: unknown, commands: unknown): string {
       return lookup.doctorExplain || lookup.doctor || "";
     case "packet-diagnostic":
       return lookup.partialResults || lookup.state || "";
+    case "decision-capsule":
+      return lookup.benchmarkLint || lookup.recommendNext || lookup.state || "";
     case "quality-gap":
       return lookup.gapCandidates || "";
     case "plateau-pivot":
@@ -7036,6 +7057,52 @@ async function nextExperiment(args: any) {
           stopReason: doctor.nextAction,
         },
       ),
+    };
+  }
+  const stateBeforeRun = currentState(workDir);
+  const preflightEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: stateBeforeRun,
+      nextAction: "Run the next measured packet.",
+    }),
+    continuationCommands(workDir),
+  );
+  const loopContract = preflightEnvelope.loopContract || {};
+  const blockingAction =
+    loopContract.strongestAction || preflightEnvelope.canonicalNextAction || null;
+  const capsule = stateBeforeRun.sessionDecisionCapsule || null;
+  const boundedNextAllowed =
+    blockingAction?.kind === "decision-capsule" && isBoundedNextAllowedByCapsule(capsule, args);
+  if (loopContract.canRunNextPacket === false && !boundedNextAllowed) {
+    return {
+      ok: false,
+      workDir,
+      refused: true,
+      code: "next_blocked_by_loop_contract",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+      blockingAction,
+      loopContract,
+      sessionDecisionCapsule: capsule,
+      decisionEnvelope: preflightEnvelope,
+      nextAction:
+        blockingAction?.reason ||
+        capsule?.nextExperiment ||
+        "Resolve loop-governance blockers before running another packet.",
+      clearingCondition:
+        capsule?.enforcement?.clearingCondition ||
+        "Resolve the loop-governance blocker or warning, then retry next.",
+      commandHint:
+        blockingAction?.command ||
+        capsule?.enforcement?.commandHint ||
+        continuationCommands(workDir).state,
+      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
+        stopReason:
+          blockingAction?.reason ||
+          capsule?.nextExperiment ||
+          "Loop contract blocked the next packet.",
+      }),
     };
   }
   const run = await runExperiment(args);

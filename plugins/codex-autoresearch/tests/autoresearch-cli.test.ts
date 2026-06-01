@@ -26,6 +26,43 @@ const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
 
+async function writeDecisionCapsule(dir, slug, overrides = {}) {
+  const capsuleDir = path.join(dir, "autoresearch.research", slug);
+  await mkdir(capsuleDir, { recursive: true });
+  const base = {
+    schemaVersion: 1,
+    kind: "session-decision-capsule",
+    status: "active",
+    enforcement: {
+      mode: "hard-block",
+      canRunNextPacket: false,
+      allowBoundedNext: false,
+      blocksFinalization: true,
+      clearingCondition: "Run benchmark-lint successfully, then acknowledge the capsule.",
+      commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+      triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
+    },
+    bottleneck: "Benchmark wrapper cannot prove the primary METRIC contract.",
+    evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
+    nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+    wrongNextActions: ["Do not run next or finalize while benchmark-lint is broken."],
+    doNotRepeat: [],
+    commandBudgetWarnings: [],
+    generatedFrom: {
+      compactions: 0,
+      first: "2026-06-01T13:00:00.000Z",
+      last: "2026-06-01T13:10:00.000Z",
+      toolCounts: {},
+      topCommandHeads: [],
+    },
+    importedAt: "2026-06-01T13:10:00.000Z",
+  };
+  await writeFile(
+    path.join(capsuleDir, "decision-capsule.json"),
+    JSON.stringify({ ...base, ...overrides }, null, 2),
+  );
+}
+
 async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
   return await new Promise((resolve) => {
     const childEnv = { ...env };
@@ -475,9 +512,11 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.equal((dryPayload.canonicalNextAction.command || "").includes(sessionPath), false);
     assert.match(
       dryPayload.canonicalNextAction.command || "",
-      /--session-jsonl "?rollout\.jsonl"?/,
+      /session-forensics|benchmark-lint|recommend-next|next/i,
     );
-    assert.equal(dryPayload.plannedFiles.length, 4);
+    assert.equal(dryPayload.plannedFiles.length, 5);
+    assert.equal(dryPayload.decisionCapsule.kind, "session-decision-capsule");
+    assert.match(dryPayload.decisionCapsule.nextExperiment, /context capsule|bounded|cheapest/i);
     await assert.rejects(() =>
       access(path.join(dir, "autoresearch.research", "session-019e", "session-digest.md")),
     );
@@ -499,11 +538,17 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
 
     const researchRoot = path.join(dir, "autoresearch.research", "session-019e");
     const digest = await readFile(path.join(researchRoot, "session-digest.md"), "utf8");
+    const capsule = JSON.parse(
+      await readFile(path.join(researchRoot, "decision-capsule.json"), "utf8"),
+    );
     const gaps = await readFile(path.join(researchRoot, "quality-gaps.md"), "utf8");
     const evidence = JSON.parse(
       await readFile(path.join(researchRoot, "evidence-index.json"), "utf8"),
     );
     assert.match(digest, /Session Forensics Import/);
+    assert.match(digest, /Decision Capsule/);
+    assert.equal(capsule.kind, "session-decision-capsule");
+    assert.equal(JSON.stringify(capsule).includes("abcdefghijklmnop"), false);
     assert.match(gaps, /\[evidence:ev-/);
     assert.equal(evidence.schemaVersion, 1);
     assert.equal(JSON.stringify(evidence).includes("abcdefghijklmnop"), false);
@@ -600,10 +645,106 @@ test("session-forensics requires an explicit gate for outside-workdir JSONL", as
     const payload = JSON.parse(allowed.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.sourcePath, "<outside-workdir>/outside-rollout.jsonl");
-    assert.equal(payload.canonicalNextAction.kind, "context-distillation");
+    assert.equal(payload.canonicalNextAction.kind, "decision-capsule");
     assert.equal((payload.canonicalNextAction.command || "").includes(sessionPath), false);
-    assert.match(payload.canonicalNextAction.command || "", /--allow-outside-workdir/);
+    assert.match(payload.canonicalNextAction.reason || "", /context capsule/i);
     assert.deepEqual(payload.snippets, []);
+  });
+});
+
+test("state and recommend-next surface active decision capsules as loop brakes", async () => {
+  await withTempDir("active-decision-capsule-state", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "capsule state", "--metric-name", "seconds"]);
+    await writeDecisionCapsule(dir, "benchmark-contract");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.sessionDecisionCapsule.kind, "session-decision-capsule");
+    assert.equal(
+      statePayload.decisionEnvelope.sessionDecisionCapsule.kind,
+      "session-decision-capsule",
+    );
+    assert.equal(statePayload.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(statePayload.loopContract.canRunNextPacket, false);
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
+    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);
+  });
+});
+
+test("next refuses hard decision capsules before running a packet", async () => {
+  await withTempDir("next-hard-decision-capsule", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "hard capsule", "--metric-name", "seconds"]);
+    await writeDecisionCapsule(dir, "benchmark-contract");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const result = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.refused, true);
+    assert.equal(payload.code, "next_blocked_by_loop_contract");
+    assert.equal(payload.blockingAction.kind, "decision-capsule");
+    assert.equal(payload.sessionDecisionCapsule.enforcement.mode, "hard-block");
+    assert.match(payload.clearingCondition, /benchmark-lint/i);
+  });
+});
+
+test("next allows explicitly bounded packet work for bounded-next capsules", async () => {
+  await withTempDir("next-bounded-decision-capsule", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "bounded capsule", "--metric-name", "seconds"]);
+    await writeDecisionCapsule(dir, "search-latency", {
+      enforcement: {
+        mode: "bounded-next",
+        canRunNextPacket: false,
+        allowBoundedNext: true,
+        blocksFinalization: false,
+        clearingCondition: "Run a bounded packet that measures search latency.",
+        commandHint:
+          "node scripts/autoresearch.mjs next --cwd <project> --timeout-seconds <n> --command-file <path>",
+        triggeredBy: ["sessionDecisionCapsule"],
+      },
+      bottleneck: "Initial retrieval/search latency dominates packet wall time.",
+      evidence: ["Search latency dominated the long session."],
+      nextExperiment: "Run a bounded search-latency packet.",
+      wrongNextActions: ["Do not run a broad packet."],
+    });
+
+    const defaultTimeoutOnly = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--timeout-seconds",
+      "5",
+      "--compact",
+    ]);
+    assert.equal(defaultTimeoutOnly.code, 0, defaultTimeoutOnly.stderr);
+    const blockedPayload = JSON.parse(defaultTimeoutOnly.stdout);
+    assert.equal(blockedPayload.ok, false);
+    assert.equal(blockedPayload.refused, true);
+    assert.equal(blockedPayload.blockingAction.kind, "decision-capsule");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const result = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--timeout-seconds",
+      "5",
+      "--compact",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.refused, undefined);
+    assert.equal(payload.decision.metric, 1);
   });
 });
 

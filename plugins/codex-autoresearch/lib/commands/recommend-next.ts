@@ -19,6 +19,7 @@ export interface RecommendNextResponseInput {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  sessionDecisionCapsule?: unknown;
 }
 
 interface RecommendNextAuthorityInput {
@@ -52,6 +53,7 @@ export interface RecommendNextResponse {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  sessionDecisionCapsule?: unknown;
 }
 
 const DEFAULT_WHY_SAFE =
@@ -84,6 +86,7 @@ export function buildRecommendNextResponse(
   copyIfProvided(response, "loopContract", input.loopContract);
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
+  copyIfProvided(response, "sessionDecisionCapsule", input.sessionDecisionCapsule);
 
   return response;
 }

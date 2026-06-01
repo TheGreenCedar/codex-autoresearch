@@ -27,6 +27,7 @@ export interface ContextCapsuleResult {
 
 const CAPSULE_FILES = [
   "session-digest.md",
+  "decision-capsule.json",
   "decisions.jsonl",
   "quality-gaps.md",
   "evidence-index.json",
@@ -43,13 +44,20 @@ export async function writeContextCapsule(
   const claims = claimsForSummary(options.summary);
   const digest = digestMarkdown(options.summary, claims);
   const gaps = qualityGapsMarkdown(options.summary, claims);
+  const decisionCapsule = {
+    ...options.summary.decisionCapsule,
+    importedAt: new Date().toISOString(),
+    sourcePath: options.summary.sourcePath,
+  };
   await fsp.mkdir(safe.outputDir, { recursive: true });
   await appendMarkdown(path.join(safe.outputDir, "session-digest.md"), digest);
+  await writeJson(path.join(safe.outputDir, "decision-capsule.json"), decisionCapsule);
   await appendJsonl(path.join(safe.outputDir, "decisions.jsonl"), {
     type: "session_forensics_import",
     sourcePath: options.summary.sourcePath,
     importedAt: new Date().toISOString(),
     claimIds: claims.map((claim) => claim.id),
+    decisionCapsule,
   });
   await appendMarkdown(path.join(safe.outputDir, "quality-gaps.md"), gaps);
   const evidenceIndex = await mergeEvidenceClaims(options.cwd, safe.slug, claims);
@@ -106,6 +114,12 @@ function digestMarkdown(summary: SessionForensicsSummary, claims: EvidenceClaim[
     `- Top tools: ${JSON.stringify(Object.fromEntries(topTools))}`,
     `- Top command heads: ${JSON.stringify(Object.fromEntries(topCommands))}`,
     "",
+    "### Decision Capsule",
+    "",
+    `- Bottleneck: ${summary.decisionCapsule.bottleneck}`,
+    `- Next experiment: ${summary.decisionCapsule.nextExperiment}`,
+    ...summary.decisionCapsule.wrongNextActions.slice(0, 4).map((action) => `- Avoid: ${action}`),
+    "",
     "### Evidence Claims",
     "",
     ...claims.map((claim) => `- [evidence:${claim.id}] ${claim.claim}`),
@@ -152,6 +166,10 @@ async function appendMarkdown(filePath: string, text: string) {
 
 async function appendJsonl(filePath: string, value: unknown) {
   await fsp.appendFile(filePath, `${JSON.stringify(value)}\n`);
+}
+
+async function writeJson(filePath: string, value: unknown) {
+  await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function topEntries(values: Record<string, number>, limit: number): [string, number][] {

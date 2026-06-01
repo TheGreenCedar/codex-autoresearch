@@ -7,6 +7,10 @@ import { createInterface } from "node:readline";
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import {
+  readActiveSessionDecisionCapsule,
+  type SessionDecisionCapsule,
+} from "./session-decision-capsule.js";
+import {
   FAILURE_STATUSES,
   NON_PROMOTIONAL_STATUSES,
   STATUS_VALUES,
@@ -51,6 +55,7 @@ type SessionState = LooseObject & {
   segment: number;
   results: RunRecord[];
   current: RunRecord[];
+  sessionDecisionCapsule: SessionDecisionCapsule | null;
 };
 
 export function listOption(value: unknown): string[] {
@@ -330,6 +335,7 @@ export function currentState(workDir: string): SessionState {
   const best = bestKeptMetric(current, config.bestDirection);
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
+  const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, entries);
   const promotionRuns = evidenceRegistry.currentRuns.filter(
     (run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run),
   );
@@ -344,6 +350,7 @@ export function currentState(workDir: string): SessionState {
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
     evidenceRegistry,
+    sessionDecisionCapsule,
   };
 }
 
@@ -541,6 +548,7 @@ export function buildDecisionEnvelope({
     laneLifecycle: state?.laneLifecycle || null,
     runtimeProvenance: state?.runtimeProvenance || null,
     packetDiagnostics: state?.packetDiagnostics || null,
+    sessionDecisionCapsule: state?.sessionDecisionCapsule || null,
     nextAction: nextAction || "Run doctor, then next.",
   };
   const loopContract = buildLoopContractStatus(envelope);

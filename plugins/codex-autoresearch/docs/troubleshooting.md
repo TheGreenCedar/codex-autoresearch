@@ -21,6 +21,10 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | `quality_gap=0` looks final | Research scope confusion | It closes the accepted checklist only. Start a fresh gap round for broader discovery. |
 | Watchdog fires | No-progress window | Inspect the process, finalize useful kept work, rescope the segment, or start a fresh segment before running another packet. |
 | Operator checklist blocks `next` | Loop governance | Follow the checklist command first. It outranks another packet until the named blocker is cleared. |
+| `next` returns `next_blocked_by_loop_contract` | Active decision capsule or loop contract | Follow `blockingAction.command`, repair the named condition, then clear by a later ledger acknowledgement, measurement-contract repair, or fresh segment. |
+| `benchmark-lint` times out or parses no primary `METRIC` | Benchmark contract | Repair the wrapper, warm-cache mode, sample, or bounded task slice until lint proves the metric. Log this as measurement-contract repair, not product progress. |
+| Loop keeps running but not learning | Degenerate loop shape | Stop packet work. Read `recommend-next --compact --operator-checklist`, inspect ASI/families/plateau, and run `session-forensics --dry-run`, `research-fanout --dry-run`, or a fresh segment before another near-neighbor tweak. |
+| Heavy benchmark was about to rerun after crash or timeout | Packet economics | Run `partial-results --from-last` and inspect artifacts first; record useful rows as diagnostic `measure` evidence, then rerun only a bounded slice. |
 | Runtime provenance is unavailable or stale | Runtime drift | Inspect or refresh the installed plugin/cache before claiming source behavior is live. |
 | Packet diagnostics report evidence loss | Packet evidence | Treat the run as diagnostic evidence. Repair citation carry, synthesis, quality scoring, or benchmark failure before promoting it. |
 | `lane-runner` refuses a command outside Git | Lane isolation | Run the lane in a Git worktree, record a read-only summary without a command, or pass `--allow-non-git-command` only when that non-Git command is intentionally admitted. |
