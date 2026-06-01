@@ -14,6 +14,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Replaced the tall README dashboard screenshot with a compact showcase snapshot and added a product-gate check so the public README image does not regress into a full-page capture.
 - Updated the Codex-facing Autoresearch skill to suggest opening a GitHub issue when user frustration or repeated failures point to an Autoresearch product bug, docs gap, stale runtime trap, or UX paper cut.
 - Changed compact `recommend-next` to use state-first handoff data instead of dashboard-grade rendering work during Codex resume.
 
