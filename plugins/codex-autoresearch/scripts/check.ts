@@ -76,21 +76,24 @@ const ok =
   (await runSourceCheckoutLauncherCheck()) &&
   (await runPackageArtifactCheck()) &&
   (await runDogfoodHealthCheck()) &&
-  (await runPhase("product", productChecks, { timeoutSeconds: 900 }));
+  (await runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 }));
 
 process.exit(ok ? 0 : 1);
 
 async function runPhase(
   name: string,
   commands: CommandSpec[],
-  options: { timeoutSeconds?: number } = {},
+  options: { streamOutput?: boolean; timeoutSeconds?: number } = {},
 ): Promise<boolean> {
   console.log(`\n== ${name} ==`);
   const results = await Promise.all(commands.map((command) => runCommand(command, options)));
   for (const result of results) {
     const marker = result.code === 0 ? "ok" : "fail";
     console.log(`${marker} ${result.label}`);
-    if (result.code !== 0 || process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1") {
+    if (
+      !options.streamOutput &&
+      (result.code !== 0 || process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1")
+    ) {
       const output = `${result.stdout}${result.stderr}`.trim();
       if (output) console.log(indent(output));
     }
@@ -714,7 +717,7 @@ async function runSourceCheckoutLauncherCheck() {
 
 function runCommand(
   command: CommandSpec,
-  options: { timeoutSeconds?: number } = {},
+  options: { streamOutput?: boolean; timeoutSeconds?: number } = {},
 ): Promise<CommandResult> {
   return runCheckCommand(command, { cwd: ROOT, ...options });
 }

@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { KeyboardEvent } from "react";
 import type {
   DashboardMeta,
   DashboardMode,
@@ -222,69 +221,32 @@ function SegmentNavigator({
 }) {
   const active = normalized.segments.find((item) => item.segment === activeSegment);
   const activeTitle = segmentTitle(active);
-  const selectedIndex = normalized.segments.findIndex((item) => item.segment === activeSegment);
-  const selectSegment = (segment: number) => {
-    setActiveSegment(segment);
-    window.setTimeout(() => {
-      document.getElementById(segmentButtonId(segment))?.focus();
-    }, 0);
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const max = normalized.segments.length - 1;
-    const current = selectedIndex < 0 ? 0 : selectedIndex;
-    const nextIndex = nextSegmentIndexForKey(event.key, current, max);
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    selectSegment(normalized.segments[nextIndex].segment);
-  };
   return (
     <div className="segment-navigator" id="segment-navigator">
-      <span className="segment-navigator-label" id="segment-navigator-label">
+      <label
+        className="segment-navigator-label"
+        id="segment-navigator-label"
+        htmlFor="segment-select"
+      >
         Segments
-      </span>
-      <div
-        className="segment-tablist"
-        role="tablist"
-        aria-labelledby="segment-navigator-label"
-        onKeyDown={onKeyDown}
+      </label>
+      <select
+        id="segment-select"
+        className="segment-select"
+        value={String(activeSegment)}
+        aria-describedby="segment-summary"
+        onChange={(event) => setActiveSegment(Number(event.currentTarget.value))}
       >
         {normalized.segments.map((item) => {
           const title = segmentTitle(item);
-          const selected = item.segment === activeSegment;
           return (
-            <button
-              id={segmentButtonId(item.segment)}
-              key={item.segment}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls="segment-panel"
-              className={selected ? "segment-tab active" : "segment-tab"}
-              title={title}
-              onClick={() => selectSegment(item.segment)}
-            >
-              <span className="segment-tab-title">
-                <strong>{`S${item.segment + 1}`}</strong>
-                <span>{truncateTitle(title, 48)}</span>
-              </span>
-              <span className="segment-tab-meta">
-                {segmentRunText(item)} / {segmentKeptText(item)}
-              </span>
-              <span className={`segment-tab-status ${segmentStatus(item, normalized)}`}>
-                {segmentStatusLabel(item, normalized)}
-              </span>
-            </button>
+            <option key={item.segment} value={String(item.segment)}>
+              {`S${item.segment + 1} - ${title} - ${segmentRunText(item)} / ${segmentKeptText(item)} - ${segmentStatusLabel(item, normalized)}`}
+            </option>
           );
         })}
-      </div>
-      <p
-        id="segment-panel"
-        className="segment-note"
-        role="tabpanel"
-        aria-labelledby={segmentButtonId(active?.segment ?? activeSegment)}
-        aria-live="polite"
-        tabIndex={0}
-      >
+      </select>
+      <p id="segment-summary" className="segment-note" aria-live="polite">
         {active
           ? `Showing segment ${active.segment + 1} of ${normalized.segments.length}: ${activeTitle}. ${segmentRunText(active)}, ${segmentKeptText(active)}.`
           : `Showing segment ${activeSegment + 1} of ${normalized.segments.length}.`}
@@ -293,24 +255,8 @@ function SegmentNavigator({
   );
 }
 
-function nextSegmentIndexForKey(key: string, current: number, max: number) {
-  if (key === "ArrowRight") return Math.min(current + 1, max);
-  if (key === "ArrowLeft") return Math.max(current - 1, 0);
-  if (key === "Home") return 0;
-  if (key === "End") return max;
-  return -1;
-}
-
-function segmentButtonId(segment: number) {
-  return `segment-tab-${segment}`;
-}
-
 function segmentTitle(segment: SessionSegment | undefined) {
   return segment?.config.name || "Autoresearch";
-}
-
-function truncateTitle(value: string, max: number) {
-  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}\u2026` : value;
 }
 
 function segmentRunText(segment: SessionSegment) {

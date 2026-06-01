@@ -376,98 +376,24 @@ p {
   text-transform: uppercase;
 }
 
-.segment-tablist {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  overscroll-behavior-x: contain;
-}
-
-.segment-tab {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 10px;
-  min-width: 220px;
-  max-width: min(420px, 72vw);
+.segment-select {
+  width: min(520px, 100%);
+  min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
-  padding: 8px 10px;
+  padding: 8px 32px 8px 10px;
   box-shadow: inset 0 -2px 0 rgba(30, 140, 134, 0.12);
+  font-weight: 800;
   cursor: pointer;
-  text-align: left;
-  touch-action: manipulation;
 }
 
-.segment-tab:hover,
-.segment-tab:focus-visible {
+.segment-select:hover,
+.segment-select:focus-visible {
   border-color: var(--teal);
   box-shadow: var(--shadow-teal-glow);
-}
-
-.segment-tab.active {
-  border-color: var(--teal);
-  background: rgba(28, 181, 173, 0.12);
-}
-
-.segment-tab-title {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-  align-items: baseline;
-}
-
-.segment-tab-title strong {
-  color: var(--teal-dark);
-  font-size: 12px;
-  font-weight: 950;
-}
-
-.segment-tab-title span,
-.segment-tab-meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.segment-tab-meta {
-  grid-column: 1;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.segment-tab-status {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  align-self: center;
-  border-radius: 999px;
-  background: rgba(43, 168, 162, 0.14);
-  color: var(--teal-dark);
-  padding: 3px 7px;
-  font-size: 10px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.segment-tab-status.blocked {
-  background: rgba(239, 108, 74, 0.16);
-  color: var(--red);
-}
-
-.segment-tab-status.complete {
-  background: rgba(251, 197, 49, 0.18);
-  color: var(--amber-dark);
-}
-
-.segment-tab-status.empty {
-  background: rgba(101, 118, 112, 0.14);
-  color: var(--muted);
+  outline: 0;
 }
 
 .generated-cell,
@@ -2809,7 +2735,7 @@ p {
   background: rgba(14, 22, 21, 0.92);
 }
 
-.dark-theme .segment-tab {
+.dark-theme .segment-select {
   box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.2);
 }
 

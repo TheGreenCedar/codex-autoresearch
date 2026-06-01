@@ -456,6 +456,86 @@ test("dashboard view model exposes finalization pressure before more packets acc
   );
 });
 
+test("dashboard keeps rejected keep evidence out of best and finalization pressure", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "rejected keep",
+        metricName: "score",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          evidenceStatus: "accepted",
+          description: "Accepted keep",
+        },
+        {
+          run: 2,
+          metric: 1,
+          status: "keep",
+          evidenceStatus: "rejected",
+          description: "Rejected keep",
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      confidence: 1,
+    },
+    settings: { deliveryMode: "static-export" },
+  });
+
+  assert.equal(viewModel.readout.bestKept?.run, 1);
+  assert.equal(viewModel.readout.bestKept?.metric, 10);
+  assert.equal(viewModel.finalizationPressure.keptCount, 1);
+  assert.doesNotMatch(JSON.stringify(viewModel.nextBestAction), /Rejected keep/);
+});
+
+test("dashboard readout keeps rejected keeps out of visible best surfaces", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "rejected keep UI",
+      metricName: "score",
+      bestDirection: "lower",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 10,
+      status: "keep",
+      evidenceStatus: "accepted",
+      description: "Accepted keep",
+      confidence: 1,
+    },
+    {
+      type: "run",
+      run: 2,
+      metric: 1,
+      status: "keep",
+      evidenceStatus: "rejected",
+      description: "Rejected keep",
+      confidence: 1,
+    },
+  ];
+
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const bestRows = [...dom.window.document.querySelectorAll(".ledger-row.best-row")];
+
+  assert.equal(getById("best-value").textContent, "10");
+  assert.equal(bestRows.length, 1);
+  assert.match(bestRows[0].textContent || "", /#1/);
+  assert.doesNotMatch(bestRows[0].textContent || "", /#2/);
+  assert.match(getById("decision-rail").textContent || "", /Best result so farAccepted keep/);
+  assert.doesNotMatch(
+    getById("decision-rail").textContent || "",
+    /Best result so farRejected keep/,
+  );
+});
+
 test("dashboard handles zero and negative metrics without unsafe percent or sign artifacts", async () => {
   const entries = [
     {
@@ -2448,48 +2528,26 @@ test("dashboard readout uses the selected segment baseline", async () => {
   });
 
   assert.equal(getById("baseline-value").textContent, "100s");
-  assert.equal(queryById("segment-select"), null);
-  const tab = getById("segment-tab-0") as HTMLButtonElement;
-  assert.equal(tab.getAttribute("role"), "tab");
-  assert.match(tab.textContent || "", /S1/);
-  tab.click();
+  assert.equal(queryById("segment-tab-0"), null);
+  const select = getById("segment-select") as HTMLSelectElement;
+  assert.equal(select.value, "1");
+  assert.match(select.options[0]?.textContent || "", /S1 - first segment/);
+  assert.match(select.options[1]?.textContent || "", /S2 - second segment/);
+  select.value = "0";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "10s",
     "Selected segment baseline did not update.",
   );
   assert.equal(getById("best-value").textContent, "8s");
-  assert.match(getById("segment-panel").textContent, /first segment/);
-  assert.equal(getById("segment-panel").getAttribute("role"), "tabpanel");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-0");
-  tab.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+  assert.match(getById("segment-summary").textContent || "", /first segment/);
+  select.value = "1";
+  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await waitFor(
     () => getById("baseline-value").textContent === "100s",
-    "Keyboard segment selection did not update.",
+    "Second segment selection did not update.",
   );
-  assert.equal(getById("segment-tab-1").getAttribute("aria-selected"), "true");
-  assert.equal(getById("segment-panel").getAttribute("aria-labelledby"), "segment-tab-1");
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "Home segment shortcut did not update.",
-  );
-  getById("segment-tab-0").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "End" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "100s",
-    "End segment shortcut did not update.",
-  );
-  getById("segment-tab-1").dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
-  );
-  await waitFor(
-    () => getById("baseline-value").textContent === "10s",
-    "ArrowLeft segment shortcut did not update.",
-  );
-  assert.equal(getById("segment-tab-0").getAttribute("aria-selected"), "true");
+  assert.match(getById("segment-summary").textContent || "", /second segment/);
   dom.window.close();
 });
 

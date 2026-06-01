@@ -2414,8 +2414,11 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
     const rendered = doc.body.innerHTML;
 
     assert.ok(doc.getElementById("segment-navigator"));
-    assert.ok(doc.getElementById("segment-tab-0"));
-    assert.ok(doc.getElementById("segment-tab-1"));
+    const segmentSelect = doc.getElementById("segment-select") as HTMLSelectElement | null;
+    assert.ok(segmentSelect);
+    assert.equal(segmentSelect.options.length, 2);
+    assert.match(segmentSelect.options[0].textContent || "", /S1 - first segment/);
+    assert.match(segmentSelect.options[1].textContent || "", /S2 - second segment/);
     assert.ok(doc.getElementById("live-toggle"));
     assert.doesNotMatch(dashboard, /id="command-grid"/);
     assert.match(doc.body.textContent, /Run log/);

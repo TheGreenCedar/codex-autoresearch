@@ -21,6 +21,8 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - Redesigned the dashboard with an audit/operate split: the served dashboard now opens in audit view (full traceability); operate (Focus view) is a chart-first surface with audit panels omitted from the DOM. The run chart leads after the header in both views (taller in operate). URL-backed view and chart preferences are included.
+- The served dashboard now returns its verified local URL before loading heavier decision diagnostics; the live page refreshes the full view model from `/view-model.json`.
+- Dashboard segment navigation now uses a native dropdown again.
 - Added a quiet chart-adjacent readiness strip for next action, evidence status, lane readiness, watchdog state, and finalization pressure without adding dashboard mutation controls.
 - Dashboard view, selected segment, and chart value/axis preferences are now stored in the URL (`?view=`, `?segment=`, `?value=`, `?axis=`) so a served link restores and shares the exact readout state.
 - Removed dashboard accessibility/guideline anti-patterns: scoped all `transition` declarations to explicit properties and replaced literal ellipses with the `…` character.
@@ -29,6 +31,8 @@ This project uses a root-only changelog because the root README is the public do
 - `state`, `recommend-next`, and the dashboard now share the same watchdog-aware decision envelope inputs, so quiet-window pressure is visible on CLI surfaces as well as the dashboard.
 - `research-fanout` plans are segment-scoped: a new segment ignores prior fanout plans and falls back to memory/default lanes until a fresh plan is recorded for that segment.
 - Completed `lane-runner` results now enrich parallel lane status and count as watchdog progress signals.
+- Dashboard best-kept and finalization surfaces now ignore rejected, superseded, non-accepted, and quarantined keeps across both server view-model and client readout paths.
+- Lane lifecycle readouts now ignore completed lane results from older segments even when passed through direct lane-result inputs.
 - Empty `lane-runner --yes` records are planning breadcrumbs, not completed accepted evidence, and do not reset watchdog progress.
 - Read-only scout lanes fail closed when running commands outside a Git worktree unless `--allow-non-git-command` is explicitly passed.
 - `research_fanout` tool metadata now avoids unconditional read-only claims because `--yes` appends a fanout plan to the ledger.

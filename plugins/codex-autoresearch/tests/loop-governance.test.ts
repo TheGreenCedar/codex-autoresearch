@@ -160,3 +160,57 @@ test("lane lifecycle summarizes result-only records from current state", () => {
   );
   assert.equal(lifecycle.staleLanes.length, 0);
 });
+
+test("lane lifecycle ignores completed lane results from older segments", () => {
+  const lifecycle = buildLaneLifecycle({
+    state: { segment: 1 },
+    fanoutPlan: {
+      segment: 1,
+      lanes: [{ id: "benchmark-contract", status: "planned" }],
+    },
+    records: [
+      {
+        type: "lane_result",
+        segment: 0,
+        timestamp: Date.parse("2026-05-31T01:00:00.000Z"),
+        lane: { id: "benchmark-contract" },
+        result: { status: "completed", recommendation: "Old segment result." },
+      },
+    ],
+    nowMs: Date.parse("2026-05-31T01:30:00.000Z"),
+  });
+
+  assert.deepEqual(
+    lifecycle.plannedLanes.map((lane) => lane.id),
+    ["benchmark-contract"],
+  );
+  assert.equal(lifecycle.resultLanes.length, 0);
+  assert.equal(lifecycle.latestResults.length, 0);
+});
+
+test("lane lifecycle ignores direct laneResults from older segments", () => {
+  const lifecycle = buildLaneLifecycle({
+    state: { segment: 1 },
+    fanoutPlan: {
+      segment: 1,
+      lanes: [{ id: "benchmark-contract", status: "planned" }],
+    },
+    laneResults: [
+      {
+        type: "lane_result",
+        segment: 0,
+        timestamp: Date.parse("2026-05-31T01:00:00.000Z"),
+        lane: { id: "benchmark-contract" },
+        result: { status: "completed", recommendation: "Old direct lane result." },
+      },
+    ],
+    nowMs: Date.parse("2026-05-31T01:30:00.000Z"),
+  });
+
+  assert.deepEqual(
+    lifecycle.plannedLanes.map((lane) => lane.id),
+    ["benchmark-contract"],
+  );
+  assert.equal(lifecycle.resultLanes.length, 0);
+  assert.equal(lifecycle.latestResults.length, 0);
+});

@@ -1,6 +1,6 @@
 import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
-import { buildEvidenceRegistry } from "./evidence-registry.js";
+import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -62,7 +62,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
   const current = (state.current || []) as RunLike[];
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
   const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
-  const kept = current.filter((run) => run.status === "keep");
+  const kept = acceptedCurrentRuns(current);
   const failures = current.filter((run) =>
     ["discard", "crash", "checks_failed"].includes(String(run.status)),
   );

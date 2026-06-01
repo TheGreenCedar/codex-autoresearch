@@ -1154,8 +1154,11 @@ test("live server exposes health and view-model endpoints", async () => {
     await withLiveServer(dir, async (payload) => {
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
       assert.equal(payload.verified, true);
-      assert.equal(payload.decisionEnvelopeSummary.kind, "benchmark-command");
-      assert.equal(payload.decisionEnvelopeSummary.runs, 1);
+      assert.equal(payload.decisionEnvelopeSummary, null);
+      assert.match(
+        payload.deferredViewModel.availableAt,
+        /^http:\/\/127\.0\.0\.1:\d+\/view-model\.json$/,
+      );
       assert.match(payload.healthUrl, /^http:\/\/127\.0\.0\.1:\d+\/health$/);
       assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());

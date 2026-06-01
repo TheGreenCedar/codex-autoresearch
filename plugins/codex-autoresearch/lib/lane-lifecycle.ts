@@ -34,6 +34,13 @@ export function buildLaneLifecycle({
       : stateRecords.length > 0
         ? stateRecords
         : stateCurrent;
+  const activeSegment = numberValue(objectValue(state)?.segment);
+  const resultRecords =
+    activeSegment == null ? recordList : recordsForSegment(recordList, activeSegment);
+  const resultLaneResults =
+    activeSegment == null
+      ? arrayValue(laneResults)
+      : recordsForSegment(arrayValue(laneResults), activeSegment);
   const plan = objectValue(fanoutPlan) || latestFanoutPlan(recordList) || objectValue(state);
   const planned = normalizePlannedLanes({
     parallelLanes,
@@ -41,7 +48,7 @@ export function buildLaneLifecycle({
     state: objectValue(state),
     records: recordList,
   });
-  const results = latestResultsByLane([...recordList, ...arrayValue(laneResults)]);
+  const results = latestResultsByLane([...resultRecords, ...resultLaneResults]);
   const plannedWithResults = includeResultOnlyLanes(planned, results);
   const staleThreshold = Math.max(0, numberValue(staleAfterMs) ?? 2 * 60 * 60 * 1000);
   const lanes = plannedWithResults.map((lane, index) =>
@@ -79,6 +86,14 @@ export function buildLaneLifecycle({
 
 export function summarizeLaneRecords(records: unknown[], options: LooseObject = {}) {
   return buildLaneLifecycle({ ...options, records });
+}
+
+function recordsForSegment(records: unknown[], segment: number): unknown[] {
+  return records.filter((record) => {
+    const value = objectValue(record);
+    if (!value || value.segment == null) return true;
+    return numberValue(value.segment) === segment;
+  });
 }
 
 function normalizePlannedLanes({
