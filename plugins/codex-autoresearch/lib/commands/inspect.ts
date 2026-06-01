@@ -24,7 +24,7 @@ export interface InspectCommandDeps {
 
 export function createInspectCommands(deps: InspectCommandDeps) {
   async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
-    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const state = deps.currentState(workDir);
     const metricName = deps.validateMetricName(
       args.metric_name || args.metricName || state.config.metricName || "metric",
@@ -73,7 +73,7 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     }
     const researchIntegrity = buildResearchIntegrity({
       state,
-      config: state.config || {},
+      config: { ...state.config, ...config },
       parsedMetrics,
       metricName,
       sample,

@@ -124,6 +124,41 @@ test("spawned CLI contract covers source launcher startup and env workdir resolu
   });
 });
 
+test("compact state exposes authoritative goal frame and operator handoff", async () => {
+  await withTempDir("compact-goal-frame", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "goal frame",
+      "--metric-name",
+      "agent_value_gap",
+      "--goal",
+      "Use cheap local evidence before live A/B.",
+    ]);
+
+    const result = await runCli([
+      "state",
+      "--cwd",
+      dir,
+      "--compact",
+      "--codex-goal-objective",
+      "Please continue with the autoresearch. Start by stating the goal.",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+
+    assert.equal(payload.goalFrame.authoritativeGoal, "Use cheap local evidence before live A/B.");
+    assert.equal(payload.goalFrame.codexObjectiveRole, "operator_instruction");
+    assert.equal(payload.goalFrame.mismatch, true);
+    assert.match(payload.goalFrame.warning, /Codex prompt is not the research goal/);
+    assert.match(payload.goalFrame.operatorLine, /Research goal:/);
+    assert.match(payload.operatorHandoff.goal, /Use cheap local evidence/);
+    assert.equal(payload.operatorHandoff.next, payload.nextAction);
+  });
+});
+
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "missing metric", "--metric-name", "seconds"]);
@@ -579,6 +614,58 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
       assert.equal(claimIds.has(evidenceId), true, evidenceId);
     }
     assert.equal((evidenceAfter.claims || []).length >= (evidence.claims || []).length, true);
+  });
+});
+
+test("session-forensics dry run surfaces goal-frame correction capsule", async () => {
+  await withTempDir("session-forensics-goal-frame", async (dir) => {
+    const sessionPath = path.join(dir, "goal-frame-rollout.jsonl");
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-06-01T13:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "That's not the goal of the autoresearch, that's my prompt. Keep the real research goal from the project state.",
+              },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const result = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "goal-frame-correction",
+      "--dry-run",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+
+    assert.equal(payload.ok, true);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.wrote, false);
+    assert.equal(payload.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(payload.decisionCapsule.enforcement.mode, "bounded-next");
+    assert.equal(payload.decisionCapsule.enforcement.canRunNextPacket, false);
+    assert.equal(payload.decisionCapsule.enforcement.allowBoundedNext, true);
+    assert.equal(
+      payload.productSignals.some((signal) => signal.kind === "goal_frame_mismatch"),
+      true,
+    );
+    assert.match(payload.decisionCapsule.bottleneck, /goal-frame drift/i);
+    assert.match(payload.nextAction, /durable Autoresearch goal/i);
   });
 });
 
@@ -2054,6 +2141,42 @@ test("benchmark-lint separates metric parsing from research integrity", async ()
   });
 });
 
+test("benchmark-lint sample respects configured holdout guard", async () => {
+  await withTempDir("benchmark-lint-configured-holdout", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "configured holdout",
+      "--metric-name",
+      "agent_value_gap",
+      "--direction",
+      "lower",
+    ]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ holdoutCommand: "node holdout-benchmark.mjs" }, null, 2),
+      "utf8",
+    );
+
+    const result = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--sample",
+      "METRIC agent_value_gap=0",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.researchIntegrity.hasIntegrityGuard, true);
+    assert.doesNotMatch(
+      payload.researchIntegrity.warnings.join("\n"),
+      /no holdout, repeat, contamination, or promotion guard is configured/i,
+    );
+  });
+});
+
 test("doctor does not treat routine rollback wording as evidence invalidation", async () => {
   await withTempDir("doctor-routine-rollback", async (dir) => {
     await runCli([
@@ -3375,13 +3498,69 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
-    assert.equal(recommendPayload.decisionEnvelope.nextAction, recommendPayload.nextAction);
+    assert.equal(recommendPayload.nextAction, statePayload.canonicalNextAction.reason);
+    assert.equal(
+      recommendPayload.decisionEnvelope.canonicalNextAction.reason,
+      statePayload.canonicalNextAction.reason,
+    );
 
     const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
     assert.equal(onboarding.code, 0, onboarding.stderr);
     const onboardingPayload = JSON.parse(onboarding.stdout);
     assert.equal(onboardingPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
     assert.equal(onboardingPayload.resumeAudit.activeSegment.runs, 0);
+  });
+});
+
+test("recommend-next compact returns state-first handoff without dashboard-only finalization", async () => {
+  await withTempDir("recommend-next-compact-state-first", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "compact recommend", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.match(statePayload.commands.state, /state --cwd/);
+
+    const recommend = await runCli([
+      "recommend-next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--operator-checklist",
+      "--codex-goal-objective",
+      "Continue the autoresearch.",
+    ]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(
+      recommendPayload.compactState.goalFrame.codexObjectiveRole,
+      "operator_instruction",
+    );
+    assert.equal(
+      recommendPayload.compactState.decisionEnvelope.finalizationReadiness.available,
+      false,
+    );
+    assert.equal(recommendPayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.equal(statePayload.canonicalNextAction.kind, "log-decision");
+    assert.doesNotMatch(statePayload.operatorHandoff.command, /\bnext\b.*--compact/);
+    assert.equal(
+      recommendPayload.commands.primary,
+      statePayload.canonicalNextAction.command || statePayload.commands.state,
+    );
+    assert.doesNotMatch(recommendPayload.commands.primary, /\bnext\b.*--compact/);
+    assert.equal(
+      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
+      statePayload.canonicalNextAction.kind,
+    );
+    assert.equal(recommendPayload.operatorChecklist.source, "latestPacketFreshness");
+    assert.doesNotMatch(recommendPayload.operatorChecklist.command, /\bnext\b.*--compact/);
+    assert.match(recommendPayload.whySafe, /compact state/);
+    assert.match(recommendPayload.whySafe, /without dashboard-grade rendering/);
   });
 });
 

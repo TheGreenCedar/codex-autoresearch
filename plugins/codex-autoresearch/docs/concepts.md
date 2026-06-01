@@ -26,6 +26,14 @@ The state returned after logging a packet. Contains `shouldContinue` (whether th
 
 A compact handoff from `recommend-next --compact --operator-checklist`. It names one command, one safety reason, one blocker, one evidence role, and one source so a resumed Codex session can continue without re-deciding the whole loop. See [Operate](operate.md#operator-checklist).
 
+## Goal Frame
+
+The compact resume object that names the durable Autoresearch goal as authoritative and classifies a fresh Codex/user prompt as missing, matching, an operator instruction, or a different research goal. Use `goalFrame.authoritativeGoal` before stating the loop objective. See [Operate](operate.md#resume).
+
+## Operator Handoff
+
+The compact state summary for resumed Codex work. It carries the research-goal line, next action, blocker, and command selected from compact loop governance so a new session can continue without turning the latest prompt into the research goal. See [Operate](operate.md#resume).
+
 ## Loop Contract
 
 The governance readout that decides whether another packet is allowed. It can route to setup repair, context distillation, lane cleanup, runtime provenance, packet diagnostics, finalization, segment transition, or a fresh packet. See [Operate](operate.md#operator-checklist).
@@ -65,6 +73,10 @@ A source-vs-installed-runtime readout. If source and the installed plugin runtim
 ## Packet Diagnostics
 
 Evidence-loss classification for packets that retrieved data but failed to carry citations, lost claims during synthesis, missed a quality score, or reported sufficiency while the benchmark failed. Treat these as diagnostic evidence, not wins. See [Trust](trust.md#runtime-provenance-and-packet-diagnostics).
+
+## Goal Frame Mismatch
+
+A session-forensics decision signal for moments when the user corrects Codex for treating an operator prompt as the Autoresearch goal. It creates a bounded-next capsule so the next session must restate the durable goal and avoid broad packet work until the handoff is clear. See [Operate](operate.md#operator-checklist).
 
 ## Evidence Status
 
