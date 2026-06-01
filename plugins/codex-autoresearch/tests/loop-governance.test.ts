@@ -27,7 +27,7 @@ test("stale lanes and runtime drift block before finalization pressure", () => {
     },
     runtimeProvenance: {
       drifted: true,
-      reason: "Source version 2.0.0 differs from installed version 1.5.1.",
+      reason: "Source version 2.0.1 differs from installed version 1.5.1.",
     },
     finalizationReadiness: { ready: true, nextAction: "Finalize reviewable kept work." },
   });
@@ -48,6 +48,57 @@ test("probe-failed runtime provenance remains non-blocking", () => {
   assert.equal(status.ok, true);
   assert.equal(status.canRunNextPacket, true);
   assert.equal(status.blockers.length, 0);
+});
+
+test("hard decision capsules block generic packets and finalization pressure", () => {
+  const status = buildLoopContractStatus({
+    sessionDecisionCapsule: {
+      enforcement: {
+        mode: "hard-block",
+        canRunNextPacket: false,
+        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
+        triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
+      },
+      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+    },
+    finalizationReadiness: { ready: true, nextAction: "Finalize reviewable kept work." },
+  });
+
+  assert.equal(status.ok, false);
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.blockers[0].kind, "decision-capsule");
+  assert.match(status.blockers[0].reason, /benchmark-lint/);
+
+  const action = canonicalNextActionForLoop({
+    sessionDecisionCapsule: {
+      enforcement: {
+        mode: "hard-block",
+        canRunNextPacket: false,
+        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
+      },
+      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+    },
+  });
+  assert.equal(action.kind, "decision-capsule");
+});
+
+test("bounded-next decision capsules warn before generic next packets", () => {
+  const status = buildLoopContractStatus({
+    sessionDecisionCapsule: {
+      enforcement: {
+        mode: "bounded-next",
+        canRunNextPacket: false,
+        allowBoundedNext: true,
+        commandHint: "node scripts/autoresearch.mjs next --cwd . --timeout-seconds 30",
+      },
+      nextExperiment: "Measure initial search latency with a bounded packet.",
+    },
+  });
+
+  assert.equal(status.ok, true);
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.warnings[0].kind, "decision-capsule");
+  assert.match(status.warnings[0].command, /timeout-seconds/);
 });
 
 test("checked runtime provenance without drift remains non-blocking", () => {

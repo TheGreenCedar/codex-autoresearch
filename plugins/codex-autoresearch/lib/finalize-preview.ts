@@ -6,6 +6,7 @@ import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
+import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 type LooseObject = Record<string, any>;
@@ -71,9 +72,20 @@ export async function finalizePreview(args: LooseObject) {
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
-  const ledgerRuns = await readLedgerRuns(workDir);
-  const keptRuns = await readKeptRuns(workDir);
+  const ledgerEntries = await readLedgerEntries(workDir);
+  const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
+  const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
+  const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, ledgerEntries);
   const { groups, missingCommitCount, warnings } = await buildKeptRunGroups(workDir, keptRuns);
+  const capsuleFinalizationBlocked =
+    sessionDecisionCapsule?.enforcement?.blocksFinalization === true;
+  if (capsuleFinalizationBlocked) {
+    warnings.push(
+      sessionDecisionCapsule.nextExperiment ||
+        sessionDecisionCapsule.enforcement.clearingCondition ||
+        "Resolve the active decision capsule before finalization.",
+    );
+  }
   const overlaps = findGroupFileOverlaps(groups);
   const finalTreePlan = await buildFinalTreePlan(workDir, trunk, groups);
   warnings.push(...finalTreePlan.warnings);
@@ -87,16 +99,18 @@ export async function finalizePreview(args: LooseObject) {
   warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
   appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps });
 
-  const ready = isFinalizePreviewReady({
-    groups,
-    dirty,
-    branch,
-    trunk,
-    baseOk: finalTreePlan.baseOk,
-    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
-    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
-    semanticSafety,
-  });
+  const ready =
+    !capsuleFinalizationBlocked &&
+    isFinalizePreviewReady({
+      groups,
+      dirty,
+      branch,
+      trunk,
+      baseOk: finalTreePlan.baseOk,
+      finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+      excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+      semanticSafety,
+    });
   const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
   const planArgv = [
     process.execPath,
@@ -109,16 +123,20 @@ export async function finalizePreview(args: LooseObject) {
     "--trunk",
     trunk,
   ];
-  const nextAction = finalizePreviewNextAction({
-    ready,
-    semanticSafety,
-    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
-    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
-    excludedCommits: finalTreePlan.excludedCommits,
-    groups,
-    keptRuns,
-    missingCommitCount,
-  });
+  const nextAction = capsuleFinalizationBlocked
+    ? sessionDecisionCapsule?.nextExperiment ||
+      sessionDecisionCapsule?.enforcement?.clearingCondition ||
+      "Resolve the active decision capsule before finalization."
+    : finalizePreviewNextAction({
+        ready,
+        semanticSafety,
+        excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+        finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+        excludedCommits: finalTreePlan.excludedCommits,
+        groups,
+        keptRuns,
+        missingCommitCount,
+      });
   return withProgress(
     {
       ok: true,
@@ -134,6 +152,7 @@ export async function finalizePreview(args: LooseObject) {
       excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
       finalTreeCoverage: finalTreePlan.finalTreeCoverage,
       semanticSafety,
+      sessionDecisionCapsule,
       overlaps,
       warnings,
       suggestedCommand: planArgv.map(shellQuote).join(" "),
@@ -596,16 +615,6 @@ function withProgress(
 
 async function readLedgerEntries(cwd: string): Promise<LooseObject[]> {
   return await readAutoresearchLedger(cwd, { mode: "silent-empty" });
-}
-
-async function readKeptRuns(cwd: string): Promise<KeptRun[]> {
-  return (await readLedgerEntries(cwd)).filter(isAcceptedCurrentRun) as KeptRun[];
-}
-
-async function readLedgerRuns(cwd: string): Promise<KeptRun[]> {
-  return (await readLedgerEntries(cwd)).filter(
-    (entry: LooseObject) => entry.run != null,
-  ) as KeptRun[];
 }
 
 async function changedFilesForCommit(hash: string, cwd: string): Promise<string[]> {

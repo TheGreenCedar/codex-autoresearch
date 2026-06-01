@@ -9,6 +9,7 @@ import {
   formatMetricValue,
   improvementPercent,
 } from "../../model";
+import { formatAsiValue } from "../../model/asi";
 import type { ChartModel, DashboardReadout, RunMetricBreakdown } from "../../types";
 
 export const VALUE_MODES = ["value", "percent"] as const;
@@ -101,10 +102,14 @@ export function buildChartData(chart: ChartModel, readout: DashboardReadout): Ch
       status: point.run.status,
       statusLabel: STATUS_LABELS[point.run.status] || point.run.status || "Run",
       description: point.run.description || "No description",
-      hypothesis: String(point.run.asi?.hypothesis || ""),
-      evidence: String(point.run.asi?.evidence || ""),
-      rollbackReason: String(point.run.asi?.rollback_reason || point.run.asi?.rollbackReason || ""),
-      nextActionHint: String(point.run.asi?.next_action_hint || point.run.asi?.nextAction || ""),
+      hypothesis: formatAsiValue(point.run.asi?.hypothesis),
+      evidence: formatAsiValue(point.run.asi?.evidence),
+      rollbackReason:
+        formatAsiValue(point.run.asi?.rollback_reason) ||
+        formatAsiValue(point.run.asi?.rollbackReason),
+      nextActionHint:
+        formatAsiValue(point.run.asi?.next_action_hint) ||
+        formatAsiValue(point.run.asi?.nextAction),
       timestamp: point.run.timestamp,
       best: point.best,
       latest: point.latest,

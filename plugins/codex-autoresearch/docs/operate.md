@@ -49,6 +49,8 @@ node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl 
 ```
 
 The command writes `session-digest.md`, `decisions.jsonl`, `quality-gaps.md`, and `evidence-index.json` under `autoresearch.research/<slug>/`. Leave snippets off by default so transcript bodies do not become durable session state.
+It also writes `decision-capsule.json`: a compact carry-forward note with the current bottleneck, evidence, next experiment, wrong next actions, and do-not-repeat command families. After importing, summarize the one carry-forward conclusion in ASI or `autoresearch.ideas.md`; otherwise the next session can know the old JSONL exists and still lose the actual lesson.
+The latest active capsule is exposed as `sessionDecisionCapsule` in `state --compact`, `recommend-next`, onboarding packets, and the dashboard packet brake. A capsule can make `decision-capsule` the canonical next action. Hard capsules block generic `next` and finalization until benchmark repair, a fresh segment, or an explicit capsule acknowledgement clears them; bounded-next capsules allow only explicit bounded packet work such as `next --timeout-seconds <n> --command-file <path>`.
 
 ## Dashboard
 
@@ -83,6 +85,9 @@ If you need fresh state, serve a fresh dashboard. Do not treat an old `file://` 
 The process-hygiene panel reports what the snapshot can actually know. It can show active cwd, plugin version, live URL metadata, runtime drift, export age, and dashboard servers started by this process. It cannot enumerate random old localhost servers outside the current process, so that gap is labeled instead of faked.
 
 ## Packet Loop
+
+Do not rerun a heavy packet just because the loop is still open. First check whether the next useful action is cheaper: `partial-results --from-last`, `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, `session-forensics --dry-run`, `research-fanout --dry-run`, or a narrower `next --timeout-seconds <n> --command-file <path>`. A heavy packet is justified only when the resume contract says packet work is safe and the hypothesis is still specific.
+`benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted. Repairing timeout, wrapper, warm-cache, or missing-metric failures is measurement-contract repair, not product progress.
 
 Normal loop:
 

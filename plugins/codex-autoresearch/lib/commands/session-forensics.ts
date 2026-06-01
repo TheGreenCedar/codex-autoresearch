@@ -62,22 +62,32 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
     const contextSignal = publicParsed.productSignals.find(
       (signal: any) => signal.kind === "context_distillation_required",
     );
-    const canonicalNextAction = contextSignal
-      ? {
-          kind: "context-distillation",
-          priority: 6,
-          reason: contextSignal.message,
-          command: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${deps.shellQuote(workDir)} --session-jsonl ${deps.shellQuote(displaySessionJsonl)} --research-slug ${deps.shellQuote(researchSlug)} --apply${sessionPathInsideWorkDir ? "" : " --allow-outside-workdir"}`,
-          triggeredBy: ["sessionForensics"],
-        }
-      : {
-          kind: "next-packet",
-          priority: 10,
-          reason:
-            "Review imported signals, then continue with the safest next Autoresearch action.",
-          command: "",
-          triggeredBy: ["sessionForensics"],
-        };
+    const decisionCapsule = publicParsed.decisionCapsule;
+    const canonicalNextAction =
+      decisionCapsule?.enforcement?.canRunNextPacket === false
+        ? {
+            kind: "decision-capsule",
+            priority: decisionCapsule.enforcement.mode === "hard-block" ? 4 : 6,
+            reason: decisionCapsule.nextExperiment || decisionCapsule.bottleneck,
+            command: decisionCapsule.enforcement.commandHint || "",
+            triggeredBy: decisionCapsule.enforcement.triggeredBy || ["sessionForensics"],
+          }
+        : contextSignal
+          ? {
+              kind: "context-distillation",
+              priority: 6,
+              reason: contextSignal.message,
+              command: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} session-forensics --cwd ${deps.shellQuote(workDir)} --session-jsonl ${deps.shellQuote(displaySessionJsonl)} --research-slug ${deps.shellQuote(researchSlug)} --apply${sessionPathInsideWorkDir ? "" : " --allow-outside-workdir"}`,
+              triggeredBy: ["sessionForensics"],
+            }
+          : {
+              kind: "next-packet",
+              priority: 10,
+              reason:
+                "Review imported signals, then continue with the safest next Autoresearch action.",
+              command: "",
+              triggeredBy: ["sessionForensics"],
+            };
     return {
       ok: true,
       workDir,
@@ -97,6 +107,7 @@ export function createSessionForensicsCommand(deps: SessionForensicsCommandDeps)
       productSignals: publicParsed.productSignals,
       workflowWaste: publicParsed.workflowWaste,
       blockers: publicParsed.blockers,
+      decisionCapsule: publicParsed.decisionCapsule,
       snippets: publicParsed.snippets,
       evidenceClaims: capsule.evidenceIndex?.claims.length ?? null,
       nextAction: canonicalNextAction.reason,

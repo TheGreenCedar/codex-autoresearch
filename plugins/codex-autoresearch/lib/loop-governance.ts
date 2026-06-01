@@ -100,6 +100,26 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     );
   }
 
+  const sessionDecisionCapsule = objectValue(envelope.sessionDecisionCapsule);
+  const capsuleEnforcement = objectValue(sessionDecisionCapsule?.enforcement);
+  if (capsuleEnforcement) {
+    const capsuleAction = loopAction(
+      "decision-capsule",
+      capsuleEnforcement.mode === "hard-block" ? 4 : 6,
+      sessionDecisionCapsule?.nextExperiment ||
+        sessionDecisionCapsule?.bottleneck ||
+        capsuleEnforcement.clearingCondition ||
+        "Resolve the active session decision capsule before another packet.",
+      capsuleEnforcement.commandHint,
+      capsuleEnforcement.triggeredBy || ["sessionDecisionCapsule"],
+    );
+    if (capsuleEnforcement.mode === "hard-block") {
+      blockers.push(capsuleAction);
+    } else if (capsuleEnforcement.canRunNextPacket === false) {
+      warnings.push(capsuleAction);
+    }
+  }
+
   const finalizationReadiness = objectValue(envelope.finalizationReadiness);
   if (finalizationPressure(finalizationReadiness)) {
     warnings.push(

@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
+import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import {
   readServeRegistry,
   registryPathForWorkDir,
@@ -21,7 +22,7 @@ test("serve registry writes pid port cwd and version in git repos", async () => 
       port: 60123,
       cwd: dir,
       startedAt: "2026-05-31T00:00:00.000Z",
-      version: "2.0.0",
+      version: PLUGIN_VERSION,
       healthUrl: "http://127.0.0.1:60123/health",
     });
 
@@ -30,7 +31,7 @@ test("serve registry writes pid port cwd and version in git repos", async () => 
     assert.equal(parsed.pid, process.pid);
     assert.equal(parsed.port, 60123);
     assert.equal(parsed.cwd, path.resolve(dir));
-    assert.equal(parsed.version, "2.0.0");
+    assert.equal(parsed.version, PLUGIN_VERSION);
     assert.equal(parsed.healthUrl, "http://127.0.0.1:60123/health");
   });
 });
@@ -44,7 +45,7 @@ test("serve registry falls back to runtime directory outside git", async () => {
       port: 60124,
       cwd: dir,
       startedAt: "2026-05-31T00:00:00.000Z",
-      version: "2.0.0",
+      version: PLUGIN_VERSION,
       healthUrl: "http://127.0.0.1:60124/health",
     });
 
@@ -63,7 +64,7 @@ test("serve registry summary distinguishes same and different cwd", () => {
     port: 60125,
     cwd: "C:/work/current",
     startedAt: "2026-05-31T00:00:00.000Z",
-    version: "2.0.0",
+    version: PLUGIN_VERSION,
     healthUrl: "http://127.0.0.1:60125/health",
   };
 

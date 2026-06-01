@@ -17,6 +17,7 @@ export interface CompactStateBuilderInput {
   developmentBest?: unknown;
   promotionBest?: unknown;
   evidenceRegistry?: unknown;
+  sessionDecisionCapsule?: unknown;
   evidenceLabels?: unknown[];
   scaffoldHealth?: unknown;
   researchIntegrity?: unknown;
@@ -67,6 +68,7 @@ export interface CompactStateResponse {
   developmentBest: unknown;
   promotionBest: unknown;
   evidenceRegistry: unknown;
+  sessionDecisionCapsule: unknown;
   evidenceLabels: unknown[];
   scaffoldHealth: unknown;
   researchIntegrity: unknown;
@@ -118,6 +120,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     developmentBest: input.developmentBest ?? null,
     promotionBest: input.promotionBest ?? null,
     evidenceRegistry: input.evidenceRegistry ?? null,
+    sessionDecisionCapsule: input.sessionDecisionCapsule ?? null,
     evidenceLabels: Array.isArray(input.evidenceLabels) ? input.evidenceLabels : [],
     scaffoldHealth: input.scaffoldHealth ?? null,
     researchIntegrity: input.researchIntegrity ?? null,

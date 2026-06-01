@@ -68,6 +68,17 @@ node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 ```
 
+Before the first expensive `next`, prove the loop shape cheaply:
+
+- `recommend-next --compact --operator-checklist` names packet work as the next action.
+- the benchmark command is the real goal benchmark, not a placeholder recipe.
+- `benchmark-lint` proves the primary `METRIC` line can be parsed inside its timeout.
+- imported `sessionDecisionCapsule` state is clear, acknowledged, or deliberately being handled.
+- the first packet is bounded by timeout, sample, task slice, or command file.
+- unrelated dirty files are not part of keep/discard cleanup.
+
+If `recommend-next` returns a `decision-capsule` action, do that action first. Hard capsules refuse generic `next`; bounded-next capsules require an explicit bounded command.
+
 Use `recommend-next --compact` whenever you want exactly one safe next action:
 
 ```bash
