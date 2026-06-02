@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
 import { JSDOM } from "jsdom";
 import { redactCommandDisplay } from "../lib/evidence-redaction.js";
+import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
@@ -2654,7 +2655,9 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     assert.equal(report.code, 0, report.stderr);
     const reportPayload = JSON.parse(report.stdout);
     assert.equal(reportPayload.report.json.cleanliness.status, "session-artifacts-dirty");
+    assert.equal(reportPayload.report.json.cleanliness.cleanupCommand, "");
     assert.match(reportPayload.report.text, /Only Autoresearch session artifacts are dirty/);
+    assert.doesNotMatch(reportPayload.report.text, /git stash push --include-untracked/);
     const doctor = await runCli(["doctor", "--cwd", dir]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
@@ -3008,6 +3011,16 @@ test("config persists operator settings and extends iteration limits", async () 
     assert.equal(statePayload.limit.remainingIterations, 4);
     assert.match(statePayload.commands[0].command, /autoresearch\.mjs/);
     assert.match(statePayload.commands[0].command, /--cwd/);
+    const commandRail = statePayload.commands
+      .map((command) => `${command.label}: ${command.command}`)
+      .join("\n");
+    const commandTexts = statePayload.commands.map((command) => command.command).join("\n");
+    assert.match(commandRail, /\bfinalize-preview\b/);
+    assert.match(commandRail, /\bnew-segment\b.*--dry-run/);
+    assert.doesNotMatch(commandTexts, /\bfinalize-current-tree\b/);
+    assert.doesNotMatch(commandTexts, /\sconfig\s.*--extend/);
+    assert.doesNotMatch(commandTexts, /\slog\s.*--from-last/);
+    assert.doesNotMatch(commandTexts, /\snext\s.*--compact/);
   });
 });
 
@@ -3995,11 +4008,19 @@ test("state report returns a compact one-screen terminal report", async () => {
     assert.equal(payload.ok, true);
     assert.equal(typeof payload.report.text, "string");
     assert.equal(typeof payload.report.json.nextCommand, "string");
-    assert.equal(payload.report.json.nextCommand.length > 0, true);
     assert.match(payload.report.text, /Next command/i);
     assert.match(payload.report.text, /Gate/i);
     assert.match(payload.report.text, /Runtime/i);
     assert.match(payload.report.text, /Dashboard/i);
+    assert.doesNotMatch(
+      payload.report.text,
+      /\bserve\b|start_dashboard|--check-benchmark|benchmark-lint|git stash push/i,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(payload.report.json),
+      /\bserve\b|start_dashboard|--check-benchmark|benchmark-lint|git stash push/i,
+    );
+    assert.notEqual(payload.report.json.dashboard.command, 'curl "/health"');
     assert.doesNotMatch(payload.report.text, /\[object Object\]/);
     assert.equal(payload.compactState, undefined);
 
@@ -4075,6 +4096,8 @@ test("state report marks registry-only dashboard health dead until HTTP responds
     const payload = JSON.parse(report.stdout);
     assert.equal(payload.report.json.dashboard.status, "dead");
     assert.match(payload.report.text, /Dashboard: dead/);
+    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
+    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
@@ -4110,7 +4133,8 @@ test("state report does not call a fake same-process registry a live dashboard",
     const payload = JSON.parse(report.stdout);
     assert.notEqual(payload.report.json.dashboard.status, "alive");
     assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
-    assert.match(payload.report.json.dashboard.command ?? "", /serve|health|curl/i);
+    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
+    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
   });
 });
 
@@ -6256,6 +6280,14 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.equal(typeof statePayload.memory.novelty.score, "number");
     assert.ok(statePayload.memory.lanePortfolio.some((lane) => lane.id === "measurement-quality"));
     assert.ok(statePayload.memory.diversityGuidance);
+    const generatedCommands = statePayload.commands.map((item) => item.command).join("\n");
+    assert.ok(statePayload.commands.some((item) => item.label === "State"));
+    assert.ok(statePayload.commands.some((item) => item.label === "Quality gap"));
+    assert.doesNotMatch(generatedCommands, /\b(?:serve|export|benchmark-lint)\b/i);
+    assert.doesNotMatch(generatedCommands, /--check-benchmark\b/i);
+    for (const item of statePayload.commands) {
+      assert.equal(dashboardCommandSafety(item.command).safe, true, item.command);
+    }
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
@@ -6355,13 +6387,10 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
     assert.equal(payload.viewModel.guidedSetup.stage, "stale-last-run");
     assert.equal(payload.viewModel.lastRun.freshness.fresh, false);
     assert.equal(payload.viewModel.nextBestAction.kind, "stale-packet");
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--command/);
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /METRIC seconds=3/);
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--checks-policy "manual"/);
-    assert.equal(
-      payload.viewModel.nextBestAction.command,
-      payload.viewModel.guidedSetup.commands.replaceLast,
-    );
+    assert.equal(payload.viewModel.guidedSetup.commands, undefined);
+    assert.doesNotMatch(String(payload.viewModel.nextBestAction.command || ""), /\bnext\b/);
+    assert.equal(payload.viewModel.missionControl.logDecision.commandsByStatus, undefined);
+    assert.equal(payload.viewModel.missionControl.logDecision.liveAction, undefined);
     assert.match(payload.viewModel.nextBestAction.detail, /Last-run packet is stale/);
     assert.match(payload.viewModel.readout.nextAction, /Last-run packet is stale/);
   });
@@ -6506,6 +6535,45 @@ test("setup state and doctor expose gate quality and preflight readiness", async
     assert.match(doctorPayload.nextAction, /benchmark/i);
     assert.doesNotMatch(doctorPayload.explanation.verdict, /no blocking/i);
     assert.equal(doctorPayload.explanation.preflight.status, "blocked");
+  });
+});
+
+test("guide, dashboard, and recommend-next share canonical preflight blocker", async () => {
+  await withTempDir("canonical-preflight-guide", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "canonical preflight",
+      "--metric-name",
+      "seconds",
+    ]);
+
+    const guide = await runCli(["guide", "--cwd", dir]);
+    assert.equal(guide.code, 0, guide.stderr);
+    const guidePayload = JSON.parse(guide.stdout);
+
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const dashboardPayload = JSON.parse(exportResult.stdout);
+    const dashboardAction = dashboardPayload.viewModel.nextBestAction;
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+
+    assert.equal(guidePayload.stage, "preflight");
+    assert.equal(dashboardAction.kind, "preflight");
+    assert.equal(recommendPayload.action.kind, "preflight");
+    assert.equal(guidePayload.nextStep.nextAction.title, "Resolve preflight");
+    assert.equal(
+      recommendPayload.nextStep.nextAction.title,
+      guidePayload.nextStep.nextAction.title,
+    );
+    assert.match(guidePayload.nextAction, /benchmark command/i);
+    assert.match(dashboardAction.detail, /benchmark command/i);
+    assert.match(recommendPayload.nextAction, /benchmark command/i);
   });
 });
 

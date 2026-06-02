@@ -27,7 +27,15 @@ This project uses a root-only changelog because the root README is the public do
 - `serve` now derives returned dashboard health from `/health` verification, including port, cwd, and version matching, before reporting the dashboard as verified.
 - `next` now refuses to overwrite a fresh unlogged last-run packet, while stale-packet replacement commands remain runnable and copy safely through Windows PowerShell.
 - Loop guidance now keeps independent gate/preflight blockers ahead of stale-packet replacement, prioritizes partial-result salvage before fresh-packet logging, and keeps read-only dashboard guidance on preview commands instead of mutating finalization.
+- `guide`, dashboard exports, and `recommend-next` now agree on canonical preflight blockers before packet work while keeping setup repair, stale-packet replacement, and pending-log paths sharper.
+- Dashboard command rails now omit mutating run/log/current-tree-finalization/limit-extension commands and keep diagnostic, preview, and dry-run commands only.
+- Dashboard command rails now stay readout-only: generated copyable commands no longer include server starts, static exports, benchmark execution checks, or bare benchmark-lint invocations.
+- Dashboard command safety now rejects unquoted parenthesized shell expressions and custom `--command` / `--checks-command` payloads before marking read-only commands as copyable.
+- Dashboard command safety now requires the real `node ... scripts/autoresearch.mjs` launcher, blocks `--` separator payloads, and aligns copyable commands with registry action policy plus dashboard-only readout overrides.
+- Dashboard and terminal-report command fallbacks now apply the same readout policy, including Windows quote safety and registry-derived custom command flags such as `--benchmark-command`.
+- Terminal reports now keep readout command fields non-mutating by filtering explicit canonical check commands, dashboard restart commands, and Git cleanup commands to descriptive guidance or read-only health probes.
 - Full `state`, dashboard, and non-compact `recommend-next` now use the runnable stale-packet replacement or full finalization authority instead of falling back to another status read or compact next-packet guidance.
+- `integrations` now respects normalized subcommand arguments, so tool-driven `doctor` and `sync-recipes` calls no longer fall back to `list`.
 - `next_experiment` output schemas now include the full packet, history, last-run path, and report fields that the tool already returns.
 
 ## 2.0.2

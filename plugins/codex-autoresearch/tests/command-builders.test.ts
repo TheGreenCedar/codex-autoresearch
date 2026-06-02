@@ -6,6 +6,7 @@ import {
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
+import { createCliCommandHandlers } from "../lib/cli-handlers.js";
 
 test("recommend-next response preserves stable fields and optional governance fields", () => {
   const response = buildRecommendNextResponse({
@@ -31,6 +32,25 @@ test("recommend-next response preserves stable fields and optional governance fi
   assert.deepEqual(response.loopContract, { nextActionKind: "runtime-provenance" });
   assert.deepEqual(response.laneLifecycle, { staleLanes: ["scout"] });
   assert.deepEqual(response.packetDiagnostics, { unresolved: true });
+});
+
+test("integrations handler prefers normalized subcommand argument", async () => {
+  const calls: Array<{ subcommand: string | undefined; catalog?: string }> = [];
+  const handlers = createCliCommandHandlers({
+    integrationsCommand: async (subcommand: string | undefined, args: Record<string, unknown>) => {
+      calls.push({ subcommand, catalog: String(args.catalog || "") });
+      return { ok: true, subcommand };
+    },
+  });
+
+  const response = await handlers.integrations({
+    _: ["integrations"],
+    subcommand: "doctor",
+    catalog: "recipes.json",
+  });
+
+  assert.deepEqual(calls, [{ subcommand: "doctor", catalog: "recipes.json" }]);
+  assert.deepEqual(response.result, { ok: true, subcommand: "doctor" });
 });
 
 test("recommend-next authority prefers dashboard runtime drift over compact source-only state", () => {

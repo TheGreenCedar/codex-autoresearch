@@ -46,6 +46,8 @@ test("terminal report prioritizes blockers before packet recommendations", () =>
   assert.match(report.text, /Gate: missing/);
   assert.match(report.text, /Runtime: installed fresh, build available/);
   assert.match(report.text, /Dashboard: not checked/);
+  assert.equal(report.json.dashboard.command, "");
+  assert.doesNotMatch(report.text, /\bserve\b/);
   assert.doesNotMatch(report.text, /\[object Object\]/);
 });
 
@@ -87,7 +89,35 @@ test("terminal report falls back to packet diagnostics when canonical action is 
     report.json.nextCommand,
     "node scripts/autoresearch.mjs partial-results --cwd C:/work/project --from-last",
   );
+  assert.equal(
+    report.json.packet.command,
+    "node scripts/autoresearch.mjs partial-results --cwd C:/work/project --from-last",
+  );
   assert.match(report.text, /Packet: missing_quality_score/);
+});
+
+test("terminal report filters unsafe packet diagnostic command fields", () => {
+  for (const command of [
+    "git stash push --include-untracked -- autoresearch.jsonl",
+    "node scripts/autoresearch.mjs doctor --cwd C:/work/project --check-benchmark --explain",
+  ]) {
+    const report = buildTerminalReport({
+      ok: true,
+      workDir: "C:/work/project",
+      commands: {
+        state: "node scripts/autoresearch.mjs state --cwd C:/work/project --compact",
+      },
+      packetDiagnostics: {
+        unresolved: true,
+        primaryStage: "unsafe-command",
+        recommendation: "Inspect packet diagnostics without running cleanup.",
+        command,
+      },
+    });
+
+    assert.equal(report.json.packet.command, "", command);
+    assert.doesNotMatch(JSON.stringify(report.json.packet), /git stash|--check-benchmark/);
+  }
 });
 
 test("terminal report uses canonical gate-quality action ahead of packet fallback", () => {
@@ -169,8 +199,9 @@ test("terminal report prefers loop-contract blockers over advisory state blocker
   assert.equal(report.json.nextAction, "Run benchmark-lint to clear the active decision capsule.");
   assert.equal(
     report.json.nextCommand,
-    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/work/project",
+    "node scripts/autoresearch.mjs state --cwd C:/work/project --compact",
   );
+  assert.doesNotMatch(report.json.nextCommand, /benchmark-lint/);
   assert.match(report.json.gate.detail, /No independent checks gate/);
   assert.doesNotMatch(report.text, /Status: blocked - Advisory dirty/);
 });
@@ -256,6 +287,49 @@ test("terminal report uses blocker metadata fallback when canonical command is a
     "node scripts/autoresearch.mjs finalize-preview --cwd C:/work/project",
   );
   assert.doesNotMatch(report.json.nextCommand, /\bnext\b/);
+});
+
+test("terminal report blocked fallbacks skip process-starting commands", () => {
+  const report = buildTerminalReport({
+    ok: false,
+    workDir: "C:/work/project",
+    commands: {
+      doctorExplain:
+        "node scripts/autoresearch.mjs doctor --cwd C:/work/project --check-benchmark --explain",
+      benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/work/project",
+      state: "node scripts/autoresearch.mjs state --cwd C:/work/project --compact --report",
+    },
+    preflight: {
+      status: "blocked",
+      blockers: ["No benchmark command is available for future packets."],
+      nextCommand:
+        "node scripts/autoresearch.mjs doctor --cwd C:/work/project --check-benchmark --explain",
+    },
+    decisionEnvelope: {
+      loopContract: {
+        ok: false,
+        canRunNextPacket: false,
+        blockers: [
+          {
+            kind: "preflight",
+            reason: "No benchmark command is available for future packets.",
+          },
+        ],
+      },
+      canonicalNextAction: {
+        kind: "preflight",
+        reason: "Resolve preflight blockers before another packet.",
+        command:
+          "node scripts/autoresearch.mjs doctor --cwd C:/work/project --check-benchmark --explain",
+      },
+    },
+  });
+
+  assert.equal(
+    report.json.nextCommand,
+    "node scripts/autoresearch.mjs state --cwd C:/work/project --compact --report",
+  );
+  assert.doesNotMatch(report.json.nextCommand, /--check-benchmark|benchmark-lint/);
 });
 
 test("terminal report does not turn advisory warnings into blocked next", () => {
@@ -357,8 +431,10 @@ test("terminal report distinguishes session-artifact dirtiness from source drift
   });
 
   assert.equal(report.json.cleanliness.status, "session-artifacts-dirty");
+  assert.equal(report.json.cleanliness.cleanupCommand, "");
   assert.match(report.text, /Cleanliness: Only Autoresearch session artifacts are dirty/);
-  assert.match(report.text, /git stash push --include-untracked/);
+  assert.match(report.text, /explicit Git action outside report command fields/);
+  assert.doesNotMatch(report.text, /git stash push --include-untracked/);
 });
 
 test("terminal report does not coerce missing metrics to zero", () => {
@@ -436,7 +512,8 @@ test("terminal report renders compact metric freshness lane and ASI contract fie
   assert.match(report.text, /ASI: risk missing-rollback-reason/);
   assert.match(
     report.text,
-    /Dashboard: dead \(stale\) Command: node scripts\/autoresearch\.mjs serve/,
+    /Dashboard: dead \(stale\); restart the dashboard outside report command fields if needed Command: curl "http:\/\/127\.0\.0\.1:61234\/health"/,
   );
-  assert.doesNotMatch(report.text, /curl "http:\/\/127\.0\.0\.1:61234\/health"/);
+  assert.equal(report.json.dashboard.command, 'curl "http://127.0.0.1:61234/health"');
+  assert.doesNotMatch(report.text, /node scripts\/autoresearch\.mjs serve/);
 });

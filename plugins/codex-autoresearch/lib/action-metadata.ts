@@ -1,5 +1,6 @@
+import { readoutSafeCommand } from "./dashboard-command-safety.js";
+
 export interface ActionMetadata {
-  command: string;
   label: string;
   commandLabel: string;
   safeAction: string;
@@ -39,126 +40,108 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["finalizePreview", "state"],
   }),
   "safety-blocker": actionMetadata({
-    command: "",
     label: "Resolve safety blocker",
     commandLabel: "Doctor",
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
   }),
   "workflow-friction": actionMetadata({
-    command: "",
     label: "Remove workflow friction",
     commandLabel: "Doctor",
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
   }),
   "benchmark-mismatch": actionMetadata({
-    command: "",
     label: "Repair benchmark mismatch",
     commandLabel: "Lint",
     safeAction: "benchmark-lint",
     fallbackKeys: ["benchmarkLint", "doctorExplain", "doctor", "state"],
   }),
   "runtime-provenance": actionMetadata({
-    command: "",
     label: "Inspect runtime provenance",
     commandLabel: "Doctor",
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
   }),
   "packet-diagnostic": actionMetadata({
-    command: "",
     label: "Inspect packet diagnostics",
     commandLabel: "Partial",
     safeAction: "partial-results",
     fallbackKeys: ["partialResults", "state"],
   }),
   "decision-capsule": actionMetadata({
-    command: "",
     label: "Resolve decision capsule",
     commandLabel: "Capsule",
     safeAction: "decision-capsule",
     fallbackKeys: ["benchmarkLint", "recommendNext", "state"],
   }),
   "context-distillation": actionMetadata({
-    command: "",
     label: "Refresh context",
     commandLabel: "Context",
     safeAction: "session-forensics",
     fallbackKeys: ["onboardingPacket", "state"],
   }),
   "lane-cleanup": actionMetadata({
-    command: "",
     label: "Clean up stale lanes",
     commandLabel: "State",
     safeAction: "state",
     fallbackKeys: ["state", "laneRunner"],
   }),
   "stale-packet": actionMetadata({
-    command: "",
     label: "Replace stale packet",
     commandLabel: "Setup",
     safeAction: "setup-plan",
     fallbackKeys: ["replaceLast", "setup", "setupPlan", "state"],
   }),
   "partial-salvage": actionMetadata({
-    command: "",
     label: "Review partial results",
     commandLabel: "Partial",
     safeAction: "partial-results",
     fallbackKeys: ["partialResults", "state"],
   }),
   setup: actionMetadata({
-    command: "",
     label: "Complete setup",
     commandLabel: "Setup",
     safeAction: "setup-plan",
     fallbackKeys: ["setup", "setupPlan", "state"],
   }),
   "benchmark-command": actionMetadata({
-    command: "",
     label: "Add benchmark command",
     commandLabel: "Setup",
     safeAction: "setup-plan",
     fallbackKeys: ["setup", "setupPlan", "benchmarkLint", "state"],
   }),
   "log-decision": actionMetadata({
-    command: "",
     label: "Log last packet",
     commandLabel: "Log",
     safeAction: "log",
     fallbackKeys: ["logLast", "keepLast", "discardLast", "state"],
   }),
   "segment-transition": actionMetadata({
-    command: "",
     label: "Start new segment",
     commandLabel: "Review",
     safeAction: "new-segment",
     fallbackKeys: ["newSegmentDryRun", "gapCandidates", "finalizePreview", "state"],
   }),
   watchdog: actionMetadata({
-    command: "",
     label: "Inspect quiet window",
     commandLabel: "Inspect",
     safeAction: "inspect",
     fallbackKeys: ["finalizePreview", "liveDashboard", "doctor", "state"],
   }),
   finalization: actionMetadata({
-    command: "",
     label: "Preview finalization",
     commandLabel: "Preview",
     safeAction: "finalize-preview",
     fallbackKeys: ["finalizePreview", "state"],
   }),
   "finalize-preview": actionMetadata({
-    command: "",
     label: "Preview finalization",
     commandLabel: "Preview",
     safeAction: "finalize-preview",
     fallbackKeys: ["finalizePreview", "state"],
   }),
   "next-packet": actionMetadata({
-    command: "",
     label: "Run next packet",
     commandLabel: "Next",
     safeAction: "next",
@@ -166,7 +149,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["next", "nextRun"],
   }),
   baseline: actionMetadata({
-    command: "",
     label: "Run baseline",
     commandLabel: "Next",
     safeAction: "next",
@@ -174,7 +156,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["baseline", "next", "nextRun"],
   }),
   plateau: actionMetadata({
-    command: "",
     label: "Pivot plateau",
     commandLabel: "Next",
     safeAction: "next",
@@ -182,7 +163,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["next", "nextRun"],
   }),
   "plateau-pivot": actionMetadata({
-    command: "",
     label: "Pivot plateau",
     commandLabel: "Next",
     safeAction: "next",
@@ -190,7 +170,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["next", "nextRun"],
   }),
   "quality-gap": actionMetadata({
-    command: "",
     label: "Close quality gaps",
     commandLabel: "Gaps",
     safeAction: "gap-candidates",
@@ -198,6 +177,15 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["gapCandidates"],
   }),
 };
+
+const operationalFallbackKinds = new Set([
+  "baseline",
+  "log-decision",
+  "next-packet",
+  "plateau",
+  "plateau-pivot",
+  "stale-packet",
+]);
 
 export function actionMetadataForKind(kind: unknown): ActionMetadata | null {
   return ACTION_METADATA[String(kind || "")] || null;
@@ -225,18 +213,24 @@ export function resolveActionCommand(
   context: { explicitCommand?: unknown } = {},
 ): string {
   const explicit = concreteCommand(context.explicitCommand);
-  if (explicit) return explicit;
+  if (explicit) {
+    const command = fallbackCommandForPolicy(kind, explicit);
+    if (command) return command;
+  }
 
   const metadata = actionMetadataForKind(kind);
   const lookup = commandLookup(commands);
   if (metadata) {
     for (const key of metadata.fallbackKeys) {
-      const command = lookup(key);
+      const command = fallbackCommandForPolicy(kind, lookup(key));
       if (command) return command;
     }
   }
   if (String(kind || "") === "next-packet") {
-    return lookup("next") || lookup("nextRun");
+    return (
+      fallbackCommandForPolicy(kind, lookup("next")) ||
+      fallbackCommandForPolicy(kind, lookup("nextRun"))
+    );
   }
   return "";
 }
@@ -248,24 +242,35 @@ export function fallbackCommandForKind(
   const metadata = actionMetadataForKind(kind);
   if (!metadata) return "";
   for (const key of metadata.fallbackKeys) {
-    const command = lookup(key) || lookup(spacedKey(key)) || lookup(normalizeActionCommandKey(key));
+    const command = fallbackCommandForPolicy(
+      kind,
+      lookup(key) || lookup(spacedKey(key)) || lookup(normalizeActionCommandKey(key)),
+    );
     if (command) return command;
   }
   return "";
 }
 
+export function readoutFallbackCommand(command: unknown): string {
+  return readoutSafeCommand(concreteCommand(command));
+}
+
+function fallbackCommandForPolicy(kind: unknown, command: unknown): string {
+  const text = concreteCommand(command);
+  if (!text) return "";
+  return operationalFallbackKinds.has(String(kind || "")) ? text : readoutFallbackCommand(text);
+}
+
 function actionMetadata({
-  command,
   label,
   commandLabel,
   safeAction,
   packetBrake = true,
   fallbackKeys,
-}: Omit<ActionMetadata, "command" | "packetBrake"> & {
-  command?: string;
+}: Omit<ActionMetadata, "packetBrake"> & {
   packetBrake?: boolean;
 }): ActionMetadata {
-  return { command: command || "", label, commandLabel, safeAction, packetBrake, fallbackKeys };
+  return { label, commandLabel, safeAction, packetBrake, fallbackKeys };
 }
 
 function spacedKey(value: string): string {

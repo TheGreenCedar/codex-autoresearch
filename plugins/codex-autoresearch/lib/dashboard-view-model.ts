@@ -6,6 +6,11 @@ import {
   fallbackCommandForKind,
   isPacketBrakeKind,
 } from "./action-metadata.js";
+import {
+  dashboardCommandMapKey,
+  dashboardReadOnlyCommand,
+  stripDashboardGuidanceCommandFields,
+} from "./dashboard-command-safety.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -20,13 +25,6 @@ type RunLike = LooseObject & {
   commit?: string;
 };
 type CommandMap = Map<string, string>;
-
-const DASHBOARD_COMMAND_KEY_ALIASES: Record<string, string> = {
-  doctorExplain: "doctor",
-  liveDashboard: "serve dashboard",
-  newSegmentDryRun: "new segment",
-  state: "recommend next",
-};
 
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
@@ -231,7 +229,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory,
     warnings,
   });
-  return {
+  return sanitizeDashboardDecisionEnvelope({
     setup: setupPlan,
     guidedSetup,
     decisionEnvelope,
@@ -312,7 +310,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
         : finalizePreview?.nextAction || "Keep evidence or run finalize-preview when ready.",
     },
     commands,
-  };
+  });
 }
 
 function normalizeDashboardContext(context: DashboardContext): NormalizedDashboardContext {
@@ -320,9 +318,9 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
   return {
     ...context,
     settings,
-    commands: Array.isArray(context.commands) ? context.commands : [],
-    setupPlan: context.setupPlan || null,
-    guidedSetup: context.guidedSetup || null,
+    commands: sanitizeDashboardCommandList(context.commands),
+    setupPlan: sanitizeDashboardGuidance(context.setupPlan),
+    guidedSetup: sanitizeDashboardGuidance(context.guidedSetup),
     qualityGap: context.qualityGap || null,
     finalizePreview: context.finalizePreview || null,
     recipes: Array.isArray(context.recipes) ? context.recipes : [],
@@ -330,6 +328,53 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
     drift: context.drift || null,
     warnings: Array.isArray(context.warnings) ? context.warnings : [],
   };
+}
+
+function sanitizeDashboardGuidance<T>(value: T): T | null {
+  return stripDashboardGuidanceCommandFields(value);
+}
+
+function sanitizeDashboardCommandList(commands: unknown) {
+  if (!Array.isArray(commands)) return [];
+  return commands
+    .map((item): LooseObject | null => {
+      const record = recordOrNull(item);
+      const label = cleanText(record?.label);
+      const command = dashboardReadOnlyCommand(record?.command);
+      if (!label || !command) return null;
+      return { ...record, label, command };
+    })
+    .filter((item): item is LooseObject => item !== null);
+}
+
+function sanitizeDashboardDecisionEnvelope<T>(value: T): T {
+  if (Array.isArray(value))
+    return value.map((item) => sanitizeDashboardDecisionEnvelope(item)) as T;
+  if (!value || typeof value !== "object") return value;
+  const result: LooseObject = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "command") {
+      const command = dashboardReadOnlyCommand(nested);
+      if (command) result[key] = command;
+      continue;
+    }
+    if (key === "primaryCommand") {
+      const primary = sanitizeDashboardPrimaryCommand(nested);
+      if (primary) result[key] = primary;
+      continue;
+    }
+    if (key === "commandsByStatus" || key === "liveAction") continue;
+    result[key] = sanitizeDashboardDecisionEnvelope(nested);
+  }
+  return result as T;
+}
+
+function sanitizeDashboardPrimaryCommand(value: unknown): LooseObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as LooseObject;
+  const command = dashboardReadOnlyCommand(record.command);
+  if (!command) return null;
+  return { ...record, command };
 }
 
 function normalizeDashboardSettings(
@@ -380,32 +425,34 @@ function normalizeDecisionEnvelope({
     settings.decisionEnvelope,
     settings.resumeAudit,
   );
-  if (Object.keys(supplied).length) return supplied;
+  if (Object.keys(supplied).length) return sanitizeDashboardDecisionEnvelope(supplied);
 
   const current = Array.isArray(state?.current) ? state.current : [];
   const lastRun = guidedSetup?.lastRun || null;
   const freshness = lastRun?.freshness || null;
-  return buildDecisionEnvelope({
-    state: { ...state, current },
-    nextAction:
-      guidedSetup?.nextStep?.nextAction?.reason ||
-      guidedSetup?.nextAction ||
-      setupPlan?.nextStep?.nextAction?.reason ||
-      "Run doctor, then next.",
-    lastRunFreshness: freshness,
-    warningDetails: warnings,
-    scaffoldHealth,
-    researchIntegrity,
-    finalization: finalizePreview,
-    qualityGap,
-    experimentEconomics,
-    salvageCandidates,
-    workflowFriction,
-    experimentMemory,
-    segmentTransition,
-    setupState,
-    watchdog,
-  });
+  return sanitizeDashboardDecisionEnvelope(
+    buildDecisionEnvelope({
+      state: { ...state, current },
+      nextAction:
+        guidedSetup?.nextStep?.nextAction?.reason ||
+        guidedSetup?.nextAction ||
+        setupPlan?.nextStep?.nextAction?.reason ||
+        "Run doctor, then next.",
+      lastRunFreshness: freshness,
+      warningDetails: warnings,
+      scaffoldHealth,
+      researchIntegrity,
+      finalization: finalizePreview,
+      qualityGap,
+      experimentEconomics,
+      salvageCandidates,
+      workflowFriction,
+      experimentMemory,
+      segmentTransition,
+      setupState,
+      watchdog,
+    }),
+  );
 }
 
 function setupStateFromDashboardInput({ guidedSetup, setupPlan }: LooseObject) {
@@ -2014,7 +2061,9 @@ function actionFromDecisionEnvelope(
     guidedSetup?.commands?.replaceLast ||
     (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
   const metadata = actionMetadataForKind(kind);
-  const metadataCommand = fallbackCommandForKind(kind, (key) => commandMap.get(commandMapKey(key)));
+  const metadataCommand = fallbackCommandForKind(kind, (key) =>
+    commandMap.get(dashboardCommandMapKey(key)),
+  );
   const commandOverrides: Record<string, string> = {
     "stale-packet":
       stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
@@ -2177,13 +2226,6 @@ export function buildMissionControl({
           : qualityGap
             ? "gaps"
             : actionRail?.[0]?.kind || "next";
-  const logCommandsByStatus = Object.fromEntries(
-    allowedStatuses.map((status: string) => [
-      status,
-      logCommandForStatus(guidedSetup?.commands?.logLast, status),
-    ]),
-  );
-
   return {
     activeStep,
     staticFallback: "Serve the dashboard locally for a fresh readout; use CLI for actions.",
@@ -2218,12 +2260,6 @@ export function buildMissionControl({
         detail: canLog
           ? `Last packet is ready to log as ${suggestedStatus || "an allowed status"}.`
           : lastRun?.freshness?.reason || "No fresh last-run packet is waiting.",
-        command:
-          guidedSetup?.commands?.logLast ||
-          commandMap.get("keep last") ||
-          commandMap.get("discard last"),
-        commandLabel: "Log",
-        mutates: true,
       }),
       missionStep({
         id: "finalize",
@@ -2238,7 +2274,6 @@ export function buildMissionControl({
     ],
     logDecision: {
       available: canLog,
-      mutates: true,
       allowedStatuses,
       suggestedStatus,
       metric: lastRun?.metric ?? null,
@@ -2251,9 +2286,6 @@ export function buildMissionControl({
             ? "Describe the failed checks"
             : "Describe the kept change",
       asiTemplate: lastRun?.asiTemplate || {},
-      command: guidedSetup?.commands?.logLast || "",
-      commandsByStatus: logCommandsByStatus,
-      liveAction: suggestedStatus ? `log-${String(suggestedStatus).replace(/_/g, "-")}` : "",
       requiresDescription: true,
       requiresConfirmation: true,
     },
@@ -2284,21 +2316,17 @@ function missionStep({
   commandLabel?: string;
   mutates?: boolean;
 }) {
+  const safeCommand = dashboardReadOnlyCommand(command);
   return {
     id,
     title,
     state,
     detail,
     safeAction,
-    command,
-    primaryCommand: command ? { label: commandLabel, command } : null,
+    command: safeCommand,
+    primaryCommand: safeCommand ? { label: commandLabel, command: safeCommand } : null,
     mutates,
   };
-}
-
-function logCommandForStatus(command: unknown, status: string): string {
-  if (!command || !status) return "";
-  return String(command).replace(/--status\s+(?:"[^"]+"|'[^']+'|\S+)/, `--status ${status}`);
 }
 
 function actionItem({
@@ -2326,6 +2354,7 @@ function actionItem({
   source?: string;
   explanation?: LooseObject | null;
 }) {
+  const safeCommand = dashboardReadOnlyCommand(command);
   return {
     kind,
     priority,
@@ -2336,8 +2365,8 @@ function actionItem({
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
-    command,
-    primaryCommand: command ? { label: commandLabel, command } : null,
+    command: safeCommand,
+    primaryCommand: safeCommand ? { label: commandLabel, command: safeCommand } : null,
     tone,
     source,
   };
@@ -2415,11 +2444,6 @@ function commandLookup(commands: unknown): CommandMap {
     if (label) map.set(label, item.command || "");
   }
   return map;
-}
-
-function commandMapKey(key: string): string {
-  if (DASHBOARD_COMMAND_KEY_ALIASES[key]) return DASHBOARD_COMMAND_KEY_ALIASES[key];
-  return key.replace(/[A-Z]/g, (match) => ` ${match.toLowerCase()}`).toLowerCase();
 }
 
 function warningMessage(warning: unknown): string {

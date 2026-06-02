@@ -91,9 +91,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     await deps.writeFile(output, html, "utf8");
     const modeGuidance = {
       staticExport: output,
-      liveDashboardCommand: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} serve --cwd ${deps.shellQuote(workDir)}`,
       difference:
-        "The exported HTML is a read-only fallback snapshot; share the served dashboard URL when the operator needs a live link.",
+        "The exported HTML is a read-only fallback snapshot; start the served dashboard explicitly from the CLI when the operator needs a live link.",
       fullJson:
         "Pass --json-full/--verbose on the CLI to include the full viewModel in the command response.",
     };

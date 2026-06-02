@@ -75,9 +75,9 @@ const ok =
   (await runDashboardBuildWithParity()) &&
   (await runDemoTrustCheck()) &&
   (await runSourceCheckoutLauncherCheck()) &&
-  (await runPackageArtifactCheck()) &&
   (await runDogfoodHealthCheck()) &&
-  (await runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 }));
+  (await runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 })) &&
+  (await runPackageArtifactCheck());
 
 process.exit(ok ? 0 : 1);
 
@@ -141,8 +141,8 @@ async function runPackageArtifactCheck() {
   const npmExecPath = await resolveNpmExecPath();
   const npmCommand = npmExecPath ? node : npm;
   const npmArgs = npmExecPath
-    ? [npmExecPath, "pack", "--json", "--pack-destination", packDir]
-    : ["pack", "--json", "--pack-destination", packDir];
+    ? [npmExecPath, "pack", "--ignore-scripts", "--json", "--pack-destination", packDir]
+    : ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir];
 
   try {
     const result = await runCommand(["package-artifact", npmCommand, npmArgs]);

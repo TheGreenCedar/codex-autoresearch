@@ -210,7 +210,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       }),
     }),
     integrations: async (args) => ({
-      result: await deps.integrationsCommand(args._[1] || "list", args),
+      result: await deps.integrationsCommand(args.subcommand || args._?.[1] || "list", args),
     }),
     init: async (args) => ({
       result: await deps.initExperiment({
@@ -359,7 +359,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         showcaseMode: args.showcaseMode,
         jsonFull: args.jsonFull,
         verbose: args.verbose,
-        progress: args.progress,
+        progress: args.progress || args.progressStderr || args.progress_stderr,
       }),
     }),
     clear: async (args) => ({

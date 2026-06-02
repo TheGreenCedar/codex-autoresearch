@@ -39,7 +39,7 @@ function loopAction(
   triggeredBy: unknown = [kind],
 ): LoopAction {
   const metadata = actionMetadataForKind(kind);
-  const actionCommand = stringValue(command) || metadata?.command || "";
+  const actionCommand = stringValue(command);
   return {
     kind,
     priority,

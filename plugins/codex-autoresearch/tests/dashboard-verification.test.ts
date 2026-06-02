@@ -10,6 +10,16 @@ import {
   buildDashboardViewModel,
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
+import {
+  DASHBOARD_COMMAND_FIELD_NAMES,
+  DASHBOARD_COMMAND_KEY_ALIASES,
+  collectDashboardCommandFields,
+  dashboardCommandSafety,
+  dashboardCommandMapKey,
+  dashboardReadOnlyCommand,
+  stripDashboardExportCommandFields,
+  stripDashboardGuidanceCommandFields,
+} from "../lib/dashboard-command-safety.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
@@ -32,6 +42,223 @@ test.after(async () => {
 
 test.afterEach(() => {
   dashboard.closeDashboardWindows();
+});
+
+test("dashboard command safety accepts read-only autoresearch commands", () => {
+  const commands = [
+    "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
+    "node ./scripts/autoresearch.mjs state --cwd C:/repo",
+    "node C:/repo/plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd C:/repo",
+    "node C:/repo/plugins/codex-autoresearch/dist/scripts/autoresearch.mjs state --cwd C:/repo",
+    "node scripts/autoresearch.mjs state --cwd C:/repo",
+    "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node scripts/autoresearch.mjs recommend-next --cwd C:/repo --compact",
+    "node scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+    "node scripts/autoresearch.mjs setup-plan --cwd C:/repo",
+    'node scripts/autoresearch.mjs benchmark-lint --cwd "C:/Repo (demo)" --sample "METRIC seconds=1"',
+    "node scripts/autoresearch.mjs benchmark-inspect --cwd C:/repo",
+    "node scripts/autoresearch.mjs checks-inspect --cwd C:/repo",
+    "node scripts/autoresearch.mjs partial-results --cwd C:/repo --from-last",
+    "node scripts/autoresearch.mjs quality-gap --cwd C:/repo --research-slug study",
+    "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo --research-slug study",
+    "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo --apply=false",
+    "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
+    "node scripts/autoresearch.mjs promote-gate --cwd C:/repo --reason review --dry-run",
+  ];
+
+  for (const command of commands) {
+    assert.equal(dashboardReadOnlyCommand(command), command, command);
+  }
+});
+
+test("dashboard command safety rejects mutating autoresearch commands", () => {
+  const commands = [
+    "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark",
+    "node scripts/autoresearch.mjs serve --cwd C:/repo",
+    "node scripts/autoresearch.mjs export --cwd C:/repo",
+    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo --command-file bench.cmd",
+    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo -- node evil.js",
+    "node scripts/autoresearch.mjs next --cwd C:/repo",
+    "node scripts/autoresearch.mjs log --cwd C:/repo --from-last --status keep",
+    "node scripts/autoresearch.mjs setup --cwd C:/repo --benchmark-command npm-test",
+    "node scripts/autoresearch.mjs run --cwd C:/repo",
+    "node scripts/autoresearch.mjs config --cwd C:/repo --extend 5",
+    "node scripts/autoresearch.mjs clear --cwd C:/repo --yes",
+    "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo",
+    "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo --apply",
+    "node scripts/autoresearch.mjs partial-results --cwd C:/repo --record candidate-1",
+    "node scripts/autoresearch.mjs integrations sync-recipes --catalog recipes.json",
+    "node scripts/autoresearch.mjs integrations --subcommand sync-recipes --catalog recipes.json",
+    "node scripts/autoresearch.mjs integrations --subcommand=sync-recipes --catalog recipes.json",
+    "node scripts/autoresearch.mjs integrations Sync-Recipes --catalog recipes.json",
+    "node scripts/autoresearch.mjs new-segment --cwd C:/repo --yes",
+    "node scripts/autoresearch.mjs promote-gate --cwd C:/repo --reason review",
+    "git status --short",
+  ];
+
+  for (const command of commands) {
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety rejects bare autoresearch subcommands", () => {
+  const commands = [
+    'doctor --cwd "C:/A&B"',
+    'doctor --cwd "C:/Repo (demo)"',
+    "doctor --cwd C:/repo",
+    "state --cwd C:/repo",
+    "benchmark-lint --cwd C:/repo --sample 'METRIC seconds=1'",
+    "integrations --subcommand sync-recipes",
+    "integrations --subcommand=sync-recipes",
+    "integrations Sync-Recipes",
+  ];
+
+  for (const command of commands) {
+    const result = dashboardCommandSafety(command);
+    assert.equal(result.safe, false, command);
+    assert.equal(result.commandName, "", command);
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety rejects unsafe executables before autoresearch script", () => {
+  const commands = [
+    "rm scripts/autoresearch.mjs doctor",
+    "git scripts/autoresearch.mjs doctor",
+    "python scripts/autoresearch.mjs doctor",
+  ];
+
+  for (const command of commands) {
+    const result = dashboardCommandSafety(command);
+    assert.equal(result.safe, false, command);
+    assert.equal(result.commandName, "", command);
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety rejects non-plugin autoresearch launcher lookalikes", () => {
+  const commands = [
+    "node autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/tmp/autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/tmp/not-scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node scripts/autoresearch.mjs.bak state --cwd C:/repo --report",
+    "node scripts/not-autoresearch.mjs state --cwd C:/repo --report",
+  ];
+
+  for (const command of commands) {
+    const result = dashboardCommandSafety(command);
+    assert.equal(result.safe, false, command);
+    assert.equal(result.commandName, "", command);
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety rejects shell-chained safe prefixes", () => {
+  const commands = [
+    "doctor && next",
+    "doctor; clear --yes",
+    "doctor | next",
+    "gap-candidates --apply=false && next",
+  ];
+
+  for (const command of commands) {
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety treats Windows backslashes as literal before quotes", () => {
+  const command = String.raw`node scripts/autoresearch.mjs state --cwd "C:\tmp\" & node scripts/autoresearch.mjs serve --cwd .`;
+  const result = dashboardCommandSafety(command);
+
+  assert.equal(result.safe, false);
+  assert.match(result.reason, /shell operator &/);
+  assert.equal(dashboardReadOnlyCommand(command), "");
+});
+
+test("dashboard command safety rejects shell substitution and redirection", () => {
+  const commands = [
+    'doctor --cwd "$(node scripts/autoresearch.mjs clear --cwd . --yes)"',
+    "doctor --cwd `node scripts/autoresearch.mjs clear --cwd . --yes`",
+    "node scripts/autoresearch.mjs doctor --cwd (node scripts/autoresearch.mjs clear --cwd . --yes)",
+    "doctor --cwd C:/repo > out.txt",
+    "doctor --cwd C:/repo >> out.txt",
+    "doctor --cwd C:/repo 2> out.txt",
+    "doctor --cwd C:/repo < input.txt",
+  ];
+
+  for (const command of commands) {
+    const result = dashboardCommandSafety(command);
+    assert.equal(result.safe, false, command);
+    assert.equal(result.commandName, "", command);
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command safety rejects embedded process command flags", () => {
+  const commands = [
+    'node scripts/autoresearch.mjs checks-inspect --cwd C:/repo --command "node evil.js"',
+    'node scripts/autoresearch.mjs benchmark-inspect --cwd C:/repo --command "node evil.js"',
+    'node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo --command "node evil.js"',
+    'node scripts/autoresearch.mjs doctor --cwd C:/repo --command "node evil.js"',
+    'node scripts/autoresearch.mjs doctor --cwd C:/repo --checks-command "node evil.js"',
+    'node scripts/autoresearch.mjs checks-inspect --cwd C:/repo --checksCommand "node --version"',
+    'node scripts/autoresearch.mjs gap-candidates --cwd C:/repo --research-slug study --model-command "node --version"',
+    'node scripts/autoresearch.mjs promote-gate --cwd C:/repo --reason review --dry-run --benchmark-command "node evil.js"',
+    'node scripts/autoresearch.mjs promote-gate --cwd C:/repo --reason review --dry-run --benchmark_command "node evil.js"',
+    'node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run --benchmarkCommand "node evil.js"',
+  ];
+
+  for (const command of commands) {
+    const result = dashboardCommandSafety(command);
+    assert.equal(result.safe, false, command);
+    assert.notEqual(result.commandName, "", command);
+    assert.equal(dashboardReadOnlyCommand(command), "", command);
+  }
+});
+
+test("dashboard command scrubbers and leak collector share canonical taxonomy", () => {
+  const payload = {
+    command: "node scripts/autoresearch.mjs next --cwd C:/repo",
+    commands: {
+      keepLast: "node scripts/autoresearch.mjs log --cwd C:/repo --from-last --status keep",
+      doctor: "node scripts/autoresearch.mjs doctor --cwd C:/repo",
+    },
+    nested: {
+      detail: "Review the current state.",
+      primaryCommand: {
+        label: "Next",
+        command: "node scripts/autoresearch.mjs next --cwd C:/repo",
+      },
+    },
+    sourceCwd: "C:/repo",
+    summary: "No command here.",
+  };
+
+  assert.equal(
+    dashboardCommandMapKey("liveDashboard"),
+    DASHBOARD_COMMAND_KEY_ALIASES.liveDashboard,
+  );
+  assert.equal(dashboardCommandMapKey("newSegmentDryRun"), "new segment");
+  assert.equal(dashboardCommandMapKey("state"), "state");
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("replaceLast"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("finalizeCurrentTree"), true);
+  assert.deepEqual(stripDashboardGuidanceCommandFields(payload), {
+    nested: { detail: "Review the current state." },
+    sourceCwd: "C:/repo",
+    summary: "No command here.",
+  });
+  assert.deepEqual(stripDashboardExportCommandFields(payload), {
+    nested: { detail: "Review the current state." },
+    summary: "No command here.",
+  });
+  assert.deepEqual(collectDashboardCommandFields(payload), [
+    "node scripts/autoresearch.mjs next --cwd C:/repo",
+    "node scripts/autoresearch.mjs log --cwd C:/repo --from-last --status keep",
+    "node scripts/autoresearch.mjs doctor --cwd C:/repo",
+    "Next",
+    "node scripts/autoresearch.mjs next --cwd C:/repo",
+  ]);
 });
 
 test("dashboard action rail uses blocker metadata instead of next fallback", () => {
@@ -66,6 +293,54 @@ test("dashboard action rail uses blocker metadata instead of next fallback", () 
     "node scripts/autoresearch.mjs doctor --cwd C:/repo",
   );
   assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bnext\b/);
+});
+
+test("dashboard view model keeps only copyable readout commands", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "generated commands",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+      current: [],
+    },
+    settings: {},
+    commands: [
+      { label: "Serve dashboard", command: "node scripts/autoresearch.mjs serve --cwd C:/repo" },
+      { label: "Export dashboard", command: "node scripts/autoresearch.mjs export --cwd C:/repo" },
+      {
+        label: "Doctor",
+        command: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark",
+      },
+      {
+        label: "Benchmark lint",
+        command: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+      },
+      {
+        label: "Benchmark separator",
+        command: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo -- node evil.js",
+      },
+      { label: "Bare state", command: "state --cwd C:/repo" },
+      { label: "State", command: "node scripts/autoresearch.mjs state --cwd C:/repo --report" },
+      {
+        label: "Quality gap",
+        command: "node scripts/autoresearch.mjs quality-gap --cwd C:/repo --research-slug study",
+      },
+      {
+        label: "New segment",
+        command: "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
+      },
+    ],
+  } as any);
+
+  assert.deepEqual(
+    viewModel.commands.map((command) => command.label),
+    ["State", "Quality gap", "New segment"],
+  );
+  for (const command of viewModel.commands) {
+    assert.equal(dashboardCommandSafety(command.command).safe, true, command.command);
+  }
 });
 
 test("dashboard segment transition command matches its safe action metadata", () => {
@@ -1661,6 +1936,121 @@ test("dashboard action rail prioritizes stale packets before normal next actions
   assert.match(rail[0].explanation.avoids, /old metric/);
 });
 
+test("dashboard view model strips packet and log commands from decision states", () => {
+  const cases = [
+    {
+      name: "pending log",
+      expectedKind: "log-decision",
+      guidedSetup: {
+        stage: "needs-log-decision",
+        nextAction: "Log the last packet with an allowed status before starting another run.",
+        commands: {
+          logLast:
+            'node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Describe"',
+          keepLast:
+            'node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Keep"',
+          discardLast:
+            'node scripts/autoresearch.mjs log --cwd . --from-last --status discard --description "Discard"',
+        },
+        nextStep: {
+          nextAction: {
+            command:
+              'node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Describe"',
+          },
+        },
+        lastRun: {
+          allowedStatuses: ["keep", "discard"],
+          suggestedStatus: "keep",
+          freshness: { fresh: true, reason: "Packet is fresh." },
+        },
+      },
+    },
+    {
+      name: "stale last-run",
+      expectedKind: "stale-packet",
+      guidedSetup: {
+        stage: "stale-last-run",
+        nextAction: "Last-run packet is stale.",
+        commands: {
+          replaceLast:
+            'node scripts/autoresearch.mjs next --cwd . --command "node -e \\"console.log(\'METRIC seconds=3\')\\""',
+          baseline: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        nextStep: {
+          nextAction: {
+            command: "node scripts/autoresearch.mjs next --cwd . --compact",
+          },
+        },
+        lastRun: {
+          allowedStatuses: ["keep", "discard"],
+          suggestedStatus: "keep",
+          freshness: { fresh: false, reason: "Last-run packet is stale." },
+        },
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const viewModel = buildDashboardViewModel({
+      state: {
+        config: {
+          name: item.name,
+          metricName: "seconds",
+          metricUnit: "s",
+          bestDirection: "lower",
+        },
+        segment: 0,
+        current: [
+          {
+            run: 1,
+            metric: 5,
+            status: "keep",
+            description: "Baseline",
+            confidence: 1,
+          },
+        ],
+        baseline: 5,
+        best: 5,
+        confidence: 1,
+      },
+      setupPlan: {
+        configured: true,
+        defaultBenchmarkCommandReady: true,
+        commands: { setup: "node scripts/autoresearch.mjs setup --cwd ." },
+      },
+      guidedSetup: item.guidedSetup,
+      commands: [
+        { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
+        {
+          label: "Keep last",
+          command:
+            'node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Keep"',
+        },
+        {
+          label: "Discard last",
+          command:
+            'node scripts/autoresearch.mjs log --cwd . --from-last --status discard --description "Discard"',
+        },
+        { label: "Doctor", command: "node scripts/autoresearch.mjs doctor --cwd ." },
+        {
+          label: "Finalize preview",
+          command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
+        },
+      ],
+    });
+
+    assert.equal(viewModel.nextBestAction.kind, item.expectedKind);
+    assert.equal(viewModel.guidedSetup.commands, undefined);
+    assert.equal(viewModel.missionControl.logDecision.commandsByStatus, undefined);
+    assert.equal(viewModel.missionControl.logDecision.liveAction, undefined);
+    assertNoMutatingDashboardCommands({
+      nextBestAction: viewModel.nextBestAction,
+      missionControl: viewModel.missionControl,
+      guidedSetup: viewModel.guidedSetup,
+    });
+  }
+});
+
 test("dashboard action rail marks governance actions as packet brakes", () => {
   const brakeKinds = [
     "context-distillation",
@@ -2793,6 +3183,15 @@ test("dashboard decision rail shows newest runs first", async () => {
   );
   dom.window.close();
 });
+
+function assertNoMutatingDashboardCommands(value: unknown) {
+  const commands = collectDashboardCommandFields(value).join("\n");
+  assert.doesNotMatch(commands, /(?:^|\s)(?:next|log)(?:\s|$)/i);
+  assert.doesNotMatch(commands, /--status\s+(?:keep|discard)\b/i);
+  assert.doesNotMatch(commands, /\b(?:serve|export|benchmark-lint)\b/i);
+  assert.doesNotMatch(commands, /--check-benchmark\b/i);
+  assert.doesNotMatch(commands, /\s--\s+\S/i);
+}
 
 function extractCssBlock(css: string, marker: string) {
   const start = css.indexOf(marker);

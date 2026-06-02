@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveActionCommand } from "../lib/action-metadata.js";
+import { fallbackCommandForKind, resolveActionCommand } from "../lib/action-metadata.js";
 import { buildCompactRecommendNextResponse } from "../lib/commands/recommend-next.js";
 import { acceptedCurrentTreeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { buildGoalFrame } from "../lib/goal-frame.js";
@@ -572,6 +572,61 @@ test("packet-brake blocker actions get non-next fallback commands", () => {
   }
 });
 
+test("readout action fallback skips process-starting fallback commands", () => {
+  const commands = {
+    doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
+    benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+    state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  };
+
+  assert.equal(
+    resolveActionCommand("gate-quality", commands),
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  );
+  assert.equal(
+    resolveActionCommand("decision-capsule", commands),
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  );
+});
+
+test("readout action fallback filters explicit process-starting canonical commands", () => {
+  const commands = {
+    doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
+    benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+    state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  };
+
+  assert.equal(
+    resolveActionCommand("preflight", commands, {
+      explicitCommand:
+        "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
+    }),
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  );
+  assert.equal(
+    resolveActionCommand("next-packet", commands, {
+      explicitCommand: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+    }),
+    "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+  );
+});
+
+test("dashboard-style metadata fallback skips unsafe dry-run command payloads", () => {
+  const commands = new Map([
+    [
+      "new segment dry run",
+      'node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run --benchmark-command "node evil.js"',
+    ],
+    ["gap candidates", "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo"],
+    ["state", "node scripts/autoresearch.mjs state --cwd C:/repo --compact"],
+  ]);
+
+  assert.equal(
+    fallbackCommandForKind("segment-transition", (key) => commands.get(key)),
+    "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo",
+  );
+});
+
 test("current-tree finalization acceptance requires only one issue and a finalization command", () => {
   const payload = {
     issues: ["Finalization preview exposed a structured current-tree blocker."],
@@ -683,8 +738,8 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
     },
     canonicalNextAction: {
       kind: "decision-capsule",
-      reason: "Run the compact benchmark lint handoff.",
-      command: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+      reason: "Run the compact doctor handoff.",
+      command: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
     },
     resumeAudit: {
       canonicalNextAction: {
@@ -729,8 +784,9 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   assert.equal(action.kind, "decision-capsule");
   assert.equal(
     response.commands.primary,
-    "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
   );
+  assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
   assert.match(response.whySafe, /compact state/);
   assert.match(response.whySafe, /without dashboard-grade rendering/);
   assert.equal(response.compactState, compactState);
@@ -769,6 +825,30 @@ test("compact recommend-next uses blocker metadata fallback instead of next", ()
     "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
   );
   assert.doesNotMatch(String(response.commands.primary), /\bnext\b/);
+});
+
+test("compact recommend-next skips process-starting metadata fallbacks", () => {
+  const response = buildCompactRecommendNextResponse({
+    workDir: "C:/repo",
+    compactState: {
+      ok: false,
+      commands: {
+        benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
+        state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
+      },
+      canonicalNextAction: {
+        kind: "decision-capsule",
+        reason: "Repair the active decision capsule before another packet.",
+        command: "",
+      },
+    },
+  });
+
+  assert.equal(
+    response.commands.primary,
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
+  );
+  assert.doesNotMatch(String(response.commands.primary), /benchmark-lint/);
 });
 
 test("goal frame keeps the durable Autoresearch goal authoritative", () => {

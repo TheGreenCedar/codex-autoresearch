@@ -14,6 +14,10 @@ import {
   buildServeRegistryHealthInput,
   readServeRegistry,
 } from "../lib/dashboard-server-registry.js";
+import {
+  stripDashboardExportCommandFields,
+  stripDashboardGuidanceCommandFields,
+} from "../lib/dashboard-command-safety.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
@@ -183,6 +187,11 @@ const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
 const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
 const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
+const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
+  "runtimeDriftSummary",
+  "gateQuality",
+  "preflight",
+]);
 
 const { exportDashboard, serveDashboard } = createDashboardCommands({
   boolOption,
@@ -939,6 +948,69 @@ function guidedNextStep({
   });
 }
 
+function canonicalActionForGuidedSetup({
+  doctor,
+  explicitBenchmarkCommand,
+  stage,
+}: LooseObject): LooseObject | null {
+  if (
+    stage === "stale-last-run" ||
+    stage === "needs-log-decision" ||
+    stage === "needs-setup" ||
+    stage === "needs-benchmark-command"
+  ) {
+    return null;
+  }
+  const loopContract = doctor?.loopContract || {};
+  const canonicalNextAction = doctor?.canonicalNextAction || null;
+  const action = blockingLoopAction(loopContract, canonicalNextAction);
+  if (!action || action.kind === "next-packet") return null;
+  if (stage === "needs-baseline" && action.kind === "preflight" && explicitBenchmarkCommand) {
+    return null;
+  }
+  if (loopContract.canRunNextPacket !== false) return null;
+  return action;
+}
+
+function canonicalGuidedNextStep({ action, commands, fallbackReason }: LooseObject) {
+  const kind = String(action?.kind || "doctor");
+  const command = resolveActionCommand(kind, commands, {
+    explicitCommand: action?.command,
+  });
+  return sharedNextStep({
+    stage: guidedStageForCanonicalKind(kind),
+    title: actionTitleForKind(kind, "Resolve loop blocker"),
+    reason:
+      actionMessage(action) || fallbackReason || "Resolve the loop blocker before packet work.",
+    command,
+    toolName: guidedToolNameForCanonicalKind(kind),
+    safety: guidedSafetyForCanonicalKind(kind),
+  });
+}
+
+function guidedStageForCanonicalKind(kind: string): string {
+  if (kind === "setup" || kind === "benchmark-command") return "setup-repair";
+  if (kind === "segment-transition") return "segment-reset";
+  if (kind === "finalization" || kind === "finalize-preview") return "finalization-preview";
+  return kind || "doctor";
+}
+
+function guidedToolNameForCanonicalKind(kind: string): string {
+  if (kind === "setup" || kind === "benchmark-command") return "setup_session";
+  if (kind === "partial-salvage" || kind === "packet-diagnostic") return "partial_results";
+  if (kind === "segment-transition") return "new_segment";
+  if (kind === "finalization" || kind === "finalize-preview") return "finalize_preview";
+  if (kind === "context-distillation") return "session_forensics";
+  return actionSafeActionForKind(kind, kind).replace(/-/g, "_");
+}
+
+function guidedSafetyForCanonicalKind(kind: string): string {
+  if (kind === "setup" || kind === "segment-transition") return "state_mutation";
+  if (kind === "next-packet" || kind === "baseline") return "process_start";
+  if (kind === "log-decision") return "git_mutation";
+  return "read";
+}
+
 async function promptPlan(args: LooseObject): Promise<LooseObject> {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const prompt = String(args.prompt || args.goal || args.request || "").trim();
@@ -1596,7 +1668,12 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const setup = await setupPlan(args);
   const state: LooseObject = await publicState({ cwd: workDir });
-  const doctor = await doctorSession({ cwd: workDir, checkBenchmark: false });
+  const doctor = await doctorSession({
+    ...args,
+    cwd: workDir,
+    checkBenchmark: false,
+    check_benchmark: false,
+  });
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -1651,18 +1728,33 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     dashboard: dashboardCommand,
     newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
   };
+  const canonicalGuideAction = canonicalActionForGuidedSetup({
+    doctor,
+    explicitBenchmarkCommand: Boolean(args.benchmarkCommand || args.benchmark_command),
+    stage,
+  });
+  let nextStep = guidedNextStep({
+    stage,
+    nextAction,
+    setup,
+    commands,
+    lastRunFreshness,
+  });
+  if (canonicalGuideAction) {
+    stage = String(canonicalGuideAction.kind || stage);
+    nextAction = actionMessage(canonicalGuideAction) || doctor.nextAction || nextAction;
+    nextStep = canonicalGuidedNextStep({
+      action: canonicalGuideAction,
+      commands,
+      fallbackReason: nextAction,
+    });
+  }
   return {
     ok: doctor.issues.length === 0,
     workDir,
     stage,
     missingEssentials: setup.missingEssentials || setup.missing || [],
-    nextStep: guidedNextStep({
-      stage,
-      nextAction,
-      setup,
-      commands,
-      lastRunFreshness,
-    }),
+    nextStep,
     setup,
     state,
     gateQuality: state.gateQuality || setup.gateQuality || doctor.gateQuality || null,
@@ -1676,6 +1768,8 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
       issues: doctor.issues,
       warnings: doctor.warnings,
       nextAction: doctor.nextAction,
+      canonicalNextAction: doctor.canonicalNextAction || null,
+      loopContract: doctor.loopContract || null,
     },
     lastRun: lastRun
       ? {
@@ -4405,14 +4499,9 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
 }
 
 function stripDashboardCommandGuidance(value: any): any {
-  if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => stripDashboardCommandGuidance(item));
-  const result: LooseObject = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "runtimeDriftSummary" || key === "gateQuality" || key === "preflight") continue;
-    result[key] = stripDashboardCommandGuidance(nested);
-  }
-  return result;
+  return stripDashboardGuidanceCommandFields(value, {
+    extraFieldNames: DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS,
+  });
 }
 
 async function operatorWarningsForWorkDir(workDir: string) {
@@ -5170,38 +5259,7 @@ function readDashboardBuildAsset(fileName: string) {
 }
 
 function stripDashboardCommandFields(value: any): any {
-  const commandKeys = new Set([
-    "argv",
-    "baselineCommand",
-    "benchmarkLintCommand",
-    "cwd",
-    "command",
-    "commandLabel",
-    "commands",
-    "commandsByStatus",
-    "display",
-    "guideCommand",
-    "guidedFlow",
-    "liveDashboardCommand",
-    "nextCommand",
-    "output",
-    "outputTail",
-    "primaryCommand",
-    "sessionCwd",
-    "sourceCwd",
-    "staticExport",
-    "suggestedCommand",
-    "suggestedCommands",
-    "workDir",
-  ]);
-  if (typeof value === "string") return dashboardSafeGuidanceText(value);
-  if (Array.isArray(value)) return value.map((item: any) => stripDashboardCommandFields(item));
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]: [string, unknown]) => !commandKeys.has(key))
-      .map(([key, item]: [string, unknown]) => [key, stripDashboardCommandFields(item)]),
-  );
+  return stripDashboardExportCommandFields(value, { stringScrubber: dashboardSafeGuidanceText });
 }
 
 function scrubDashboardPublicExport(value: any): any {
@@ -6324,7 +6382,7 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
   const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
   const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
   return [
-    { label: "Serve dashboard", command: `node ${script} serve --cwd ${cwd}` },
+    { label: "State", command: `node ${script} state --cwd ${cwd} --report` },
     {
       label: "Onboarding packet",
       command: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
@@ -6334,34 +6392,23 @@ function dashboardCommands(workDir: string, qualityGap: any = null) {
     { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
     {
       label: "Doctor",
-      command: `node ${script} doctor --cwd ${cwd} --check-benchmark`,
+      command: `node ${script} doctor --cwd ${cwd} --explain`,
     },
-    { label: "Benchmark lint", command: `node ${script} benchmark-lint --cwd ${cwd}` },
     { label: "Benchmark inspect", command: `node ${script} benchmark-inspect --cwd ${cwd}` },
-    { label: "Next run", command: `node ${script} next --cwd ${cwd} --compact` },
-    {
-      label: "Keep last",
-      command: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
-    },
-    {
-      label: "Discard last",
-      command: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
-    },
+    { label: "Checks inspect", command: `node ${script} checks-inspect --cwd ${cwd}` },
     {
       label: "Partial results",
       command: `node ${script} partial-results --cwd ${cwd} --from-last`,
+    },
+    {
+      label: "Quality gap",
+      command: `node ${script} quality-gap --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}`,
     },
     {
       label: "Gap candidates",
       command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}`,
     },
     { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
-    {
-      label: "Finalize current tree",
-      command: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
-    },
-    { label: "Export dashboard", command: `node ${script} export --cwd ${cwd}` },
-    { label: "Extend limit", command: `node ${script} config --cwd ${cwd} --extend 10` },
     { label: "New segment", command: `node ${script} new-segment --cwd ${cwd} --dry-run` },
     {
       label: "Promote gate",
@@ -7229,7 +7276,10 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     benchmark.checked = true;
     benchmarkCommandSource =
       benchmarkCommandSource ||
-      (await resolveBenchmarkCommandSource(args, workDir, { fallbackToDefault: true }));
+      (await resolveBenchmarkCommandSource(args, workDir, {
+        fallbackToDefault: true,
+        requireCommand: false,
+      }));
     benchmark.command = benchmarkCommandSource.command;
     if (!benchmark.command) {
       benchmark.metricError =
@@ -7831,6 +7881,7 @@ function promotionStateForLoggedDecision({
 
 async function nextExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  await writeNextPreflightProgressSnapshot(workDir, args).catch(() => {});
   const doctor = await doctorSession({
     ...args,
     check_benchmark: false,
@@ -7849,6 +7900,7 @@ async function nextExperiment(args: any) {
     ) {
       const state = currentState(doctor.workDir);
       const capsule = state.sessionDecisionCapsule || null;
+      await deleteActiveProgressSnapshot(workDir).catch(() => {});
       return {
         ok: false,
         workDir: doctor.workDir,
@@ -7884,6 +7936,7 @@ async function nextExperiment(args: any) {
         }),
       };
     }
+    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     return {
       ok: false,
       workDir: doctor.workDir,
@@ -7929,6 +7982,7 @@ async function nextExperiment(args: any) {
     !boundedNextAllowed &&
     !stalePacketReplacementAllowed
   ) {
+    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     return {
       ok: false,
       workDir,
@@ -8034,6 +8088,29 @@ async function nextExperiment(args: any) {
   await writeLastRunPacket(run.workDir, packet, lastRunFile);
   await deleteActiveProgressSnapshot(run.workDir);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+
+async function writeNextPreflightProgressSnapshot(workDir: string, args: LooseObject) {
+  const state = currentState(workDir);
+  const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
+    fallbackToDefault: true,
+    requireCommand: false,
+  }).catch(() => null);
+  const timeoutSeconds = numberOption(
+    args.timeout_seconds ?? args.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
+  await writeActiveProgressSnapshot(
+    workDir,
+    createProgressSnapshot({
+      packetId: `packet-${state.results.length + 1}-active`,
+      command: commandSource?.command || "autoresearch next preflight",
+      commandClass: "autoresearch preflight",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds,
+      artifactRoot: ".",
+    }),
+  );
 }
 
 function blockingLoopAction(loopContract: LooseObject, canonicalNextAction: LooseObject | null) {

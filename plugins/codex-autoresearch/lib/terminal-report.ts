@@ -1,4 +1,4 @@
-import { resolveActionCommand } from "./action-metadata.js";
+import { readoutFallbackCommand, resolveActionCommand } from "./action-metadata.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -112,7 +112,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     canonicalNextAction,
     packet,
   });
-  const dashboard = dashboardSummary(state, commands);
+  const dashboard = dashboardSummary(state);
   const gate = {
     posture: stringValue(gateQuality?.posture) || "unknown",
     detail: detailFromParts([
@@ -130,7 +130,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     status:
       packet?.unresolved === true ? stringValue(packet.primaryStage) || "unresolved" : "clear",
     recommendation: packetRecommendation,
-    command: stringValue(packet?.command),
+    command: readoutFallbackCommand(packet?.command),
   };
   const portfolioSummary = {
     kind: stringValue(portfolio?.kind) || "insufficient-evidence",
@@ -198,10 +198,16 @@ function cleanlinessSummary(state: JsonRecord) {
   const status = stringValue(cleanliness?.status) || "unknown";
   const message = stringValue(cleanliness?.message);
   const nextAction = stringValue(cleanliness?.nextAction);
+  const rawCleanupCommand = stringValue(cleanliness?.cleanupCommand);
+  const cleanupCommand = readoutFallbackCommand(rawCleanupCommand);
+  const detail = message || nextAction || "not checked";
   return {
     status,
-    detail: message || nextAction || "not checked",
-    cleanupCommand: stringValue(cleanliness?.cleanupCommand),
+    detail:
+      rawCleanupCommand && !cleanupCommand
+        ? `${detail} Cleanup requires an explicit Git action outside report command fields.`
+        : detail,
+    cleanupCommand,
   };
 }
 
@@ -224,18 +230,18 @@ function selectNextCommand({
   if (blocked) {
     return (
       canonicalCommand ||
-      stringValue(preflight?.nextCommand) ||
-      commandLookup(commands, "doctorExplain") ||
-      commandLookup(commands, "benchmarkLint") ||
-      commandLookup(commands, "state")
+      readoutFallbackCommand(preflight?.nextCommand) ||
+      readoutCommandLookup(commands, "doctorExplain") ||
+      readoutCommandLookup(commands, "benchmarkLint") ||
+      readoutCommandLookup(commands, "state")
     );
   }
   if (canonicalCommand) return canonicalCommand;
   if (packet?.unresolved === true) {
     return (
-      stringValue(packet.command) ||
-      commandLookup(commands, "partialResults") ||
-      commandLookup(commands, "state")
+      readoutFallbackCommand(packet.command) ||
+      readoutCommandLookup(commands, "partialResults") ||
+      readoutCommandLookup(commands, "state")
     );
   }
   return (
@@ -301,29 +307,27 @@ function asiSummary(state: JsonRecord) {
   };
 }
 
-function dashboardSummary(state: JsonRecord, commands: JsonRecord): TerminalReportDashboard {
+function dashboardSummary(state: JsonRecord): TerminalReportDashboard {
   const health = recordOrNull(state.dashboardHealth);
   const liveness = stringValue(health?.liveness);
   const healthUrl = stringValue(health?.healthUrl);
-  const serveCommand = commandLookup(commands, "liveDashboard") || commandLookup(commands, "serve");
+  const healthProbeCommand = httpHealthProbeCommand(healthUrl);
   if (liveness && liveness !== "unknown") {
     const stale = health?.stale === true ? "stale" : health?.stale === false ? "fresh" : "unknown";
     const shouldRestart = liveness === "dead" || health?.stale === true;
     return {
       status: liveness,
-      detail: `${liveness} (${stale})`,
-      command: shouldRestart
-        ? serveCommand
-        : healthUrl
-          ? `curl ${quoteForDisplay(healthUrl)}`
-          : serveCommand,
+      detail: `${liveness} (${stale})${
+        shouldRestart ? "; restart the dashboard outside report command fields if needed" : ""
+      }`,
+      command: healthProbeCommand,
       healthUrl,
     };
   }
   return {
     status: "not-checked",
-    detail: "not checked; serve or verify the live dashboard when dashboard evidence matters.",
-    command: serveCommand,
+    detail: "not checked; verify dashboard health when dashboard evidence matters.",
+    command: healthProbeCommand,
     healthUrl,
   };
 }
@@ -340,6 +344,10 @@ function commandLookup(commands: unknown, key: string): string {
     .map(recordOrNull)
     .find((item) => pattern.test(stringValue(item?.label || item?.name)));
   return stringValue(entry?.command);
+}
+
+function readoutCommandLookup(commands: unknown, key: string): string {
+  return readoutFallbackCommand(commandLookup(commands, key));
 }
 
 function detailFromParts(parts: string[]): string {
@@ -411,4 +419,8 @@ function stringValue(value: unknown): string {
 
 function quoteForDisplay(value: string): string {
   return JSON.stringify(value);
+}
+
+function httpHealthProbeCommand(healthUrl: string): string {
+  return /^https?:\/\//i.test(healthUrl) ? `curl ${quoteForDisplay(healthUrl)}` : "";
 }
