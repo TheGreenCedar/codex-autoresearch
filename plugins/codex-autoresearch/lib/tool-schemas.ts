@@ -421,6 +421,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
+        report: { type: "boolean" },
         codex_goal_objective: { type: "string" },
       },
       required: ["working_dir"],
@@ -464,6 +465,7 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         trunk: { type: "string" },
+        progress: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -479,6 +481,7 @@ export const toolSchemas = applyToolContracts([
         trunk: { type: "string" },
         exclude_session_artifacts: { type: "boolean" },
         include_session_artifacts: { type: "boolean" },
+        progress: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -590,6 +593,7 @@ export const toolSchemas = applyToolContracts([
         output: { type: "string" },
         full: { type: "boolean" },
         json_full: { type: "boolean" },
+        progress: { type: "boolean" },
       },
       required: ["working_dir"],
     },

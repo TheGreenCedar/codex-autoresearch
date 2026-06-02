@@ -1,0 +1,414 @@
+import { resolveActionCommand } from "./action-metadata.js";
+
+type JsonRecord = Record<string, unknown>;
+
+export interface TerminalReportDashboard {
+  status: string;
+  detail: string;
+  command: string;
+  healthUrl: string;
+}
+
+export interface TerminalReportSummary {
+  status: "blocked" | "ready" | "unknown";
+  blocker: string;
+  nextAction: string;
+  nextCommand: string;
+  gate: {
+    posture: string;
+    detail: string;
+  };
+  runtime: {
+    installedRuntime: string;
+    builtRuntime: string;
+    detail: string;
+  };
+  dashboard: TerminalReportDashboard;
+  cleanliness: {
+    status: string;
+    detail: string;
+    cleanupCommand: string;
+  };
+  packet: {
+    status: string;
+    recommendation: string;
+    command: string;
+  };
+  metric: {
+    name: string;
+    best: number | null;
+    developmentBest: number | null;
+  };
+  freshness: {
+    fresh: boolean | null;
+    reason: string;
+  };
+  lanes: {
+    planned: number;
+    stale: number;
+  };
+  asi: {
+    risk: string;
+  };
+  portfolio: {
+    kind: string;
+    confidence: string;
+    recommendation: string;
+  };
+  lines: string[];
+}
+
+export interface TerminalReport {
+  text: string;
+  json: TerminalReportSummary;
+}
+
+export function buildTerminalReport(stateInput: unknown): TerminalReport {
+  const state = recordOrNull(stateInput) || {};
+  const commands = recordOrNull(state.commands) || {};
+  const preflight = recordOrNull(state.preflight);
+  const gateQuality = recordOrNull(state.gateQuality);
+  const runtime = recordOrNull(state.runtimeDriftSummary);
+  const packet = recordOrNull(state.packetDiagnostics);
+  const portfolio = recordOrNull(state.portfolioRecommendation);
+  const envelope = recordOrNull(state.decisionEnvelope);
+  const loopContract = recordOrNull(envelope?.loopContract) || recordOrNull(state.loopContract);
+  const canonicalNextAction =
+    recordOrNull(envelope?.canonicalNextAction) || recordOrNull(state.canonicalNextAction);
+  const cleanliness = cleanlinessSummary(state);
+  const metric = metricSummary(state, envelope);
+  const freshness = freshnessSummary(state, envelope);
+  const lanes = lanesSummary(state, envelope);
+  const asi = asiSummary(state);
+
+  const loopBlockers = objectMessageList(loopContract?.blockers);
+  const authoritativeNextAction = loopBlockers.length
+    ? firstNonEmpty([
+        stringValue(canonicalNextAction?.reason),
+        stringValue(recordOrNull(loopContract?.strongestAction)?.reason),
+        loopBlockers[0] || "",
+      ])
+    : "";
+  const blocker = firstNonEmpty([
+    ...loopBlockers,
+    loopBlockers.length ? stringValue(recordOrNull(loopContract?.strongestAction)?.reason) : "",
+    loopBlockers.length ? stringValue(canonicalNextAction?.reason) : "",
+    ...stringList(state.blockers),
+    ...stringList(preflight?.blockers),
+    ...stringList(gateQuality?.blockers),
+  ]);
+  const packetRecommendation = stringValue(packet?.recommendation);
+  const nextAction =
+    authoritativeNextAction ||
+    blocker ||
+    stringValue(canonicalNextAction?.reason) ||
+    stringValue(state.nextAction) ||
+    packetRecommendation ||
+    "Read state and choose the next safe Autoresearch action.";
+  const nextCommand = selectNextCommand({
+    blocked: Boolean(blocker),
+    preflight,
+    commands,
+    canonicalNextAction,
+    packet,
+  });
+  const dashboard = dashboardSummary(state, commands);
+  const gate = {
+    posture: stringValue(gateQuality?.posture) || "unknown",
+    detail: detailFromParts([
+      ...stringList(gateQuality?.blockers),
+      ...stringList(gateQuality?.warnings),
+      stringValue(gateQuality?.nextActionHint),
+    ]),
+  };
+  const runtimeSummary = {
+    installedRuntime: stringValue(runtime?.installedRuntime) || "unknown",
+    builtRuntime: stringValue(runtime?.builtRuntime) || "unknown",
+    detail: stringValue(runtime?.nextActionHint),
+  };
+  const packetSummary = {
+    status:
+      packet?.unresolved === true ? stringValue(packet.primaryStage) || "unresolved" : "clear",
+    recommendation: packetRecommendation,
+    command: stringValue(packet?.command),
+  };
+  const portfolioSummary = {
+    kind: stringValue(portfolio?.kind) || "insufficient-evidence",
+    confidence: stringValue(portfolio?.confidence) || "low",
+    recommendation: stringValue(portfolio?.nextActionHint) || stringValue(portfolio?.reason),
+  };
+  const status = blocker ? "blocked" : nextCommand ? "ready" : "unknown";
+  const workDir = stringValue(state.workDir);
+
+  const lines = [
+    "Codex Autoresearch report",
+    workDir ? `Workdir: ${workDir}` : "",
+    `Status: ${status}${blocker ? ` - ${blocker}` : ""}`,
+    `Next action: ${nextAction}`,
+    nextCommand ? `Next command: ${nextCommand}` : "Next command: unavailable",
+    `Gate: ${gate.posture}${gate.detail ? ` - ${gate.detail}` : ""}`,
+    `Runtime: installed ${runtimeSummary.installedRuntime}, build ${runtimeSummary.builtRuntime}${
+      runtimeSummary.detail ? ` - ${runtimeSummary.detail}` : ""
+    }`,
+    `Metric: ${metric.name}, best accepted ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}`,
+    `Freshness: ${freshnessLabel(freshness.fresh)}${
+      freshness.reason ? ` - ${freshness.reason}` : ""
+    }`,
+    `Lanes: planned ${lanes.planned}, stale ${lanes.stale}`,
+    `ASI: ${asi.risk ? `risk ${asi.risk}` : "risk unknown"}`,
+    `Dashboard: ${dashboard.detail}${dashboard.command ? ` Command: ${dashboard.command}` : ""}`,
+    `Cleanliness: ${cleanliness.detail}${
+      cleanliness.cleanupCommand ? ` Cleanup: ${cleanliness.cleanupCommand}` : ""
+    }`,
+    `Packet: ${packetSummary.status}${
+      packetSummary.recommendation ? ` - ${packetSummary.recommendation}` : ""
+    }`,
+    `Portfolio: ${portfolioSummary.kind} (${portfolioSummary.confidence})${
+      portfolioSummary.recommendation ? ` - ${portfolioSummary.recommendation}` : ""
+    }`,
+  ].filter(Boolean);
+
+  return {
+    text: lines.join("\n"),
+    json: {
+      status,
+      blocker,
+      nextAction,
+      nextCommand,
+      gate,
+      runtime: runtimeSummary,
+      dashboard,
+      cleanliness,
+      packet: packetSummary,
+      metric,
+      freshness,
+      lanes,
+      asi,
+      portfolio: portfolioSummary,
+      lines,
+    },
+  };
+}
+
+function cleanlinessSummary(state: JsonRecord) {
+  const cleanliness =
+    recordOrNull(state.sourceCleanliness) ||
+    recordOrNull(recordOrNull(state.decisionEnvelope)?.sourceCleanliness) ||
+    null;
+  const status = stringValue(cleanliness?.status) || "unknown";
+  const message = stringValue(cleanliness?.message);
+  const nextAction = stringValue(cleanliness?.nextAction);
+  return {
+    status,
+    detail: message || nextAction || "not checked",
+    cleanupCommand: stringValue(cleanliness?.cleanupCommand),
+  };
+}
+
+function selectNextCommand({
+  blocked,
+  preflight,
+  commands,
+  canonicalNextAction,
+  packet,
+}: {
+  blocked: boolean;
+  preflight: JsonRecord | null;
+  commands: JsonRecord;
+  canonicalNextAction: JsonRecord | null;
+  packet: JsonRecord | null;
+}): string {
+  const canonicalCommand = resolveActionCommand(canonicalNextAction?.kind, commands, {
+    explicitCommand: canonicalNextAction?.command,
+  });
+  if (blocked) {
+    return (
+      canonicalCommand ||
+      stringValue(preflight?.nextCommand) ||
+      commandLookup(commands, "doctorExplain") ||
+      commandLookup(commands, "benchmarkLint") ||
+      commandLookup(commands, "state")
+    );
+  }
+  if (canonicalCommand) return canonicalCommand;
+  if (packet?.unresolved === true) {
+    return (
+      stringValue(packet.command) ||
+      commandLookup(commands, "partialResults") ||
+      commandLookup(commands, "state")
+    );
+  }
+  return (
+    commandLookup(commands, "next") ||
+    commandLookup(commands, "recommendNext") ||
+    commandLookup(commands, "state")
+  );
+}
+
+function metricSummary(state: JsonRecord, envelope: JsonRecord | null) {
+  const activeSegment = recordOrNull(envelope?.activeSegment) || recordOrNull(state.activeSegment);
+  const config = recordOrNull(state.config);
+  const stateMetric = recordOrNull(state.metric);
+  const stateMetricName =
+    typeof state.metric === "string" ? stringValue(state.metric) : stringValue(stateMetric?.name);
+  const development = recordOrNull(state.development);
+  return {
+    name:
+      stateMetricName ||
+      stringValue(config?.metricName) ||
+      stringValue(state.metricName) ||
+      "metric",
+    best: numberOrNull(activeSegment?.best) ?? numberOrNull(state.best),
+    developmentBest:
+      numberOrNull(activeSegment?.developmentBest) ?? numberOrNull(development?.best),
+  };
+}
+
+function freshnessSummary(state: JsonRecord, envelope: JsonRecord | null) {
+  const lastRun = recordOrNull(state.lastRun);
+  const freshness =
+    recordOrNull(envelope?.latestPacketFreshness) ||
+    recordOrNull(state.latestPacketFreshness) ||
+    recordOrNull(lastRun?.freshness);
+  return {
+    fresh: booleanOrNull(freshness?.fresh),
+    reason: stringValue(freshness?.reason),
+  };
+}
+
+function lanesSummary(state: JsonRecord, envelope: JsonRecord | null) {
+  const laneLifecycle = recordOrNull(envelope?.laneLifecycle) || recordOrNull(state.laneLifecycle);
+  const parallelLanes = arrayValue(state.parallelLanes).map(recordOrNull).filter(Boolean);
+  const planned =
+    arrayValue(laneLifecycle?.plannedLanes).length ||
+    parallelLanes.filter((lane) => stringValue(lane?.status) === "planned").length;
+  const stale =
+    arrayValue(laneLifecycle?.staleLanes).length ||
+    parallelLanes.filter((lane) => stringValue(lane?.status) === "stale").length ||
+    (laneLifecycle?.stale === true ? 1 : 0);
+  return { planned, stale };
+}
+
+function asiSummary(state: JsonRecord) {
+  const asi = recordOrNull(state.asi);
+  const experimentMemory = recordOrNull(state.experimentMemory);
+  const firstMissingAsi = recordOrNull(arrayValue(experimentMemory?.missingAsiDetails)[0]);
+  return {
+    risk:
+      stringValue(asi?.risk) ||
+      stringValue(firstMissingAsi?.risk) ||
+      stringValue(arrayValue(experimentMemory?.warnings)[0]),
+  };
+}
+
+function dashboardSummary(state: JsonRecord, commands: JsonRecord): TerminalReportDashboard {
+  const health = recordOrNull(state.dashboardHealth);
+  const liveness = stringValue(health?.liveness);
+  const healthUrl = stringValue(health?.healthUrl);
+  const serveCommand = commandLookup(commands, "liveDashboard") || commandLookup(commands, "serve");
+  if (liveness && liveness !== "unknown") {
+    const stale = health?.stale === true ? "stale" : health?.stale === false ? "fresh" : "unknown";
+    const shouldRestart = liveness === "dead" || health?.stale === true;
+    return {
+      status: liveness,
+      detail: `${liveness} (${stale})`,
+      command: shouldRestart
+        ? serveCommand
+        : healthUrl
+          ? `curl ${quoteForDisplay(healthUrl)}`
+          : serveCommand,
+      healthUrl,
+    };
+  }
+  return {
+    status: "not-checked",
+    detail: "not checked; serve or verify the live dashboard when dashboard evidence matters.",
+    command: serveCommand,
+    healthUrl,
+  };
+}
+
+function commandLookup(commands: unknown, key: string): string {
+  const record = recordOrNull(commands);
+  if (record) return stringValue(record[key]);
+  if (!Array.isArray(commands)) return "";
+  const pattern = new RegExp(
+    key.replace(/[A-Z]/g, (match) => `\\s*${match.toLowerCase()}`),
+    "i",
+  );
+  const entry = commands
+    .map(recordOrNull)
+    .find((item) => pattern.test(stringValue(item?.label || item?.name)));
+  return stringValue(entry?.command);
+}
+
+function detailFromParts(parts: string[]): string {
+  return firstNonEmpty(parts.map((part) => part.replace(/\s+/g, " ").trim()));
+}
+
+function objectMessageList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(describeValue).filter(Boolean);
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(describeValue).filter(Boolean);
+}
+
+function describeValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const record = recordOrNull(value);
+  if (!record) return "";
+  return firstNonEmpty([
+    stringValue(record.message),
+    stringValue(record.reason),
+    stringValue(record.code),
+    stringValue(record.kind),
+    stringValue(record.title),
+    stringValue(record.summary),
+    stringValue(record.nextActionHint),
+  ]);
+}
+
+function firstNonEmpty(values: string[]): string {
+  return values.find((value) => value.trim())?.trim() || "";
+}
+
+function recordOrNull(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatMetricValue(value: number | null): string {
+  return value == null ? "unknown" : String(value);
+}
+
+function freshnessLabel(value: boolean | null): string {
+  if (value === true) return "fresh";
+  if (value === false) return "stale";
+  return "unknown";
+}
+
+function booleanOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function quoteForDisplay(value: string): string {
+  return JSON.stringify(value);
+}

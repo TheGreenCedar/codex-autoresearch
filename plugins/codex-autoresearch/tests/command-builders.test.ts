@@ -123,6 +123,51 @@ test("recommend-next authority keeps unavailable runtime probes non-blocking", (
   });
 });
 
+test("recommend-next authority uses full envelope when dashboard-only blockers exist", () => {
+  const authority = selectRecommendNextRuntimeAuthority({
+    viewModel: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "finalization",
+          reason: "Preview finalization before another packet.",
+        },
+        loopContract: {
+          ok: true,
+          canRunNextPacket: false,
+          blockers: [],
+          warnings: [{ kind: "finalization" }],
+        },
+        finalizationReadiness: {
+          available: true,
+          ready: true,
+        },
+      },
+    },
+    compact: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+        },
+        loopContract: {
+          ok: true,
+          canRunNextPacket: true,
+          blockers: [],
+          warnings: [],
+        },
+      },
+    },
+  });
+
+  assert.equal((authority.canonicalNextAction as any).kind, "finalization");
+  assert.deepEqual(authority.loopContract, {
+    ok: true,
+    canRunNextPacket: false,
+    blockers: [],
+    warnings: [{ kind: "finalization" }],
+  });
+});
+
 test("recommend-next authority preserves compact state when checked runtime is clean", () => {
   const authority = selectRecommendNextRuntimeAuthority({
     viewModel: {

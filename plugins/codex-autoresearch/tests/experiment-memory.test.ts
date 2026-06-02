@@ -1,6 +1,91 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildExperimentMemory, detectRepeatedHypothesis } from "../lib/experiment-memory.js";
+import { buildPreflightAudit } from "../lib/preflight-audit.js";
+import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
+
+test("portfolio advisor treats built runtime failures as trust blockers", () => {
+  const recommendation = recommendPortfolioDirection({
+    runtimeDrift: {
+      installedRuntime: "fresh",
+      builtRuntime: "missing",
+      nextActionHint: "Build the local runtime.",
+    },
+    gateQuality: { posture: "correctness" },
+    laneResults: [],
+    packetDiagnostics: null,
+    experimentMemory: null,
+  });
+
+  assert.equal(recommendation.kind, "trust-blocker");
+  assert.equal(recommendation.confidence, "high");
+  assert.match(recommendation.nextActionHint, /trust blocker|measured packet/i);
+});
+
+test("stale installed runtime alone stays advisory across portfolio and preflight", () => {
+  const recommendation = recommendPortfolioDirection({
+    runtimeDrift: {
+      installedRuntime: "stale",
+      builtRuntime: "available",
+      nextActionHint: "Installed cache is stale.",
+    },
+    gateQuality: { posture: "correctness" },
+    preflight: { status: "ready" },
+    laneLifecycle: { plannedLanes: [] },
+    experimentMemory: null,
+    current: [{ run: 1, status: "measure", metric: 1 }],
+  });
+
+  assert.notEqual(recommendation.kind, "trust-blocker");
+
+  const preflight = buildPreflightAudit({
+    metricName: "seconds",
+    benchmarkCommand: "node bench.mjs",
+    gateQuality: { posture: "correctness", blockers: [], warnings: [] },
+    runtimeDrift: {
+      installedRuntime: "stale",
+      builtRuntime: "available",
+      nextActionHint: "Installed cache is stale.",
+    },
+    runs: 1,
+  });
+
+  assert.equal(preflight.status, "ready");
+  assert.deepEqual(preflight.blockers, []);
+  assert.match(preflight.warnings.join("\n"), /Installed cache is stale/);
+});
+
+test("missing built runtime blocks preflight runtime trust", () => {
+  const preflight = buildPreflightAudit({
+    metricName: "seconds",
+    benchmarkCommand: "node bench.mjs",
+    gateQuality: { posture: "correctness", blockers: [], warnings: [] },
+    runtimeDrift: {
+      installedRuntime: "fresh",
+      builtRuntime: "missing",
+      nextActionHint: "Build the local runtime.",
+    },
+    runs: 1,
+  });
+
+  assert.equal(preflight.status, "blocked");
+  assert.match(preflight.blockers.join("\n"), /Build the local runtime/);
+});
+
+test("portfolio advisor reports low confidence for insufficient evidence", () => {
+  const recommendation = recommendPortfolioDirection({
+    runtimeDrift: { installedRuntime: "fresh" },
+    gateQuality: { posture: "correctness" },
+    preflight: { status: "ready" },
+    laneLifecycle: { plannedLanes: [] },
+    experimentMemory: null,
+    current: [],
+  });
+
+  assert.equal(recommendation.kind, "insufficient-evidence");
+  assert.equal(recommendation.confidence, "low");
+  assert.match(recommendation.reason, /low confidence|No measured packet/i);
+});
 
 test("experiment memory groups repeated setting families and detects plateau risk", () => {
   const runs = [

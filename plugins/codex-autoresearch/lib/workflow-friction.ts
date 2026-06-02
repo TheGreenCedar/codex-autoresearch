@@ -7,7 +7,8 @@ export type WorkflowFrictionKind =
   | "verification_churn"
   | "dirty_tree_recovery"
   | "unknown_recipe"
-  | "quality_gap_wording";
+  | "quality_gap_wording"
+  | "metric_saturated_not_promotable";
 
 export interface WorkflowFrictionSignal {
   kind: WorkflowFrictionKind;
@@ -43,6 +44,8 @@ export function analyzeWorkflowFriction({
   if (unknown) signals.push(unknown);
   const qualityGap = qualityGapWordingSignal({ state });
   if (qualityGap) signals.push(qualityGap);
+  const saturation = metricSaturationSignal({ state });
+  if (saturation) signals.push(saturation);
   return dedupeSignals(signals);
 }
 
@@ -208,6 +211,43 @@ function qualityGapWordingSignal({ state }: { state: LooseObject }): WorkflowFri
     reason: `${open} accepted quality-gap checklist item${open === 1 ? "" : "s"} remain open.`,
     actionReason:
       "Describe quality_gap as accepted checklist count, not as a perfect score or universal quality benchmark.",
+  });
+}
+
+function metricSaturationSignal({ state }: { state: LooseObject }): WorkflowFrictionSignal | null {
+  const metricName = String(state.config?.metricName || "");
+  const direction = String(state.config?.bestDirection || "lower");
+  const best = Number(state.best ?? state.development?.best);
+  const qualityRoundClosed =
+    Number(state.qualityGap?.open) === 0 && Number(state.qualityGap?.total) > 0;
+  const gapMetricSaturated =
+    direction !== "higher" &&
+    Number.isFinite(best) &&
+    best === 0 &&
+    /gap|debt|risk|issue|bug|fail|loss/i.test(metricName);
+  if (!qualityRoundClosed && !gapMetricSaturated) return null;
+
+  const evidenceLabels = Array.isArray(state.researchIntegrity?.evidenceLabels)
+    ? state.researchIntegrity.evidenceLabels.map(String)
+    : [];
+  const notPromotableBecause = Array.isArray(state.researchIntegrity?.notPromotableBecause)
+    ? state.researchIntegrity.notPromotableBecause.map(String).filter(Boolean)
+    : [];
+  const promotionEligible =
+    evidenceLabels.includes("promotion_eligible") ||
+    state.promotion?.eligible === true ||
+    Number(state.promotion?.kept ?? 0) > 0;
+  if (promotionEligible) return null;
+
+  return workflowSignal({
+    kind: "metric_saturated_not_promotable",
+    severity: "warning",
+    reason:
+      notPromotableBecause[0] ||
+      `${metricName || "Primary metric"} is saturated, but promotion-grade evidence is still missing.`,
+    actionReason:
+      "Treat metric saturation as a review/rescope checkpoint: check promotion evidence, run finalize-preview/current-tree, or start a new segment instead of spending another same-metric packet.",
+    commandHead: metricName || "primary metric",
   });
 }
 

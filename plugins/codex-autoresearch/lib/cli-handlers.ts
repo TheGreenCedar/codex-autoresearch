@@ -190,6 +190,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.finalizePreview({
         cwd: args.cwd,
         trunk: args.trunk,
+        progress: args.progress,
       }),
     }),
     "finalize-current-tree": async (args) => ({
@@ -198,6 +199,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         trunk: args.trunk,
         excludeSessionArtifacts: args.excludeSessionArtifacts,
         includeSessionArtifacts: args.includeSessionArtifacts,
+        progress: args.progress,
       }),
     }),
     serve: async (args) => ({
@@ -284,6 +286,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.publicState({
         cwd: args.cwd,
         compact: args.compact,
+        report: args.report,
         codexGoalObjective: args.codexGoalObjective,
       }),
     }),
@@ -356,6 +359,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         showcaseMode: args.showcaseMode,
         jsonFull: args.jsonFull,
         verbose: args.verbose,
+        progress: args.progress,
       }),
     }),
     clear: async (args) => ({

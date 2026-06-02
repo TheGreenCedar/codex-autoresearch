@@ -54,6 +54,7 @@ export async function finalizePreview(args: LooseObject) {
   const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
+  emitProgress(args, "finalize-preview", `checking Git state in ${workDir}`);
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
     return withProgress(
@@ -72,6 +73,7 @@ export async function finalizePreview(args: LooseObject) {
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
+  emitProgress(args, "finalize-preview", "reading autoresearch ledger and kept commits");
   const ledgerEntries = await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
@@ -87,6 +89,7 @@ export async function finalizePreview(args: LooseObject) {
     );
   }
   const overlaps = findGroupFileOverlaps(groups);
+  emitProgress(args, "finalize-preview", "checking current final tree coverage");
   const finalTreePlan = await buildFinalTreePlan(workDir, trunk, groups);
   warnings.push(...finalTreePlan.warnings);
   const semanticSafety = await buildSemanticSafety({
@@ -95,6 +98,7 @@ export async function finalizePreview(args: LooseObject) {
     ledgerRuns,
     base: finalTreePlan.base,
   });
+  emitProgress(args, "finalize-preview", "building finalization recommendation");
   appendFinalTreeWarnings(warnings, finalTreePlan);
   warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
   appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps });
@@ -137,6 +141,18 @@ export async function finalizePreview(args: LooseObject) {
         keptRuns,
         missingCommitCount,
       });
+  const actionCode = capsuleFinalizationBlocked
+    ? "decision-capsule"
+    : finalizePreviewActionCode({
+        ready,
+        semanticSafety,
+        excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+        finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+        excludedCommits: finalTreePlan.excludedCommits,
+        groups,
+        keptRuns,
+        missingCommitCount,
+      });
   return withProgress(
     {
       ok: true,
@@ -166,6 +182,7 @@ export async function finalizePreview(args: LooseObject) {
         },
       },
       nextAction,
+      actionCode,
     },
     startedAt,
     ready ? "completed" : "blocked",
@@ -372,10 +389,33 @@ function finalizePreviewNextAction({
   return "Resolve preview warnings before creating review branches.";
 }
 
+function finalizePreviewActionCode({
+  ready,
+  semanticSafety,
+  excludedPlannedFileConflicts,
+  finalTreeCoverage,
+  excludedCommits,
+  groups,
+  keptRuns,
+  missingCommitCount,
+}: LooseObject): string {
+  if (ready) return "finalization-preview-ready";
+  if (!semanticSafety.ok) return "semantic-safety";
+  if (excludedPlannedFileConflicts.length || !finalTreeCoverage.covered) {
+    return "current-tree-finalization";
+  }
+  if (excludedCommits.length) return "review-excluded-history";
+  if (groups.length === 0 && keptRuns.length > 0 && missingCommitCount === keptRuns.length) {
+    return "commit-backed-keep-required";
+  }
+  return "preview-warning";
+}
+
 export async function finalizeCurrentTree(args: LooseObject) {
   const startedAt = Date.now();
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const trunk = args.trunk || "main";
+  emitProgress(args, "finalize-current-tree", `checking current tree in ${workDir}`);
   const includeSessionArtifacts = Boolean(
     args.include_session_artifacts ?? args.includeSessionArtifacts ?? false,
   );
@@ -405,6 +445,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
   const base = baseResult.ok ? baseResult.stdout.trim() : "";
   const finalTree = (await git(["rev-parse", "HEAD"], workDir)).stdout.trim();
   const allFiles = base ? await changedFilesBetween(base, "HEAD", workDir, false) : [];
+  emitProgress(args, "finalize-current-tree", "classifying session artifacts and review files");
   const fileSelection = selectCurrentTreeFiles(allFiles, Boolean(excludeSessionArtifacts));
   const files = fileSelection.includedFiles;
   const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
@@ -464,6 +505,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     plan_fingerprint: planFingerprint(plan),
   };
   if (ready) {
+    emitProgress(args, "finalize-current-tree", `writing plan to ${planOutput}`);
     await fsp.mkdir(path.dirname(planOutput), { recursive: true });
     await fsp.writeFile(planOutput, `${JSON.stringify(planWithFingerprint, null, 2)}\n`, "utf8");
   }
@@ -508,6 +550,13 @@ export async function finalizeCurrentTree(args: LooseObject) {
     ready ? "completed" : "blocked",
     "finalize-current-tree",
   );
+}
+
+function emitProgress(args: LooseObject, stage: string, message: string): void {
+  if (args.progress !== true && args.progress_stderr !== true && args.progressStderr !== true) {
+    return;
+  }
+  process.stderr.write(`[autoresearch:${stage}] ${message}\n`);
 }
 
 function selectCurrentTreeFiles(

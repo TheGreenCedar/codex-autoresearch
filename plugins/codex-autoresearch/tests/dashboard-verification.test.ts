@@ -34,6 +34,79 @@ test.afterEach(() => {
   dashboard.closeDashboardWindows();
 });
 
+test("dashboard action rail uses blocker metadata instead of next fallback", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "metadata fallback",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+      current: [],
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "gate-quality",
+          priority: 3,
+          reason: "Configure an independent checks gate before another packet.",
+          command: "",
+        },
+      },
+    },
+    settings: {},
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd C:/repo" },
+      { label: "Doctor", command: "node scripts/autoresearch.mjs doctor --cwd C:/repo" },
+    ],
+  } as any);
+
+  assert.equal(viewModel.nextBestAction.kind, "gate-quality");
+  assert.equal(viewModel.nextBestAction.packetBrake, true);
+  assert.equal(
+    viewModel.nextBestAction.primaryCommand.command,
+    "node scripts/autoresearch.mjs doctor --cwd C:/repo",
+  );
+  assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bnext\b/);
+});
+
+test("dashboard segment transition command matches its safe action metadata", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "segment transition",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+      current: [],
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "segment-transition",
+          priority: 7,
+          reason: "Start a new segment before another packet.",
+          command: "",
+        },
+      },
+    },
+    settings: {},
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd C:/repo" },
+      {
+        label: "New segment",
+        command: "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
+      },
+      {
+        label: "Gap candidates",
+        command: "node scripts/autoresearch.mjs gap-candidates --cwd C:/repo --research-slug study",
+      },
+    ],
+  } as any);
+
+  assert.equal(viewModel.nextBestAction.kind, "segment-transition");
+  assert.equal(viewModel.nextBestAction.safeAction, "new-segment");
+  assert.equal(viewModel.nextBestAction.primaryCommand.label, "Segment");
+  assert.match(viewModel.nextBestAction.primaryCommand.command, /\bnew-segment\b/);
+  assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bgap-candidates\b/);
+});
+
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
   const entries = [
     dashboardConfigEntry({ name: "zero path", metricName: "seconds", metricUnit: "s" }),
@@ -1656,8 +1729,8 @@ test("dashboard decision envelope priority ladder is stable across competing sig
       },
     },
     {
-      name: "setup outranks fresh log decision",
-      expected: "setup",
+      name: "fresh log decision outranks setup repair",
+      expected: "log-decision",
       context: {
         guidedSetup: {
           stage: "needs-setup",
@@ -1667,8 +1740,8 @@ test("dashboard decision envelope priority ladder is stable across competing sig
       },
     },
     {
-      name: "benchmark blocker outranks fresh log decision",
-      expected: "benchmark-command",
+      name: "fresh log decision outranks benchmark repair",
+      expected: "log-decision",
       context: {
         guidedSetup: {
           stage: "needs-benchmark-command",
@@ -1702,8 +1775,8 @@ test("dashboard decision envelope priority ladder is stable across competing sig
       },
     },
     {
-      name: "plateau outranks finalization readiness",
-      expected: "plateau-pivot",
+      name: "finalization readiness outranks plateau packet drift",
+      expected: "finalization",
       context: {
         experimentMemory: {
           plateau: { detected: true, recommendation: "Scout a distant lane." },

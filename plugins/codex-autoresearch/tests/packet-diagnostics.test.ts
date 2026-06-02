@@ -79,3 +79,18 @@ test("classifies sufficient packets that still fail quality", () => {
 
   assert.equal(result.primaryStage, "marked_sufficient_but_failed");
 });
+
+test("carries optional task artifact diagnostics without changing metric classification", () => {
+  const taskArtifacts = {
+    acceptedTasks: [{ id: "task-1", status: "done" }],
+    quarantinedTasks: [],
+    warnings: [],
+  };
+  const result = classifyPacketDiagnostics({
+    metricName: "score",
+    packetEvidence: { exitStatus: 0, metrics: { score: 1 }, taskArtifacts },
+  });
+
+  assert.equal(result.primaryStage, "none");
+  assert.equal(result.taskArtifacts, taskArtifacts);
+});

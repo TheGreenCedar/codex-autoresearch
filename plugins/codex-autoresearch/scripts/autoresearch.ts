@@ -8,6 +8,12 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
+import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
+import { buildDecisionGuidanceContext } from "../lib/decision-guidance.js";
+import {
+  buildServeRegistryHealthInput,
+  readServeRegistry,
+} from "../lib/dashboard-server-registry.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
@@ -19,9 +25,19 @@ import {
 } from "../lib/commands/recommend-next.js";
 import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
+import {
+  actionSafeActionForKind,
+  actionTitleForKind,
+  isPacketBrakeKind,
+  resolveActionCommand,
+} from "../lib/action-metadata.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
+import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
+import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
+import { buildTerminalReport } from "../lib/terminal-report.js";
+import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
   redactCommandDisplay,
   redactEvidenceObject,
@@ -43,6 +59,7 @@ import { buildGoalFrame } from "../lib/goal-frame.js";
 import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
+import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
 import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
@@ -50,6 +67,7 @@ import {
   researchRoundGuidance,
   resolveResearchSlugForQualityGapSync,
 } from "../lib/research-gaps.js";
+import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
 import {
   applyResolvedRecipeDefaults,
   findRecipe,
@@ -96,6 +114,7 @@ import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
+import { indexTaskArtifacts } from "../lib/task-artifact-indexer.js";
 
 type LooseObject = Record<string, any>;
 type CliArgs = LooseObject & { _: string[] };
@@ -268,12 +287,12 @@ Usage:
   node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--allow-non-git-command] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
   node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
   node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
-  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main]
-  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts]
+  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]
+  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts] [--progress]
   node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
   node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
   node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
-  node scripts/autoresearch.mjs state --cwd <project> [--compact]
+  node scripts/autoresearch.mjs state --cwd <project> [--compact] [--report]
   node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
   node scripts/autoresearch.mjs doctor hooks
   node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
@@ -281,7 +300,7 @@ Usage:
   node scripts/autoresearch.mjs checks-inspect --cwd <project> --command <cmd> [--timeout-seconds <n>]
   node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--dry-run|--yes]
   node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose]
+  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose] [--progress]
   node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
 
 Benchmark output format:
@@ -480,6 +499,15 @@ function errorCodeOrMessage(error: unknown): string {
     return String(payload.code || payload.message || error);
   }
   return String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function readConfig(sessionCwd: string): LooseObject {
@@ -735,6 +763,16 @@ async function setupPlan(args: any) {
   const integrityPreflight = await benchmarkIntegrityPreflight(workDir, config, state);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails: integrityPreflight,
+    setupMissing: missing,
+    benchmarkCommand,
+    checksCommand,
+  });
   const preSetupCheckpoint =
     commitPaths.length > 0
       ? {
@@ -779,6 +817,9 @@ async function setupPlan(args: any) {
     defaultBenchmarkCommandReady: hasDefaultBenchmarkCommand,
     benchmarkMode,
     benchmarkLintCommand,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
     scopeWarnings,
     scaffoldHealth,
     researchIntegrity,
@@ -1566,9 +1607,11 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
         ? lastRun.decision.allowedStatuses[0]
         : "discard")
     : "";
-  const replaceLastRunCommand = lastRun
-    ? replacementNextCommandFromLastRun(workDir, lastRun, setup.defaultBenchmarkCommandReady)
-    : "";
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(
+    workDir,
+    lastRun,
+    setup.defaultBenchmarkCommandReady,
+  );
   const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
   const baselineCommand = setup.baselineCommand;
   const logCommand = lastRun
@@ -1622,6 +1665,10 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     }),
     setup,
     state,
+    gateQuality: state.gateQuality || setup.gateQuality || doctor.gateQuality || null,
+    preflight: state.preflight || setup.preflight || doctor.preflight || null,
+    runtimeDriftSummary:
+      state.runtimeDriftSummary || setup.runtimeDriftSummary || doctor.runtimeDriftSummary || null,
     scaffoldHealth: state.scaffoldHealth,
     researchIntegrity: state.researchIntegrity,
     doctor: {
@@ -1880,6 +1927,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     loopContract,
     laneLifecycle: compact.laneLifecycle,
     packetDiagnostics: compact.packetDiagnostics,
+    portfolioRecommendation: compact.portfolioRecommendation,
     sessionDecisionCapsule:
       decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
   });
@@ -1906,39 +1954,22 @@ function canonicalActionForRecommendNext(
   commands: unknown,
 ): LooseObject {
   const base = existing && typeof existing === "object" ? (existing as LooseObject) : {};
-  const command = canonical.command || commandForCanonicalKind(canonical.kind, commands);
+  const command = resolveActionCommand(canonical.kind, commands, {
+    explicitCommand: canonical.command,
+  });
   return {
     ...base,
     kind: canonical.kind || base.kind || "next-packet",
     priority: String(canonical.priority ?? base.priority ?? "Next"),
-    title: canonicalTitle(canonical.kind, base.title),
+    title: actionTitleForKind(canonical.kind, String(base.title || "Next action")),
     detail: canonical.reason || base.detail || "",
     utilityCopy: base.utilityCopy || "Decision envelope is the authoritative next-action source.",
-    safeAction: base.safeAction || String(canonical.kind || ""),
+    safeAction:
+      base.safeAction || actionSafeActionForKind(canonical.kind, String(canonical.kind || "")),
     command,
     primaryCommand: command ? { label: "Run", command } : base.primaryCommand || null,
     source: "decision-envelope",
   };
-}
-
-function canonicalTitle(kind: unknown, fallback: unknown): string {
-  const text = String(kind || "");
-  const titles: Record<string, string> = {
-    "safety-blocker": "Resolve the safety blocker",
-    "benchmark-mismatch": "Repair the benchmark mismatch",
-    "workflow-friction": "Remove workflow friction",
-    "stale-packet": "Replace the stale packet",
-    "partial-salvage": "Review partial results",
-    "context-distillation": "Refresh context",
-    "lane-cleanup": "Close stale lanes",
-    "runtime-provenance": "Inspect runtime provenance",
-    "packet-diagnostic": "Inspect packet diagnostics",
-    "quality-gap": "Close accepted quality gaps",
-    "plateau-pivot": "Pivot before repeating the plateau",
-    finalization: "Preview finalization",
-    "next-packet": "Run the next measured packet",
-  };
-  return titles[text] || String(fallback || "Next action");
 }
 
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
@@ -2107,19 +2138,28 @@ function codexGoalCompletionAudit({
     (state.best != null || state.development?.best != null || state.promotion?.best != null);
   const hasLocalCompletionEvidence =
     hasMeasuredEvidence || finalizationReady || (qualityRound.active && qualityRound.done === true);
+  const completionBlockingIssues = blockers.filter(
+    (blocker) =>
+      !/finalize-current-tree|current non-session branch diff/i.test(blocker) &&
+      !/No benchmark command is available for future packets/i.test(blocker),
+  );
   let status = "active";
   if (importedGoal?.status === "budget_limited" || limitReached) {
     status = "budget_limited";
   } else if (compact.requiresLogDecision) {
     status = "pending_log_decision";
-  } else if (blockers.length) {
-    status = "blocked";
   } else if (completionRequested && !importedGoal) {
     status = "no_codex_goal_imported";
   } else if (completionRequested && !importedGoalCompletable) {
     status = "codex_goal_not_active";
-  } else if (completionRequested && hasLocalCompletionEvidence) {
+  } else if (
+    completionRequested &&
+    hasLocalCompletionEvidence &&
+    completionBlockingIssues.length === 0
+  ) {
     status = "complete";
+  } else if (blockers.length) {
+    status = "blocked";
   } else if (completionRequested) {
     status = "completion_evidence_insufficient";
   } else if (!state.runs) {
@@ -2266,7 +2306,7 @@ function replacementNextCommandFromLastRun(
   ];
   const command = packet?.run?.command;
   if (command) {
-    parts.push("--command", shellQuote(command));
+    parts.push("--command", copyCommandArg(command));
   } else if (!defaultBenchmarkCommandReady) {
     return "";
   }
@@ -2276,9 +2316,28 @@ function replacementNextCommandFromLastRun(
   }
   const checksCommand = packet?.run?.checks?.command;
   if (checksCommand) {
-    parts.push("--checks-command", shellQuote(checksCommand));
+    parts.push("--checks-command", copyCommandArg(checksCommand));
   }
   return parts.join(" ");
+}
+
+async function replacementNextCommandForLastRun(
+  workDir: string,
+  packet: any,
+  defaultBenchmarkCommandReady?: boolean,
+) {
+  if (!packet) return "";
+  const defaultReady =
+    typeof defaultBenchmarkCommandReady === "boolean"
+      ? defaultBenchmarkCommandReady
+      : await defaultBenchmarkCommandExists(workDir);
+  return replacementNextCommandFromLastRun(workDir, packet, defaultReady);
+}
+
+function copyCommandArg(value: unknown): string {
+  const text = String(value);
+  if (process.platform === "win32") return `'${text.replace(/"/g, '\\"').replace(/'/g, "''")}'`;
+  return shellQuote(text);
 }
 
 async function recipeCommand(subcommand: string, args: any) {
@@ -2814,27 +2873,94 @@ async function defaultBenchmarkCommandExists(workDir: string) {
 }
 
 async function benchmarkCommandFromArgs(args: LooseObject, workDir: string) {
+  const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
+    fallbackToDefault: true,
+    requireCommand: true,
+  });
+  const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
+  const env = envFile ? await readEnvFile(envFile, workDir) : null;
+  return {
+    command: commandSource.command,
+    env: env?.values || undefined,
+    commandFile: commandSource.commandFile,
+    envFile: env?.path || "",
+    envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
+    separatorCommand: commandSource.separatorCommand,
+  };
+}
+
+async function resolveBenchmarkCommandSource(
+  args: LooseObject,
+  workDir: string,
+  options: { fallbackToDefault?: boolean; requireCommand?: boolean } = {},
+) {
   const commandFile = args.command_file ?? args.commandFile;
   if (args.command && commandFile) {
     throw new Error("Use either --command or --command-file, not both.");
   }
   const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
-  const command =
-    args.command ||
-    (separatorCommand ? args._.slice(1).join(" ") : "") ||
-    (commandFile
-      ? await readCommandFile(commandFile, workDir)
-      : await defaultBenchmarkCommand(workDir));
-  const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
-  const env = envFile ? await readEnvFile(envFile, workDir) : null;
+  if (args.command) {
+    return {
+      command: normalizePowerShellEscapedCommandArg(args.command),
+      commandFile: "",
+      separatorCommand: false,
+      source: "command",
+      missingReason: "",
+    };
+  }
+  if (separatorCommand) {
+    return {
+      command: args._.slice(1).join(" "),
+      commandFile: "",
+      separatorCommand: true,
+      source: "separator",
+      missingReason: "",
+    };
+  }
+  if (commandFile) {
+    return {
+      command: await readCommandFile(commandFile, workDir),
+      commandFile: resolveOptionPath(commandFile, workDir),
+      separatorCommand: false,
+      source: "command-file",
+      missingReason: "",
+    };
+  }
+  if (options.fallbackToDefault) {
+    try {
+      return {
+        command: await defaultBenchmarkCommand(workDir),
+        commandFile: "",
+        separatorCommand: false,
+        source: "default",
+        missingReason: "",
+      };
+    } catch (error: unknown) {
+      if (options.requireCommand) throw error;
+      return {
+        command: "",
+        commandFile: "",
+        separatorCommand: false,
+        source: "missing",
+        missingReason: missingBenchmarkCommandMessage(error),
+      };
+    }
+  }
   return {
-    command,
-    env: env?.values || undefined,
-    commandFile: commandFile ? resolveOptionPath(commandFile, workDir) : "",
-    envFile: env?.path || "",
-    envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
-    separatorCommand,
+    command: "",
+    commandFile: "",
+    separatorCommand: false,
+    source: "missing",
+    missingReason: "",
   };
+}
+
+function missingBenchmarkCommandMessage(error: unknown = null): string {
+  const detail = error ? errorMessage(error) : "";
+  if (/No command provided/i.test(detail)) {
+    return "No benchmark command was provided and no autoresearch script was found.";
+  }
+  return detail || "No benchmark command was provided and no autoresearch script was found.";
 }
 
 function resolveOptionPath(filePath: string, workDir: string) {
@@ -3006,6 +3132,12 @@ async function liveGitProcessSummary(workDir: string) {
   } catch (error) {
     return `process check unavailable (${errorMessage(error)})`;
   }
+}
+
+function normalizePowerShellEscapedCommandArg(command: unknown): string {
+  const text = String(command);
+  if (process.platform !== "win32" || !/^\\".+?\\"(?:\s|$)/.test(text)) return text;
+  return text.replace(/\\"/g, '"');
 }
 
 async function shortHead(cwd: string) {
@@ -3612,10 +3744,25 @@ async function setupCommandResponseFields({
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
   const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const config = readConfig(sessionCwd);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const checksCommand =
+    args.checks_command || args.checksCommand || (await defaultChecksCommand(workDir)) || "";
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state: currentState(workDir),
+    scaffoldHealth,
+    benchmarkCommand,
+    checksCommand,
+  });
   return {
-    scaffoldHealth: await buildScaffoldHealth({ workDir, config: readConfig(sessionCwd) }),
+    scaffoldHealth,
     benchmarkMode,
     benchmarkLintCommand,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
     scopeWarnings: scopeWarningsFromArgs(args),
     firstRunChecklist: firstRunChecklist({
       setupCommand: "already completed",
@@ -3966,6 +4113,36 @@ function dashboardSettings(config: any, extra: LooseObject = {}) {
   };
 }
 
+async function decisionGuidance({
+  workDir,
+  config,
+  state,
+  scaffoldHealth = null,
+  warningDetails = [],
+  setupMissing = [],
+  runtimeDriftSummary = null,
+  benchmarkCommand = "",
+  checksCommand = "",
+}: LooseObject) {
+  return buildDecisionGuidanceContext({
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+    setupMissing,
+    runtimeDriftSummary,
+    benchmarkCommand,
+    checksCommand,
+    defaultBenchmarkCommand,
+    defaultChecksCommand,
+    shellQuote,
+    errorMessage,
+  });
+}
+
 function decisionSetupState(guided: any, plan: any) {
   const blockers = [...listOption(plan?.missing), ...listOption(plan?.missingEssentials)];
   if (!guided?.stage && blockers.length === 0) return null;
@@ -3978,6 +4155,63 @@ function decisionSetupState(guided: any, plan: any) {
       plan?.nextStep?.nextAction?.reason ||
       "",
   };
+}
+
+function dashboardSafeDecisionGuidance(guidance: LooseObject): LooseObject {
+  const runtimeDriftSummary = guidance.runtimeDriftSummary
+    ? {
+        ...guidance.runtimeDriftSummary,
+        smokeCheck: "",
+        nextActionHint: dashboardSafeRuntimeHint(guidance.runtimeDriftSummary),
+      }
+    : null;
+  const preflight = guidance.preflight
+    ? {
+        ...guidance.preflight,
+        blockers: listOption(guidance.preflight.blockers).map(dashboardSafeGuidanceText),
+        warnings: listOption(guidance.preflight.warnings).map(dashboardSafeGuidanceText),
+        nextCommand: "",
+      }
+    : null;
+  const gateQuality = guidance.gateQuality
+    ? {
+        ...guidance.gateQuality,
+        blockers: listOption(guidance.gateQuality.blockers).map(dashboardSafeGuidanceText),
+        warnings: listOption(guidance.gateQuality.warnings).map(dashboardSafeGuidanceText),
+        nextActionHint: dashboardSafeGuidanceText(guidance.gateQuality.nextActionHint),
+      }
+    : null;
+  return {
+    ...guidance,
+    runtimeDriftSummary,
+    preflight,
+    gateQuality,
+  };
+}
+
+function dashboardSafeRuntimeHint(runtimeDriftSummary: LooseObject): string {
+  const installedRuntime = String(runtimeDriftSummary.installedRuntime || "");
+  const builtRuntime = String(runtimeDriftSummary.builtRuntime || "");
+  if (installedRuntime === "fresh" && builtRuntime === "available") {
+    return "Runtime surfaces look fresh; use the CLI smoke check before making live claims.";
+  }
+  if (installedRuntime === "stale") {
+    return "Installed runtime appears stale; inspect or refresh the runtime with the CLI before acting.";
+  }
+  if (installedRuntime === "missing") {
+    return "Installed runtime is missing; inspect or refresh the runtime with the CLI before acting.";
+  }
+  return "Runtime drift evidence is unavailable; inspect the runtime with the CLI before acting.";
+}
+
+function dashboardSafeGuidanceText(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!/autoresearch\.mjs|benchmark-lint|doctor --cwd/i.test(text)) return text;
+  if (/runtime/i.test(text)) return "Inspect runtime drift with the CLI before acting.";
+  if (/benchmark|metric|setup|gate/i.test(text)) {
+    return "Run the CLI benchmark or doctor check before trusting the next packet.";
+  }
+  return "Use the CLI check before continuing.";
 }
 
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
@@ -4012,6 +4246,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const continuation = loopContinuation(workDir, state, config, "dashboard");
   const setupPlanResult = await setupPlan({ cwd: workDir }).catch((error: any) => ({
     ok: false,
@@ -4021,6 +4256,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     ok: false,
     warnings: [error.message],
   }));
+  const dashboardSetupPlan = stripDashboardCommandGuidance(setupPlanResult);
+  const dashboardGuidedSetup = stripDashboardCommandGuidance(guidedSetupResult);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
@@ -4048,12 +4285,26 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       })
     : classifyPacketDiagnostics();
   const currentRuntimeProvenance = runtimeProvenance(drift);
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails: warnings });
+  const guidance = dashboardSafeDecisionGuidance(
+    await decisionGuidance({
+      workDir,
+      config,
+      state,
+      scaffoldHealth,
+      warningDetails: warnings,
+    }),
+  );
   const stateWithQualityGap = {
     ...state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
     runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -4076,17 +4327,32 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       lastRun?.packetEvidence?.progressSnapshot ||
       null,
   });
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
+    experimentMemory: memory,
+    best: state.best,
+    current: state.current,
+  });
   const commands = dashboardCommands(workDir, qualityGap);
-  const guidedCommands = (guidedSetupResult as LooseObject).commands || {};
+  const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
   const canonicalCommandHints = {
     ...commandLookupObject(commands),
-    replaceLast: guidedCommands.replaceLast || "",
+    replaceLast: replaceLastRunCommand || guidedCommands.replaceLast || "",
     logLast: guidedCommands.logLast || "",
     setup: guidedCommands.setup || "",
   };
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
+      state: {
+        ...stateWithQualityGap,
+        portfolioRecommendation,
+        limit: iterationLimitInfo(state, config),
+      },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails: warnings,
@@ -4098,7 +4364,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       salvageCandidates: partialResults.candidates,
       workflowFriction,
       experimentMemory: memory,
-      setupState: decisionSetupState(guidedSetupResult, setupPlanResult),
+      setupState: decisionSetupState(dashboardGuidedSetup, dashboardSetupPlan),
       watchdog: watchdogSummary,
     }),
     canonicalCommandHints,
@@ -4114,10 +4380,12 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     laneLifecycle,
     packetDiagnostics,
     runtimeProvenance: currentRuntimeProvenance,
+    sourceCleanliness,
     watchdogSummary,
     experimentEconomics,
     partialResults,
     workflowFriction,
+    portfolioRecommendation,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
@@ -4125,8 +4393,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     state: enrichedState as any,
     settings,
     commands,
-    setupPlan: setupPlanResult,
-    guidedSetup: guidedSetupResult,
+    setupPlan: dashboardSetupPlan,
+    guidedSetup: dashboardGuidedSetup,
     qualityGap,
     finalizePreview: effectiveFinalizePreview,
     recipes: recipeSummaries,
@@ -4134,6 +4402,17 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     drift,
     warnings,
   });
+}
+
+function stripDashboardCommandGuidance(value: any): any {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => stripDashboardCommandGuidance(item));
+  const result: LooseObject = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "runtimeDriftSummary" || key === "gateQuality" || key === "preflight") continue;
+    result[key] = stripDashboardCommandGuidance(nested);
+  }
+  return result;
 }
 
 async function operatorWarningsForWorkDir(workDir: string) {
@@ -4369,8 +4648,11 @@ async function runExperiment(args: LooseObject) {
     (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
   const isBaseline = state.current.filter(isBaselineEligibleMetricRun).length === 0;
   let checks = null;
-  const checksCommand =
+  const rawChecksCommand =
     args.checks_command || args.checksCommand || (await defaultChecksCommand(workDir));
+  const checksCommand = rawChecksCommand
+    ? normalizePowerShellEscapedCommandArg(rawChecksCommand)
+    : "";
   const checksPolicy = checksPolicyFromArgs(args, config);
   const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
   if (
@@ -4746,6 +5028,14 @@ async function logExperiment(args: any) {
     experiment.artifacts = artifacts;
     experiment.artifactEvidence = artifactEvidenceList(artifacts, workDir, evidenceStatus);
   }
+  if (
+    lastPacket?.packetEvidence?.taskArtifacts &&
+    typeof lastPacket.packetEvidence.taskArtifacts === "object" &&
+    !Array.isArray(lastPacket.packetEvidence.taskArtifacts)
+  ) {
+    experiment.taskArtifacts = lastPacket.packetEvidence.taskArtifacts;
+    experiment.taskArtifactsScope = "durable";
+  }
   const benchmarkContract =
     lastPacket?.history?.benchmarkContract ||
     (await benchmarkContractSnapshot(workDir, {
@@ -4904,6 +5194,7 @@ function stripDashboardCommandFields(value: any): any {
     "suggestedCommands",
     "workDir",
   ]);
+  if (typeof value === "string") return dashboardSafeGuidanceText(value);
   if (Array.isArray(value)) return value.map((item: any) => stripDashboardCommandFields(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
@@ -5320,8 +5611,19 @@ function partialResultEligiblePacket(packet: LooseObject | null): boolean {
 async function publicState(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const compact = boolOption(args.compact, false);
+  const report = boolOption(args.report, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
-  if (compact) return await publicCompactState({ workDir, config, codexGoalObjective });
+  if (compact || report) {
+    const compactState = await publicCompactState({ workDir, config, codexGoalObjective });
+    if (!report) return compactState;
+    const response: LooseObject = {
+      ok: compactState.ok !== false,
+      workDir,
+      report: buildTerminalReport(compactState),
+    };
+    if (compact) response.compactState = compactState;
+    return response;
+  }
 
   const state = currentState(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -5330,6 +5632,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const qualityGap = await currentQualityGapSummary(workDir);
   const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
     ok: false,
@@ -5365,12 +5668,26 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       })
     : classifyPacketDiagnostics();
   const currentRuntimeProvenance = runtimeProvenance();
+  const dashboardHealth = await dashboardHealthForWorkDir(workDir);
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+  });
   const stateWithQualityGap = {
     ...state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
     runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -5393,6 +5710,17 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       lastRun?.packetEvidence?.progressSnapshot ||
       null,
   });
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
+    experimentMemory: memory,
+    best: state.best,
+    current: state.current,
+  });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
       status,
@@ -5400,9 +5728,17 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     ]),
   );
   const continuation = loopContinuation(workDir, state, config, "state");
+  const stateCommands = {
+    ...continuation.commands,
+    ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
+  };
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
+      state: {
+        ...stateWithQualityGap,
+        portfolioRecommendation,
+        limit: iterationLimitInfo(state, config),
+      },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails,
@@ -5416,7 +5752,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       experimentMemory: memory,
       watchdog: watchdogSummary,
     }),
-    continuation.commands,
+    stateCommands,
   );
   const fullState = {
     ok: true,
@@ -5440,6 +5776,11 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     scaffoldHealth,
     researchIntegrity,
     runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -5456,6 +5797,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     laneLifecycle,
     packetDiagnostics,
+    portfolioRecommendation,
     watchdogSummary,
     memory,
     experimentEconomics,
@@ -5481,6 +5823,7 @@ async function publicCompactState({
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const qualityGap = await currentQualityGapSummary(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
@@ -5512,18 +5855,44 @@ async function publicCompactState({
         command: continuationCommands(workDir).partialResults,
       })
     : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance();
+  const dashboardHealth = await dashboardHealthForWorkDir(workDir);
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+  });
   const stateWithQualityGap = {
     ...state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
-    runtimeProvenance: runtimeProvenance(),
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   };
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
     progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
+    experimentMemory: memory,
+    best: state.best,
+    current: state.current,
   });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
@@ -5532,25 +5901,33 @@ async function publicCompactState({
     ]),
   );
   const continuation = loopContinuation(workDir, state, config, "state");
+  const compactCommands = {
+    ...continuation.commands,
+    ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
+  };
+  const compactFinalization = compactFinalizationPreview(workDir);
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
-      state: { ...stateWithQualityGap, limit: iterationLimitInfo(state, config) },
+      state: {
+        ...stateWithQualityGap,
+        portfolioRecommendation,
+        limit: iterationLimitInfo(state, config),
+      },
       nextAction: continuation.nextAction,
       lastRunFreshness,
       warningDetails,
       scaffoldHealth,
       researchIntegrity,
       qualityGap,
-      finalization: null,
+      finalization: compactFinalization,
       experimentEconomics,
       salvageCandidates: partialResults.candidates,
       workflowFriction: [],
       experimentMemory: memory,
       watchdog: watchdogSummary,
     }),
-    continuation.commands,
+    compactCommands,
   );
-  decisionEnvelope.finalizationReadiness = compactFinalizationPreview(workDir);
   return compactPublicState({
     ok: true,
     workDir,
@@ -5572,7 +5949,12 @@ async function publicCompactState({
     confidence: state.confidence,
     scaffoldHealth,
     researchIntegrity,
-    runtimeProvenance: stateWithQualityGap.runtimeProvenance,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -5581,7 +5963,7 @@ async function publicCompactState({
       dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
       commitPaths: config.commitPaths || [],
     },
-    commands: dashboardCommands(workDir),
+    commands: compactCommands,
     warnings: warningDetails.map((warning: any) => warning.message),
     warningDetails,
     qualityGap,
@@ -5592,6 +5974,7 @@ async function publicCompactState({
     watchdogSummary,
     laneLifecycle,
     packetDiagnostics,
+    portfolioRecommendation,
     experimentEconomics,
     partialResults,
     workflowFriction: [],
@@ -5611,12 +5994,23 @@ function compactPublicState(state: LooseObject) {
     state.decisionEnvelope?.canonicalNextAction ||
     state.resumeAudit?.canonicalNextAction ||
     null;
-  const blockers = [
-    ...(Array.isArray(state.warningDetails)
-      ? state.warningDetails.map((warning: any) => warning.message || warning.code)
-      : []),
-    ...(Array.isArray(state.warnings) ? state.warnings : []),
-  ].filter(Boolean);
+  const loopBlockers = Array.isArray(compactDecisionEnvelope?.loopContract?.blockers)
+    ? compactDecisionEnvelope.loopContract.blockers.map(actionMessage).filter(Boolean)
+    : [];
+  const canonicalBlocker =
+    canonicalNextAction && isPacketBrakeKind(canonicalNextAction.kind)
+      ? actionMessage(canonicalNextAction)
+      : "";
+  const warningBlockers = Array.isArray(state.warningDetails)
+    ? state.warningDetails
+        .filter((warning: any) =>
+          ["git_dirty", "missing_commit_paths"].includes(String(warning?.code || "")),
+        )
+        .map((warning: any) => warning.message || warning.code)
+    : [];
+  const blockers = uniqueStrings(
+    [...loopBlockers, canonicalBlocker, ...warningBlockers].filter(Boolean),
+  );
   const goalFrame = buildGoalFrame({
     autoresearchGoal: state.config?.goal,
     codexGoalObjective: state.codexGoalObjective,
@@ -5693,6 +6087,7 @@ function compactPublicState(state: LooseObject) {
           mode: lane.mode,
           evidenceStatus: lane.evidenceStatus,
           nextActionHint: lane.nextActionHint,
+          brief: lane.brief || null,
         }))
       : [],
     fanoutPlan: state.fanoutPlan
@@ -5756,14 +6151,40 @@ function compactPublicState(state: LooseObject) {
         ? state.partialResults.skippedArtifacts.slice(0, 5)
         : [],
     },
+    portfolioRecommendation: compactPortfolioRecommendation(state.portfolioRecommendation),
     workflowFriction: Array.isArray(state.workflowFriction)
       ? state.workflowFriction.slice(0, 5)
       : [],
-    commands: continuation.commands || state.commands || {},
+    commands: state.commands || {},
     resumeAudit: compactDecisionEnvelope,
     decisionEnvelope: compactDecisionEnvelope,
     canonicalNextAction,
     runtimeProvenance: state.runtimeProvenance,
+    runtimeDriftSummary: state.runtimeDriftSummary
+      ? {
+          installedRuntime: state.runtimeDriftSummary.installedRuntime,
+          builtRuntime: state.runtimeDriftSummary.builtRuntime,
+          nextActionHint: state.runtimeDriftSummary.nextActionHint,
+        }
+      : null,
+    dashboardHealth: state.dashboardHealth || null,
+    sourceCleanliness: state.sourceCleanliness || null,
+    gateQuality: state.gateQuality
+      ? {
+          posture: state.gateQuality.posture,
+          blockers: state.gateQuality.blockers || [],
+          warnings: state.gateQuality.warnings || [],
+          nextActionHint: state.gateQuality.nextActionHint || "",
+        }
+      : null,
+    preflight: state.preflight
+      ? {
+          status: state.preflight.status,
+          blockers: state.preflight.blockers || [],
+          warnings: state.preflight.warnings || [],
+          nextCommand: state.preflight.nextCommand || "",
+        }
+      : null,
     loopContract: compactDecisionEnvelope?.loopContract,
     laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
@@ -5789,6 +6210,7 @@ function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject 
     latestPacketFreshness: envelope.latestPacketFreshness || null,
     benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
     dirtySourceDrift: envelope.dirtySourceDrift || null,
+    sourceCleanliness: envelope.sourceCleanliness || null,
     qualityRound: envelope.qualityRound || null,
     scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
     researchIntegrity: envelope.researchIntegrity || null,
@@ -5866,10 +6288,35 @@ function compactLaneLifecycle(laneLifecycle: LooseObject | null | undefined): Lo
       mode: lane.mode,
       evidenceStatus: lane.evidenceStatus,
       nextActionHint: lane.nextActionHint,
+      brief: lane.brief || null,
     })),
+    lessonsToAvoid: Array.isArray(laneLifecycle.lessonsToAvoid)
+      ? laneLifecycle.lessonsToAvoid.slice(0, 8)
+      : [],
     recommendation: laneLifecycle.recommendation || "",
     command: laneLifecycle.command || "",
   };
+}
+
+function compactPortfolioRecommendation(value: LooseObject | null | undefined): LooseObject | null {
+  if (!value) return null;
+  return {
+    kind: value.kind || "insufficient-evidence",
+    confidence: value.confidence || "low",
+    reason: value.reason || "",
+    nextActionHint: value.nextActionHint || "",
+    evidence: Array.isArray(value.evidence) ? value.evidence.slice(0, 6) : [],
+  };
+}
+
+async function dashboardHealthForWorkDir(workDir: string): Promise<LooseObject> {
+  const record = await readServeRegistry(workDir);
+  return verifyDashboardHealthSummary(
+    buildServeRegistryHealthInput(workDir, record, {
+      expectedVersion: PLUGIN_VERSION,
+      timeoutMs: 500,
+    }),
+  );
 }
 
 function dashboardCommands(workDir: string, qualityGap: any = null) {
@@ -6219,7 +6666,11 @@ function buildParallelLanes({
   config?: LooseObject;
 }) {
   const planned = Array.isArray(fanoutPlan?.lanes) ? fanoutPlan.lanes : [];
-  if (planned.length > 0) return planned;
+  if (planned.length > 0) {
+    return planned.map((lane: LooseObject, index: number) =>
+      normalizeParallelLane(lane, index, config),
+    );
+  }
   const memoryLanes = Array.isArray(memory?.lanePortfolio) ? memory.lanePortfolio : [];
   const lanes = memoryLanes.map((lane: LooseObject, index: number) =>
     normalizeParallelLane(lane, index, config),
@@ -6242,6 +6693,13 @@ function defaultParallelLaneSeeds(config: LooseObject) {
       label: "Read-only scout",
       priority: "high",
       nextActionHint: `Find one evidence-backed hypothesis that could move ${metricName}.`,
+      brief: {
+        objective: `Find one evidence-backed hypothesis that could move ${metricName}.`,
+        evidencePoint: "Current ledger, ASI memory, and recent packet evidence.",
+        boundaries: ["read-only", "do not edit files", "return one candidate next action"],
+        pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
+        expectedDecisionOutput: "one scout recommendation with evidence and a next measured action",
+      },
     },
     {
       id: "benchmark-contract",
@@ -6249,6 +6707,15 @@ function defaultParallelLaneSeeds(config: LooseObject) {
       priority: "high",
       nextActionHint:
         "Check whether the benchmark, parsed metric, and checks still measure the intended outcome.",
+      brief: {
+        objective:
+          "Check that benchmark, parsed metric, and checks still measure the intended outcome.",
+        evidencePoint:
+          "Benchmark contract, METRIC parser output, checks command, and doctor warnings.",
+        boundaries: ["read-only", "do not change benchmark code in this lane"],
+        pointers: ["autoresearch.config.json", "autoresearch.last-run.json"],
+        expectedDecisionOutput: "one benchmark-trust recommendation or repair candidate",
+      },
     },
     {
       id: "implementation-candidate",
@@ -6256,6 +6723,14 @@ function defaultParallelLaneSeeds(config: LooseObject) {
       priority: "medium",
       nextActionHint:
         "Prepare one isolated edit lane only after a scout produces a concrete hypothesis.",
+      brief: {
+        objective:
+          "Prepare one isolated edit candidate after a scout produces a concrete hypothesis.",
+        evidencePoint: "Accepted scout recommendation and current commit path boundaries.",
+        boundaries: ["use a separate worktree or owned write scope", "keep edits scoped"],
+        pointers: ["autoresearch.ideas.md", "autoresearch.config.json"],
+        expectedDecisionOutput: "one implementation plan with files, risks, and verification",
+      },
     },
     {
       id: "promotion-readiness",
@@ -6263,6 +6738,15 @@ function defaultParallelLaneSeeds(config: LooseObject) {
       priority: "medium",
       nextActionHint:
         "Identify repeat, holdout, or finalization evidence still needed before a keep can promote.",
+      brief: {
+        objective:
+          "Identify repeat, holdout, or finalization evidence still needed before promotion.",
+        evidencePoint:
+          "Kept runs, promotion-grade measurements, finalization preview, and gate quality.",
+        boundaries: ["read-only", "do not promote evidence from this lane"],
+        pointers: ["autoresearch.jsonl", "autoresearch.research"],
+        expectedDecisionOutput: "one promotion-readiness gap or finalization recommendation",
+      },
     },
   ];
 }
@@ -6274,6 +6758,24 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
   const readOnly =
     !/implementation|edit|candidate|worktree/i.test(String(id)) &&
     !/implementation|edit|candidate|worktree/i.test(String(label));
+  const isolation = readOnly
+    ? "read-only; do not edit files"
+    : "use a separate worktree or owned file set";
+  const nextActionHint =
+    lane.nextActionHint ||
+    lane.recommendation ||
+    "Return a concise hypothesis, evidence, and next measured action.";
+  const brief = normalizeLaneBrief(lane.brief || lane, {
+    objective: lane.objective || nextActionHint,
+    evidencePoint:
+      lane.evidencePoint ||
+      lane.evidence ||
+      `Current ${config.metricName || "primary metric"} evidence and session memory.`,
+    boundaries: [isolation],
+    pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
+    expectedDecisionOutput: "one recommendation, supporting evidence, and the next measured action",
+    lessonsToAvoid: [],
+  });
   return {
     id,
     title: label,
@@ -6281,17 +6783,13 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
     status: lane.status || "planned",
     priority: lane.priority || (index === 0 ? "high" : "medium"),
     mode: readOnly ? "read_only_scout" : "isolated_worktree",
-    isolation: readOnly
-      ? "read-only; do not edit files"
-      : "use a separate worktree or owned file set",
+    isolation,
     evidenceStatus: lane.evidenceStatus || "provisional",
     owner: lane.owner || "subagent",
     writeScope: readOnly ? [] : listOption(config.commitPaths || config.commit_paths),
     reason: lane.reason || lane.evidence || "Parallel lane planned from current session memory.",
-    nextActionHint:
-      lane.nextActionHint ||
-      lane.recommendation ||
-      "Return a concise hypothesis, evidence, and next measured action.",
+    nextActionHint,
+    brief,
   };
 }
 
@@ -6484,10 +6982,12 @@ function synthesizeLaneDecision({
     selected?.result?.summary ||
     fallbackLane?.nextActionHint ||
     "Run one read-only scout lane, then choose one isolated implementation candidate for the next measured packet.";
+  const lessonsToAvoid = summarizeLaneLessons(laneResults);
   return {
     status: selected ? "ready" : "needs_lane_result",
     sourceLane: selected?.lane?.id || fallbackLane?.id || "",
     nextAction,
+    lessonsToAvoid,
     measuredPacket:
       "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
     commandHint: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`,
@@ -6579,10 +7079,9 @@ function continuationCommands(workDir: string) {
 function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
   const action = envelope?.canonicalNextAction;
   if (!action) return envelope;
-  const command = concreteCanonicalCommand(
-    action.command,
-    commandForCanonicalKind(action.kind, commands),
-  );
+  const command = resolveActionCommand(action.kind, commands, {
+    explicitCommand: action.command,
+  });
   return {
     ...envelope,
     canonicalNextAction: {
@@ -6590,48 +7089,6 @@ function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): L
       command,
     },
   };
-}
-
-function concreteCanonicalCommand(command: unknown, fallback: string): string {
-  const text = String(command || "");
-  if (!text) return fallback;
-  return /<[^>]+>/.test(text) ? fallback || text : text;
-}
-
-function commandForCanonicalKind(kind: unknown, commands: unknown): string {
-  const lookup = commandLookupObject(commands);
-  switch (String(kind || "")) {
-    case "safety-blocker":
-    case "workflow-friction":
-      return lookup.doctorExplain || lookup.doctor || lookup.state || "";
-    case "benchmark-mismatch":
-      return lookup.benchmarkLint || lookup.doctorExplain || lookup.doctor || "";
-    case "log-decision":
-      return lookup.keepLast || lookup.state || "";
-    case "stale-packet":
-      return lookup.replaceLast || lookup.next || lookup.nextRun || "";
-    case "partial-salvage":
-      return lookup.partialResults || "";
-    case "context-distillation":
-      return lookup.onboardingPacket || lookup.state || "";
-    case "lane-cleanup":
-      return lookup.state || lookup.laneRunner || "";
-    case "runtime-provenance":
-      return lookup.doctorExplain || lookup.doctor || "";
-    case "packet-diagnostic":
-      return lookup.partialResults || lookup.state || "";
-    case "decision-capsule":
-      return lookup.benchmarkLint || lookup.recommendNext || lookup.state || "";
-    case "quality-gap":
-      return lookup.gapCandidates || "";
-    case "plateau-pivot":
-    case "next-packet":
-      return lookup.next || lookup.nextRun || "";
-    case "finalization":
-      return lookup.finalizePreview || lookup.finalizeCurrentTree || "";
-    default:
-      return lookup.next || lookup.nextRun || "";
-  }
 }
 
 function commandLookupObject(commands: unknown): LooseObject {
@@ -6707,7 +7164,55 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
   });
+  const runtimeDriftSummary = await inspectRuntimeDrift({
+    packageRoot: PLUGIN_ROOT,
+    sourceVersion: PLUGIN_VERSION,
+  });
+  let benchmarkCommandHint = "";
+  let benchmarkCommandSource: Awaited<ReturnType<typeof resolveBenchmarkCommandSource>> | null =
+    null;
+  try {
+    benchmarkCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
+      fallbackToDefault: true,
+    });
+    benchmarkCommandHint = benchmarkCommandSource.command;
+  } catch (error: unknown) {
+    pushUniqueMessage(issues, errorMessage(error));
+  }
   warnings.push(...drift.warnings);
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth: state.scaffoldHealth,
+    warningDetails,
+    runtimeDriftSummary,
+    benchmarkCommand: benchmarkCommandHint,
+  });
+  for (const blocker of guidanceBlockers(guidance)) {
+    if (!hasSharperDoctorBlocker(state, blocker)) {
+      pushUniqueMessage(issues, blocker);
+    }
+  }
+  for (const warning of guidanceWarnings(guidance)) pushUniqueMessage(warnings, warning);
+  const loopAuthority = doctorLoopContractAuthority(
+    withCanonicalActionCommand(
+      buildDecisionEnvelope({
+        state: {
+          ...state,
+          gateQuality: guidance.gateQuality,
+          preflight: guidance.preflight,
+          portfolioRecommendation: null,
+          runtimeDriftSummary,
+          scaffoldHealth: state.scaffoldHealth,
+        },
+        nextAction: "Run the next experiment, then log keep or discard with ASI.",
+        finalization: state.decisionEnvelope?.finalizationReadiness || null,
+      }),
+      continuationCommands(workDir),
+    ),
+  );
+  for (const blocker of loopAuthority.blockers) pushUniqueMessage(issues, blocker);
 
   const benchmark: LooseObject = {
     checked: false,
@@ -6722,10 +7227,13 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
 
   if (boolOption(args.check_benchmark ?? args.checkBenchmark, false)) {
     benchmark.checked = true;
-    benchmark.command = args.command || (await defaultBenchmarkCommand(workDir));
+    benchmarkCommandSource =
+      benchmarkCommandSource ||
+      (await resolveBenchmarkCommandSource(args, workDir, { fallbackToDefault: true }));
+    benchmark.command = benchmarkCommandSource.command;
     if (!benchmark.command) {
       benchmark.metricError =
-        "No benchmark command was provided and no autoresearch script was found.";
+        benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
       issues.push(benchmark.metricError);
     } else {
       const run = await runShell(
@@ -6766,10 +7274,12 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   }
 
   let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (issues.some((issue: any) => /contract changed/i.test(issue))) {
+  if (loopAuthority.nextAction) {
+    nextAction = loopAuthority.nextAction;
+  } else if (issues.some((issue: any) => /contract changed/i.test(issue))) {
     nextAction =
       "Start a new segment or explicitly invalidate the old evidence before running another packet.";
-  } else if (issues.some((issue: any) => /primary metric|Benchmark/.test(issue))) {
+  } else if (issues.some((issue: any) => /primary metric|benchmark/i.test(issue))) {
     nextAction =
       "Fix the benchmark command so it emits the configured primary metric before continuing.";
   } else if (state.runs === 0) {
@@ -6791,6 +7301,12 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     },
     benchmark,
     drift,
+    runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
+    decisionEnvelope: loopAuthority.decisionEnvelope,
+    loopContract: loopAuthority.loopContract,
+    canonicalNextAction: loopAuthority.canonicalNextAction,
     runtimeProvenance: runtimeProvenance(drift),
     scaffoldHealth: state.scaffoldHealth,
     researchIntegrity: state.researchIntegrity,
@@ -6823,6 +7339,7 @@ function benchmarkDriftWarning({ currentMetric, bestMetric, direction, metricNam
 }
 
 function doctorExplanation(result: LooseObject): LooseObject {
+  const runtimeSummary = result.runtimeDriftSummary || null;
   return {
     verdict: result.ok
       ? "Doctor found no blocking issues."
@@ -6833,10 +7350,107 @@ function doctorExplanation(result: LooseObject): LooseObject {
         /dirty|drift|benchmark|missing|stale|commitPaths/i.test(String(warning)),
       ),
     ].slice(0, 5),
+    runtimeDriftSummary: runtimeSummary
+      ? {
+          installedRuntime: runtimeSummary.installedRuntime,
+          builtRuntime: runtimeSummary.builtRuntime,
+          smokeCheck: runtimeSummary.smokeCheck,
+          nextActionHint: runtimeSummary.nextActionHint,
+        }
+      : null,
+    gateQuality: result.gateQuality || null,
+    preflight: result.preflight || null,
     nextSafeAction: result.nextAction,
     readAs:
       "Issues block the loop. Warnings reduce trust and should be resolved before keeping results when they affect evidence, Git, or runtime drift.",
   };
+}
+
+function guidanceBlockers(guidance: LooseObject): string[] {
+  const blockers = [
+    ...listOption(guidance.gateQuality?.blockers),
+    ...(guidance.preflight?.status === "blocked" ? listOption(guidance.preflight?.blockers) : []),
+  ]
+    .map((blocker: any) => String(blocker || "").trim())
+    .filter(Boolean);
+  if (guidance.preflight?.status === "blocked" && blockers.length === 0) {
+    blockers.push("Preflight readiness is blocked.");
+  }
+  return uniqueStrings(blockers);
+}
+
+function guidanceWarnings(guidance: LooseObject): string[] {
+  return uniqueStrings([
+    ...listOption(guidance.gateQuality?.warnings),
+    ...listOption(guidance.preflight?.warnings),
+  ]);
+}
+
+function doctorLoopContractAuthority(decisionEnvelope: LooseObject | null | undefined) {
+  const envelope = decisionEnvelope || {};
+  const loopContract = envelope.loopContract || null;
+  const canonicalNextAction = envelope.canonicalNextAction || null;
+  const blockers = Array.isArray(loopContract?.blockers)
+    ? loopContract.blockers.map(actionMessage).filter(Boolean)
+    : [];
+  const strongestActionMessage = actionMessage(loopContract?.strongestAction);
+  if (blockers.length === 0 && strongestActionMessage && loopContract?.ok === false) {
+    blockers.push(strongestActionMessage);
+  }
+  return {
+    decisionEnvelope: envelope,
+    loopContract,
+    canonicalNextAction,
+    blockers: uniqueStrings(blockers),
+    nextAction:
+      blockers.length > 0
+        ? actionMessage(canonicalNextAction) || strongestActionMessage || blockers[0]
+        : "",
+  };
+}
+
+function actionMessage(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const record = value as LooseObject;
+  return String(
+    record.reason || record.message || record.nextActionHint || record.title || record.kind || "",
+  ).trim();
+}
+
+function pushUniqueMessage(target: any[], message: unknown) {
+  const text = String(message || "").trim();
+  if (text && !target.includes(text)) target.push(text);
+}
+
+function hasSharperDoctorBlocker(state: LooseObject, blocker: unknown = ""): boolean {
+  if (hasScaffoldBlocker(state.scaffoldHealth)) return true;
+  if (
+    blocker &&
+    shouldSuppressPreflightGateBlockerForCapsule(
+      { sessionDecisionCapsule: state.sessionDecisionCapsule },
+      blocker,
+    )
+  ) {
+    return true;
+  }
+  if (
+    blocker &&
+    shouldSuppressPreflightGateBlockerForCapsule(
+      { sessionDecisionCapsule: state.decisionEnvelope?.sessionDecisionCapsule },
+      blocker,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
+  const checks = Array.isArray((scaffoldHealth as LooseObject | null)?.checks)
+    ? (scaffoldHealth as LooseObject).checks
+    : [];
+  return checks.some((check: any) => check?.severity === "blocker");
 }
 
 async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
@@ -6982,7 +7596,7 @@ function promotionStateForPacket(run: LooseObject, state: LooseObject) {
   return { label: "exploratory", reasons };
 }
 
-function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
+async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
   const packetSource = {
     history,
     command: run.command,
@@ -6994,6 +7608,7 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .update(JSON.stringify(packetSource), "utf8")
     .digest("hex");
   const artifacts = artifactList(run.artifacts, run.workDir);
+  const taskArtifacts = await taskArtifactsForRun(run);
   const packetId = `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`;
   return {
     packetId,
@@ -7018,6 +7633,7 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     primaryMetric: run.parsedPrimary ?? null,
     artifacts,
     artifactWarnings: run.artifactWarnings || [],
+    taskArtifacts,
     progressSnapshot: progressSnapshotFromRun({ packetId, run, artifacts }),
     checks: run.checks
       ? {
@@ -7029,6 +7645,140 @@ function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
       : null,
     freshnessFingerprint: fingerprint,
   };
+}
+
+async function taskArtifactsForRun(run: LooseObject) {
+  const {
+    paths: taskManifestPaths,
+    quarantinedTasks,
+    warnings,
+  } = await taskManifestPathsForRun(run);
+  if (taskManifestPaths.length === 0) {
+    return {
+      acceptedTasks: [],
+      quarantinedTasks,
+      warnings,
+      totalTasks: 0,
+      processedTasks: 0,
+      acceptedTaskCount: 0,
+      quarantinedTaskCount: quarantinedTasks.length,
+      truncated: false,
+    };
+  }
+  const indexed = await indexTaskArtifacts({ artifactPaths: taskManifestPaths });
+  return {
+    ...indexed,
+    quarantinedTasks: [...quarantinedTasks, ...(indexed.quarantinedTasks || [])],
+    warnings: [...warnings, ...(indexed.warnings || [])],
+    quarantinedTaskCount:
+      quarantinedTasks.length +
+      (indexed.quarantinedTaskCount ?? (indexed.quarantinedTasks || []).length),
+  };
+}
+
+async function taskManifestPathsForRun(run: LooseObject) {
+  const workDir = path.resolve(run.workDir || process.cwd());
+  const workDirReal = await realPathOrResolved(workDir);
+  const paths: string[] = [];
+  const quarantinedTasks: LooseObject[] = [];
+  const warnings: string[] = [];
+
+  for (const [name, artifactPath] of Object.entries(run.artifacts || {})) {
+    if (!/task[_-]?manifest/i.test(name) || !isUsableArtifactPath(artifactPath)) continue;
+
+    const artifactValue = String(artifactPath);
+    const resolved = path.isAbsolute(artifactValue)
+      ? path.resolve(artifactValue)
+      : path.resolve(workDir, artifactValue);
+    if (!isPathInside(workDir, resolved)) {
+      quarantineTaskManifestPath({
+        resolved,
+        reason: "outside_workdir",
+        workDir,
+        quarantinedTasks,
+        warnings,
+      });
+      continue;
+    }
+
+    const realPathResult = await realPathIfExists(resolved);
+    if (realPathResult.error) {
+      quarantineTaskManifestPath({
+        resolved,
+        reason: "realpath_failed",
+        detail: realPathResult.error,
+        workDir,
+        quarantinedTasks,
+        warnings,
+      });
+      continue;
+    }
+
+    if (realPathResult.path && !isPathInside(workDirReal, realPathResult.path)) {
+      quarantineTaskManifestPath({
+        resolved,
+        reason: "outside_workdir_realpath",
+        workDir,
+        quarantinedTasks,
+        warnings,
+      });
+      continue;
+    }
+
+    paths.push(resolved);
+  }
+
+  return { paths, quarantinedTasks, warnings };
+}
+
+function quarantineTaskManifestPath({
+  resolved,
+  reason,
+  detail = "path escapes the working directory",
+  workDir,
+  quarantinedTasks,
+  warnings,
+}: {
+  resolved: string;
+  reason: string;
+  detail?: string;
+  workDir: string;
+  quarantinedTasks: LooseObject[];
+  warnings: string[];
+}) {
+  const displayPath = redactPathDisplay(resolved, workDir);
+  quarantinedTasks.push({ path: displayPath, reason });
+  warnings.push(`task artifact ${reason} for ${displayPath}: ${detail}`);
+}
+
+function isUsableArtifactPath(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0 && value !== "<outside-workdir>";
+}
+
+async function realPathIfExists(target: string): Promise<{ path: string | null; error: string }> {
+  try {
+    return { path: await fsp.realpath(target), error: "" };
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { path: null, error: "" }
+      : { path: null, error: errorMessage(error) };
+  }
+}
+
+async function realPathOrResolved(target: string): Promise<string> {
+  try {
+    return await fsp.realpath(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target)).replace(/\\/g, "/");
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative))
+  );
 }
 
 function promotionStateForLoggedDecision({
@@ -7087,6 +7837,53 @@ async function nextExperiment(args: any) {
     checkBenchmark: false,
   });
   if (!doctor.ok) {
+    const loopContract = doctor.loopContract || {};
+    const blockingAction = blockingLoopAction(loopContract, doctor.canonicalNextAction);
+    if (
+      shouldRefuseBeforeRun({
+        blockingAction,
+        loopContract,
+        capsule: currentState(doctor.workDir).sessionDecisionCapsule || null,
+        args,
+      })
+    ) {
+      const state = currentState(doctor.workDir);
+      const capsule = state.sessionDecisionCapsule || null;
+      return {
+        ok: false,
+        workDir: doctor.workDir,
+        refused: true,
+        code: "next_blocked_by_loop_contract",
+        doctor,
+        run: null as LooseObject | null,
+        decision: null as LooseObject | null,
+        blockingAction,
+        loopContract,
+        sessionDecisionCapsule: capsule,
+        decisionEnvelope: {
+          ...doctor.decisionEnvelope,
+          loopContract,
+          canonicalNextAction: blockingAction,
+        },
+        nextAction:
+          blockingAction.reason ||
+          capsule?.nextExperiment ||
+          "Resolve loop-governance blockers before running another packet.",
+        clearingCondition:
+          capsule?.enforcement?.clearingCondition ||
+          "Resolve the loop-governance blocker or warning, then retry next.",
+        commandHint:
+          blockingAction.command ||
+          capsule?.enforcement?.commandHint ||
+          continuationCommands(doctor.workDir).state,
+        continuation: loopContinuation(doctor.workDir, state, config, "blocked", {
+          stopReason:
+            blockingAction.reason ||
+            capsule?.nextExperiment ||
+            "Loop contract blocked the next packet.",
+        }),
+      };
+    }
     return {
       ok: false,
       workDir: doctor.workDir,
@@ -7106,20 +7903,32 @@ async function nextExperiment(args: any) {
     };
   }
   const stateBeforeRun = currentState(workDir);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const preflightEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: stateBeforeRun,
       nextAction: "Run the next measured packet.",
+      lastRunFreshness,
+      finalization: doctor.decisionEnvelope?.finalizationReadiness || null,
     }),
     continuationCommands(workDir),
   );
   const loopContract = preflightEnvelope.loopContract || {};
-  const blockingAction =
-    loopContract.strongestAction || preflightEnvelope.canonicalNextAction || null;
+  const blockingAction = blockingLoopAction(loopContract, preflightEnvelope.canonicalNextAction);
   const capsule = stateBeforeRun.sessionDecisionCapsule || null;
   const boundedNextAllowed =
     blockingAction?.kind === "decision-capsule" && isBoundedNextAllowedByCapsule(capsule, args);
-  if (loopContract.canRunNextPacket === false && !boundedNextAllowed) {
+  const loopBlockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
+  const stalePacketReplacementAllowed =
+    blockingAction?.kind === "stale-packet" &&
+    loopBlockers.length > 0 &&
+    loopBlockers.every((blocker: LooseObject) => blocker?.kind === "stale-packet");
+  if (
+    loopContract.canRunNextPacket === false &&
+    !boundedNextAllowed &&
+    !stalePacketReplacementAllowed
+  ) {
     return {
       ok: false,
       workDir,
@@ -7205,7 +8014,7 @@ async function nextExperiment(args: any) {
       error: error.message || String(error),
     })),
   };
-  const packetEvidence = packetEvidenceForRun(run, history);
+  const packetEvidence = await packetEvidenceForRun(run, history);
   const packet = {
     ok: doctor.ok && run.ok,
     workDir: run.workDir,
@@ -7225,6 +8034,37 @@ async function nextExperiment(args: any) {
   await writeLastRunPacket(run.workDir, packet, lastRunFile);
   await deleteActiveProgressSnapshot(run.workDir);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+
+function blockingLoopAction(loopContract: LooseObject, canonicalNextAction: LooseObject | null) {
+  const strongestAction = loopContract?.strongestAction || null;
+  if (
+    strongestAction &&
+    canonicalNextAction &&
+    strongestAction.kind === canonicalNextAction.kind &&
+    canonicalNextAction.command &&
+    !strongestAction.command
+  ) {
+    return { ...strongestAction, command: canonicalNextAction.command };
+  }
+  return strongestAction || canonicalNextAction || null;
+}
+
+function shouldRefuseBeforeRun({
+  blockingAction,
+  loopContract,
+  capsule,
+  args,
+}: {
+  blockingAction: LooseObject | null;
+  loopContract: LooseObject;
+  capsule: LooseObject | null;
+  args: LooseObject;
+}) {
+  if (!blockingAction || loopContract.canRunNextPacket !== false) return false;
+  if (blockingAction.kind === "current-tree-finalization") return true;
+  if (blockingAction.kind !== "decision-capsule") return false;
+  return !isBoundedNextAllowedByCapsule(capsule as any, args);
 }
 
 function compactNextExperimentPacket(packet: LooseObject) {

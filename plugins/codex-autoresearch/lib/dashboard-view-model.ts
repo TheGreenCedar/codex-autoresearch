@@ -1,6 +1,11 @@
 import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
+import {
+  actionMetadataForKind,
+  fallbackCommandForKind,
+  isPacketBrakeKind,
+} from "./action-metadata.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -16,21 +21,12 @@ type RunLike = LooseObject & {
 };
 type CommandMap = Map<string, string>;
 
-const PACKET_BRAKE_KINDS = new Set([
-  "context-distillation",
-  "decision-capsule",
-  "lane-cleanup",
-  "runtime-provenance",
-  "packet-diagnostic",
-  "workflow-friction",
-  "finalization",
-  "stale-packet",
-  "setup",
-  "benchmark-command",
-  "log-decision",
-  "segment-transition",
-  "watchdog",
-]);
+const DASHBOARD_COMMAND_KEY_ALIASES: Record<string, string> = {
+  doctorExplain: "doctor",
+  liveDashboard: "serve dashboard",
+  newSegmentDryRun: "new segment",
+  state: "recommend next",
+};
 
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
@@ -643,6 +639,8 @@ function canonicalPriorityLabel(value: unknown): string {
 }
 
 function canonicalTitle(kind: string): string {
+  const metadata = actionMetadataForKind(kind);
+  if (metadata?.label) return metadata.label;
   const titles: Record<string, string> = {
     "safety-blocker": "Resolve the safety blocker",
     "benchmark-mismatch": "Repair the benchmark mismatch",
@@ -2015,103 +2013,45 @@ function actionFromDecisionEnvelope(
   const stalePacketCommand =
     guidedSetup?.commands?.replaceLast ||
     (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
-  const commandByKind: Record<string, string> = {
-    "safety-blocker": commandMap.get("doctor") || "",
-    "workflow-friction": commandMap.get("doctor") || "",
-    "benchmark-mismatch": commandMap.get("benchmark lint") || commandMap.get("doctor") || "",
+  const metadata = actionMetadataForKind(kind);
+  const metadataCommand = fallbackCommandForKind(kind, (key) => commandMap.get(commandMapKey(key)));
+  const commandOverrides: Record<string, string> = {
     "stale-packet":
       stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "partial-salvage": commandMap.get("partial results") || "",
-    "context-distillation": cleanText(summary.command) || "",
-    "decision-capsule":
-      cleanText(summary.command) ||
-      commandMap.get("benchmark lint") ||
-      commandMap.get("recommend next") ||
-      commandMap.get("state") ||
-      "",
-    "quality-gap": commandMap.get("gap candidates") || "",
-    "plateau-pivot": commandMap.get("next run") || "",
-    watchdog:
-      commandMap.get("finalize preview") ||
-      commandMap.get("serve dashboard") ||
-      commandMap.get("doctor") ||
-      "",
-    finalization: commandMap.get("finalize preview") || "",
-    "next-packet": commandMap.get("next run") || "",
     setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
     "benchmark-command": guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "log-decision":
-      guidedSetup?.commands?.logLast ||
-      commandMap.get("keep last") ||
-      commandMap.get("discard last") ||
-      "",
-    "segment-transition":
-      commandMap.get("new segment") ||
-      commandMap.get("gap candidates") ||
-      commandMap.get("finalize preview") ||
-      "",
-    plateau: commandMap.get("next run") || "",
-    "finalize-preview": commandMap.get("finalize preview") || "",
+    "log-decision": guidedSetup?.commands?.logLast || "",
     baseline: guidedSetup?.commands?.baseline || commandMap.get("next run") || "",
   };
-  const labelByKind: Record<string, string> = {
-    "safety-blocker": "Doctor",
-    "workflow-friction": "Doctor",
-    "benchmark-mismatch": "Lint",
-    "stale-packet": stalePacketCommand ? "Next" : "Setup",
-    "partial-salvage": "Partial",
-    "context-distillation": "Context",
-    "decision-capsule": "Capsule",
-    "quality-gap": "Gaps",
-    "plateau-pivot": "Next",
-    watchdog: commandMap.get("finalize preview") ? "Preview" : "Inspect",
-    finalization: "Preview",
-    "next-packet": "Next",
-    setup: "Setup",
-    "benchmark-command": "Setup",
-    "log-decision": "Log",
-    "segment-transition": commandMap.get("gap candidates") ? "Gaps" : "Review",
-    plateau: "Next",
-    "finalize-preview": "Preview",
-    baseline: "Next",
-  };
-  const safeActionByKind: Record<string, string> = {
-    "safety-blocker": "doctor",
-    "workflow-friction": "doctor",
-    "benchmark-mismatch": "benchmark-lint",
-    "stale-packet": stalePacketCommand ? "" : "setup-plan",
-    "partial-salvage": "partial-results",
-    "context-distillation": "session-forensics",
-    "decision-capsule": "decision-capsule",
-    "quality-gap": "gap-candidates",
-    "plateau-pivot": "next",
-    watchdog: commandMap.get("finalize preview") ? "finalize-preview" : "inspect",
-    finalization: "finalize-preview",
-    "next-packet": "next",
-    setup: "setup-plan",
-    "benchmark-command": "setup-plan",
-    "segment-transition": "new-segment",
-    "finalize-preview": "finalize-preview",
-    baseline: "next",
-  };
-  const packetBrake = PACKET_BRAKE_KINDS.has(kind);
+  const commandLabel = dashboardCommandLabelOverride(kind, {
+    commandMap,
+    stalePacketCommand,
+  });
+  const safeAction = dashboardSafeActionOverride(kind, { commandMap, stalePacketCommand });
+  const packetBrake = isPacketBrakeKind(kind);
   return actionItem({
     kind,
     priority: cleanText(summary.priority) || "Next",
     title: cleanText(summary.title) || "Next action",
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
     utilityCopy: decisionEnvelopeUtility(kind),
-    safeAction: safeActionByKind[kind] || "",
+    safeAction: safeAction ?? metadata?.safeAction ?? "",
     command:
       cleanText(summary.command) ||
-      commandByKind[kind] ||
+      commandOverrides[kind] ||
+      metadataCommand ||
       (packetBrake ? "" : commandMap.get("next run") || ""),
-    commandLabel: labelByKind[kind] || "Next",
+    commandLabel: commandLabel || metadata?.commandLabel || "Next",
     tone: ["finalize-preview", "finalization"].includes(kind)
       ? "good"
       : [
             "safety-blocker",
             "benchmark-mismatch",
+            "gate-quality",
+            "preflight",
+            "portfolio-trust-blocker",
+            "metric-saturation",
+            "current-tree-finalization",
             "workflow-friction",
             "stale-packet",
             "setup",
@@ -2128,6 +2068,30 @@ function actionFromDecisionEnvelope(
   });
 }
 
+function dashboardCommandLabelOverride(
+  kind: string,
+  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
+): string {
+  if (kind === "stale-packet" && stalePacketCommand) return "Next";
+  if (kind === "watchdog") return commandMap.get("finalize preview") ? "Preview" : "Inspect";
+  if (kind === "segment-transition") {
+    if (commandMap.get("new segment")) return "Segment";
+    return commandMap.get("gap candidates") ? "Gaps" : "Review";
+  }
+  return "";
+}
+
+function dashboardSafeActionOverride(
+  kind: string,
+  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
+): string | null {
+  if (kind === "stale-packet" && stalePacketCommand) return "";
+  if (kind === "watchdog") {
+    return commandMap.get("finalize preview") ? "finalize-preview" : "inspect";
+  }
+  return null;
+}
+
 function decisionEnvelopeUtility(kind: string): string {
   if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
   if (kind === "workflow-friction")
@@ -2139,6 +2103,15 @@ function decisionEnvelopeUtility(kind: string): string {
     return "Packet diagnostics should explain the last run before another packet.";
   if (kind === "benchmark-mismatch")
     return "Benchmark timeout and command-shape mismatches come before reruns.";
+  if (kind === "gate-quality")
+    return "Independent gate quality should be repaired before another measured packet.";
+  if (kind === "preflight") return "Preflight blockers come before another measured packet.";
+  if (kind === "portfolio-trust-blocker")
+    return "Portfolio trust blockers should be resolved before spending another packet.";
+  if (kind === "metric-saturation")
+    return "Saturated metrics need promotion evidence or a pivot before more packets.";
+  if (kind === "current-tree-finalization")
+    return "Current-tree finalization should describe the branch before review work continues.";
   if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
   if (kind === "partial-salvage")
     return "Review completed artifact rows before rerunning an expensive failed packet.";
@@ -2359,7 +2332,7 @@ function actionItem({
     title,
     detail,
     utilityCopy,
-    packetBrake: PACKET_BRAKE_KINDS.has(kind),
+    packetBrake: isPacketBrakeKind(kind),
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
@@ -2442,6 +2415,11 @@ function commandLookup(commands: unknown): CommandMap {
     if (label) map.set(label, item.command || "");
   }
   return map;
+}
+
+function commandMapKey(key: string): string {
+  if (DASHBOARD_COMMAND_KEY_ALIASES[key]) return DASHBOARD_COMMAND_KEY_ALIASES[key];
+  return key.replace(/[A-Z]/g, (match) => ` ${match.toLowerCase()}`).toLowerCase();
 }
 
 function warningMessage(warning: unknown): string {
