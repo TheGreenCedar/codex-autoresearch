@@ -25,7 +25,7 @@ This project uses a root-only changelog because the root README is the public do
 - Dashboard command safety now accepts generated Windows launcher paths for read-only Autoresearch commands while continuing to reject mutating command payloads.
 - Source cleanliness no longer emits a copyable `git stash` cleanup command for dirty Autoresearch session artifacts; readouts keep cleanup guidance descriptive instead of shell-ready.
 - Stale last-run replacement guidance now uses replay-safe packet commands instead of display-redacted command evidence, keeping `state` and `recommend-next` replacement commands runnable across CI platforms.
-- Runtime drift inspection command quoting now normalizes path separators before escaping double quotes so generated smoke-check commands remain correctly encoded.
+- Runtime drift inspection command quoting now normalizes path separators before JSON-encoding quoted arguments so generated smoke-check commands remain correctly encoded.
 - Runtime drift now requires matching built-entrypoint fingerprints before a same-version installed runtime is reported as fresh.
 - Gate quality keeps benchmark-as-checks classified as smoke coverage even when promotion metadata is present.
 - `serve` now derives returned dashboard health from `/health` verification, including port, cwd, and version matching, before reporting the dashboard as verified.
