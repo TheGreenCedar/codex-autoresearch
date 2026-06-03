@@ -10,6 +10,12 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Preview is read-only. It should report readiness, blockers, overlap, dirty-tree status, finalization readiness, current-tree fingerprints, included/excluded files, and a next action.
 
+For slow or noisy source branches, add `--progress` to print heartbeat lines to stderr while preserving JSON stdout:
+
+```bash
+node scripts/autoresearch.mjs finalize-preview --cwd <project> --progress
+```
+
 Preview also reports semantic safety:
 
 - kept commits later logged as discard, crash, or checks_failed
@@ -30,6 +36,8 @@ node scripts/autoresearch.mjs finalize-current-tree --cwd <project>
 ```
 
 Current-tree mode states that the current tree, not old kept commits, is the review unit. Session artifacts are excluded by default: `autoresearch.*`, `autoresearch.research/**`, dashboard exports, and generated finalization scratch files stay out of the branch.
+
+If `state --report` shows `sourceCleanliness.status` as `session-artifacts-dirty`, temporarily stash or commit those session files before branch-changing finalization. The current-tree plan still excludes session artifacts by default; the clean worktree requirement protects Git branch operations.
 
 Use the escape hatch only when the reviewer explicitly wants the session files:
 

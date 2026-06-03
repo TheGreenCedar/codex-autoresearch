@@ -11,6 +11,9 @@ export async function serveAutoresearch(args: LooseObject) {
   const port = Number(args.port || 0);
   const dashboardHtml = args.dashboardHtml;
   const viewModel = args.viewModel;
+  const startedAt = String(args.startedAt || new Date().toISOString());
+  const version = String(args.pluginVersion || args.version || "");
+  let serverPort = 0;
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -28,7 +31,18 @@ export async function serveAutoresearch(args: LooseObject) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/health") {
-        sendJson(res, { ok: true, workDir });
+        sendJson(res, {
+          ok: true,
+          workDir,
+          dashboard: {
+            cwd: workDir,
+            liveness: "alive",
+            pid: process.pid,
+            port: serverPort || null,
+            startedAt,
+            version,
+          },
+        });
         return;
       }
       sendJson(res, { ok: false, error: "Not found" }, 404);
@@ -53,11 +67,16 @@ export async function serveAutoresearch(args: LooseObject) {
   if (!address || typeof address === "string") {
     throw new Error("Autoresearch live dashboard did not expose a numeric loopback port.");
   }
+  serverPort = address.port;
   return {
     ok: true,
     workDir,
     port: address.port,
     url: `http://127.0.0.1:${address.port}/`,
+    pid: process.pid,
+    cwd: workDir,
+    startedAt,
+    version,
     server,
   };
 }

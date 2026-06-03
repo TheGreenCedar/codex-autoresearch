@@ -826,6 +826,7 @@ const checks = [
         "new-segment --cwd <project>",
         "gap-candidates --cwd <project>",
         "finalize-preview --cwd <project>",
+        "state --cwd <project> [--compact] [--report]",
         "serve --cwd <project>",
         "integrations list|doctor|sync-recipes",
         "setup_plan",
@@ -839,6 +840,7 @@ const checks = [
         "new_segment",
         "gap_candidates",
         "finalize_preview",
+        'report: { type: "boolean" }',
       ])
         ? pass()
         : fail("Missing one or more full-product CLI surfaces.");
@@ -861,6 +863,15 @@ const checks = [
         "lib/live-server.ts",
         "lib/integrations.ts",
         "lib/session-decision-capsule.ts",
+        "lib/gate-quality.ts",
+        "lib/preflight-audit.ts",
+        "lib/runtime-drift-doctor.ts",
+        "lib/dashboard-health.ts",
+        "lib/lane-briefs.ts",
+        "lib/portfolio-advisor.ts",
+        "lib/task-artifact-indexer.ts",
+        "lib/terminal-report.ts",
+        "lib/source-cleanliness.ts",
       ];
       for (const file of files) await readText(file);
       return pass();
@@ -888,6 +899,16 @@ const checks = [
         "Use the CLI",
         "live dashboard URL",
         "recipes",
+        "state --report",
+        "report.text",
+        "terminal-first",
+        "gateQuality",
+        "preflight",
+        "sourceCleanliness",
+        "portfolioRecommendation",
+        "task_manifest",
+        "symlink/realpath escapes",
+        "built-entrypoint fingerprint",
       ])
         ? pass()
         : fail("Docs are missing full-product workflow terms.");
@@ -909,8 +930,16 @@ const checks = [
         "sessionDecisionCapsule",
         "decision-capsule",
         "runtimeProvenance",
+        "runtimeDriftSummary",
+        "gateQuality",
+        "preflight",
+        "sourceCleanliness",
+        "portfolioRecommendation",
         "laneLifecycle",
         "packetDiagnostics",
+        "state --report",
+        "state --report` and `state` expose",
+        "recommend-next --compact` carries",
         "benchmark-lint` must prove the primary `METRIC`",
       ])
         ? pass()

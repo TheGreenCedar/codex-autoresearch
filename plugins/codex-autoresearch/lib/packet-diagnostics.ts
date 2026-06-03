@@ -14,6 +14,7 @@ export interface PacketDiagnostics {
   reasons: string[];
   recommendation: string;
   command: string;
+  taskArtifacts?: unknown;
 }
 
 export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagnostics {
@@ -74,6 +75,7 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
         ? ""
         : `Inspect packet diagnostic stage ${primaryStage} before another packet.`,
     command: stringValue(input.command),
+    taskArtifacts: packetEvidence.taskArtifacts || null,
   };
 }
 

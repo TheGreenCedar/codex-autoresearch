@@ -869,6 +869,48 @@ test("workflow friction uses forensics, churn, dirty tree, recipes, and quality_
   );
 });
 
+test("metric saturation becomes a review checkpoint before another same-metric packet", () => {
+  const saturatedState = {
+    best: 0,
+    config: { metricName: "agent_value_gap", bestDirection: "lower" },
+    current: [{ run: 1, status: "keep", metric: 0 }],
+    development: { best: 0 },
+    promotion: { kept: 0 },
+    researchIntegrity: {
+      evidenceLabels: ["dev_best"],
+      notPromotableBecause: [
+        "Current best is development-only; it is not promotable without promotion-grade metadata.",
+      ],
+    },
+  };
+  const signals = analyzeWorkflowFriction({ state: saturatedState });
+  const saturation = signals.find((signal) => signal.kind === "metric_saturated_not_promotable");
+
+  assert.equal(saturation?.severity, "warning");
+  assert.match(saturation?.suggestedAction.reason || "", /review\/rescope checkpoint/);
+  const envelope = buildDecisionEnvelope({
+    state: saturatedState,
+    workflowFriction: signals,
+    nextAction: "Run the next measured packet.",
+  });
+  assert.equal(envelope.canonicalNextAction.kind, "metric-saturation");
+});
+
+test("finalization coverage gaps prefer current-tree finalization", () => {
+  const envelope = buildDecisionEnvelope({
+    state: { current: [{ run: 1, status: "keep", metric: 0 }] },
+    finalization: {
+      ready: false,
+      actionCode: "current-tree-finalization",
+      nextAction: "Resolve the structured current-tree review unit blocker.",
+      warnings: ["Current branch tree is not covered by selected kept groups."],
+    },
+    nextAction: "Run the next measured packet.",
+  });
+
+  assert.equal(envelope.canonicalNextAction.kind, "current-tree-finalization");
+});
+
 test("loop contract blockers drive canonical next action ahead of legacy actions", () => {
   const envelope = buildDecisionEnvelope({
     state: {
@@ -899,6 +941,34 @@ test("loop contract warnings prevent next-packet canonical drift", () => {
   assert.equal(envelope.loopContract.warnings[0].kind, "finalization");
   assert.equal(envelope.loopContract.canRunNextPacket, false);
   assert.equal(envelope.canonicalNextAction.kind, "finalization");
+});
+
+test("loop contract warnings also prevent plateau packet drift", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      current: [{ run: 1, status: "keep", metric: 5 }],
+      sessionDecisionCapsule: {
+        enforcement: {
+          mode: "bounded-next",
+          canRunNextPacket: false,
+          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
+        },
+        nextExperiment: "Run a bounded benchmark-lint handoff before more packet work.",
+      },
+    },
+    experimentMemory: {
+      plateau: {
+        detected: true,
+        recommendation: "Scout a distant lane before repeating the plateau.",
+      },
+    },
+    nextAction: "Run the next measured packet.",
+  });
+
+  assert.equal(envelope.loopContract.blockers.length, 0);
+  assert.equal(envelope.loopContract.warnings[0].kind, "decision-capsule");
+  assert.equal(envelope.loopContract.canRunNextPacket, false);
+  assert.equal(envelope.canonicalNextAction.kind, "decision-capsule");
 });
 
 test("session forensics parses bounded signals without raw body persistence", async () => {

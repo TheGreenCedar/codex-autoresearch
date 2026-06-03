@@ -1,5 +1,5 @@
 type LooseObject = Record<string, any>;
-type ActionPolicy =
+export type ActionPolicy =
   | "read"
   | "preview"
   | "artifact_write"
@@ -36,7 +36,7 @@ const TOOL_REGISTRY = [
   { name: "init_experiment", cliCommand: "init", actionPolicy: "state_mutation" },
   { name: "run_experiment", cliCommand: "run", actionPolicy: "process_start" },
   { name: "next_experiment", cliCommand: "next", actionPolicy: "process_start" },
-  { name: "partial_results", cliCommand: "partial-results", actionPolicy: "artifact_write" },
+  { name: "partial_results", cliCommand: "partial-results", actionPolicy: "read" },
   { name: "log_experiment", cliCommand: "log", actionPolicy: "git_mutation" },
   { name: "read_state", cliCommand: "state", actionPolicy: "read" },
   { name: "measure_quality_gap", cliCommand: "quality-gap", actionPolicy: "read" },
@@ -65,6 +65,10 @@ export const toolRegistry = Object.freeze(
 
 export const toolNames = Object.freeze(TOOL_REGISTRY.map((tool) => tool.name));
 
+const toolNameByCliCommand: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(TOOL_REGISTRY.map((tool) => [tool.cliCommand, tool.name])),
+);
+
 export function toolMetadata(name: string): LooseObject | null {
   return toolRegistry[name] || null;
 }
@@ -75,27 +79,43 @@ export function toolMutates(name: string): boolean {
 
 export function actionPolicyForTool(name: string, args: LooseObject = {}): ActionPolicy {
   const base = (toolMetadata(name)?.actionPolicy || "read") as ActionPolicy;
-  if (name === "gap_candidates" && (args.apply || args.apply === "true")) {
+  if (name === "gap_candidates" && enabledArg(args.apply)) {
     return "state_mutation";
   }
-  if (name === "session_forensics" && (args.apply || args.apply === "true")) {
+  if (name === "session_forensics" && enabledArg(args.apply)) {
     return "artifact_write";
   }
-  if (name === "research_fanout" && (args.yes || args.yes === "true")) {
+  if (name === "research_fanout" && enabledArg(args.yes)) {
     return "state_mutation";
   }
-  if (name === "lane_runner" && (args.command || args.yes || args.yes === "true")) {
+  if (name === "lane_runner" && (args.command || enabledArg(args.yes))) {
     return args.command ? "process_start" : "state_mutation";
   }
-  if (name === "partial_results" && args.record) return "artifact_write";
-  if (name === "guided_setup" && (args.start_dashboard || args.startDashboard)) {
+  if (name === "partial_results" && enabledArg(args.record)) return "artifact_write";
+  if (
+    name === "guided_setup" &&
+    (enabledArg(args.start_dashboard) || enabledArg(args.startDashboard))
+  ) {
     return "process_start";
   }
-  if (name === "doctor_session" && args.check_benchmark) return "process_start";
+  if (
+    name === "doctor_session" &&
+    (enabledArg(args.check_benchmark) || enabledArg(args.checkBenchmark))
+  ) {
+    return "process_start";
+  }
   if (name === "benchmark_inspect" && args.command) return "process_start";
   if (name === "checks_inspect" && (args.command || args.checks_command || args.checksCommand))
     return "process_start";
-  if (name === "benchmark_lint" && args.command) return "process_start";
+  if (name === "benchmark_lint" && !args.sample && !args.sampleText && !args.sample_text) {
+    return "process_start";
+  }
+  if (name === "new_segment" && (enabledArg(args.dry_run) || enabledArg(args.dryRun))) {
+    return "preview";
+  }
+  if (name === "promote_gate" && (enabledArg(args.dry_run) || enabledArg(args.dryRun))) {
+    return "preview";
+  }
   return base;
 }
 
@@ -113,6 +133,10 @@ export function cliCommandForTool(name: string): string | null {
   return toolMetadata(name)?.cliCommand || null;
 }
 
+export function toolNameForCliCommand(command: string): string | null {
+  return toolNameByCliCommand[command] || null;
+}
+
 export function unsafeCommandFieldsForArgs(args: LooseObject = {}) {
   return COMMAND_ARGUMENT_FIELDS.filter((field) => args?.[field] != null && args[field] !== "");
 }
@@ -127,4 +151,10 @@ export function validateToolRegistry(schemaTools: Array<{ name: string }>) {
     missingRegistry,
     missingSchema,
   };
+}
+
+function enabledArg(value: unknown): boolean {
+  if (value == null || value === false) return false;
+  if (typeof value === "string") return !["", "0", "false", "no"].includes(value.toLowerCase());
+  return true;
 }

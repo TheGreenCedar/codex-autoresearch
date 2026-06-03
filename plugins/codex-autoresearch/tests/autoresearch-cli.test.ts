@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
 import { JSDOM } from "jsdom";
 import { redactCommandDisplay } from "../lib/evidence-redaction.js";
+import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
@@ -63,6 +66,56 @@ async function writeDecisionCapsule(dir, slug, overrides = {}) {
   );
 }
 
+async function prepareCurrentTreeFinalizationBlocker(dir) {
+  await git(dir, ["init"]);
+  await git(dir, ["config", "user.email", "codex@example.test"]);
+  await git(dir, ["config", "user.name", "Codex Test"]);
+  await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
+  await git(dir, ["add", "base.txt"]);
+  await git(dir, ["commit", "-m", "base"]);
+  await git(dir, ["branch", "-M", "main"]);
+  await git(dir, ["checkout", "-b", "feature"]);
+  await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC seconds=1'\n", "utf8");
+  await writeFile(path.join(dir, "autoresearch.checks.ps1"), "Write-Output 'test ok'\n", "utf8");
+  await runCli([
+    "init",
+    "--cwd",
+    dir,
+    "--name",
+    "current tree finalization",
+    "--metric-name",
+    "seconds",
+  ]);
+  await git(dir, ["add", "autoresearch.jsonl", "autoresearch.ps1", "autoresearch.checks.ps1"]);
+  await git(dir, ["commit", "-m", "init autoresearch"]);
+
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await writeFile(path.join(dir, "src", "kept.txt"), "kept\n", "utf8");
+  await git(dir, ["add", "src/kept.txt"]);
+  await git(dir, ["commit", "-m", "kept change"]);
+  const keptCommit = (await git(dir, ["rev-parse", "HEAD"])).trim();
+  const keep = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--metric",
+    "1",
+    "--status",
+    "keep",
+    "--description",
+    "Keep committed change",
+    "--commit",
+    keptCommit,
+  ]);
+  assert.equal(keep.code, 0, keep.stderr);
+  await git(dir, ["add", "autoresearch.jsonl"]);
+  await git(dir, ["commit", "-m", "log kept run"]);
+
+  await writeFile(path.join(dir, "src", "unlogged.txt"), "support\n", "utf8");
+  await git(dir, ["add", "src/unlogged.txt"]);
+  await git(dir, ["commit", "-m", "unlogged support change"]);
+}
+
 async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
   return await new Promise((resolve) => {
     const childEnv = { ...env };
@@ -86,6 +139,56 @@ async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
     );
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+async function runShellCommand(command, { cwd = pluginRoot } = {}) {
+  const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
+  const args =
+    process.platform === "win32"
+      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
+      : ["-c", command];
+  return await new Promise((resolve) => {
+    const child = spawn(shell, args, {
+      cwd,
+      env: process.env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
+    );
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+async function listenOnRandomPort(server) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+async function closeServer(server) {
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function addressPort(server) {
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Server did not bind a TCP port");
+  return address.port;
 }
 
 async function renderExportedDashboard(html) {
@@ -761,6 +864,34 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
     assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
     assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.equal(doctorPayload.loopContract.canRunNextPacket, false);
+    assert.equal(doctorPayload.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(doctorPayload.state.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(doctorPayload.state.sessionDecisionCapsule.kind, "session-decision-capsule");
+    assert.match(doctorPayload.issues.join("\n"), /benchmark-lint|primary METRIC/i);
+    assert.match(doctorPayload.nextAction, /benchmark-lint|primary METRIC/i);
+    assert.doesNotMatch(doctorPayload.explanation.verdict, /no blocking/i);
+
+    const { toolSchemas } = await import("../lib/tool-schemas.js");
+    const doctorSchema = toolSchemas.find((tool) => tool.name === "doctor_session");
+    assert.ok(doctorSchema);
+    for (const field of Object.keys(doctorPayload)) {
+      assert.ok(
+        doctorSchema.outputSchema.properties[field],
+        `doctor_session schema should cover doctor --explain field ${field}`,
+      );
+    }
+    assert.equal(doctorSchema.outputSchema.properties.loopContract.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.canonicalNextAction.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.runtimeProvenance.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.decisionEnvelope.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.sessionDecisionCapsule.type, "object");
+    assert.match(doctorSchema.outputSchema.properties.state.description, /decisionEnvelope/);
   });
 });
 
@@ -813,8 +944,9 @@ test("next allows explicitly bounded packet work for bounded-next capsules", asy
     assert.equal(defaultTimeoutOnly.code, 0, defaultTimeoutOnly.stderr);
     const blockedPayload = JSON.parse(defaultTimeoutOnly.stdout);
     assert.equal(blockedPayload.ok, false);
-    assert.equal(blockedPayload.refused, true);
-    assert.equal(blockedPayload.blockingAction.kind, "decision-capsule");
+    assert.equal(blockedPayload.refused, undefined);
+    assert.match(blockedPayload.doctor.issues.join("\n"), /No benchmark command/i);
+    assert.match(blockedPayload.nextAction, /benchmark/i);
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const result = await runCli([
@@ -1076,8 +1208,13 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
     await mkdir(path.join(dir, "out"), { recursive: true });
     await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
     await writeFile(
+      path.join(dir, "out", "task-manifest.json"),
+      JSON.stringify({ tasks: [{ id: "task-1", status: "done" }] }, null, 2),
+      "utf8",
+    );
+    await writeFile(
       path.join(dir, "packet-runner.mjs"),
-      "console.log(`METRIC score=${process.env.SCORE}`);\nconsole.log('ARTIFACT manifest=out/manifest.json');\n",
+      "console.log(`METRIC score=${process.env.SCORE}`);\nconsole.log('ARTIFACT manifest=out/manifest.json');\nconsole.log('ARTIFACT task_manifest=out/task-manifest.json');\n",
       "utf8",
     );
     await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs\n", "utf8");
@@ -1096,7 +1233,10 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
     const payload = JSON.parse(packet.stdout);
     assert.equal(payload.run.parsedPrimary, 7);
     assert.equal(payload.run.artifacts.manifest, "out/manifest.json");
+    assert.equal(payload.run.artifacts.task_manifest, "out/task-manifest.json");
     assert.equal(payload.packetEvidence.artifacts[0].exists, true);
+    assert.equal(payload.packetEvidence.taskArtifacts.acceptedTasks.length, 1);
+    assert.equal(payload.packetEvidence.taskArtifacts.quarantinedTasks.length, 0);
     assert.deepEqual(payload.run.envKeys, ["SCORE"]);
 
     const logged = await runCli([
@@ -1110,7 +1250,89 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
       "Keep artifact packet",
     ]);
     assert.equal(logged.code, 0, logged.stderr);
-    assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "out/manifest.json");
+    const logPayload = JSON.parse(logged.stdout);
+    assert.equal(logPayload.experiment.artifacts.manifest, "out/manifest.json");
+    assert.equal(logPayload.experiment.taskArtifacts.acceptedTasks[0].id, "task-1");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(
+      statePayload.evidenceRegistry.currentRuns[0].taskArtifacts.acceptedTasks[0].id,
+      "task-1",
+    );
+  });
+});
+
+test("malformed task manifests are quarantined without invalidating primary metrics", async () => {
+  await withTempDir("task-manifest-malformed", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "task manifest",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(path.join(dir, "task-manifest.json"), "{not json}\n", "utf8");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
+    const packet = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const payload = JSON.parse(packet.stdout);
+    assert.equal(payload.run.parsedPrimary, 1);
+    assert.equal(payload.packetEvidence.metrics.score, 1);
+    assert.equal(payload.packetEvidence.taskArtifacts.acceptedTasks.length, 0);
+    assert.equal(payload.packetEvidence.taskArtifacts.quarantinedTasks.length, 1);
+  });
+});
+
+test("symlinked task manifests outside the workdir are quarantined", async (t) => {
+  await withTempDir("task-manifest-symlink-outside", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      const outsideManifest = path.join(outsideDir, "task-manifest.json");
+      await writeFile(
+        outsideManifest,
+        JSON.stringify({ tasks: [{ id: "outside-secret-task", status: "done" }] }),
+        "utf8",
+      );
+      const linkPath = path.join(dir, "task-manifest.json");
+      try {
+        await symlink(outsideManifest, linkPath, "file");
+      } catch (error) {
+        t.skip(`file symlink unavailable on this platform: ${error}`);
+        return;
+      }
+
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "task manifest symlink",
+        "--metric-name",
+        "score",
+        "--direction",
+        "higher",
+      ]);
+
+      const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
+      const packet = await runCli(["next", "--cwd", dir, "--command", command]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const payload = JSON.parse(packet.stdout);
+      const taskArtifacts = payload.packetEvidence.taskArtifacts;
+      assert.equal(taskArtifacts.acceptedTasks.length, 0);
+      assert.equal(taskArtifacts.quarantinedTasks.length, 1);
+      assert.match(taskArtifacts.warnings.join("\n"), /outside_workdir_realpath|escapes/i);
+      assert.doesNotMatch(JSON.stringify(taskArtifacts), /outside-secret-task/);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1489,11 +1711,15 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
     assert.ok(plan.parallelLanes.length <= 6);
     assert.match(plan.fanoutPlan.metric.contract, /configured benchmark METRIC output/);
     assert.equal(plan.parallelLanes[0].evidenceStatus, "provisional");
+    assert.equal(typeof plan.parallelLanes[0].brief.objective, "string");
+    assert.ok(Array.isArray(plan.parallelLanes[0].brief.boundaries));
+    assert.equal(typeof plan.parallelLanes[0].brief.expectedDecisionOutput, "string");
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.ok(payload.parallelLanes.length > 0);
+    assert.equal(typeof payload.parallelLanes[0].brief.objective, "string");
     assert.equal(payload.fanoutPlan.status, "planned");
     assert.equal(payload.metric, "quality_gap");
 
@@ -1532,9 +1758,16 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
     assert.equal(payload.result.evidenceAccepted, true);
     assert.equal(payload.result.isolation.worktree, "");
     assert.deepEqual(payload.result.isolation.writeScope, []);
+    assert.equal(typeof payload.lane.brief.objective, "string");
 
     const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
     assert.match(ledger, /"type":"lane_result"/);
+    const laneEntry = ledger
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.type === "lane_result");
+    assert.equal(typeof laneEntry.lane.brief.objective, "string");
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
@@ -1542,6 +1775,7 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
     const lane = statePayload.parallelLanes.find((item) => item.id === "read-only-scout");
     assert.equal(lane.status, "completed");
     assert.equal(lane.evidenceStatus, "accepted");
+    assert.equal(typeof lane.brief.objective, "string");
   });
 });
 
@@ -2018,6 +2252,12 @@ test("lane-runner synthesizes completed lane results into one next action", asyn
       "Run one measured packet that validates benchmark contract parsing.",
     );
     assert.equal(typeof payload.coordinatorRecommendation.nextAction, "string");
+    assert.ok(payload.coordinatorRecommendation.lessonsToAvoid.length >= 1);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.ok(statePayload.laneLifecycle.lessonsToAvoid.length >= 1);
   });
 });
 
@@ -2190,6 +2430,11 @@ test("doctor does not treat routine rollback wording as evidence invalidation", 
       "--direction",
       "higher",
     ]);
+    if (process.platform === "win32") {
+      await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=1'\n");
+    } else {
+      await writeFile(path.join(dir, "autoresearch.sh"), "echo 'METRIC score=1'\n");
+    }
     await runCli([
       "log",
       "--cwd",
@@ -2399,10 +2644,21 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.segment, 1);
     assert.equal(payload.decisionEnvelope.dirtySourceDrift.dirty, false);
+    assert.equal(payload.sourceCleanliness.status, "session-artifacts-dirty");
+    assert.equal(payload.sourceCleanliness.sourceDirty, false);
+    assert.equal(payload.sourceCleanliness.sessionArtifactDirty, true);
+    assert.equal(payload.sourceCleanliness.cleanupCommand, "");
     assert.ok(
       payload.warningDetails.every((warning) => warning.code !== "git_dirty"),
       "session-only dirtiness should not be reported as source drift",
     );
+    const report = await runCli(["state", "--cwd", dir, "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.report.json.cleanliness.status, "session-artifacts-dirty");
+    assert.equal(reportPayload.report.json.cleanliness.cleanupCommand, "");
+    assert.match(reportPayload.report.text, /Only Autoresearch session artifacts are dirty/);
+    assert.doesNotMatch(reportPayload.report.text, /git stash push --include-untracked/);
     const doctor = await runCli(["doctor", "--cwd", dir]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
@@ -2423,6 +2679,8 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     assert.equal(dirtyCompact.code, 0, dirtyCompact.stderr);
     const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
     assert.equal(dirtyCompactPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.equal(dirtyCompactPayload.sourceCleanliness.status, "source-dirty");
+    assert.equal(dirtyCompactPayload.sourceCleanliness.cleanupCommand, "");
     assert.ok(
       dirtyCompactPayload.blockers.some((blocker) =>
         String(blocker).includes("Git worktree is dirty"),
@@ -2755,6 +3013,16 @@ test("config persists operator settings and extends iteration limits", async () 
     assert.equal(statePayload.limit.remainingIterations, 4);
     assert.match(statePayload.commands[0].command, /autoresearch\.mjs/);
     assert.match(statePayload.commands[0].command, /--cwd/);
+    const commandRail = statePayload.commands
+      .map((command) => `${command.label}: ${command.command}`)
+      .join("\n");
+    const commandTexts = statePayload.commands.map((command) => command.command).join("\n");
+    assert.match(commandRail, /\bfinalize-preview\b/);
+    assert.match(commandRail, /\bnew-segment\b.*--dry-run/);
+    assert.doesNotMatch(commandTexts, /\bfinalize-current-tree\b/);
+    assert.doesNotMatch(commandTexts, /\sconfig\s.*--extend/);
+    assert.doesNotMatch(commandTexts, /\slog\s.*--from-last/);
+    assert.doesNotMatch(commandTexts, /\snext\s.*--compact/);
   });
 });
 
@@ -2830,6 +3098,65 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     ]);
     assert.notEqual(duplicate.code, 0);
     assert.match(duplicate.stderr, /No last-run packet/);
+  });
+});
+
+test("next refuses to overwrite an unlogged fresh last-run packet", async () => {
+  await withTempDir("fresh-last-run-next-refusal", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "fresh last run", "--metric-name", "seconds"]);
+    const firstCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const first = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      firstCommand,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+    const firstPayload = JSON.parse(first.stdout);
+    const packetPath = firstPayload.lastRunPath;
+    const before = JSON.parse(await readFile(packetPath, "utf8"));
+    assert.equal(before.decision.metric, 3);
+
+    const sideEffectFile = path.join(dir, "second-packet-ran.txt");
+    const sideEffectScript = path.join(dir, "second-packet.mjs");
+    await writeFile(
+      sideEffectScript,
+      [
+        `import { writeFileSync } from "node:fs";`,
+        `writeFileSync(${JSON.stringify(sideEffectFile)}, "ran");`,
+        `console.log("METRIC seconds=99");`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const secondCommand = `${quoteForShell(process.execPath)} ${quoteForShell(sideEffectScript)}`;
+    const second = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      secondCommand,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(second.code, 0, second.stderr);
+    const refused = JSON.parse(second.stdout);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.refused, true);
+    assert.equal(refused.code, "next_blocked_by_loop_contract");
+    assert.equal(refused.blockingAction.kind, "log-decision");
+    assert.equal(refused.loopContract.canRunNextPacket, false);
+    assert.equal(refused.run, null);
+    assert.equal(refused.decision, null);
+    assert.match(refused.commandHint, /\blog\b/);
+
+    const after = JSON.parse(await readFile(packetPath, "utf8"));
+    assert.equal(after.decision.metric, 3);
+    assert.equal(after.packetEvidence.metrics.seconds, 3);
+    await assert.rejects(access(sideEffectFile));
   });
 });
 
@@ -3561,6 +3888,418 @@ test("recommend-next compact returns state-first handoff without dashboard-only 
     assert.doesNotMatch(recommendPayload.operatorChecklist.command, /\bnext\b.*--compact/);
     assert.match(recommendPayload.whySafe, /compact state/);
     assert.match(recommendPayload.whySafe, /without dashboard-grade rendering/);
+  });
+});
+
+test("doctor explain preserves current-tree finalization blockers", async () => {
+  await withTempDir("doctor-current-tree-finalization", async (dir) => {
+    await prepareCurrentTreeFinalizationBlocker(dir);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+
+    assert.equal(payload.ok, false);
+    assert.equal(payload.canonicalNextAction.kind, "current-tree-finalization");
+    assert.equal(payload.loopContract.canRunNextPacket, false);
+    assert.equal(payload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "current-tree-finalization");
+    assert.match(payload.nextAction, /finalize-current-tree|Final tree coverage/i);
+    assert.doesNotMatch(payload.canonicalNextAction.command, /\bnext\b/);
+  });
+});
+
+test("next compact refuses current-tree finalization blockers before running packets", async () => {
+  await withTempDir("next-current-tree-finalization", async (dir) => {
+    await prepareCurrentTreeFinalizationBlocker(dir);
+
+    const next = await runCli(["next", "--cwd", dir, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+    const payload = JSON.parse(next.stdout);
+
+    assert.equal(payload.ok, false);
+    assert.equal(payload.refused, true);
+    assert.equal(payload.code, "next_blocked_by_loop_contract");
+    assert.equal(payload.blockingAction.kind, "current-tree-finalization");
+    assert.equal(payload.loopContract.canRunNextPacket, false);
+    assert.equal(payload.run, null);
+    assert.equal(payload.decision, null);
+    assert.match(payload.commandHint, /finalize-(preview|current-tree)/);
+    assert.doesNotMatch(payload.commandHint, /autoresearch\.mjs"?\s+next\b/);
+  });
+});
+
+test("stale packet compact state recommends replacement next command", async () => {
+  await withTempDir("state-stale-last-run-replacement", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "stale state", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "always",
+      "--checks-command",
+      checksCommand,
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const directLog = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "2",
+      "--status",
+      "keep",
+      "--description",
+      "Manual run",
+    ]);
+    assert.equal(directLog.code, 0, directLog.stderr);
+
+    const lastRunPath = path.join(dir, "autoresearch.last-run.json");
+    const lastRunPacket = JSON.parse(await readFile(lastRunPath, "utf8"));
+    assert.match(lastRunPacket.history.replayCommand, /METRIC seconds=3/);
+    assert.match(lastRunPacket.history.replayChecksCommand, /process\.exit\(0\)/);
+    lastRunPacket.history.command = "<redacted benchmark command>";
+    lastRunPacket.run.command = "";
+    lastRunPacket.run.checks.command = "";
+    await writeFile(lastRunPath, JSON.stringify(lastRunPacket, null, 2), "utf8");
+
+    const fullState = await runCli(["state", "--cwd", dir]);
+    assert.equal(fullState.code, 0, fullState.stderr);
+    const fullStatePayload = JSON.parse(fullState.stdout);
+
+    assert.equal(fullStatePayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
+    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /\bnext\b/);
+    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--command/);
+    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--checks-command/);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+
+    assert.equal(statePayload.canonicalNextAction.kind, "stale-packet");
+    assert.match(statePayload.commands.replaceLast, /\bnext\b/);
+    assert.match(statePayload.commands.replaceLast, /--command/);
+    assert.match(statePayload.commands.replaceLast, /--checks-command/);
+    assert.equal(statePayload.canonicalNextAction.command, statePayload.commands.replaceLast);
+    assert.equal(
+      fullStatePayload.decisionEnvelope.canonicalNextAction.command,
+      statePayload.commands.replaceLast,
+    );
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+
+    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
+    assert.equal(recommendPayload.commands.primary, statePayload.commands.replaceLast);
+    assert.match(recommendPayload.commands.primary, /\bnext\b/);
+
+    const replacement = await runShellCommand(statePayload.commands.replaceLast, {
+      cwd: pluginRoot,
+    });
+    assert.equal(replacement.code, 0, replacement.stderr);
+    const replacementPayload = JSON.parse(replacement.stdout);
+    assert.equal(replacementPayload.decision.metric, 3);
+  });
+});
+
+test("state report returns a compact one-screen terminal report", async () => {
+  await withTempDir("state-terminal-report", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "report loop", "--metric-name", "seconds"]);
+
+    const report = await runCli(["state", "--cwd", dir, "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const payload = JSON.parse(report.stdout);
+
+    assert.equal(payload.ok, true);
+    assert.equal(typeof payload.report.text, "string");
+    assert.equal(typeof payload.report.json.nextCommand, "string");
+    assert.match(payload.report.text, /Next command/i);
+    assert.match(payload.report.text, /Gate/i);
+    assert.match(payload.report.text, /Runtime/i);
+    assert.match(payload.report.text, /Dashboard/i);
+    assert.doesNotMatch(
+      payload.report.text,
+      /\bserve\b|start_dashboard|--check-benchmark|benchmark-lint|git stash push/i,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(payload.report.json),
+      /\bserve\b|start_dashboard|--check-benchmark|benchmark-lint|git stash push/i,
+    );
+    assert.notEqual(payload.report.json.dashboard.command, 'curl "/health"');
+    assert.doesNotMatch(payload.report.text, /\[object Object\]/);
+    assert.equal(payload.compactState, undefined);
+
+    const reportWithSource = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
+    assert.equal(reportWithSource.code, 0, reportWithSource.stderr);
+    const sourcePayload = JSON.parse(reportWithSource.stdout);
+    assert.equal(sourcePayload.compactState.metric, "seconds");
+    assert.equal(sourcePayload.report.json.blocker.length > 0, true);
+  });
+});
+
+test("state report uses canonical command for blocked decision capsules", async () => {
+  await withTempDir("state-report-decision-capsule-command", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "report capsule", "--metric-name", "seconds"]);
+    await writeDecisionCapsule(dir, "benchmark-contract");
+
+    const report = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const payload = JSON.parse(report.stdout);
+
+    assert.equal(payload.compactState.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(payload.report.json.nextCommand, payload.compactState.canonicalNextAction.command);
+    assert.doesNotMatch(payload.report.json.nextCommand, /doctor --cwd/);
+  });
+});
+
+test("state report does not promote empty promotion evidence", async () => {
+  await withTempDir("state-report-empty-promotion", async (dir) => {
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const setup = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "generic checks",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      command,
+      "--checks-command",
+      "node verify.mjs",
+    ]);
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "unknown");
+
+    const report = await runCli(["state", "--cwd", dir, "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.report.json.gate.posture, "unknown");
+    assert.doesNotMatch(reportPayload.report.text, /Gate: promotion/);
+    assert.notEqual(reportPayload.report.json.portfolio.kind, "holdout");
+  });
+});
+
+test("state report marks registry-only dashboard health dead until HTTP responds", async () => {
+  await withTempDir("state-report-dashboard-health", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "dashboard health", "--metric-name", "seconds"]);
+    await writeServeRegistry(dir, {
+      pid: process.pid,
+      port: 60241,
+      cwd: dir,
+      startedAt: "2026-06-01T00:00:00.000Z",
+      version: PLUGIN_VERSION,
+      healthUrl: "http://127.0.0.1:60241/health",
+    });
+
+    const report = await runCli(["state", "--cwd", dir, "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const payload = JSON.parse(report.stdout);
+    assert.equal(payload.report.json.dashboard.status, "dead");
+    assert.match(payload.report.text, /Dashboard: dead/);
+    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
+    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.dashboardHealth.liveness, "dead");
+    assert.equal(compactPayload.dashboardHealth.stale, true);
+    assert.equal(compactPayload.dashboardHealth.registryPath.includes("serve-registry.json"), true);
+  });
+});
+
+test("state report does not call a fake same-process registry a live dashboard", async () => {
+  await withTempDir("state-report-dashboard-fake-same-process", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "fake dashboard health",
+      "--metric-name",
+      "seconds",
+    ]);
+    await writeServeRegistry(dir, {
+      pid: process.pid,
+      port: 60242,
+      cwd: dir,
+      startedAt: "2026-06-02T00:00:00.000Z",
+      version: PLUGIN_VERSION,
+      healthUrl: "http://127.0.0.1:60242/health",
+    });
+
+    const report = await runCli(["state", "--cwd", dir, "--report"]);
+    assert.equal(report.code, 0, report.stderr);
+    const payload = JSON.parse(report.stdout);
+    assert.notEqual(payload.report.json.dashboard.status, "alive");
+    assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
+    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
+    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+  });
+});
+
+test("static export does not call a same-process registry a live dashboard without HTTP health", async () => {
+  await withTempDir("export-dashboard-fake-same-process", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "static fake dashboard health",
+      "--metric-name",
+      "seconds",
+    ]);
+    await writeServeRegistry(dir, {
+      pid: process.pid,
+      port: 60243,
+      cwd: dir,
+      startedAt: "2026-06-02T00:00:00.000Z",
+      version: PLUGIN_VERSION,
+      healthUrl: "http://127.0.0.1:60243/health",
+    });
+
+    const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const payload = JSON.parse(exported.stdout);
+    const registry = payload.viewModel.processHygiene.dashboardServerRegistry;
+    assert.notEqual(registry.liveness, "alive");
+    assert.equal(registry.stale, true);
+    assert.match(registry.message, /HTTP health/i);
+  });
+});
+
+test("state health rejects an alive HTTP response for a different cwd", async () => {
+  await withTempDir("state-dashboard-health-wrong-cwd", async (dir) => {
+    const otherDir = path.join(dir, "other");
+    await mkdir(otherDir, { recursive: true });
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "wrong cwd dashboard health",
+      "--metric-name",
+      "seconds",
+    ]);
+    const server = createServer((request, response) => {
+      if (request.url === "/health") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: true,
+            dashboard: {
+              pid: process.pid,
+              port: addressPort(server),
+              cwd: path.resolve(otherDir),
+              version: PLUGIN_VERSION,
+              liveness: "alive",
+            },
+          }),
+        );
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await listenOnRandomPort(server);
+    const port = addressPort(server);
+
+    try {
+      await writeServeRegistry(dir, {
+        pid: process.pid,
+        port,
+        cwd: dir,
+        startedAt: "2026-06-02T00:00:00.000Z",
+        version: PLUGIN_VERSION,
+        healthUrl: `http://127.0.0.1:${port}/health`,
+      });
+
+      const report = await runCli(["state", "--cwd", dir, "--report"]);
+      assert.equal(report.code, 0, report.stderr);
+      const payload = JSON.parse(report.stdout);
+      assert.notEqual(payload.report.json.dashboard.status, "alive");
+      assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
+
+      const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+      assert.equal(compact.code, 0, compact.stderr);
+      const compactPayload = JSON.parse(compact.stdout);
+      assert.notEqual(compactPayload.dashboardHealth.liveness, "alive");
+      assert.equal(compactPayload.dashboardHealth.stale, true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
+
+test("state health accepts an alive same-cwd current-version HTTP response", async () => {
+  await withTempDir("state-dashboard-health-alive", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "alive dashboard health",
+      "--metric-name",
+      "seconds",
+    ]);
+    const server = createServer((request, response) => {
+      if (request.url === "/health") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: true,
+            dashboard: {
+              pid: process.pid,
+              port: addressPort(server),
+              cwd: path.resolve(dir),
+              version: PLUGIN_VERSION,
+              liveness: "alive",
+            },
+          }),
+        );
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await listenOnRandomPort(server);
+    const port = addressPort(server);
+
+    try {
+      await writeServeRegistry(dir, {
+        pid: process.pid,
+        port,
+        cwd: dir,
+        startedAt: "2026-06-02T00:00:00.000Z",
+        version: PLUGIN_VERSION,
+        healthUrl: `http://127.0.0.1:${port}/health`,
+      });
+
+      const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+      assert.equal(compact.code, 0, compact.stderr);
+      const compactPayload = JSON.parse(compact.stdout);
+      assert.equal(compactPayload.dashboardHealth.liveness, "alive");
+      assert.equal(compactPayload.dashboardHealth.stale, false);
+
+      const report = await runCli(["state", "--cwd", dir, "--report"]);
+      assert.equal(report.code, 0, report.stderr);
+      const payload = JSON.parse(report.stdout);
+      assert.equal(payload.report.json.dashboard.status, "alive");
+      assert.match(payload.report.text, /Dashboard: alive/);
+    } finally {
+      await closeServer(server);
+    }
   });
 });
 
@@ -4954,6 +5693,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
   const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
+  const readState = toolSchemas.find((tool) => tool.name === "read_state");
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
 
@@ -4961,6 +5701,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
+  assert.ok(readState);
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
   assert.match(guided.description, /first-run or resume action packet/);
@@ -4988,6 +5729,9 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
   assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
   assert.equal(guided.inputSchema.properties.port.type, "number");
+  assert.equal(readState.inputSchema.properties.report.type, "boolean");
+  assert.equal(readState.outputSchema.properties.report.type, "object");
+  assert.equal(readState.outputSchema.properties.dashboardHealth.type, "object");
   assert.equal(onboardingPacket.inputSchema.properties.operator_checklist, undefined);
   assert.equal(recommendNext.inputSchema.properties.operator_checklist.type, "boolean");
   assert.deepEqual(recommendNext.outputSchema.properties.action.type, ["string", "object"]);
@@ -4999,8 +5743,43 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.outputSchema.properties.dashboard.type, "object");
   assert.equal(next.outputSchema.properties.parsedMetrics, undefined);
   assert.equal(next.outputSchema.properties.decision.type, "object");
+  for (const field of [
+    "continuation",
+    "decision",
+    "fullPacket",
+    "history",
+    "lastRunPath",
+    "nextAction",
+    "ok",
+    "packetEvidence",
+    "report",
+    "run",
+    "workDir",
+  ]) {
+    assert.ok(next.outputSchema.properties[field], `next schema should include ${field}`);
+  }
+  assert.equal(next.outputSchema.properties.code.type, "string");
+  assert.equal(next.outputSchema.properties.loopContract.type, "object");
+  assert.equal(next.outputSchema.properties.nextAction.type, "string");
+  assert.equal(next.outputSchema.properties.clearingCondition.type, "string");
+  assert.equal(next.outputSchema.properties.commandHint.type, "string");
+  assert.equal(richDoctor.outputSchema.properties.state.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.git.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.benchmark.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.loopContract.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.canonicalNextAction.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.runtimeProvenance.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.decisionEnvelope.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.sessionDecisionCapsule.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.scaffoldHealth.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.researchIntegrity.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.nextAction.type, "string");
+  assert.equal(richDoctor.outputSchema.properties.continuation.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.explanation.type, "object");
   assert.equal(richDoctor.outputSchema.properties.issues.type, "array");
   assert.equal(richDoctor.outputSchema.properties.issues.items.type, "string");
+  assert.equal(richDoctor.outputSchema.properties.warningDetails.type, "array");
+  assert.equal(richDoctor.outputSchema.properties.warningDetails.items.type, "object");
   const qualityGap = toolSchemas.find((tool) => tool.name === "measure_quality_gap");
   assert.equal(qualityGap.outputSchema.properties.open.type, "number");
   assert.equal(qualityGap.outputSchema.properties.openItems.items.type, "string");
@@ -5306,6 +6085,18 @@ test("export is compact by default and full with json-full", async () => {
   });
 });
 
+test("export progress writes stderr heartbeats without corrupting JSON stdout", async () => {
+  await withTempDir("export-progress-json", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "export progress", "--metric-name", "seconds"]);
+
+    const result = await runSpawnedCli(["export", "--cwd", dir, "--json-full", "--progress"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.match(result.stderr, /\[autoresearch:export]/);
+  });
+});
+
 test("large benchmark output is capped and marked truncated", async () => {
   await withTempDir("large-output", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "large output", "--metric-name", "seconds"]);
@@ -5500,6 +6291,14 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.equal(typeof statePayload.memory.novelty.score, "number");
     assert.ok(statePayload.memory.lanePortfolio.some((lane) => lane.id === "measurement-quality"));
     assert.ok(statePayload.memory.diversityGuidance);
+    const generatedCommands = statePayload.commands.map((item) => item.command).join("\n");
+    assert.ok(statePayload.commands.some((item) => item.label === "State"));
+    assert.ok(statePayload.commands.some((item) => item.label === "Quality gap"));
+    assert.doesNotMatch(generatedCommands, /\b(?:serve|export|benchmark-lint)\b/i);
+    assert.doesNotMatch(generatedCommands, /--check-benchmark\b/i);
+    for (const item of statePayload.commands) {
+      assert.equal(dashboardCommandSafety(item.command).safe, true, item.command);
+    }
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
@@ -5599,13 +6398,10 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
     assert.equal(payload.viewModel.guidedSetup.stage, "stale-last-run");
     assert.equal(payload.viewModel.lastRun.freshness.fresh, false);
     assert.equal(payload.viewModel.nextBestAction.kind, "stale-packet");
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--command/);
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /METRIC seconds=3/);
-    assert.match(payload.viewModel.guidedSetup.commands.replaceLast, /--checks-policy "manual"/);
-    assert.equal(
-      payload.viewModel.nextBestAction.command,
-      payload.viewModel.guidedSetup.commands.replaceLast,
-    );
+    assert.equal(payload.viewModel.guidedSetup.commands, undefined);
+    assert.doesNotMatch(String(payload.viewModel.nextBestAction.command || ""), /\bnext\b/);
+    assert.equal(payload.viewModel.missionControl.logDecision.commandsByStatus, undefined);
+    assert.equal(payload.viewModel.missionControl.logDecision.liveAction, undefined);
     assert.match(payload.viewModel.nextBestAction.detail, /Last-run packet is stale/);
     assert.match(payload.viewModel.readout.nextAction, /Last-run packet is stale/);
   });
@@ -5634,8 +6430,182 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
     assert.equal(payload.benchmark.progress.status, "failed");
     assert.equal(payload.benchmark.progress.cancellable, false);
     assert.equal(payload.benchmark.progress.stages[0].stage, "benchmark");
+    assert.doesNotMatch(payload.preflight.blockers.join("\n"), /No benchmark command/i);
     assert.match(payload.issues.join("\n"), /primary metric/);
     assert.match(payload.nextAction, /benchmark/i);
+  });
+});
+
+test("doctor and next report missing future benchmark commands for manual sessions", async () => {
+  await withTempDir("manual-metric-missing-benchmark-command", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "manual doctor", "--metric-name", "seconds"]);
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "5",
+      "--status",
+      "keep",
+      "--description",
+      "Manual baseline",
+    ]);
+    assert.equal(log.code, 0, log.stderr);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--explain"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.equal(doctorPayload.benchmark.checked, true);
+    assert.equal(doctorPayload.benchmark.command, "");
+    assert.match(doctorPayload.benchmark.metricError, /No benchmark command/i);
+    assert.match(doctorPayload.issues.join("\n"), /No benchmark command/i);
+    assert.equal(doctorPayload.preflight.status, "blocked");
+    assert.match(doctorPayload.preflight.blockers.join("\n"), /future packets/i);
+    assert.equal(doctorPayload.explanation.preflight.status, "blocked");
+
+    const next = await runCli(["next", "--cwd", dir, "--compact"]);
+    assert.equal(next.code, 0, next.stderr);
+    const nextPayload = JSON.parse(next.stdout);
+    assert.equal(nextPayload.ok, false);
+    assert.equal(nextPayload.run, null);
+    assert.equal(nextPayload.decision, null);
+    assert.match(nextPayload.doctor.issues.join("\n"), /No benchmark command/i);
+    assert.match(nextPayload.nextAction, /benchmark/i);
+  });
+});
+
+test("doctor explain exposes runtime drift summary and next diagnostic command", async () => {
+  await withTempDir("doctor-runtime-drift-summary", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "doctor drift", "--metric-name", "seconds"]);
+
+    const result = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    assert.equal(result.code, 0, result.stderr);
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.runtimeDriftSummary.sourceVersion, PLUGIN_VERSION);
+    assert.equal(payload.runtimeDriftSummary.packageRoot, pluginRoot);
+    assert.match(payload.runtimeDriftSummary.smokeCheck, /autoresearch\.mjs|npm run build:node/);
+    assert.match(payload.runtimeDriftSummary.nextActionHint, /runtime|smoke check/i);
+    assert.deepEqual(payload.explanation.runtimeDriftSummary, {
+      installedRuntime: payload.runtimeDriftSummary.installedRuntime,
+      builtRuntime: payload.runtimeDriftSummary.builtRuntime,
+      smokeCheck: payload.runtimeDriftSummary.smokeCheck,
+      nextActionHint: payload.runtimeDriftSummary.nextActionHint,
+    });
+  });
+});
+
+test("setup state and doctor expose gate quality and preflight readiness", async () => {
+  await withTempDir("gate-quality-preflight", async (dir) => {
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const setupPlanResult = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "gate preflight",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      benchmarkCommand,
+    ]);
+    assert.equal(setupPlanResult.code, 0, setupPlanResult.stderr);
+    const setupPlanPayload = JSON.parse(setupPlanResult.stdout);
+    assert.equal(setupPlanPayload.gateQuality.posture, "advisory-missing");
+    assert.match(setupPlanPayload.preflight.status, /^(ready|blocked)$/);
+    if (setupPlanPayload.preflight.status === "blocked") {
+      assert.match(setupPlanPayload.preflight.blockers.join("\n"), /runtime|fingerprint/i);
+    }
+    assert.match(setupPlanPayload.preflight.nextCommand, /benchmark-lint|doctor/i);
+
+    await runCli(["init", "--cwd", dir, "--name", "gate preflight", "--metric-name", "seconds"]);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "advisory-missing");
+    assert.equal(statePayload.preflight.status, "blocked");
+    assert.match(statePayload.preflight.blockers.join("\n"), /benchmark command/i);
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    const compactPayload = JSON.parse(compact.stdout);
+    assert.equal(compactPayload.gateQuality.posture, "advisory-missing");
+    assert.equal(compactPayload.preflight.status, "blocked");
+    assert.match(compactPayload.preflight.blockers.join("\n"), /benchmark command/i);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.equal(doctorPayload.gateQuality.posture, "advisory-missing");
+    assert.equal(doctorPayload.preflight.status, "blocked");
+    assert.match(doctorPayload.preflight.blockers.join("\n"), /benchmark command/i);
+    assert.match(doctorPayload.issues.join("\n"), /benchmark command/i);
+    assert.match(doctorPayload.nextAction, /benchmark/i);
+    assert.doesNotMatch(doctorPayload.explanation.verdict, /no blocking/i);
+    assert.equal(doctorPayload.explanation.preflight.status, "blocked");
+  });
+});
+
+test("guide, dashboard, and recommend-next share canonical preflight blocker", async () => {
+  await withTempDir("canonical-preflight-guide", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "canonical preflight",
+      "--metric-name",
+      "seconds",
+    ]);
+
+    const guide = await runCli(["guide", "--cwd", dir]);
+    assert.equal(guide.code, 0, guide.stderr);
+    const guidePayload = JSON.parse(guide.stdout);
+
+    const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exportResult.code, 0, exportResult.stderr);
+    const dashboardPayload = JSON.parse(exportResult.stdout);
+    const dashboardAction = dashboardPayload.viewModel.nextBestAction;
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+
+    assert.equal(guidePayload.stage, "preflight");
+    assert.equal(dashboardAction.kind, "preflight");
+    assert.equal(recommendPayload.action.kind, "preflight");
+    assert.equal(guidePayload.nextStep.nextAction.title, "Resolve preflight");
+    assert.equal(
+      recommendPayload.nextStep.nextAction.title,
+      guidePayload.nextStep.nextAction.title,
+    );
+    assert.match(guidePayload.nextAction, /benchmark command/i);
+    assert.match(dashboardAction.detail, /benchmark command/i);
+    assert.match(recommendPayload.nextAction, /benchmark command/i);
+  });
+});
+
+test("state and recommend-next expose advisory portfolio guidance", async () => {
+  await withTempDir("portfolio-guidance", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "portfolio", "--metric-name", "seconds"]);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.portfolioRecommendation.kind, "trust-blocker");
+    assert.equal(typeof statePayload.portfolioRecommendation.nextActionHint, "string");
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(recommendPayload.portfolioRecommendation.kind, "trust-blocker");
+    assert.deepEqual(
+      recommendPayload.portfolioRecommendation,
+      statePayload.portfolioRecommendation,
+    );
   });
 });
 

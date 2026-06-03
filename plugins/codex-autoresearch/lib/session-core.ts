@@ -427,6 +427,7 @@ export function buildDecisionEnvelope({
     limit.limitReached === true ||
     (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
   const qualityRound = qualityRoundState(qualityGap);
+  const cleanliness = sourceCleanliness(state);
   const segmentTransitionRequired =
     segmentTransition?.required === true || limitReached || qualityRound.done === true;
   const scaffoldBlockers = Array.isArray(scaffoldHealth?.checks)
@@ -464,13 +465,18 @@ export function buildDecisionEnvelope({
         : [],
     },
     dirtySourceDrift: {
-      dirty: codes.has("git_dirty"),
+      dirty: cleanliness?.sourceDirty === true || codes.has("git_dirty"),
+      status: cleanliness?.status || (codes.has("git_dirty") ? "source-dirty" : "clean"),
+      sessionArtifactDirty: cleanliness?.sessionArtifactDirty === true,
+      sourcePaths: cleanliness?.sourcePaths || [],
+      sessionArtifactPaths: cleanliness?.sessionArtifactPaths || [],
       warnings: Array.isArray(warningDetails)
         ? warningDetails.filter((warning: any) =>
             ["git_dirty", "missing_commit_paths"].includes(String(warning?.code || "")),
           )
         : [],
     },
+    sourceCleanliness: cleanliness,
     qualityRound,
     scaffoldHealth: scaffoldHealth
       ? {
@@ -496,8 +502,9 @@ export function buildDecisionEnvelope({
     }),
     finalizationReadiness: finalization
       ? {
-          available: true,
-          ready: finalization.ready === true,
+          available: finalization.available !== false,
+          ready: finalization.ready === null ? null : finalization.ready === true,
+          actionCode: finalization.actionCode || "",
           nextAction: finalization.nextAction || "",
           warnings: finalization.warnings || [],
         }
@@ -549,16 +556,17 @@ export function buildDecisionEnvelope({
     runtimeProvenance: state?.runtimeProvenance || null,
     packetDiagnostics: state?.packetDiagnostics || null,
     sessionDecisionCapsule: state?.sessionDecisionCapsule || null,
+    gateQuality: state?.gateQuality || null,
+    preflight: state?.preflight || null,
+    portfolioRecommendation: state?.portfolioRecommendation || null,
     nextAction: nextAction || "Run doctor, then next.",
   };
   const loopContract = buildLoopContractStatus(envelope);
-  const legacyAction = canonicalNextActionForEnvelope(envelope);
+  const supplementalAction = supplementalNextActionForEnvelope(envelope);
   const governanceAction = canonicalNextActionForLoop(envelope);
-  const canonicalNextAction =
-    loopContract.blockers.length > 0 ||
-    (legacyAction?.kind === "next-packet" && loopContract.canRunNextPacket === false)
-      ? governanceAction
-      : legacyAction;
+  const canonicalNextAction = loopContractShouldOverrideSupplemental(loopContract)
+    ? governanceAction
+    : supplementalAction;
   return {
     ...envelope,
     loopContract,
@@ -566,18 +574,46 @@ export function buildDecisionEnvelope({
   };
 }
 
-type CanonicalRule = (envelope: LooseObject) => LooseObject | null;
+function loopContractShouldOverrideSupplemental(loopContract: {
+  blockers?: LooseObject[];
+  canRunNextPacket?: boolean;
+}): boolean {
+  const blockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
+  if (blockers.length === 0) {
+    if (loopContract.canRunNextPacket !== false) return false;
+    return true;
+  }
+  return true;
+}
 
-const CANONICAL_NEXT_ACTION_RULES: CanonicalRule[] = [
+type SupplementalActionRule = (envelope: LooseObject) => LooseObject | null;
+
+const SUPPLEMENTAL_ACTION_PRIORITY = {
+  essentialSafety: 1,
+  earlyWorkflowBlocker: 2,
+  workflowWarning: 3,
+  setupOrFreshness: 4,
+  pendingPacketDecision: 5,
+  contextDistillation: 6,
+  segmentOrQualityGap: 7,
+  plateauOrWatchdogOrCurrentTree: 8,
+  finalizationReady: 9,
+  nextPacket: 10,
+} as const;
+
+// Loop governance owns packet brakes; this ladder supplies richer guidance once the loop contract allows continuation.
+const SUPPLEMENTAL_NEXT_ACTION_RULES: SupplementalActionRule[] = [
   scaffoldBlockerAction,
   dirtySourceDriftAction,
   timeoutMismatchAction,
   workflowBlockerAction,
-  workflowWarningAction,
+  metricSaturationAction,
   stalePacketAction,
   setupAction,
   benchmarkCommandAction,
   logDecisionAction,
+  trustBlockerAction,
+  workflowWarningAction,
   segmentTransitionAction,
   plateauAction,
   watchdogAction,
@@ -586,8 +622,8 @@ const CANONICAL_NEXT_ACTION_RULES: CanonicalRule[] = [
   nextPacketAction,
 ];
 
-function canonicalNextActionForEnvelope(envelope: LooseObject): LooseObject {
-  for (const rule of CANONICAL_NEXT_ACTION_RULES) {
+function supplementalNextActionForEnvelope(envelope: LooseObject): LooseObject {
+  for (const rule of SUPPLEMENTAL_NEXT_ACTION_RULES) {
     const action = rule(envelope);
     if (action) return action;
   }
@@ -599,7 +635,7 @@ function scaffoldBlockerAction(envelope: LooseObject): LooseObject | null {
   if (Array.isArray(scaffoldBlockers) && scaffoldBlockers.length > 0) {
     return {
       kind: "safety-blocker",
-      priority: 1,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.essentialSafety,
       reason: String(scaffoldBlockers[0] || "Resolve scaffold blockers."),
       command: "",
       triggeredBy: ["scaffoldHealth"],
@@ -612,7 +648,7 @@ function dirtySourceDriftAction(envelope: LooseObject): LooseObject | null {
   if (envelope.dirtySourceDrift?.dirty === true) {
     return {
       kind: "workflow-friction",
-      priority: 2,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.earlyWorkflowBlocker,
       reason: "Review dirty source drift before another packet.",
       command: "",
       triggeredBy: ["dirtySourceDrift"],
@@ -629,7 +665,7 @@ function timeoutMismatchAction(envelope: LooseObject): LooseObject | null {
   if (timeoutMismatch) {
     return {
       kind: "benchmark-mismatch",
-      priority: 2,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.earlyWorkflowBlocker,
       reason: timeoutMismatch.recommendation || timeoutMismatch.message,
       command: "",
       triggeredBy: ["experimentEconomics", timeoutMismatch.code],
@@ -643,7 +679,7 @@ function workflowBlockerAction(envelope: LooseObject): LooseObject | null {
   if (workflowBlocker) {
     return {
       kind: "workflow-friction",
-      priority: 2,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.earlyWorkflowBlocker,
       reason: workflowBlocker.suggestedAction?.reason || workflowBlocker.reason,
       command: workflowBlocker.suggestedAction?.command || "",
       triggeredBy: workflowBlocker.suggestedAction?.triggeredBy || [workflowBlocker.kind],
@@ -657,7 +693,7 @@ function workflowWarningAction(envelope: LooseObject): LooseObject | null {
   if (workflowWarning) {
     return {
       kind: "workflow-friction",
-      priority: 3,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.workflowWarning,
       reason: workflowWarning.suggestedAction?.reason || workflowWarning.reason,
       command: workflowWarning.suggestedAction?.command || "",
       triggeredBy: workflowWarning.suggestedAction?.triggeredBy || [workflowWarning.kind],
@@ -670,7 +706,7 @@ function workflowWarningAction(envelope: LooseObject): LooseObject | null {
   if (repeatedSmallProbe) {
     return {
       kind: "workflow-friction",
-      priority: 3,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.workflowWarning,
       reason: repeatedSmallProbe.recommendation || repeatedSmallProbe.message,
       command: "",
       triggeredBy: ["experimentEconomics", repeatedSmallProbe.code],
@@ -679,11 +715,86 @@ function workflowWarningAction(envelope: LooseObject): LooseObject | null {
   return null;
 }
 
+function metricSaturationAction(envelope: LooseObject): LooseObject | null {
+  const signal = firstWorkflowFrictionByKind(
+    envelope.workflowFriction,
+    "metric_saturated_not_promotable",
+  );
+  if (!signal) return null;
+  return {
+    kind: "metric-saturation",
+    priority: SUPPLEMENTAL_ACTION_PRIORITY.workflowWarning,
+    reason: signal.suggestedAction?.reason || signal.reason,
+    command: signal.suggestedAction?.command || "",
+    triggeredBy: signal.suggestedAction?.triggeredBy || [signal.kind],
+  };
+}
+
+function trustBlockerAction(envelope: LooseObject): LooseObject | null {
+  if (
+    firstDiagnosticSalvage(envelope.salvageCandidates) ||
+    envelope.latestPacketFreshness?.fresh === true
+  ) {
+    return null;
+  }
+
+  const gateQualityBlocker = firstNonEmptyString(envelope.gateQuality?.blockers);
+  if (gateQualityBlocker) {
+    return {
+      kind: "gate-quality",
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.earlyWorkflowBlocker,
+      reason: gateQualityBlocker,
+      command: envelope.preflight?.nextCommand || "",
+      triggeredBy: ["gateQuality"],
+    };
+  }
+
+  if (hasSharperSetupOrFreshnessAction(envelope)) return null;
+
+  const preflightBlocker = firstNonEmptyString(envelope.preflight?.blockers);
+  if (preflightBlocker) {
+    return {
+      kind: "preflight",
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.earlyWorkflowBlocker,
+      reason: preflightBlocker,
+      command: envelope.preflight?.nextCommand || "",
+      triggeredBy: ["preflight"],
+    };
+  }
+
+  if (envelope.portfolioRecommendation?.kind === "trust-blocker") {
+    return {
+      kind: "portfolio-trust-blocker",
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.workflowWarning,
+      reason:
+        envelope.portfolioRecommendation.reason ||
+        envelope.portfolioRecommendation.nextActionHint ||
+        "Resolve the portfolio trust blocker before continuing.",
+      command: envelope.preflight?.nextCommand || "",
+      triggeredBy: ["portfolioRecommendation"],
+    };
+  }
+
+  return null;
+}
+
+function hasSharperSetupOrFreshnessAction(envelope: LooseObject): boolean {
+  const setupBlockers = Array.isArray(envelope.setupState?.blockers)
+    ? envelope.setupState.blockers
+    : [];
+  return (
+    envelope.latestPacketFreshness?.fresh === false ||
+    setupBlockers.length > 0 ||
+    envelope.setupState?.stage === "needs-setup" ||
+    envelope.setupState?.stage === "needs-benchmark-command"
+  );
+}
+
 function stalePacketAction(envelope: LooseObject): LooseObject | null {
   if (envelope.latestPacketFreshness?.fresh === false) {
     return {
       kind: "stale-packet",
-      priority: 4,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.setupOrFreshness,
       reason: envelope.latestPacketFreshness.reason || "Last-run packet is stale.",
       command: "",
       triggeredBy: ["latestPacketFreshness"],
@@ -696,7 +807,7 @@ function stalePacketAction(envelope: LooseObject): LooseObject | null {
   ) {
     return {
       kind: "stale-packet",
-      priority: 4,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.setupOrFreshness,
       reason:
         envelope.experimentEconomics.warnings.find(
           (warning: any) => warning.code === "stale_progress",
@@ -715,7 +826,7 @@ function setupAction(envelope: LooseObject): LooseObject | null {
   if (setupBlockers.length || envelope.setupState?.stage === "needs-setup") {
     return {
       kind: "setup",
-      priority: 4,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.setupOrFreshness,
       reason:
         setupBlockers[0] ||
         envelope.setupState?.nextAction ||
@@ -731,7 +842,7 @@ function benchmarkCommandAction(envelope: LooseObject): LooseObject | null {
   if (envelope.setupState?.stage === "needs-benchmark-command") {
     return {
       kind: "benchmark-command",
-      priority: 4,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.setupOrFreshness,
       reason: envelope.setupState?.nextAction || "Add a repeatable benchmark command.",
       command: "",
       triggeredBy: ["setup", "benchmarkCommand"],
@@ -745,7 +856,7 @@ function logDecisionAction(envelope: LooseObject): LooseObject | null {
   if (salvage) {
     return {
       kind: "partial-salvage",
-      priority: 5,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.pendingPacketDecision,
       reason: `Review partial result ${salvage.id} before rerunning an expensive packet.`,
       command: "",
       triggeredBy: ["partialResults"],
@@ -754,7 +865,7 @@ function logDecisionAction(envelope: LooseObject): LooseObject | null {
   if (envelope.latestPacketFreshness?.fresh === true) {
     return {
       kind: "log-decision",
-      priority: 5,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.pendingPacketDecision,
       reason: "Record the fresh last-run packet before starting another packet.",
       command: "",
       triggeredBy: ["latestPacketFreshness"],
@@ -767,7 +878,7 @@ function segmentTransitionAction(envelope: LooseObject): LooseObject | null {
   if (envelope.contextDistillation?.required === true) {
     return {
       kind: "context-distillation",
-      priority: 6,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.contextDistillation,
       reason:
         envelope.contextDistillation.reason ||
         "Refresh a context capsule before running another packet.",
@@ -778,7 +889,7 @@ function segmentTransitionAction(envelope: LooseObject): LooseObject | null {
   if (envelope.segmentTransition?.required === true) {
     return {
       kind: "segment-transition",
-      priority: 7,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.segmentOrQualityGap,
       title: Array.isArray(envelope.segmentTransition.triggeredBy)
         ? envelope.segmentTransition.triggeredBy.includes("qualityRound")
           ? "Review completion state"
@@ -798,7 +909,7 @@ function plateauAction(envelope: LooseObject): LooseObject | null {
   if (envelope.qualityRound?.active && envelope.qualityRound.done === false) {
     return {
       kind: "quality-gap",
-      priority: 7,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.segmentOrQualityGap,
       reason: `${envelope.qualityRound.open ?? "Open"} accepted quality gaps remain.`,
       command: "",
       triggeredBy: ["qualityRound"],
@@ -809,7 +920,7 @@ function plateauAction(envelope: LooseObject): LooseObject | null {
   if (envelope.experimentMemory?.plateau?.detected || exhausted || shelf) {
     return {
       kind: "plateau-pivot",
-      priority: 8,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.plateauOrWatchdogOrCurrentTree,
       reason:
         exhausted?.requiredPrecondition ||
         shelf?.reason ||
@@ -826,7 +937,7 @@ function watchdogAction(envelope: LooseObject): LooseObject | null {
   if (envelope.watchdog?.stale === true) {
     return {
       kind: "watchdog",
-      priority: 8,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.plateauOrWatchdogOrCurrentTree,
       reason:
         envelope.watchdog.recommendation ||
         "No progress signal has appeared within the watchdog window.",
@@ -838,10 +949,30 @@ function watchdogAction(envelope: LooseObject): LooseObject | null {
 }
 
 function finalizationAction(envelope: LooseObject): LooseObject | null {
+  const finalization = envelope.finalizationReadiness || {};
+  const warnings = Array.isArray(finalization.warnings) ? finalization.warnings.map(String) : [];
+  const nextAction = String(finalization.nextAction || "");
+  if (
+    finalization.actionCode === "current-tree-finalization" ||
+    /finalize-current-tree/i.test(nextAction) ||
+    warnings.some((warning: string) =>
+      /Final tree coverage is missing|Excluded commits touch planned files/i.test(warning),
+    )
+  ) {
+    return {
+      kind: "current-tree-finalization",
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.plateauOrWatchdogOrCurrentTree,
+      reason:
+        nextAction ||
+        "Use current-tree finalization because commit-level kept evidence does not describe the current branch tree cleanly.",
+      command: "",
+      triggeredBy: ["finalizationReadiness", "currentTree"],
+    };
+  }
   if (envelope.finalizationReadiness?.ready === true) {
     return {
       kind: "finalization",
-      priority: 9,
+      priority: SUPPLEMENTAL_ACTION_PRIORITY.finalizationReady,
       reason: envelope.finalizationReadiness.nextAction || "Finalize reviewable kept work.",
       command: "",
       triggeredBy: ["finalizationReadiness"],
@@ -857,7 +988,7 @@ function baselineAction(_envelope: LooseObject): LooseObject | null {
 function nextPacketAction(envelope: LooseObject): LooseObject {
   return {
     kind: "next-packet",
-    priority: 10,
+    priority: SUPPLEMENTAL_ACTION_PRIORITY.nextPacket,
     reason: envelope.nextAction || "Run the next measured packet.",
     command: "",
     triggeredBy: ["continuation"],
@@ -873,6 +1004,29 @@ function firstEconomicsWarning(economics: any, code: string): any | null {
 function firstWorkflowFriction(signals: any[], severity: string): any | null {
   return Array.isArray(signals)
     ? signals.find((signal) => signal?.severity === severity) || null
+    : null;
+}
+
+function firstWorkflowFrictionByKind(signals: any[], kind: string): any | null {
+  return Array.isArray(signals)
+    ? signals.find((signal) => String(signal?.kind || "") === kind) || null
+    : null;
+}
+
+function firstNonEmptyString(values: unknown): string {
+  if (!Array.isArray(values)) return "";
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function sourceCleanliness(state: LooseObject): LooseObject | null {
+  const cleanliness = state?.sourceCleanliness;
+  return cleanliness && typeof cleanliness === "object" && !Array.isArray(cleanliness)
+    ? (cleanliness as LooseObject)
     : null;
 }
 

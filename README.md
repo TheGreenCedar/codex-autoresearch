@@ -90,18 +90,29 @@ Codex Autoresearch helps Codex:
 5. return a shared next-step contract with stage, reason, CLI command, safety, blockers, and missing essentials
 6. verify the benchmark contract
 7. run a measured packet with command identity, output tails, metrics, artifacts, checks, progress, and a freshness fingerprint
-8. log the result as `keep`, `discard`, `measure`, `crash`, or `checks_failed`
-9. salvage diagnostic partial-result rows from failed packet artifacts before rerunning expensive work
-10. split stuck serial work into read-only scout lanes and isolated implementation lanes
-11. preserve ASI, packet fingerprints, promotion labels, evidence status, evidence claims, and metrics in durable files
-12. stop on watchdog, runtime-provenance, packet-diagnostic, or finalization-pressure blockers before spending another packet
-13. continue safely or preview finalization into reviewable branches
+8. summarize gate quality, preflight readiness, runtime drift, dashboard liveness, packet diagnostics, and portfolio guidance before suggesting packet work
+9. log the result as `keep`, `discard`, `measure`, `crash`, or `checks_failed`
+10. salvage diagnostic partial-result rows and optional `task_manifest` artifacts from failed packet output before rerunning expensive work
+11. split stuck serial work into read-only scout lanes and isolated implementation lanes
+12. preserve ASI, packet fingerprints, promotion labels, evidence status, evidence claims, and metrics in durable files
+13. stop on watchdog, runtime-provenance, packet-diagnostic, gate-quality, or finalization-pressure blockers before spending another packet
+14. continue safely or preview finalization into reviewable branches
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
 A packet is one measured experiment cycle: make a scoped change, run the benchmark, inspect the metric, and log the decision.
 
 ASI means Accumulated Structured Intelligence. It is the structured memory attached to each packet decision: hypothesis, evidence, rollback reason, next action hint, and optional lane, family, or risk metadata. It tells the next Codex session what happened, what was learned, and which path deserves the next attempt.
+
+For terminal-first resumes, ask for the compact report:
+
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd <project> --report
+```
+
+From inside `plugins/codex-autoresearch`, the shorter `node scripts/autoresearch.mjs ...` form is equivalent.
+
+It returns `report.text` for a one-screen readout and `report.json` for automation. Blockers outrank packet recommendations, and missing dashboard liveness includes the command to serve or verify the dashboard instead of pretending a stale view is live.
 
 ## When to use it
 

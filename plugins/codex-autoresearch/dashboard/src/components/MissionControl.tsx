@@ -33,7 +33,7 @@ export function MissionControl({
             key={step.id || i}
             step={step}
             active={step.id === mc.activeStep}
-            showCommand={mode.liveRefresh}
+            showCommand={mode.liveRefresh && mode.liveActions}
             last={i === steps.length - 1}
           />
         ))}

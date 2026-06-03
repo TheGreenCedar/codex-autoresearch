@@ -19,7 +19,7 @@ export function DecisionRail({
   const handoffCopy = useCopyText();
   const commandCopy = useCopyText();
   const command = typeof action.command === "string" ? action.command : "";
-  const showCommandCopy = mode.liveRefresh && command;
+  const showCommandCopy = mode.liveRefresh && mode.liveActions && command;
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
