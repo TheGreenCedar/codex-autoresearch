@@ -2398,7 +2398,7 @@ function replacementNextCommandFromLastRun(
     "--cwd",
     shellQuote(workDir),
   ];
-  const command = packet?.run?.command;
+  const command = packet?.history?.replayCommand || packet?.run?.command;
   if (command) {
     parts.push("--command", copyCommandArg(command));
   } else if (!defaultBenchmarkCommandReady) {
@@ -2408,7 +2408,7 @@ function replacementNextCommandFromLastRun(
   if (CHECKS_POLICIES.has(checksPolicy)) {
     parts.push("--checks-policy", shellQuote(checksPolicy));
   }
-  const checksCommand = packet?.run?.checks?.command;
+  const checksCommand = packet?.history?.replayChecksCommand || packet?.run?.checks?.command;
   if (checksCommand) {
     parts.push("--checks-command", copyCommandArg(checksCommand));
   }
@@ -2432,6 +2432,27 @@ function copyCommandArg(value: unknown): string {
   const text = String(value);
   if (process.platform === "win32") return `'${text.replace(/"/g, '\\"').replace(/'/g, "''")}'`;
   return shellQuote(text);
+}
+
+function replaySafeCommand(value: unknown, context: LooseObject): string {
+  const portable = portableNodeCommand(String(value || "").trim());
+  if (!portable) return "";
+  return redactCommandDisplay(portable, context) === portable ? portable : "";
+}
+
+function portableNodeCommand(command: string): string {
+  const executable = process.execPath;
+  const candidates = [executable, executable.replace(/\\/g, "/")].filter(Boolean);
+  for (const candidate of [...new Set(candidates)]) {
+    for (const quote of ['"', "'"]) {
+      const prefix = `${quote}${candidate}${quote}`;
+      if (command === prefix) return "node";
+      if (command.startsWith(`${prefix} `)) return `node${command.slice(prefix.length)}`;
+    }
+    if (command === candidate) return "node";
+    if (command.startsWith(`${candidate} `)) return `node${command.slice(candidate.length)}`;
+  }
+  return command;
 }
 
 async function recipeCommand(subcommand: string, args: any) {
@@ -5610,7 +5631,7 @@ async function lastRunPacketFreshness(workDir: string, packet: any) {
     expectedNextRun,
     actualNextRun,
     expectedWorkDir: expectedWorkDir || workDir,
-    command: packet.history?.command || packet.run?.command || "",
+    command: packet.history?.replayCommand || packet.history?.command || packet.run?.command || "",
     git: packet.history?.git || null,
     reason: "Last-run packet matches the current ledger.",
   };
@@ -8058,6 +8079,8 @@ async function nextExperiment(args: any) {
     segment: stateBeforeLog.segment,
     config: lastRunConfigSnapshot(stateBeforeLog.config),
     command: run.command,
+    replayCommand: replaySafeCommand(run.command, { workDir: run.workDir }),
+    replayChecksCommand: replaySafeCommand(run.checks?.command || "", { workDir: run.workDir }),
     workDir: run.workDir,
     currentRuns: stateBeforeLog.current.length,
     totalRuns: stateBeforeLog.results.length,

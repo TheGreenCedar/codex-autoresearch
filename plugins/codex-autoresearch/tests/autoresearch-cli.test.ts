@@ -3959,6 +3959,15 @@ test("stale packet compact state recommends replacement next command", async () 
     ]);
     assert.equal(directLog.code, 0, directLog.stderr);
 
+    const lastRunPath = path.join(dir, "autoresearch.last-run.json");
+    const lastRunPacket = JSON.parse(await readFile(lastRunPath, "utf8"));
+    assert.match(lastRunPacket.history.replayCommand, /METRIC seconds=3/);
+    assert.match(lastRunPacket.history.replayChecksCommand, /process\.exit\(0\)/);
+    lastRunPacket.history.command = "<redacted benchmark command>";
+    lastRunPacket.run.command = "";
+    lastRunPacket.run.checks.command = "";
+    await writeFile(lastRunPath, JSON.stringify(lastRunPacket, null, 2), "utf8");
+
     const fullState = await runCli(["state", "--cwd", dir]);
     assert.equal(fullState.code, 0, fullState.stderr);
     const fullStatePayload = JSON.parse(fullState.stdout);
