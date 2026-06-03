@@ -260,7 +260,7 @@ function sortVersionCandidates(versions: string[]): string[] {
 }
 
 function quoteCommandArg(value: string): string {
-  const normalized = value.trim() || ".";
+  const normalized = (value.trim() || ".").replace(/\\/g, "/");
   if (/^[\w@%+=:,./\\-]+$/.test(normalized)) return normalized;
   return `"${normalized.replace(/"/g, '\\"')}"`;
 }

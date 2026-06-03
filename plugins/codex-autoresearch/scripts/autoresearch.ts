@@ -2430,7 +2430,9 @@ async function replacementNextCommandForLastRun(
 
 function copyCommandArg(value: unknown): string {
   const text = String(value);
-  if (process.platform === "win32") return `'${text.replace(/"/g, '\\"').replace(/'/g, "''")}'`;
+  if (process.platform === "win32") {
+    return `'${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "''")}'`;
+  }
   return shellQuote(text);
 }
 
@@ -2442,8 +2444,12 @@ function replaySafeCommand(value: unknown, context: LooseObject): string {
 
 function portableNodeCommand(command: string): string {
   const executable = process.execPath;
-  const candidates = [executable, executable.replace(/\\/g, "/")].filter(Boolean);
-  for (const candidate of [...new Set(candidates)]) {
+  const candidates = [
+    executable,
+    executable.replace(/\\/g, "/"),
+    executable.replace(/\\/g, "\\\\"),
+  ].filter(Boolean);
+  for (const candidate of new Set(candidates)) {
     for (const quote of ['"', "'"]) {
       const prefix = `${quote}${candidate}${quote}`;
       if (command === prefix) return "node";
