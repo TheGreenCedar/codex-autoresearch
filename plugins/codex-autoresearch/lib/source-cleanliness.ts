@@ -40,9 +40,6 @@ export function buildSourceCleanliness({
     : sessionArtifactDirty
       ? "session-artifacts-dirty"
       : "clean";
-  const cleanupCommand = sessionArtifactDirty
-    ? sessionArtifactStashCommand(sessionArtifactPaths)
-    : "";
   const message = sourceDirty
     ? "Source files are dirty; keep/discard automation and finalization need scoped Git cleanup."
     : sessionArtifactDirty
@@ -67,23 +64,9 @@ export function buildSourceCleanliness({
     },
     message,
     nextAction,
-    cleanupCommand,
+    cleanupCommand: "",
     warningCodes: uniqueStrings(warnings.map((warning) => stringValue(warning?.code))),
   };
-}
-
-function sessionArtifactStashCommand(paths: string[]): string {
-  const targets = paths.length
-    ? paths.slice(0, 20)
-    : [
-        "autoresearch.jsonl",
-        "autoresearch.md",
-        "autoresearch.ideas.md",
-        "autoresearch-dashboard.html",
-        "autoresearch.research",
-        "autoresearch-finalize",
-      ];
-  return `git stash push --include-untracked -- ${targets.map(shellQuote).join(" ")}`;
 }
 
 function stringList(value: unknown): string[] {
@@ -103,8 +86,4 @@ function stringValue(value: unknown): string {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
-
-function shellQuote(value: string): string {
-  return `"${String(value).replace(/[\\"]/g, "\\$&")}"`;
 }

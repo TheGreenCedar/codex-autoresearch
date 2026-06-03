@@ -28,6 +28,7 @@ export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "commandLabel",
   "commands",
   "commandsByStatus",
+  "cleanupCommand",
   "discardLast",
   "display",
   "doctorExplain",
@@ -340,7 +341,7 @@ function isAllowedNodeAutoresearchInvocation(tokens: string[]): boolean {
 }
 
 function isAutoresearchScript(token: string): boolean {
-  const normalized = token.replace(/\\/g, "/").toLowerCase();
+  const normalized = token.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
   return /(?:^|\/)(?:dist\/)?scripts\/autoresearch\.(?:mjs|js|ts)$/.test(normalized);
 }
 

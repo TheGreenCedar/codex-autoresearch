@@ -2647,6 +2647,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     assert.equal(payload.sourceCleanliness.status, "session-artifacts-dirty");
     assert.equal(payload.sourceCleanliness.sourceDirty, false);
     assert.equal(payload.sourceCleanliness.sessionArtifactDirty, true);
+    assert.equal(payload.sourceCleanliness.cleanupCommand, "");
     assert.ok(
       payload.warningDetails.every((warning) => warning.code !== "git_dirty"),
       "session-only dirtiness should not be reported as source drift",
@@ -2679,6 +2680,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
     assert.equal(dirtyCompactPayload.decisionEnvelope.dirtySourceDrift.dirty, true);
     assert.equal(dirtyCompactPayload.sourceCleanliness.status, "source-dirty");
+    assert.equal(dirtyCompactPayload.sourceCleanliness.cleanupCommand, "");
     assert.ok(
       dirtyCompactPayload.blockers.some((blocker) =>
         String(blocker).includes("Git worktree is dirty"),

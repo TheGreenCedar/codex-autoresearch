@@ -154,6 +154,15 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
   }
 });
 
+test("dashboard command safety accepts generated Windows launcher paths", () => {
+  const command = String.raw`node "C:\\Users\\alber\\source\\repos\\autoresearch\\plugins\\codex-autoresearch\\scripts\\autoresearch.mjs" state --cwd "C:\\work\\repo" --report`;
+  const result = dashboardCommandSafety(command);
+
+  assert.equal(result.safe, true, result.reason);
+  assert.equal(result.commandName, "state");
+  assert.equal(dashboardReadOnlyCommand(command), command);
+});
+
 test("dashboard command safety rejects shell-chained safe prefixes", () => {
   const commands = [
     "doctor && next",
@@ -220,6 +229,7 @@ test("dashboard command safety rejects embedded process command flags", () => {
 test("dashboard command scrubbers and leak collector share canonical taxonomy", () => {
   const payload = {
     command: "node scripts/autoresearch.mjs next --cwd C:/repo",
+    cleanupCommand: "git stash push --include-untracked -- autoresearch.jsonl",
     commands: {
       keepLast: "node scripts/autoresearch.mjs log --cwd C:/repo --from-last --status keep",
       doctor: "node scripts/autoresearch.mjs doctor --cwd C:/repo",
@@ -243,6 +253,7 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
   assert.equal(dashboardCommandMapKey("state"), "state");
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("replaceLast"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("finalizeCurrentTree"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("cleanupCommand"), true);
   assert.deepEqual(stripDashboardGuidanceCommandFields(payload), {
     nested: { detail: "Review the current state." },
     sourceCwd: "C:/repo",
@@ -254,6 +265,7 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
   });
   assert.deepEqual(collectDashboardCommandFields(payload), [
     "node scripts/autoresearch.mjs next --cwd C:/repo",
+    "git stash push --include-untracked -- autoresearch.jsonl",
     "node scripts/autoresearch.mjs log --cwd C:/repo --from-last --status keep",
     "node scripts/autoresearch.mjs doctor --cwd C:/repo",
     "Next",

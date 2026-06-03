@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 2.1.0
 
 ### Added
 
@@ -22,6 +22,8 @@ This project uses a root-only changelog because the root README is the public do
 ### Fixed
 
 - Hardened optional `task_manifest` packet evidence so symlinked or realpath-resolved manifests outside `--cwd` are quarantined before task rows are read.
+- Dashboard command safety now accepts generated Windows launcher paths for read-only Autoresearch commands while continuing to reject mutating command payloads.
+- Source cleanliness no longer emits a copyable `git stash` cleanup command for dirty Autoresearch session artifacts; readouts keep cleanup guidance descriptive instead of shell-ready.
 - Runtime drift now requires matching built-entrypoint fingerprints before a same-version installed runtime is reported as fresh.
 - Gate quality keeps benchmark-as-checks classified as smoke coverage even when promotion metadata is present.
 - `serve` now derives returned dashboard health from `/health` verification, including port, cwd, and version matching, before reporting the dashboard as verified.
@@ -37,6 +39,10 @@ This project uses a root-only changelog because the root README is the public do
 - Full `state`, dashboard, and non-compact `recommend-next` now use the runnable stale-packet replacement or full finalization authority instead of falling back to another status read or compact next-packet guidance.
 - `integrations` now respects normalized subcommand arguments, so tool-driven `doctor` and `sync-recipes` calls no longer fall back to `list`.
 - `next_experiment` output schemas now include the full packet, history, last-run path, and report fields that the tool already returns.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.0`.
 
 ## 2.0.2
 
