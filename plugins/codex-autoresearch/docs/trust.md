@@ -66,7 +66,7 @@ When that happens, treat the old best as historical evidence. Do not claim it is
 
 ## Runtime Provenance And Packet Diagnostics
 
-Runtime provenance is a trust gate, not decoration. Read `runtimeProvenance` before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence; inspect the active runtime path/version before saying the behavior is live. If installed runtime cannot be inspected, call it unavailable instead of fresh.
+Runtime provenance is a trust gate, not decoration. Read `runtimeProvenance` and `runtimeDriftSummary` before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence; inspect the active runtime path/version and built-entrypoint fingerprint before saying the behavior is live. If installed runtime or fingerprint evidence cannot be inspected, call it unavailable instead of fresh.
 
 Packet diagnostics are also trust gates. Read `packetDiagnostics` before rerunning or promoting a packet that lost evidence. A packet that retrieved evidence but failed citation carry, lost claims during synthesis, missed a quality score, or marked itself sufficient while the benchmark failed is diagnostic evidence. It can explain the next fix, but it is not a product win.
 

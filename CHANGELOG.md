@@ -4,6 +4,48 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.0
+
+### Added
+
+- Added gate-quality, preflight, runtime-drift, structured lane-brief, dashboard-health, and packet-diagnostic readouts to state, report, doctor, and recommend-next surfaces, plus optional `task_manifest` packet evidence on next/log/state evidence surfaces and advisory portfolio guidance on state and `recommend-next`.
+- Added `state --report`, a compact terminal-first report with `report.text` and `report.json` so blockers, next command, gate quality, runtime drift, dashboard status, packet diagnostics, and portfolio guidance are visible without opening the dashboard.
+- Added `sourceCleanliness` so state/report can distinguish source drift from dirty Autoresearch session artifacts, and added opt-in `--progress` stderr heartbeats for slow finalization/export commands.
+
+### Changed
+
+- `serve` now returns read-only dashboard health metadata such as pid, cwd, port, version, registry path, health URL, started time, and liveness; `/health` exposes the active process liveness subset without adding dashboard mutation controls.
+- Remediated decision guidance around one canonical guidance authority: HTTP-verified dashboard liveness, durable task artifact diagnostics, policy-aware missing-checks guidance, and terminal report rendering now come from the same state path before packet work is recommended.
+- Saturated gap-style metrics such as `agent_value_gap=0` now become a review/rescope checkpoint when promotion-grade evidence is missing instead of silently recommending another same-metric packet.
+- `finalize-preview` now emits structured `actionCode` guidance so current-tree finalization blockers are detected without relying only on prose matching.
+
+### Fixed
+
+- Hardened optional `task_manifest` packet evidence so symlinked or realpath-resolved manifests outside `--cwd` are quarantined before task rows are read.
+- Dashboard command safety now accepts generated Windows launcher paths for read-only Autoresearch commands while continuing to reject mutating command payloads.
+- Source cleanliness no longer emits a copyable `git stash` cleanup command for dirty Autoresearch session artifacts; readouts keep cleanup guidance descriptive instead of shell-ready.
+- Stale last-run replacement guidance now uses replay-safe packet commands instead of display-redacted command evidence, keeping `state` and `recommend-next` replacement commands runnable across CI platforms.
+- Runtime drift inspection command quoting now normalizes path separators before JSON-encoding quoted arguments so generated smoke-check commands remain correctly encoded.
+- Runtime drift now requires matching built-entrypoint fingerprints before a same-version installed runtime is reported as fresh.
+- Gate quality keeps benchmark-as-checks classified as smoke coverage even when promotion metadata is present.
+- `serve` now derives returned dashboard health from `/health` verification, including port, cwd, and version matching, before reporting the dashboard as verified.
+- `next` now refuses to overwrite a fresh unlogged last-run packet, while stale-packet replacement commands remain runnable and copy safely through Windows PowerShell.
+- Loop guidance now keeps independent gate/preflight blockers ahead of stale-packet replacement, prioritizes partial-result salvage before fresh-packet logging, and keeps read-only dashboard guidance on preview commands instead of mutating finalization.
+- `guide`, dashboard exports, and `recommend-next` now agree on canonical preflight blockers before packet work while keeping setup repair, stale-packet replacement, and pending-log paths sharper.
+- Dashboard command rails now omit mutating run/log/current-tree-finalization/limit-extension commands and keep diagnostic, preview, and dry-run commands only.
+- Dashboard command rails now stay readout-only: generated copyable commands no longer include server starts, static exports, benchmark execution checks, or bare benchmark-lint invocations.
+- Dashboard command safety now rejects unquoted parenthesized shell expressions and custom `--command` / `--checks-command` payloads before marking read-only commands as copyable.
+- Dashboard command safety now requires the real `node ... scripts/autoresearch.mjs` launcher, blocks `--` separator payloads, and aligns copyable commands with registry action policy plus dashboard-only readout overrides.
+- Dashboard and terminal-report command fallbacks now apply the same readout policy, including Windows quote safety and registry-derived custom command flags such as `--benchmark-command`.
+- Terminal reports now keep readout command fields non-mutating by filtering explicit canonical check commands, dashboard restart commands, and Git cleanup commands to descriptive guidance or read-only health probes.
+- Full `state`, dashboard, and non-compact `recommend-next` now use the runnable stale-packet replacement or full finalization authority instead of falling back to another status read or compact next-packet guidance.
+- `integrations` now respects normalized subcommand arguments, so tool-driven `doctor` and `sync-recipes` calls no longer fall back to `list`.
+- `next_experiment` output schemas now include the full packet, history, last-run path, and report fields that the tool already returns.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.0`.
+
 ## 2.0.2
 
 ### Added

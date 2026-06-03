@@ -19,7 +19,7 @@ Target -> Onboard -> Setup -> Doctor -> Dashboard -> Packet -> Log -> Continue o
 
 AX, the AI experience:
 
-- Start by getting machine-readable context from the CLI: `onboarding-packet`, then `recommend-next`, `state`, `guide`, or `doctor`. Read `decisionEnvelope` / `resumeAudit` first when present.
+- Start by getting machine-readable context from the CLI: `onboarding-packet`, then `recommend-next`, `state --report`, `state`, `guide`, or `doctor`. Read `decisionEnvelope` / `resumeAudit` first when present.
 - Prefer CLI JSON and durable session files for read-only truth: `autoresearch.jsonl`, `autoresearch.last-run.json`, `autoresearch.research/<slug>/quality-gaps.md`, dashboard view-model output, and `finalize-preview`.
 - When the user gives a broad natural-language goal without a benchmark contract, run `prompt-plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
@@ -73,7 +73,8 @@ If any answer is missing, do the cheap read-only action first: inspect state, ru
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
 6. Read `goalFrame` and `operatorHandoff` from compact state before stating the goal. The durable Autoresearch goal is authoritative; a fresh Codex prompt such as "continue" or "start by stating the goal" is an operator instruction unless the goal frame says it matches.
-7. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
+7. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `runtimeDriftSummary`, `gateQuality`, `preflight`, `portfolioRecommendation`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, gate/preflight repair, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
+   Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
 8. Use `prompt-plan` when the user prompt is broad, exploratory, or written like the README examples. Prefer `setup-plan` for read-only setup guidance. Use `setup` only when essentials are known and files should be created.
 9. Use `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, or `doctor --cwd <project> --check-benchmark --explain` before the first live packet or any drift-sensitive metric.
 10. If benchmark output is uncertain, inspect a bounded list/dry-run/sample command first, then use `benchmark-lint --cwd <project> --sample "METRIC name=value"`.
@@ -81,7 +82,7 @@ If any answer is missing, do the cheap read-only action first: inspect state, ru
 12. After setup, checkpoint the returned generated session files in Git when appropriate, then run and log the baseline immediately.
 13. If the user has asked for an ongoing budget, treat each packet as log-then-continue: log the current packet first, read the returned continuation, then continue without handing the loop back unless a blocker or safety stop appears.
 
-Explicit benchmark commands are assumed to print `METRIC name=value` lines. They may also print `ARTIFACT name=path` for manifests or reports the dashboard/last-run packet should link. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
+Explicit benchmark commands are assumed to print `METRIC name=value` lines. They may also print `ARTIFACT name=path` for manifests or reports the dashboard/last-run packet should link. Optional task manifests use the same contract, usually `ARTIFACT task_manifest=out/task-manifest.json`; malformed manifests, outside-workdir paths, and symlink/realpath escapes are quarantined without invalidating unrelated metric evidence. Use `--benchmark-prints-metric false` only when the command is a raw workload that should be timed by the generated wrapper.
 
 The shared first-valid-loop contract stages are setup repair, doctor, dashboard serve, baseline packet, log decision, segment reset, finalization preview, and blocker. If a stale dashboard URL or stale last-run packet is present, replace it with the returned recovery action before continuing.
 
@@ -91,6 +92,7 @@ CLI fallback from `plugins/codex-autoresearch`:
 node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<user request>"
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
+node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs codex-goal-brief --cwd <project>
 node scripts/autoresearch.mjs setup-plan --cwd <project>
 node scripts/autoresearch.mjs benchmark-inspect --cwd <project>
@@ -131,6 +133,7 @@ CLI fallback:
 ```bash
 node scripts/autoresearch.mjs next --cwd <project> --compact
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
 
@@ -139,7 +142,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 - Missing, null, crashed, and ineligible metrics are unknown. Do not report them as `0`, `0%`, baseline, best, latest plotted evidence, or a win.
 - Last-run packets become stale after ledger, config, command, working directory, Git, or relevant file changes. Rerun `next` before logging.
 - The resume audit is the single next-decision surface. It compares the active segment, historical best, promotion-grade best, packet freshness, progress/economics, partial-result candidates, workflow friction, benchmark/config drift, dirty source drift, quality round, experiment memory, and finalization readiness before naming `nextAction`.
-- Read `watchdog` in `state`, `recommend-next`, and the dashboard before continuing a long run. A stale watchdog means no metric movement, logged decision, kept commit, or completed lane result has appeared inside the configured quiet window; inspect the process, finalize kept work, or rescope instead of spending another packet by reflex.
+- Read `watchdog` in `state --report`, `state`, `recommend-next`, and the dashboard before continuing a long run. `state --report` and `state` expose the full compact decision-guidance set: `gateQuality`, `preflight`, `runtimeDriftSummary`, `sourceCleanliness`, `portfolioRecommendation`, and `packetDiagnostics`. `recommend-next --compact` carries the canonical next action plus governance/portfolio fields. A stale watchdog means no metric movement, logged decision, kept commit, or completed lane result has appeared inside the configured quiet window; inspect the process, finalize kept work, or rescope instead of spending another packet by reflex.
 - If the benchmark/check/config contract changes after logged runs, start a new segment or explicitly invalidate old evidence before running another packet or finalizing.
 - Read dev/local best and promotion-grade best separately. A run needs explicit promotion metadata before it counts as promotion evidence.
 - Read `scaffoldHealth` before first packets and before keep logging. Self-recursive wrappers, missing benchmark workloads, stale `commitPaths`/`revertPaths`, and Git index locks are setup blockers, not experiment evidence.
@@ -196,7 +199,7 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 7. Log implementation or rejection with ASI.
 8. Start a fresh round before claiming there are no more high-impact gaps.
 
-`quality_gap=0` only means the accepted checklist for the current round is closed. In plain text: quality_gap=0 only means this round's accepted checklist is done; it does not prove discovery is complete. Read `qualityRound.closed`, `freshRoundSuggested`, and plateau reason fields before deciding whether to start another research round or segment.
+`quality_gap=0` only means the accepted checklist for the current round is closed. In plain text: quality_gap=0 only means this round's accepted checklist is done; it does not prove discovery is complete. Other gap-style metrics such as `agent_value_gap=0` can also saturate while the work is still development-only. Read `qualityRound.closed`, `researchIntegrity.notPromotableBecause`, `sourceCleanliness`, finalization readiness, and plateau reason fields before deciding whether to start another research round, run a promotion gate, use current-tree finalization, or start a segment.
 
 ## Finalize
 
@@ -212,7 +215,9 @@ Use finalization when noisy loop history has useful kept commits.
 8. Verify branch union, session-artifact exclusion, review summary, and cleanup order.
 9. Report created review branches, files, metric improvement, verification, and remaining risk.
 
-Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project>` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain that the current tree, not old kept commits, is the review unit.
+Use `scripts/autoresearch.mjs finalize-current-tree --cwd <project>` when the final branch contents are correct but kept-run commits were later corrected, reverted, or bundled with unkept support commits. Explain that the current tree, not old kept commits, is the review unit. If `sourceCleanliness.status` is `session-artifacts-dirty`, stash or commit those session artifacts before branch-changing finalization; the current-tree plan excludes them by default.
+
+For slow `finalize-preview`, `finalize-current-tree`, or `export` runs, pass `--progress` to print heartbeat lines to stderr while stdout remains JSON.
 
 Current-tree finalization excludes `autoresearch.*`, `autoresearch.research/**`, dashboard exports, and generated finalization scratch files by default. Use `--include-session-artifacts` only when the reviewer explicitly wants those session files in the branch, and say why.
 

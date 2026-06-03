@@ -64,6 +64,7 @@ node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC se
 node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs serve --cwd <project>
+node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 ```
@@ -84,6 +85,8 @@ Use `recommend-next --compact` whenever you want exactly one safe next action:
 ```bash
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 ```
+
+Use `state --report` when you want a compact terminal readout. It returns `report.text` and `report.json` with blocker-first next action, gate quality, runtime drift, dashboard status, packet diagnostics, and portfolio guidance.
 
 ## Session Files
 

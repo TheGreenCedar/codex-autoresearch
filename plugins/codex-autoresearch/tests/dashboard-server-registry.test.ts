@@ -4,7 +4,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
+import { serveAutoresearch } from "../lib/live-server.js";
 import {
+  buildServeRegistryHealthInput,
   readServeRegistry,
   registryPathForWorkDir,
   summarizeServeRegistry,
@@ -82,4 +85,130 @@ test("serve registry summary distinguishes same and different cwd", () => {
   assert.equal(same.currentProcess, true);
   assert.equal(different.stale, true);
   assert.equal(different.cwdRelation, "different-cwd");
+});
+
+test("serve registry health input verifies the requested child cwd in shared git roots", async () => {
+  await withTempDir("autoresearch", "serve-registry-shared-git", async (dir) => {
+    await mkdir(path.join(dir, ".git"), { recursive: true });
+    const firstChild = path.join(dir, "packages", "first");
+    const secondChild = path.join(dir, "packages", "second");
+    await mkdir(firstChild, { recursive: true });
+    await mkdir(secondChild, { recursive: true });
+
+    await writeServeRegistry(firstChild, {
+      pid: process.pid,
+      port: 60126,
+      cwd: firstChild,
+      startedAt: "2026-05-31T00:00:00.000Z",
+      version: PLUGIN_VERSION,
+      healthUrl: "http://127.0.0.1:60126/health",
+    });
+
+    const record = await readServeRegistry(secondChild);
+    const healthInput = buildServeRegistryHealthInput(secondChild, record, { timeoutMs: 1000 });
+    assert.equal(healthInput.cwd, path.resolve(secondChild));
+    assert.equal(healthInput.previous.stale, true);
+    assert.equal(healthInput.previous.cwdRelation, "different-cwd");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          dashboard: {
+            port: 60126,
+            cwd: path.resolve(firstChild),
+            version: PLUGIN_VERSION,
+            liveness: "alive",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+
+    try {
+      const summary = await verifyDashboardHealthSummary(healthInput);
+      assert.equal(summary.liveness, "unknown");
+      assert.equal(summary.stale, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("serve registry health verification uses the current plugin version expectation", async () => {
+  await withTempDir("autoresearch", "serve-registry-old-version", async (dir) => {
+    const oldVersion = "0.1.0";
+    const record = {
+      pid: process.pid,
+      port: 60127,
+      cwd: dir,
+      startedAt: "2026-05-31T00:00:00.000Z",
+      version: oldVersion,
+      healthUrl: "http://127.0.0.1:60127/health",
+    };
+
+    const healthInput = buildServeRegistryHealthInput(dir, record, {
+      expectedVersion: PLUGIN_VERSION,
+      timeoutMs: 1000,
+    });
+    assert.equal(healthInput.version, PLUGIN_VERSION);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          dashboard: {
+            port: 60127,
+            cwd: path.resolve(dir),
+            version: oldVersion,
+            liveness: "alive",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+
+    try {
+      const summary = await verifyDashboardHealthSummary(healthInput);
+      assert.equal(summary.liveness, "unknown");
+      assert.equal(summary.stale, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("live dashboard health endpoint exposes read-only process metadata", async () => {
+  await withTempDir("autoresearch", "serve-health", async (dir) => {
+    const startedAt = "2026-06-01T00:00:00.000Z";
+    const result = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      startedAt,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      assert.equal(result.pid, process.pid);
+      assert.equal(result.cwd, path.resolve(dir));
+      assert.equal(result.version, PLUGIN_VERSION);
+      assert.equal(result.startedAt, startedAt);
+
+      const response = await fetch(new URL("health", result.url));
+      assert.equal(response.ok, true);
+      const payload = await response.json();
+      assert.equal(payload.ok, true);
+      assert.equal(payload.dashboard.pid, process.pid);
+      assert.equal(payload.dashboard.port, result.port);
+      assert.equal(payload.dashboard.version, PLUGIN_VERSION);
+      assert.equal(payload.dashboard.startedAt, startedAt);
+      assert.equal(payload.dashboard.actions, undefined);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        result.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 });

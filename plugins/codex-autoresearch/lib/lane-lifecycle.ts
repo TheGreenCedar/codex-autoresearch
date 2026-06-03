@@ -1,3 +1,5 @@
+import { summarizeLaneLessons } from "./lane-briefs.js";
+
 type LooseObject = Record<string, unknown>;
 
 export type LaneStatus = "planned" | "running" | "result" | "stale";
@@ -10,6 +12,7 @@ export interface LaneLifecycleSummary {
   resultLanes: LooseObject[];
   staleLanes: LooseObject[];
   latestResults: LooseObject[];
+  lessonsToAvoid: string[];
   recommendation: string;
   command: string;
 }
@@ -66,6 +69,7 @@ export function buildLaneLifecycle({
   const runningLanes = lanes.filter((lane) => lane.status === "running");
   const resultLanes = lanes.filter((lane) => lane.status === "result");
   const staleLanes = lanes.filter((lane) => lane.status === "stale");
+  const lessonsToAvoid = summarizeLaneLessons([...results.values()]);
   const recommendation = recommendationForLaneState(staleLanes, runningLanes, plannedLanes);
   return {
     stale: staleLanes.length > 0,
@@ -75,6 +79,7 @@ export function buildLaneLifecycle({
     resultLanes,
     staleLanes,
     latestResults: [...results.values()],
+    lessonsToAvoid,
     recommendation,
     command: commandForRecommendation({
       lane: staleLanes[0] || runningLanes[0] || plannedLanes[0] || null,
@@ -137,6 +142,7 @@ function includeResultOnlyLanes(
           id: laneId,
           label: lane?.title || lane?.label || laneId,
           status: "result",
+          brief: lane?.brief,
         },
         lanes.length,
       ),
@@ -167,6 +173,7 @@ function summarizeLane({
       status: "result",
       latestResult: result,
       resultStatus: stringValue(objectValue(result.result)?.status || result.status || "completed"),
+      lessonsToAvoid: summarizeLaneLessons([result]),
     };
   }
   const rawStatus = stringValue(lane.status || lane.evidenceStatus).toLowerCase();

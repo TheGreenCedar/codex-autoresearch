@@ -197,6 +197,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
         id: lane.id,
         title: lane.title || lane.label,
         mode,
+        brief: lane.brief || null,
       },
       result,
     };

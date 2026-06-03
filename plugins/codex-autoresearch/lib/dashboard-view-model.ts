@@ -1,6 +1,16 @@
 import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
+import {
+  actionMetadataForKind,
+  fallbackCommandForKind,
+  isPacketBrakeKind,
+} from "./action-metadata.js";
+import {
+  dashboardCommandMapKey,
+  dashboardReadOnlyCommand,
+  stripDashboardGuidanceCommandFields,
+} from "./dashboard-command-safety.js";
 import type { DashboardContext } from "../dashboard/src/types.js";
 
 type LooseObject = Record<string, any>;
@@ -15,22 +25,6 @@ type RunLike = LooseObject & {
   commit?: string;
 };
 type CommandMap = Map<string, string>;
-
-const PACKET_BRAKE_KINDS = new Set([
-  "context-distillation",
-  "decision-capsule",
-  "lane-cleanup",
-  "runtime-provenance",
-  "packet-diagnostic",
-  "workflow-friction",
-  "finalization",
-  "stale-packet",
-  "setup",
-  "benchmark-command",
-  "log-decision",
-  "segment-transition",
-  "watchdog",
-]);
 
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
@@ -235,7 +229,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory,
     warnings,
   });
-  return {
+  return sanitizeDashboardDecisionEnvelope({
     setup: setupPlan,
     guidedSetup,
     decisionEnvelope,
@@ -316,7 +310,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
         : finalizePreview?.nextAction || "Keep evidence or run finalize-preview when ready.",
     },
     commands,
-  };
+  });
 }
 
 function normalizeDashboardContext(context: DashboardContext): NormalizedDashboardContext {
@@ -324,9 +318,9 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
   return {
     ...context,
     settings,
-    commands: Array.isArray(context.commands) ? context.commands : [],
-    setupPlan: context.setupPlan || null,
-    guidedSetup: context.guidedSetup || null,
+    commands: sanitizeDashboardCommandList(context.commands),
+    setupPlan: sanitizeDashboardGuidance(context.setupPlan),
+    guidedSetup: sanitizeDashboardGuidance(context.guidedSetup),
     qualityGap: context.qualityGap || null,
     finalizePreview: context.finalizePreview || null,
     recipes: Array.isArray(context.recipes) ? context.recipes : [],
@@ -334,6 +328,53 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
     drift: context.drift || null,
     warnings: Array.isArray(context.warnings) ? context.warnings : [],
   };
+}
+
+function sanitizeDashboardGuidance<T>(value: T): T | null {
+  return stripDashboardGuidanceCommandFields(value);
+}
+
+function sanitizeDashboardCommandList(commands: unknown) {
+  if (!Array.isArray(commands)) return [];
+  return commands
+    .map((item): LooseObject | null => {
+      const record = recordOrNull(item);
+      const label = cleanText(record?.label);
+      const command = dashboardReadOnlyCommand(record?.command);
+      if (!label || !command) return null;
+      return { ...record, label, command };
+    })
+    .filter((item): item is LooseObject => item !== null);
+}
+
+function sanitizeDashboardDecisionEnvelope<T>(value: T): T {
+  if (Array.isArray(value))
+    return value.map((item) => sanitizeDashboardDecisionEnvelope(item)) as T;
+  if (!value || typeof value !== "object") return value;
+  const result: LooseObject = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "command") {
+      const command = dashboardReadOnlyCommand(nested);
+      if (command) result[key] = command;
+      continue;
+    }
+    if (key === "primaryCommand") {
+      const primary = sanitizeDashboardPrimaryCommand(nested);
+      if (primary) result[key] = primary;
+      continue;
+    }
+    if (key === "commandsByStatus" || key === "liveAction") continue;
+    result[key] = sanitizeDashboardDecisionEnvelope(nested);
+  }
+  return result as T;
+}
+
+function sanitizeDashboardPrimaryCommand(value: unknown): LooseObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as LooseObject;
+  const command = dashboardReadOnlyCommand(record.command);
+  if (!command) return null;
+  return { ...record, command };
 }
 
 function normalizeDashboardSettings(
@@ -384,32 +425,34 @@ function normalizeDecisionEnvelope({
     settings.decisionEnvelope,
     settings.resumeAudit,
   );
-  if (Object.keys(supplied).length) return supplied;
+  if (Object.keys(supplied).length) return sanitizeDashboardDecisionEnvelope(supplied);
 
   const current = Array.isArray(state?.current) ? state.current : [];
   const lastRun = guidedSetup?.lastRun || null;
   const freshness = lastRun?.freshness || null;
-  return buildDecisionEnvelope({
-    state: { ...state, current },
-    nextAction:
-      guidedSetup?.nextStep?.nextAction?.reason ||
-      guidedSetup?.nextAction ||
-      setupPlan?.nextStep?.nextAction?.reason ||
-      "Run doctor, then next.",
-    lastRunFreshness: freshness,
-    warningDetails: warnings,
-    scaffoldHealth,
-    researchIntegrity,
-    finalization: finalizePreview,
-    qualityGap,
-    experimentEconomics,
-    salvageCandidates,
-    workflowFriction,
-    experimentMemory,
-    segmentTransition,
-    setupState,
-    watchdog,
-  });
+  return sanitizeDashboardDecisionEnvelope(
+    buildDecisionEnvelope({
+      state: { ...state, current },
+      nextAction:
+        guidedSetup?.nextStep?.nextAction?.reason ||
+        guidedSetup?.nextAction ||
+        setupPlan?.nextStep?.nextAction?.reason ||
+        "Run doctor, then next.",
+      lastRunFreshness: freshness,
+      warningDetails: warnings,
+      scaffoldHealth,
+      researchIntegrity,
+      finalization: finalizePreview,
+      qualityGap,
+      experimentEconomics,
+      salvageCandidates,
+      workflowFriction,
+      experimentMemory,
+      segmentTransition,
+      setupState,
+      watchdog,
+    }),
+  );
 }
 
 function setupStateFromDashboardInput({ guidedSetup, setupPlan }: LooseObject) {
@@ -643,6 +686,8 @@ function canonicalPriorityLabel(value: unknown): string {
 }
 
 function canonicalTitle(kind: string): string {
+  const metadata = actionMetadataForKind(kind);
+  if (metadata?.label) return metadata.label;
   const titles: Record<string, string> = {
     "safety-blocker": "Resolve the safety blocker",
     "benchmark-mismatch": "Repair the benchmark mismatch",
@@ -2015,103 +2060,47 @@ function actionFromDecisionEnvelope(
   const stalePacketCommand =
     guidedSetup?.commands?.replaceLast ||
     (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
-  const commandByKind: Record<string, string> = {
-    "safety-blocker": commandMap.get("doctor") || "",
-    "workflow-friction": commandMap.get("doctor") || "",
-    "benchmark-mismatch": commandMap.get("benchmark lint") || commandMap.get("doctor") || "",
+  const metadata = actionMetadataForKind(kind);
+  const metadataCommand = fallbackCommandForKind(kind, (key) =>
+    commandMap.get(dashboardCommandMapKey(key)),
+  );
+  const commandOverrides: Record<string, string> = {
     "stale-packet":
       stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "partial-salvage": commandMap.get("partial results") || "",
-    "context-distillation": cleanText(summary.command) || "",
-    "decision-capsule":
-      cleanText(summary.command) ||
-      commandMap.get("benchmark lint") ||
-      commandMap.get("recommend next") ||
-      commandMap.get("state") ||
-      "",
-    "quality-gap": commandMap.get("gap candidates") || "",
-    "plateau-pivot": commandMap.get("next run") || "",
-    watchdog:
-      commandMap.get("finalize preview") ||
-      commandMap.get("serve dashboard") ||
-      commandMap.get("doctor") ||
-      "",
-    finalization: commandMap.get("finalize preview") || "",
-    "next-packet": commandMap.get("next run") || "",
     setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
     "benchmark-command": guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "log-decision":
-      guidedSetup?.commands?.logLast ||
-      commandMap.get("keep last") ||
-      commandMap.get("discard last") ||
-      "",
-    "segment-transition":
-      commandMap.get("new segment") ||
-      commandMap.get("gap candidates") ||
-      commandMap.get("finalize preview") ||
-      "",
-    plateau: commandMap.get("next run") || "",
-    "finalize-preview": commandMap.get("finalize preview") || "",
+    "log-decision": guidedSetup?.commands?.logLast || "",
     baseline: guidedSetup?.commands?.baseline || commandMap.get("next run") || "",
   };
-  const labelByKind: Record<string, string> = {
-    "safety-blocker": "Doctor",
-    "workflow-friction": "Doctor",
-    "benchmark-mismatch": "Lint",
-    "stale-packet": stalePacketCommand ? "Next" : "Setup",
-    "partial-salvage": "Partial",
-    "context-distillation": "Context",
-    "decision-capsule": "Capsule",
-    "quality-gap": "Gaps",
-    "plateau-pivot": "Next",
-    watchdog: commandMap.get("finalize preview") ? "Preview" : "Inspect",
-    finalization: "Preview",
-    "next-packet": "Next",
-    setup: "Setup",
-    "benchmark-command": "Setup",
-    "log-decision": "Log",
-    "segment-transition": commandMap.get("gap candidates") ? "Gaps" : "Review",
-    plateau: "Next",
-    "finalize-preview": "Preview",
-    baseline: "Next",
-  };
-  const safeActionByKind: Record<string, string> = {
-    "safety-blocker": "doctor",
-    "workflow-friction": "doctor",
-    "benchmark-mismatch": "benchmark-lint",
-    "stale-packet": stalePacketCommand ? "" : "setup-plan",
-    "partial-salvage": "partial-results",
-    "context-distillation": "session-forensics",
-    "decision-capsule": "decision-capsule",
-    "quality-gap": "gap-candidates",
-    "plateau-pivot": "next",
-    watchdog: commandMap.get("finalize preview") ? "finalize-preview" : "inspect",
-    finalization: "finalize-preview",
-    "next-packet": "next",
-    setup: "setup-plan",
-    "benchmark-command": "setup-plan",
-    "segment-transition": "new-segment",
-    "finalize-preview": "finalize-preview",
-    baseline: "next",
-  };
-  const packetBrake = PACKET_BRAKE_KINDS.has(kind);
+  const commandLabel = dashboardCommandLabelOverride(kind, {
+    commandMap,
+    stalePacketCommand,
+  });
+  const safeAction = dashboardSafeActionOverride(kind, { commandMap, stalePacketCommand });
+  const packetBrake = isPacketBrakeKind(kind);
   return actionItem({
     kind,
     priority: cleanText(summary.priority) || "Next",
     title: cleanText(summary.title) || "Next action",
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
     utilityCopy: decisionEnvelopeUtility(kind),
-    safeAction: safeActionByKind[kind] || "",
+    safeAction: safeAction ?? metadata?.safeAction ?? "",
     command:
       cleanText(summary.command) ||
-      commandByKind[kind] ||
+      commandOverrides[kind] ||
+      metadataCommand ||
       (packetBrake ? "" : commandMap.get("next run") || ""),
-    commandLabel: labelByKind[kind] || "Next",
+    commandLabel: commandLabel || metadata?.commandLabel || "Next",
     tone: ["finalize-preview", "finalization"].includes(kind)
       ? "good"
       : [
             "safety-blocker",
             "benchmark-mismatch",
+            "gate-quality",
+            "preflight",
+            "portfolio-trust-blocker",
+            "metric-saturation",
+            "current-tree-finalization",
             "workflow-friction",
             "stale-packet",
             "setup",
@@ -2128,6 +2117,30 @@ function actionFromDecisionEnvelope(
   });
 }
 
+function dashboardCommandLabelOverride(
+  kind: string,
+  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
+): string {
+  if (kind === "stale-packet" && stalePacketCommand) return "Next";
+  if (kind === "watchdog") return commandMap.get("finalize preview") ? "Preview" : "Inspect";
+  if (kind === "segment-transition") {
+    if (commandMap.get("new segment")) return "Segment";
+    return commandMap.get("gap candidates") ? "Gaps" : "Review";
+  }
+  return "";
+}
+
+function dashboardSafeActionOverride(
+  kind: string,
+  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
+): string | null {
+  if (kind === "stale-packet" && stalePacketCommand) return "";
+  if (kind === "watchdog") {
+    return commandMap.get("finalize preview") ? "finalize-preview" : "inspect";
+  }
+  return null;
+}
+
 function decisionEnvelopeUtility(kind: string): string {
   if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
   if (kind === "workflow-friction")
@@ -2139,6 +2152,15 @@ function decisionEnvelopeUtility(kind: string): string {
     return "Packet diagnostics should explain the last run before another packet.";
   if (kind === "benchmark-mismatch")
     return "Benchmark timeout and command-shape mismatches come before reruns.";
+  if (kind === "gate-quality")
+    return "Independent gate quality should be repaired before another measured packet.";
+  if (kind === "preflight") return "Preflight blockers come before another measured packet.";
+  if (kind === "portfolio-trust-blocker")
+    return "Portfolio trust blockers should be resolved before spending another packet.";
+  if (kind === "metric-saturation")
+    return "Saturated metrics need promotion evidence or a pivot before more packets.";
+  if (kind === "current-tree-finalization")
+    return "Current-tree finalization should describe the branch before review work continues.";
   if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
   if (kind === "partial-salvage")
     return "Review completed artifact rows before rerunning an expensive failed packet.";
@@ -2204,13 +2226,6 @@ export function buildMissionControl({
           : qualityGap
             ? "gaps"
             : actionRail?.[0]?.kind || "next";
-  const logCommandsByStatus = Object.fromEntries(
-    allowedStatuses.map((status: string) => [
-      status,
-      logCommandForStatus(guidedSetup?.commands?.logLast, status),
-    ]),
-  );
-
   return {
     activeStep,
     staticFallback: "Serve the dashboard locally for a fresh readout; use CLI for actions.",
@@ -2245,12 +2260,6 @@ export function buildMissionControl({
         detail: canLog
           ? `Last packet is ready to log as ${suggestedStatus || "an allowed status"}.`
           : lastRun?.freshness?.reason || "No fresh last-run packet is waiting.",
-        command:
-          guidedSetup?.commands?.logLast ||
-          commandMap.get("keep last") ||
-          commandMap.get("discard last"),
-        commandLabel: "Log",
-        mutates: true,
       }),
       missionStep({
         id: "finalize",
@@ -2265,7 +2274,6 @@ export function buildMissionControl({
     ],
     logDecision: {
       available: canLog,
-      mutates: true,
       allowedStatuses,
       suggestedStatus,
       metric: lastRun?.metric ?? null,
@@ -2278,9 +2286,6 @@ export function buildMissionControl({
             ? "Describe the failed checks"
             : "Describe the kept change",
       asiTemplate: lastRun?.asiTemplate || {},
-      command: guidedSetup?.commands?.logLast || "",
-      commandsByStatus: logCommandsByStatus,
-      liveAction: suggestedStatus ? `log-${String(suggestedStatus).replace(/_/g, "-")}` : "",
       requiresDescription: true,
       requiresConfirmation: true,
     },
@@ -2311,21 +2316,17 @@ function missionStep({
   commandLabel?: string;
   mutates?: boolean;
 }) {
+  const safeCommand = dashboardReadOnlyCommand(command);
   return {
     id,
     title,
     state,
     detail,
     safeAction,
-    command,
-    primaryCommand: command ? { label: commandLabel, command } : null,
+    command: safeCommand,
+    primaryCommand: safeCommand ? { label: commandLabel, command: safeCommand } : null,
     mutates,
   };
-}
-
-function logCommandForStatus(command: unknown, status: string): string {
-  if (!command || !status) return "";
-  return String(command).replace(/--status\s+(?:"[^"]+"|'[^']+'|\S+)/, `--status ${status}`);
 }
 
 function actionItem({
@@ -2353,18 +2354,19 @@ function actionItem({
   source?: string;
   explanation?: LooseObject | null;
 }) {
+  const safeCommand = dashboardReadOnlyCommand(command);
   return {
     kind,
     priority,
     title,
     detail,
     utilityCopy,
-    packetBrake: PACKET_BRAKE_KINDS.has(kind),
+    packetBrake: isPacketBrakeKind(kind),
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
-    command,
-    primaryCommand: command ? { label: commandLabel, command } : null,
+    command: safeCommand,
+    primaryCommand: safeCommand ? { label: commandLabel, command: safeCommand } : null,
     tone,
     source,
   };

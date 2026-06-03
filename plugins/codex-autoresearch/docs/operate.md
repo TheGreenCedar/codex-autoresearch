@@ -9,6 +9,7 @@ Start with read-only context:
 ```bash
 node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs state --cwd <project> --compact
+node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
@@ -23,7 +24,13 @@ On resume, treat `goalFrame.authoritativeGoal` and `operatorHandoff.goal` as the
 
 `state --compact`, `recommend-next --compact`, and the dashboard should agree on the same watchdog summary and canonical next-action kind. If they diverge, treat that as a bug rather than a dashboard-only signal.
 
+Use `state --report` when you need a terminal-first one-screen status instead of the full compact JSON. It returns `report.text` and `report.json` from the same compact state. Read it top-down: blockers, next action, next command, gate quality, runtime drift, dashboard status, source cleanliness, packet diagnostics, and portfolio guidance. If dashboard liveness is missing, the report should name the command to serve or verify the live dashboard rather than implying the dashboard is already current.
+
+Read `sourceCleanliness` before Git-sensitive actions. `source-dirty` means source files need scoped cleanup before keep/discard automation or finalization. `session-artifacts-dirty` means only `autoresearch.*`, `autoresearch.research/**`, dashboard exports, or finalization scratch files are dirty: source drift is clean, but branch-changing finalization still needs a temporary stash or commit of those artifacts first.
+
 The resume contract also carries a watchdog summary. By default it treats an eight-hour quiet window as suspicious when there has been no metric movement, no logged decision, no kept commit, or a completed lane result in the active segment. Tune it with `watchdogNoProgressHours` or `watchdogNoProgressSeconds` in config when a project has a different overnight rhythm. If it fires, do not just feed the machine another packet. Inspect the process, finalize kept work, or rescope the segment.
+
+If a gap-style metric is saturated, such as `agent_value_gap=0`, but `researchIntegrity` still says the best is development-only or not promotion-grade, treat that as a review/rescope checkpoint. Run the finalization preview, current-tree finalization, a promotion gate, or a new segment before spending another same-metric packet.
 
 ## Operator Checklist
 
@@ -35,7 +42,7 @@ node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operato
 
 The checklist returns one command, one safety reason, one blocker, one evidence role, and one source. Treat it as the shortest safe continuation path: the command says what to do next, the safety reason explains why it outranks another packet, the blocker names the stop condition when one exists, the evidence role says how to use the result, and the source points back to the governance readout that made the call.
 
-Read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `laneLifecycle`, and `packetDiagnostics` when present. If any of them blocks packet work, clear that action before `next`.
+Read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `runtimeDriftSummary`, `gateQuality`, `preflight`, `portfolioRecommendation`, `laneLifecycle`, and `packetDiagnostics` when present. If any of them blocks packet work, clear that action before `next`.
 
 Read existing files before editing:
 
@@ -117,6 +124,14 @@ node scripts/autoresearch.mjs partial-results --cwd <project> --record <candidat
 ```
 
 Recorded partial results are diagnostic `measure` evidence only. They link the source packet, artifact row, metric provenance, validation status, and evidence-index claim, but they are never promotion-grade evidence.
+
+Packet commands may also print optional task manifests with the existing artifact contract:
+
+```text
+ARTIFACT task_manifest=out/task-manifest.json
+```
+
+Autoresearch indexes accepted and quarantined task diagnostics inside packet evidence. A valid task manifest can explain what was done; a malformed manifest, outside-workdir path, or symlink/realpath escape is quarantined without invalidating unrelated primary metric evidence.
 
 If `log --from-last` says there is no loggable packet or the packet is stale, recover with one of the commands it prints:
 

@@ -48,6 +48,12 @@ export interface CompactStateBuilderInput {
   decisionEnvelope?: unknown;
   canonicalNextAction?: unknown;
   runtimeProvenance?: unknown;
+  runtimeDriftSummary?: unknown;
+  dashboardHealth?: unknown;
+  sourceCleanliness?: unknown;
+  gateQuality?: unknown;
+  preflight?: unknown;
+  portfolioRecommendation?: unknown;
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
@@ -101,6 +107,12 @@ export interface CompactStateResponse {
   decisionEnvelope: unknown;
   canonicalNextAction: unknown;
   runtimeProvenance?: unknown;
+  runtimeDriftSummary?: unknown;
+  dashboardHealth?: unknown;
+  sourceCleanliness?: unknown;
+  gateQuality?: unknown;
+  preflight?: unknown;
+  portfolioRecommendation?: unknown;
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
@@ -157,6 +169,12 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
   };
 
   copyIfProvided(response, "runtimeProvenance", input.runtimeProvenance);
+  copyIfProvided(response, "runtimeDriftSummary", input.runtimeDriftSummary);
+  copyIfProvided(response, "dashboardHealth", input.dashboardHealth);
+  copyIfProvided(response, "sourceCleanliness", input.sourceCleanliness);
+  copyIfProvided(response, "gateQuality", input.gateQuality);
+  copyIfProvided(response, "preflight", input.preflight);
+  copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
   copyIfProvided(response, "loopContract", input.loopContract);
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);

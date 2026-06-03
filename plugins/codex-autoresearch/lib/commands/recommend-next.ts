@@ -1,3 +1,5 @@
+import { resolveActionCommand } from "../action-metadata.js";
+
 type JsonObject = Record<string, unknown>;
 
 export interface RecommendNextResponseInput {
@@ -19,6 +21,7 @@ export interface RecommendNextResponseInput {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  portfolioRecommendation?: unknown;
   sessionDecisionCapsule?: unknown;
 }
 
@@ -58,6 +61,7 @@ export interface RecommendNextResponse {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  portfolioRecommendation?: unknown;
   sessionDecisionCapsule?: unknown;
 }
 
@@ -97,6 +101,7 @@ export function buildRecommendNextResponse(
   copyIfProvided(response, "loopContract", input.loopContract);
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
+  copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
   copyIfProvided(response, "sessionDecisionCapsule", input.sessionDecisionCapsule);
 
   return response;
@@ -110,7 +115,9 @@ export function buildCompactRecommendNextResponse({
   const canonicalNextAction = recordOrNull(compact.canonicalNextAction);
   const commands = recordOrNull(compact.commands) || {};
   const primaryCommand =
-    stringOrEmpty(canonicalNextAction?.command) || stringOrEmpty(commands.state);
+    resolveActionCommand(canonicalNextAction?.kind, commands, {
+      explicitCommand: canonicalNextAction?.command,
+    }) || stringOrEmpty(commands.state);
   const nextAction =
     stringOrEmpty(canonicalNextAction?.reason) ||
     stringOrEmpty(compact.nextAction) ||
@@ -142,6 +149,7 @@ export function buildCompactRecommendNextResponse({
     loopContract: compact.loopContract,
     laneLifecycle: compact.laneLifecycle,
     packetDiagnostics: compact.packetDiagnostics,
+    portfolioRecommendation: compact.portfolioRecommendation,
     sessionDecisionCapsule: compact.sessionDecisionCapsule,
   });
 }
@@ -157,7 +165,10 @@ export function selectRecommendNextRuntimeAuthority({
     recordOrNull(viewEnvelope?.runtimeProvenance) ||
     recordOrNull(recordOrNull(viewModel?.processHygiene)?.runtimeDrift);
   const viewRuntimeBlocker = hasRuntimeProvenanceBlocker(viewEnvelope, viewRuntimeProvenance);
-  const decisionEnvelope = viewRuntimeBlocker ? viewEnvelope : compactEnvelope || viewEnvelope;
+  const viewLoopContract = recordOrNull(viewEnvelope?.loopContract);
+  const viewLoopBlocker = loopContractBlocksNextPacket(viewLoopContract);
+  const decisionEnvelope =
+    viewRuntimeBlocker || viewLoopBlocker ? viewEnvelope : compactEnvelope || viewEnvelope;
 
   return {
     decisionEnvelope,
@@ -198,4 +209,11 @@ function hasRuntimeProvenanceBlocker(
   const loopContract = recordOrNull(envelope?.loopContract);
   const blockers = Array.isArray(loopContract?.blockers) ? loopContract.blockers : [];
   return blockers.some((blocker) => recordOrNull(blocker)?.kind === "runtime-provenance");
+}
+
+function loopContractBlocksNextPacket(loopContract: JsonObject | null): boolean {
+  if (!loopContract) return false;
+  const blockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
+  const warnings = Array.isArray(loopContract.warnings) ? loopContract.warnings : [];
+  return loopContract.canRunNextPacket === false || blockers.length > 0 || warnings.length > 0;
 }

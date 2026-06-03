@@ -1,3 +1,5 @@
+import { actionMetadataForKind } from "./action-metadata.js";
+
 type LooseObject = Record<string, unknown>;
 
 export interface OperatorChecklist {
@@ -48,6 +50,15 @@ function evidenceRoleForAction(kind: string): string {
       return "runtime-truth";
     case "packet-diagnostic":
       return "diagnostic-measure";
+    case "gate-quality":
+    case "preflight":
+      return "loop-contract";
+    case "portfolio-trust-blocker":
+      return "portfolio-trust";
+    case "metric-saturation":
+      return "promotion-readiness";
+    case "current-tree-finalization":
+      return "current-tree-finalization";
     case "next-packet":
       return "new-measurement";
     default:
@@ -63,16 +74,25 @@ function inspectCommandForAction(action: LooseObject, context: LooseObject): str
   switch (stringValue(action.kind)) {
     case "context-distillation":
       return `${script} session-forensics --cwd ${cwd} --dry-run`;
-    case "runtime-provenance":
-      return `${script} doctor --cwd ${cwd} --explain`;
     case "packet-diagnostic":
       return `${script} partial-results --cwd ${cwd} --from-last`;
+    case "gate-quality":
+    case "preflight":
+    case "runtime-provenance":
+      return `${script} doctor --cwd ${cwd} --check-benchmark --explain`;
+    case "portfolio-trust-blocker":
+    case "metric-saturation":
+      return `${script} state --cwd ${cwd} --compact --report`;
+    case "current-tree-finalization":
+      return `${script} finalize-preview --cwd ${cwd}`;
     case "finalization":
       return `${script} finalize-preview --cwd ${cwd} --dry-run`;
     case "lane-cleanup":
       return `${script} state --cwd ${cwd} --compact`;
     default:
-      return `${script} state --cwd ${cwd} --compact`;
+      return actionMetadataForKind(action.kind)?.packetBrake === false
+        ? ""
+        : `${script} state --cwd ${cwd} --compact`;
   }
 }
 

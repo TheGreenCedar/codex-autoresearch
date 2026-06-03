@@ -1,10 +1,12 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
 import {
+  buildServeRegistryHealthInput,
   readServeRegistry,
   summarizeServeRegistry,
   writeServeRegistry,
 } from "../dashboard-server-registry.js";
+import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 
 type LooseObject = Record<string, any>;
 
@@ -36,6 +38,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   async function exportDashboard(args: LooseObject) {
     const startedAt = Date.now();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    emitProgress(args, "export", `reading session ledger from ${workDir}`);
     const entries = deps.readJsonl(workDir);
     if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
     const output = deps.resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
@@ -51,7 +54,11 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         includeInstalled: false,
       })
       .catch(unavailableRuntimeDrift);
-    const dashboardServerRegistry = await dashboardServerRegistryStatus(workDir);
+    emitProgress(args, "export", "building dashboard view model");
+    const dashboardServerRegistry = await dashboardServerRegistryStatus(
+      workDir,
+      deps.pluginVersion,
+    );
     const dashboardContext = {
       deliveryMode: "static-export",
       generatedAt,
@@ -80,12 +87,12 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       viewModel,
       publicExport: showcaseExport,
     });
+    emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
     await deps.writeFile(output, html, "utf8");
     const modeGuidance = {
       staticExport: output,
-      liveDashboardCommand: `node ${deps.shellQuote(path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"))} serve --cwd ${deps.shellQuote(workDir)}`,
       difference:
-        "The exported HTML is a read-only fallback snapshot; share the served dashboard URL when the operator needs a live link.",
+        "The exported HTML is a read-only fallback snapshot; start the served dashboard explicitly from the CLI when the operator needs a live link.",
       fullJson:
         "Pass --json-full/--verbose on the CLI to include the full viewModel in the command response.",
     };
@@ -118,6 +125,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
 
   async function serveDashboard(args: LooseObject) {
     const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     let liveUrl = "";
     let dashboardServerRegistry: LooseObject | null = null;
@@ -130,6 +138,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
       port: args.port,
+      pluginVersion: deps.pluginVersion,
+      startedAt: startedAtIso,
       scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
       dashboardHtml: async () => {
         const entries = deps.readJsonl(workDir);
@@ -175,30 +185,50 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     });
     liveUrl = serveResult.url;
     liveDashboardServers.add(serveResult.server);
-    const health = await verifyLiveDashboardUrl(liveUrl);
+    const healthUrl = new URL("health", liveUrl).toString();
     const registryWrite = await writeServeRegistry(workDir, {
       pid: process.pid,
       port: Number(serveResult.port),
       cwd: workDir,
-      startedAt: new Date(startedAt).toISOString(),
+      startedAt: startedAtIso,
       version: deps.pluginVersion,
-      healthUrl: health.url,
+      healthUrl,
     });
-    dashboardServerRegistry = summarizeServeRegistry(registryWrite.record, {
+    const registrySummary = summarizeServeRegistry(registryWrite.record, {
       currentPid: process.pid,
       currentCwd: workDir,
     });
+    const dashboardHealth = await verifyDashboardHealthSummary({
+      url: serveResult.url,
+      port: serveResult.port,
+      pid: process.pid,
+      registryPath: registryWrite.path,
+      cwd: workDir,
+      version: deps.pluginVersion,
+      startedAt: startedAtIso,
+      previous: registrySummary,
+      timeoutMs: 1000,
+    });
+    dashboardServerRegistry = mergeRegistryHealthSummary(registrySummary, dashboardHealth);
     serveResult.server.on("close", () => {
       liveDashboardServers.delete(serveResult.server);
     });
+    const dashboardVerified =
+      dashboardHealth.liveness === "alive" && dashboardHealth.stale === false;
     return {
       ok: true,
       workDir: serveResult.workDir,
       port: serveResult.port,
       url: serveResult.url,
-      verified: health.ok,
-      healthUrl: health.url,
-      checkedAt: health.checkedAt,
+      pid: process.pid,
+      cwd: workDir,
+      version: deps.pluginVersion,
+      startedAt: startedAtIso,
+      verified: dashboardVerified,
+      healthUrl: dashboardHealth.healthUrl || healthUrl,
+      registryPath: registryWrite.path,
+      dashboardHealth,
+      checkedAt: new Date().toISOString(),
       registry: {
         path: registryWrite.path,
         status: dashboardServerRegistry,
@@ -212,9 +242,9 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       },
       modeGuidance: {
         deliveryMode: "live-server",
-        difference: health.ok
+        difference: dashboardVerified
           ? "This dashboard link was liveness-checked and can be handed to the operator; exported HTML is only a read-only fallback snapshot."
-          : `Dashboard server started but liveness check failed: ${health.error}. Restart serve before handing this URL to the operator.`,
+          : `Dashboard server started but health verification reported ${dashboardHealth.liveness}. Restart serve before handing this URL to the operator.`,
       },
       progress: deps.operationProgress({
         stage: "serve",
@@ -227,6 +257,13 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   }
 
   return { exportDashboard, serveDashboard };
+}
+
+function emitProgress(args: LooseObject, stage: string, message: string): void {
+  if (args.progress !== true && args.progress_stderr !== true && args.progressStderr !== true) {
+    return;
+  }
+  process.stderr.write(`[autoresearch:${stage}] ${message}\n`);
 }
 
 function sanitizePublicShowcaseViewModel(value: LooseObject): LooseObject {
@@ -257,40 +294,41 @@ function containsShowcaseOnlyWarning(value: unknown): boolean {
   return Object.values(value as LooseObject).some((item) => containsShowcaseOnlyWarning(item));
 }
 
-async function verifyLiveDashboardUrl(url: string) {
-  const checkedAt = new Date().toISOString();
-  const healthUrl = new URL("health", url).toString();
-  try {
-    const response = await fetch(healthUrl);
-    if (!response.ok) {
-      return {
-        ok: false,
-        url: healthUrl,
-        checkedAt,
-        error: `GET /health returned ${response.status}`,
-      };
-    }
-    const payload = (await response.json().catch((): null => null)) as LooseObject | null;
-    return {
-      ok: payload?.ok === true,
-      url: healthUrl,
-      checkedAt,
-      error: payload?.ok === true ? "" : "GET /health did not return ok=true",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      url: healthUrl,
-      checkedAt,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+async function dashboardServerRegistryStatus(workDir: string, expectedVersion: string) {
+  const record = await readServeRegistry(workDir);
+  const previous = summarizeServeRegistry(record, { currentCwd: workDir });
+  if (!previous.available) return null;
+  const health = await verifyDashboardHealthSummary(
+    buildServeRegistryHealthInput(workDir, record, {
+      expectedVersion,
+      timeoutMs: 500,
+    }),
+  );
+  return mergeRegistryHealthSummary(previous, health);
 }
 
-async function dashboardServerRegistryStatus(workDir: string) {
-  const record = await readServeRegistry(workDir);
-  const summary = summarizeServeRegistry(record, { currentCwd: workDir });
-  return summary.available ? summary : null;
+function mergeRegistryHealthSummary(summary: LooseObject, health: LooseObject): LooseObject {
+  const liveness = health.liveness === "alive" ? "alive" : health.liveness || "unknown";
+  const stale =
+    health.stale === false && liveness === "alive"
+      ? false
+      : health.stale === true
+        ? true
+        : summary.stale === true
+          ? true
+          : null;
+  return {
+    ...summary,
+    healthUrl: health.healthUrl || summary.record?.healthUrl || "",
+    checkedAt: new Date().toISOString(),
+    expectedVersion: health.version || "",
+    liveness,
+    stale,
+    message:
+      liveness === "alive" && stale === false
+        ? "Dashboard registry HTTP health matched this cwd and plugin version."
+        : "Dashboard registry requires matching HTTP health before it can be trusted as live.",
+  };
 }
 
 function unavailableRuntimeDrift(error: unknown): LooseObject {

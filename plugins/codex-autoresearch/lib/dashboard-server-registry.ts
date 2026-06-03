@@ -26,6 +26,18 @@ export interface DashboardServeRegistrySummary {
   record: DashboardServeRegistryRecord | null;
 }
 
+export interface DashboardServeRegistryHealthInput {
+  url: string;
+  port?: number;
+  pid?: number;
+  registryPath: string;
+  cwd: string;
+  version?: string;
+  startedAt?: string;
+  previous: DashboardServeRegistrySummary;
+  timeoutMs?: number;
+}
+
 export function registryPathForWorkDir(workDir: string): string {
   const resolvedWorkDir = path.resolve(workDir);
   const gitDir = findGitDir(resolvedWorkDir);
@@ -113,6 +125,27 @@ export function summarizeServeRegistry(
     currentProcess,
     message: registryMessage({ record: normalized, stale, cwdRelation, liveness, currentProcess }),
     record: normalized,
+  };
+}
+
+export function buildServeRegistryHealthInput(
+  workDir: string,
+  record: DashboardServeRegistryRecord | null,
+  options: { expectedVersion?: string; timeoutMs?: number } = {},
+): DashboardServeRegistryHealthInput {
+  const requestedCwd = path.resolve(workDir);
+  const normalized = record ? normalizeRecord(record) : null;
+  const previous = summarizeServeRegistry(normalized, { currentCwd: requestedCwd });
+  return {
+    url: normalized?.port ? `http://127.0.0.1:${normalized.port}/` : "",
+    port: normalized?.port,
+    pid: normalized?.pid,
+    registryPath: registryPathForWorkDir(requestedCwd),
+    cwd: requestedCwd,
+    version: cleanString(options.expectedVersion) || normalized?.version,
+    startedAt: normalized?.startedAt,
+    previous,
+    timeoutMs: options.timeoutMs,
   };
 }
 
