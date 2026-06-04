@@ -12,14 +12,15 @@ The job is simple: make one measured improvement loop trustworthy enough that a 
 Default state machine:
 
 ```text
-Target -> Onboard -> Setup -> Doctor -> Dashboard -> Packet -> Log -> Continue or Finalize
+setup -> doctor -> next -> log -> state -> finalize-preview
 ```
 
 ## AX And UX
 
 AX, the AI experience:
 
-- Start by getting machine-readable context from the CLI: `onboarding-packet`, then `recommend-next`, `state --report`, `state`, `guide`, or `doctor`. Read `decisionEnvelope` / `resumeAudit` first when present.
+- Start with the short command path unless the session is ambiguous or blocked: `setup`, `doctor`, `next`, `log`, `state`, then `finalize-preview`.
+- Use advanced diagnostics only when needed: `onboarding-packet`, `recommend-next`, `prompt-plan`, `setup-plan`, `benchmark-inspect`, `partial-results`, `session-forensics`, `guide`, or `serve`. Read `decisionEnvelope` / `resumeAudit` first when present.
 - Prefer CLI JSON and durable session files for read-only truth: `autoresearch.jsonl`, `autoresearch.last-run.json`, `autoresearch.research/<slug>/quality-gaps.md`, dashboard view-model output, and `finalize-preview`.
 - When the user gives a broad natural-language goal without a benchmark contract, run `prompt-plan` first. It should infer metric defaults, experiment lanes, safe scope, missing essentials, and the read-only setup path before Codex edits files.
 - If the target repo already has benchmark surfaces in scripts, package/cargo scripts, docs, known benchmark filenames, or `.git/autoresearch` hints, prefer those before generic recipes. Treat score-like metrics as quality-bearing until the session docs prove otherwise.
@@ -61,6 +62,7 @@ Before running `next` or any heavy benchmark, answer these in the operator updat
 - What is the authoritative next action from `recommend-next --compact` or the operator checklist?
 - Is the benchmark the real goal benchmark, not a generic recipe fallback, and does `benchmark-lint` prove the primary `METRIC` line inside the lint budget?
 - Is this command bounded by timeout, narrowed scope, query/task slice, command file, or read-only scout lane?
+- Are protected benchmark paths and configured secondary metric constraints clean before treating a keep as promotable?
 - Did the last failed or timed-out packet leave partial results that should be inspected first?
 - Is the key lesson from the previous segment or session written into ASI, `autoresearch.ideas.md`, or a session-forensics decision capsule?
 - Does `state --compact`, `recommend-next`, or the onboarding packet expose an active `sessionDecisionCapsule` whose canonical action is `decision-capsule`?
@@ -71,7 +73,7 @@ If any answer is missing, do the cheap read-only action first: inspect state, ru
 2. Check Git status and work around unrelated dirty files.
 3. If this repo is the target, use the repo-local plugin. From the wrapper root, call `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`; the package root is `plugins/codex-autoresearch`.
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
-5. Use `onboarding-packet --compact` for a compact handoff, then `recommend-next --compact` for one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a command.
+5. Use the happy path first: `setup -> doctor -> next -> log -> state -> finalize-preview`. Switch to `onboarding-packet --compact` or `recommend-next --compact` only when the session needs a compact handoff, resume repair, or one safe action. Read `decisionEnvelope.nextAction`, `resumeAudit.latestPacketFreshness`, `nextStep.stage`, `nextStep.nextAction.reason`, `nextStep.nextAction.safety`, and `nextStep.missingEssentials` before choosing a recovery command.
 6. Read `goalFrame` and `operatorHandoff` from compact state before stating the goal. The durable Autoresearch goal is authoritative; a fresh Codex prompt such as "continue" or "start by stating the goal" is an operator instruction unless the goal frame says it matches.
 7. Before running another packet, read `operatorChecklist`, `loopContract`, `runtimeProvenance`, `runtimeDriftSummary`, `gateQuality`, `preflight`, `portfolioRecommendation`, `laneLifecycle`, and `packetDiagnostics` when present. If any checklist or governance field says context distillation, lane cleanup, runtime provenance, gate/preflight repair, packet diagnostic, finalization, or another blocker owns the next action, do that action before `next`.
    Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
@@ -86,23 +88,18 @@ Explicit benchmark commands are assumed to print `METRIC name=value` lines. They
 
 The shared first-valid-loop contract stages are setup repair, doctor, dashboard serve, baseline packet, log decision, segment reset, finalization preview, and blocker. If a stale dashboard URL or stale last-run packet is present, replace it with the returned recovery action before continuing.
 
-CLI fallback from `plugins/codex-autoresearch`:
+Happy-path CLI from `plugins/codex-autoresearch`:
 
 ```bash
-node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
-node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<user request>"
-node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
+node scripts/autoresearch.mjs setup --cwd <project> --name "<session>" --metric-name <metric> --direction lower --benchmark-command "<command>"
+node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
+node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs codex-goal-brief --cwd <project>
-node scripts/autoresearch.mjs setup-plan --cwd <project>
-node scripts/autoresearch.mjs benchmark-inspect --cwd <project>
-node scripts/autoresearch.mjs checks-inspect --cwd <project> --command "<checks command>"
-node scripts/autoresearch.mjs guide --cwd <project>
-node scripts/autoresearch.mjs doctor --cwd <project> --explain
-node scripts/autoresearch.mjs serve --cwd <project>
-node scripts/autoresearch.mjs partial-results --cwd <project> --from-last
-node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run
+node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
+
+Advanced diagnostics are available with `--help --all`; open them when the happy path is missing essentials, blocked, stale, or needs dashboard/forensics/recovery context.
 
 ## Active Loop Contract
 
@@ -121,6 +118,7 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - Treat parsed metrics and promotion readiness separately. New keeps default to `exploratory`; discards are `invalidated`; crashes and failed checks are `blocked`; only repeat, holdout, breadth, or explicit promotion metadata should make evidence promotable.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
 - If the loop is serially burning time, run `research-fanout --cwd <project> --dry-run` to create a generic parallel lane plan. Fanout plans are segment-scoped; after `new-segment`, record a fresh plan for that segment. Dispatch read-only scout lanes first with `lane-runner`; they do not need a worktree, must not edit files, and cannot run commands outside Git without `--allow-non-git-command`. Implementation lanes need `lane-runner --mode implementation` plus a worktree or explicit owned write scope before mutating commands run. Use the coordinator recommendation as the single next measured packet.
+- Use `lane-runner --mode big_idea` for distant architecture hypotheses only when advice is enough. Big-idea lanes cannot run commands or declare write scope, and their recommendation requires human approval before implementation or measured packet work.
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer. A finite active budget counts: do not stop at a report while iterations remain and there is no blocker.
 - Prefer `next --compact` for live-loop reporting; the full decision packet stays in `lastRunPath` for `log --from-last` and audit.
 - Use `--command-file <path>` plus `--packet-env-file <path>` for Windows/PowerShell packets that would otherwise need fragile inline quoting.

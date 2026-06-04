@@ -35,6 +35,7 @@ import {
   isPacketBrakeKind,
   resolveActionCommand,
 } from "../lib/action-metadata.js";
+import { renderCliHelp } from "../lib/cli/help.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
@@ -42,6 +43,19 @@ import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
+import {
+  buildProtectedBenchmarkGuard,
+  buildProtectedBenchmarkSnapshot,
+  normalizeProtectedBenchmarkPaths,
+  protectedBenchmarkGuardBlocksKeep,
+  protectedBenchmarkPathsFromConfig,
+  protectedBenchmarkWarningFromGuard,
+} from "../lib/benchmark/contract-guards.js";
+import {
+  evaluateSecondaryMetricConstraints,
+  normalizeSecondaryMetricConstraintMode,
+  normalizeSecondaryMetricConstraints,
+} from "../lib/benchmark/multi-metric-constraints.js";
 import {
   redactCommandDisplay,
   redactEvidenceObject,
@@ -171,10 +185,17 @@ const RESEARCH_DIR = "autoresearch.research";
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
+const SECONDARY_METRIC_CONSTRAINT_MODES = new Set(["advisory", "blocking"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
+const COMMAND_EXECUTION_BOUNDARY = {
+  mode: "not_sandboxed",
+  note: "Benchmark and checks commands run as local shell commands with the current user's permissions.",
+  recommendation:
+    "Prefer project-local scripts or --command-file for reviewable command text and safer quoting.",
+};
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
@@ -272,50 +293,8 @@ const laneRunner = createLaneRunnerCommand({
   writeScopeSnapshot,
 });
 
-function usage() {
-  return `Codex Autoresearch
-
-Usage:
-  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--max-iterations <n>]
-  node scripts/autoresearch.mjs setup --cwd <project> --interactive
-  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>
-  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]
-  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]
-  node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]
-  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir]
-  node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]
-  node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs partial-results --cwd <project> [--from-last|--artifact <path>] [--record <candidate-id>] [--research-slug <slug>]
-  node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>]
-  node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>]
-  node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--allow-non-git-command] [--summary <text>] [--recommendation <text>] [--time-budget-seconds <n>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]
-  node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]
-  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]
-  node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts] [--progress]
-  node scripts/autoresearch.mjs serve --cwd <project> [--port <n>]
-  node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]
-  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]
-  node scripts/autoresearch.mjs state --cwd <project> [--compact] [--report]
-  node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--explain]
-  node scripts/autoresearch.mjs doctor hooks
-  node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs benchmark-lint --cwd <project> [--metric-name <name>] [--sample <text>|--command <cmd>]
-  node scripts/autoresearch.mjs checks-inspect --cwd <project> --command <cmd> [--timeout-seconds <n>]
-  node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]
-  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose] [--progress]
-  node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]
-
-Benchmark output format:
-  METRIC name=value
-  ARTIFACT name=path
-`;
+function usage(options: { all?: boolean } = {}) {
+  return renderCliHelp(options);
 }
 
 function parseCliArgs(argv: string[]): CliArgs {
@@ -751,7 +730,37 @@ async function setupPlan(args: any) {
     listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
       ? `--secondary-metrics ${shellQuote(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).join(","))}`
       : "",
+    listOption(planArgs.secondary_metric_constraints ?? planArgs.secondaryMetricConstraints).length
+      ? `--secondary-metric-constraints ${shellQuote(
+          listOption(
+            planArgs.secondary_metric_constraints ?? planArgs.secondaryMetricConstraints,
+          ).join(","),
+        )}`
+      : "",
+    (planArgs.secondary_metric_constraint_mode ?? planArgs.secondaryMetricConstraintMode)
+      ? `--secondary-metric-constraint-mode ${shellQuote(
+          planArgs.secondary_metric_constraint_mode ?? planArgs.secondaryMetricConstraintMode,
+        )}`
+      : "",
+    listOption(planArgs.protected_benchmark_paths ?? planArgs.protectedBenchmarkPaths).length
+      ? `--protected-benchmark-paths ${shellQuote(
+          listOption(planArgs.protected_benchmark_paths ?? planArgs.protectedBenchmarkPaths).join(
+            ",",
+          ),
+        )}`
+      : "",
     setupMaxIterations != null ? `--max-iterations ${shellQuote(setupMaxIterations)}` : "",
+    (planArgs.packet_budget ?? planArgs.packetBudget)
+      ? `--packet-budget ${shellQuote(planArgs.packet_budget ?? planArgs.packetBudget)}`
+      : "",
+    (planArgs.wall_clock_budget_seconds ?? planArgs.wallClockBudgetSeconds)
+      ? `--wall-clock-budget-seconds ${shellQuote(
+          planArgs.wall_clock_budget_seconds ?? planArgs.wallClockBudgetSeconds,
+        )}`
+      : "",
+    (planArgs.budget_note ?? planArgs.budgetNote)
+      ? `--budget-note ${shellQuote(planArgs.budget_note ?? planArgs.budgetNote)}`
+      : "",
     commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
     recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
     args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
@@ -3000,14 +3009,30 @@ async function benchmarkCommandFromArgs(args: LooseObject, workDir: string) {
   });
   const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
   const env = envFile ? await readEnvFile(envFile, workDir) : null;
+  const packetEnvMode = packetEnvModeFromArgs(args);
   return {
     command: commandSource.command,
     env: env?.values || undefined,
+    packetEnvMode,
     commandFile: commandSource.commandFile,
     envFile: env?.path || "",
+    explicitEnvKeys: env
+      ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b))
+      : [],
     envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
     separatorCommand: commandSource.separatorCommand,
   };
+}
+
+function packetEnvModeFromArgs(args: LooseObject): "inherit" | "minimal" {
+  return (
+    enumOption(
+      args.packet_env_mode ?? args.packetEnvMode,
+      new Set(["inherit", "minimal"]),
+      "inherit",
+      "packetEnvMode",
+    ) || "inherit"
+  );
 }
 
 async function resolveBenchmarkCommandSource(
@@ -3600,6 +3625,21 @@ async function benchmarkContractDrift(workDir: string, state: any) {
   };
 }
 
+async function protectedBenchmarkGuardForWorkDir(
+  workDir: string,
+  config: LooseObject,
+  state: LooseObject,
+) {
+  const dirtyPaths = (await gitDirtyPathDetails(workDir).catch((): LooseObject[] => [])).map(
+    (entry: LooseObject) => entry.path,
+  );
+  return await buildProtectedBenchmarkGuard({ workDir, config, state, dirtyPaths });
+}
+
+function protectedBenchmarkGuardError(guard: LooseObject) {
+  return [guard.message, guard.action].filter(Boolean).join(" ");
+}
+
 async function preserveSessionFiles(workDir: string) {
   const saved = new Map();
   for (const file of SESSION_FILES) {
@@ -3946,11 +3986,52 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
     args.dashboard_refresh_seconds ?? args.dashboardRefreshSeconds,
     null,
   );
+  const packetBudget = positiveIntegerOption(
+    args.packet_budget ?? args.packetBudget,
+    null,
+    "packetBudget",
+  );
+  const wallClockBudgetSeconds = positiveIntegerOption(
+    args.wall_clock_budget_seconds ?? args.wallClockBudgetSeconds,
+    null,
+    "wallClockBudgetSeconds",
+  );
+  const budgetNote = String(args.budget_note ?? args.budgetNote ?? "").trim();
+  const protectedBenchmarkPaths = normalizeProtectedBenchmarkPaths(
+    args.protected_benchmark_paths ?? args.protectedBenchmarkPaths,
+  );
+  const secondaryMetricConstraintMode = enumOption(
+    args.secondary_metric_constraint_mode ?? args.secondaryMetricConstraintMode,
+    SECONDARY_METRIC_CONSTRAINT_MODES as Set<"advisory" | "blocking">,
+    null,
+    "secondaryMetricConstraintMode",
+  );
+  const secondaryMetricConstraints = normalizeSecondaryMetricConstraints(
+    args.secondary_metric_constraints ?? args.secondaryMetricConstraints,
+    normalizeSecondaryMetricConstraintMode(secondaryMetricConstraintMode, "advisory"),
+  );
   if (autonomyMode) updates.autonomyMode = autonomyMode;
   if (checksPolicy) updates.checksPolicy = checksPolicy;
   if (keepPolicy) updates.keepPolicy = keepPolicy;
   if (dashboardRefreshSeconds != null)
     updates.dashboardRefreshSeconds = Math.max(1, Math.floor(dashboardRefreshSeconds));
+  if (packetBudget != null) updates.packetBudget = packetBudget;
+  if (wallClockBudgetSeconds != null) updates.wallClockBudgetSeconds = wallClockBudgetSeconds;
+  if (budgetNote) updates.budgetNote = budgetNote;
+  if (protectedBenchmarkPaths.length > 0) updates.protectedBenchmarkPaths = protectedBenchmarkPaths;
+  if (secondaryMetricConstraintMode)
+    updates.secondaryMetricConstraintMode = secondaryMetricConstraintMode;
+  if (secondaryMetricConstraints.length > 0)
+    updates.secondaryMetricConstraints = secondaryMetricConstraints.map((constraint) => ({
+      id: constraint.id,
+      metric: constraint.metric,
+      operator: constraint.operator,
+      expression: constraint.expression,
+      mode: constraint.mode,
+    }));
+  if (packetBudget != null || wallClockBudgetSeconds != null) {
+    updates.budgetStartedAt = new Date().toISOString();
+  }
   return updates;
 }
 
@@ -4576,6 +4657,9 @@ async function operatorWarningsForWorkDir(workDir: string) {
   }
   const contractDrift = await benchmarkContractDrift(workDir, state);
   if (contractDrift) warnings.push(contractDrift);
+  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
+  const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
+  if (protectedBenchmarkWarning) warnings.push(protectedBenchmarkWarning);
   warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state)));
   return warnings;
 }
@@ -4708,8 +4792,13 @@ async function runExperiment(args: LooseObject) {
   const limit = iterationLimitInfo(state, config);
   if (limit.limitReached) {
     throw new Error(
-      `maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`,
+      limit.stopReason ||
+        `maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`,
     );
+  }
+  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
+  if (protectedBenchmarkGuard.configured && !protectedBenchmarkGuard.ok) {
+    throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
   }
   const commandInput = await benchmarkCommandFromArgs(args, workDir);
   const { command } = commandInput;
@@ -4741,6 +4830,7 @@ async function runExperiment(args: LooseObject) {
   };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
+    envMode: commandInput.packetEnvMode,
     onProgress: updateProgress,
     retainMetricNames: [state.config.metricName],
   });
@@ -4788,7 +4878,11 @@ async function runExperiment(args: LooseObject) {
         args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
         DEFAULT_CHECKS_TIMEOUT_SECONDS,
       ),
-      { env: commandInput.env, onProgress: updateProgress },
+      {
+        env: commandInput.env,
+        envMode: commandInput.packetEnvMode,
+        onProgress: updateProgress,
+      },
     );
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
@@ -4821,10 +4915,14 @@ async function runExperiment(args: LooseObject) {
     ok: passed,
     workDir,
     command,
+    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY.mode,
+    commandExecutionBoundaryNote: COMMAND_EXECUTION_BOUNDARY.note,
     timeoutSeconds,
     commandFile: commandInput.commandFile,
     envFile: commandInput.envFile,
     envKeys: commandInput.envKeys,
+    explicitEnvKeys: commandInput.explicitEnvKeys,
+    packetEnvMode: commandInput.packetEnvMode,
     commandDiagnostics: commandDiagnostics({
       command,
       commandFile: commandInput.commandFile,
@@ -4859,6 +4957,7 @@ async function runExperiment(args: LooseObject) {
     metricName: state.config.metricName,
     metricUnit: state.config.metricUnit,
     progress,
+    protectedBenchmarkGuard,
     checks: checks
       ? {
           command: checksCommand,
@@ -4890,6 +4989,7 @@ async function runExperiment(args: LooseObject) {
       checksCommand,
       commandFile: commandInput.commandFile,
       envFile: commandInput.envFile,
+      packetEnvMode: commandInput.packetEnvMode,
     }),
   };
 }
@@ -5039,11 +5139,50 @@ async function logExperiment(args: any) {
   }
   const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, asiFileOptionName);
   const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
-  const evidenceStatus =
+  let evidenceStatus =
     evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
     defaultEvidenceStatusForRun({ status });
 
   const stateBefore = currentState(workDir);
+  const constraintRunMetrics = {
+    ...metrics,
+    [stateBefore.config.metricName || "metric"]: metric,
+  };
+  const constraintState =
+    stateBefore.current.some(isBaselineEligibleMetricRun) || !isMetricEligibleStatus(status)
+      ? stateBefore
+      : {
+          ...stateBefore,
+          current: [
+            ...stateBefore.current,
+            {
+              run: stateBefore.results.length + 1,
+              metric,
+              metrics,
+              status,
+            },
+          ],
+        };
+  const secondaryMetricConstraints = evaluateSecondaryMetricConstraints({
+    config,
+    state: constraintState,
+    runMetrics: constraintRunMetrics,
+  });
+  if (
+    status === "keep" &&
+    secondaryMetricConstraints.blockPromotion &&
+    evidenceStatus === "accepted"
+  ) {
+    evidenceStatus = "provisional";
+  }
+  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(
+    workDir,
+    config,
+    stateBefore,
+  );
+  if (status === "keep" && protectedBenchmarkGuardBlocksKeep(protectedBenchmarkGuard)) {
+    throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
+  }
   const inGit = await insideGitRepo(workDir);
   const explicitCommit = args.commit != null && String(args.commit).trim() !== "";
   const allowAddAll = boolOption(args.allow_add_all ?? args.allowAddAll, false);
@@ -5133,12 +5272,38 @@ async function logExperiment(args: any) {
   if (lastPacket?.packetEvidence?.freshnessFingerprint) {
     experiment.packetFingerprint = lastPacket.packetEvidence.freshnessFingerprint;
   }
+  if (lastPacket?.packetEvidence?.commandExecutionBoundary) {
+    experiment.commandExecutionBoundary = lastPacket.packetEvidence.commandExecutionBoundary;
+  }
+  const protectedPaths = protectedBenchmarkPathsFromConfig(config);
+  if (protectedPaths.length > 0 && isBaselineEligibleMetricRun(experiment)) {
+    experiment.protectedBenchmarkSnapshot = await buildProtectedBenchmarkSnapshot({
+      workDir,
+      paths: protectedPaths,
+    });
+  }
+  const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
+  if (protectedBenchmarkWarning) {
+    experiment.protectedBenchmarkGuard = protectedBenchmarkWarning;
+  }
+  if (secondaryMetricConstraints.configured) {
+    experiment.secondaryMetricConstraints = secondaryMetricConstraints;
+  }
   experiment.promotion = promotionStateForLoggedDecision({
     status,
     metric,
     metrics,
     packetPromotion: lastPacket?.decision?.promotion,
   });
+  if (secondaryMetricConstraints.blockPromotion) {
+    experiment.promotion = {
+      label: "blocked",
+      reasons: [
+        "Blocking secondary metric constraints failed or were unavailable.",
+        ...secondaryMetricConstraints.messages,
+      ],
+    };
+  }
   if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
   if (artifacts && Object.keys(artifacts).length > 0) {
     experiment.artifacts = artifacts;
@@ -5882,6 +6047,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     laneLifecycle,
     packetDiagnostics,
+    commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     watchdogSummary,
     memory,
@@ -6059,6 +6225,7 @@ async function publicCompactState({
     watchdogSummary,
     laneLifecycle,
     packetDiagnostics,
+    commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     experimentEconomics,
     partialResults,
@@ -6236,6 +6403,7 @@ function compactPublicState(state: LooseObject) {
         ? state.partialResults.skippedArtifacts.slice(0, 5)
         : [],
     },
+    commandExecutionBoundary: state.commandExecutionBoundary || null,
     portfolioRecommendation: compactPortfolioRecommendation(state.portfolioRecommendation),
     workflowFriction: Array.isArray(state.workflowFriction)
       ? state.workflowFriction.slice(0, 5)
@@ -6286,6 +6454,27 @@ function compactFinalizationPreview(workDir: string): LooseObject {
   };
 }
 
+function commandExecutionBoundaryForState({
+  state,
+  lastRun,
+}: {
+  state: LooseObject;
+  lastRun?: LooseObject | null;
+}): LooseObject | null {
+  const boundary =
+    lastRun?.packetEvidence?.commandExecutionBoundary ||
+    [...(Array.isArray(state.current) ? state.current : [])]
+      .reverse()
+      .map((run: LooseObject) => run.commandExecutionBoundary)
+      .find(Boolean);
+  if (!boundary) return null;
+  return {
+    mode: String(boundary),
+    note: COMMAND_EXECUTION_BOUNDARY.note,
+    recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
+  };
+}
+
 function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject | null {
   if (!envelope) return null;
   return {
@@ -6296,6 +6485,7 @@ function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject 
     benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
     dirtySourceDrift: envelope.dirtySourceDrift || null,
     sourceCleanliness: envelope.sourceCleanliness || null,
+    budgetStatus: envelope.budgetStatus || null,
     qualityRound: envelope.qualityRound || null,
     scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
     researchIntegrity: envelope.researchIntegrity || null,
@@ -6515,8 +6705,8 @@ function loopContinuation(
 ) {
   const mode = config.autonomyMode || "guarded";
   const limit = iterationLimitInfo(state, config);
-  const activeBudget =
-    limit.maxIterations != null && Number(limit.remainingIterations) > 0 && mode !== "manual";
+  const activeBudget = loopBudgetActive(limit) && mode !== "manual";
+  const remainingBudget = loopBudgetRemainingText(limit);
   const commands = continuationCommands(workDir);
   const memory = buildExperimentMemory({
     runs: state.current,
@@ -6526,7 +6716,7 @@ function loopContinuation(
   const topLane = memory.diversityGuidance || memory.lanePortfolio?.[0];
   const stopConditions = [
     "user interrupts or turns the loop off",
-    "iteration limit is reached",
+    "packet, wall-clock, or iteration budget is reached",
     "benchmark or correctness checks are blocked",
     "the task is genuinely exhausted",
   ];
@@ -6572,8 +6762,9 @@ function loopContinuation(
       stage,
       shouldContinue: false,
       shouldAskUser: false,
-      stopReason: `maxIterations reached (${limit.maxIterations}).`,
+      stopReason: limit.stopReason || `maxIterations reached (${limit.maxIterations}).`,
       nextAction:
+        limit.budgetStatus?.nextAction ||
         "Export the dashboard and summarize the limit, or extend the session before more experiments.",
       commands,
       stopConditions,
@@ -6611,12 +6802,46 @@ function loopContinuation(
         : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to invoke another subskill."
       : activeBudget
         ? memory.plateau?.detected
-          ? `Keep going: run the ${topLane?.label || "distant scout"} lane next, log it, and continue because the active budget still has ${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"} left.`
-          : `Keep going: choose the next hypothesis, run next --compact, log the packet, and continue because the active budget still has ${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"} left.`
+          ? `Keep going: run the ${topLane?.label || "distant scout"} lane next, log it, and continue because ${remainingBudget}.`
+          : `Keep going: choose the next hypothesis, run next --compact, log the packet, and continue because ${remainingBudget}.`
         : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
     commands,
     stopConditions,
   };
+}
+
+function loopBudgetActive(limit: LooseObject): boolean {
+  if (limit.limitReached) return false;
+  if (limit.maxIterations != null && Number(limit.remainingIterations) > 0) return true;
+  const budget = limit.budgetStatus || {};
+  if (budget.configured !== true) return false;
+  if (budget.exhausted === true) return false;
+  if (budget.packetsRemaining != null && Number(budget.packetsRemaining) <= 0) return false;
+  if (budget.wallClockRemainingSeconds != null && Number(budget.wallClockRemainingSeconds) <= 0) {
+    return false;
+  }
+  return true;
+}
+
+function loopBudgetRemainingText(limit: LooseObject): string {
+  const parts = [];
+  if (limit.maxIterations != null && limit.remainingIterations != null) {
+    parts.push(
+      `${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"}`,
+    );
+  }
+  const budget = limit.budgetStatus || {};
+  if (budget.packetsRemaining != null) {
+    parts.push(
+      `${budget.packetsRemaining} packet${budget.packetsRemaining === 1 ? "" : "s"} in the packet budget`,
+    );
+  }
+  if (budget.wallClockRemainingSeconds != null) {
+    parts.push(`${budget.wallClockRemainingSeconds} wall-clock second(s)`);
+  }
+  return parts.length
+    ? `the active budget still has ${parts.join(" and ")} left`
+    : "the loop is still active";
 }
 
 function resolveFanoutForSegment(workDir: string, segment: number) {
@@ -6880,7 +7105,8 @@ function normalizeLaneMode(value: unknown, fallback: string) {
     .replace(/-/g, "_");
   if (["read_only", "readonly", "scout", "read_only_scout"].includes(raw)) return "read_only_scout";
   if (["implementation", "isolated_worktree", "mutating"].includes(raw)) return "implementation";
-  throw new Error("--mode must be read_only_scout or implementation.");
+  if (["big_idea", "bigidea", "architecture", "distant"].includes(raw)) return "big_idea";
+  throw new Error("--mode must be read_only_scout, implementation, or big_idea.");
 }
 
 type LaneCommandSafety = {
@@ -7214,8 +7440,16 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   for (const detail of operatorDetails) {
     if (!detail?.message) continue;
     warningDetails.push(detail);
-    if (detail.code === "benchmark_contract_changed") issues.push(detail.message);
-    else warnings.push(detail.message);
+    if (
+      detail.code === "benchmark_contract_changed" ||
+      String(detail.code || "").startsWith("protected_benchmark_")
+    ) {
+      if (detail.severity === "error" || detail.code === "benchmark_contract_changed") {
+        issues.push(detail.message);
+      } else {
+        warnings.push(detail.message);
+      }
+    } else warnings.push(detail.message);
   }
   for (const check of state.scaffoldHealth?.checks || []) {
     if (!check?.message) continue;
@@ -7367,6 +7601,14 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
+  const commandExecutionBoundary = benchmarkCommandHint
+    ? {
+        mode: COMMAND_EXECUTION_BOUNDARY.mode,
+        note: COMMAND_EXECUTION_BOUNDARY.note,
+        recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
+      }
+    : null;
+
   const result: LooseObject = {
     ok: issues.length === 0,
     workDir,
@@ -7384,6 +7626,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     decisionEnvelope: loopAuthority.decisionEnvelope,
     loopContract: loopAuthority.loopContract,
     canonicalNextAction: loopAuthority.canonicalNextAction,
+    commandExecutionBoundary,
     runtimeProvenance: runtimeProvenance(drift),
     scaffoldHealth: state.scaffoldHealth,
     researchIntegrity: state.researchIntegrity,
@@ -7438,6 +7681,7 @@ function doctorExplanation(result: LooseObject): LooseObject {
     gateQuality: result.gateQuality || null,
     preflight: result.preflight || null,
     nextSafeAction: result.nextAction,
+    commandExecutionBoundary: result.commandExecutionBoundary || null,
     readAs:
       "Issues block the loop. Warnings reduce trust and should be resolved before keeping results when they affect evidence, Git, or runtime drift.",
   };
@@ -7695,10 +7939,16 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
       commandFile: redactPathDisplay(run.commandFile || "", run.workDir),
       envFile: run.envFile ? "<env-file>" : "",
       envKeys: run.envKeys || [],
+      explicitEnvKeys: run.explicitEnvKeys || run.envKeys || [],
+      envMode: run.packetEnvMode || "inherit",
       commandHash: run.command
         ? createHash("sha256").update(run.command, "utf8").digest("hex")
         : "",
     },
+    packetEnvMode: run.packetEnvMode || "inherit",
+    explicitEnvKeys: run.explicitEnvKeys || run.envKeys || [],
+    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY.mode,
+    commandExecutionBoundaryNote: COMMAND_EXECUTION_BOUNDARY.note,
     timeoutSeconds: run.timeoutSeconds ?? null,
     exitStatus: run.exitCode ?? null,
     timedOut: Boolean(run.timedOut),
@@ -7711,6 +7961,7 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     artifacts,
     artifactWarnings: run.artifactWarnings || [],
     taskArtifacts,
+    protectedBenchmarkGuard: run.protectedBenchmarkGuard || null,
     progressSnapshot: progressSnapshotFromRun({ packetId, run, artifacts }),
     checks: run.checks
       ? {
@@ -8269,7 +8520,7 @@ async function executeAutoresearchCli(
   const args = parseCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
-    writeStdout(usage());
+    writeStdout(usage({ all: boolOption(args.all, false) }));
     return;
   }
   const handlers = createCliCommandHandlers({

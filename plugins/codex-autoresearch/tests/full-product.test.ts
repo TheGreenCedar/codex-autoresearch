@@ -38,10 +38,10 @@ const readGoalBrief = async (dir: string, args: string[] = []) => {
   return JSON.parse(result.stdout);
 };
 
-const withLiveServer = (dir, fn) => {
+const withLiveServer = (dir, fn, extraArgs = []) => {
   return withProcess(
     process.execPath,
-    [cli, "serve", "--cwd", dir, "--port", "0"],
+    [cli, "serve", "--cwd", dir, "--port", "0", ...extraArgs],
     pluginRoot,
     async (_child, stdout, stderr) => {
       const payload = await waitForServerPayload(stdout, stderr);
@@ -1163,6 +1163,10 @@ test("live server exposes health and view-model endpoints", async () => {
       assert.match(payload.modeGuidance.difference, /read-only snapshots|fallback snapshot/);
       const health = await fetch(`${payload.url}health`).then((res) => res.json());
       assert.equal(health.ok, true);
+      const ledger = await fetch(`${payload.url}autoresearch.jsonl`);
+      assert.equal(ledger.status, 404);
+      const ledgerBody = await ledger.json();
+      assert.match(ledgerBody.error, /--debug-ledger/);
       const html = await fetch(payload.url).then((res) => res.text());
       assert.match(html, /"deliveryMode":"live-server"/);
       for (const forbidden of [
@@ -1217,20 +1221,34 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
 
     await withLiveServer(dir, async (payload) => {
       const html = await fetch(payload.url).then((res) => res.text());
-      const jsonl = await fetch(`${payload.url}autoresearch.jsonl`).then((res) => res.text());
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       const viewModelText = JSON.stringify(viewModel);
+      const ledger = await fetch(`${payload.url}autoresearch.jsonl`);
 
       assertNoSensitiveEvidence(html);
-      assertNoSensitiveEvidence(jsonl);
       assertNoSensitiveEvidence(viewModelText);
-      assert.match(jsonl, /api_key=<redacted>/);
-      assert.match(jsonl, /Bearer <redacted>/);
-      assert.match(jsonl, /https:\/\/<credentials>@example\.com/);
-      assert.match(viewModelText, /<env-file>/);
-      assert.match(`${html}\n${jsonl}\n${viewModelText}`, /<stack-frame>/);
-      assert.doesNotMatch(`${html}\n${jsonl}\n${viewModelText}`, /secret\.ts/);
+      assert.equal(ledger.status, 404);
     });
+
+    await withLiveServer(
+      dir,
+      async (payload) => {
+        assert.equal(payload.debugLedger.enabled, true);
+        const jsonl = await fetch(`${payload.url}autoresearch.jsonl`).then((res) => res.text());
+        const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
+        const viewModelText = JSON.stringify(viewModel);
+
+        assertNoSensitiveEvidence(jsonl);
+        assertNoSensitiveEvidence(viewModelText);
+        assert.match(jsonl, /api_key=<redacted>/);
+        assert.match(jsonl, /Bearer <redacted>/);
+        assert.match(jsonl, /https:\/\/<credentials>@example\.com/);
+        assert.match(viewModelText, /<env-file>/);
+        assert.match(`${jsonl}\n${viewModelText}`, /<stack-frame>/);
+        assert.doesNotMatch(`${jsonl}\n${viewModelText}`, /secret\.ts/);
+      },
+      ["--debug-ledger"],
+    );
   });
 });
 

@@ -42,6 +42,7 @@ export interface CompactStateBuilderInput {
   memory?: unknown;
   experimentEconomics?: unknown;
   partialResults?: unknown;
+  commandExecutionBoundary?: unknown;
   workflowFriction?: unknown[];
   commands?: JsonObject;
   resumeAudit?: unknown;
@@ -101,6 +102,7 @@ export interface CompactStateResponse {
   memory: unknown;
   experimentEconomics: unknown;
   partialResults: unknown;
+  commandExecutionBoundary?: unknown;
   workflowFriction: unknown[];
   commands: JsonObject;
   resumeAudit: unknown;
@@ -178,6 +180,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
   copyIfProvided(response, "loopContract", input.loopContract);
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
+  copyIfProvided(response, "commandExecutionBoundary", input.commandExecutionBoundary);
 
   return response;
 }

@@ -86,6 +86,14 @@ The evidence role attached to a logged run. CLI `--evidence-status` accepts `acc
 
 When current benchmark output is significantly worse than the historical best. This can mean the environment changed, a dependency shifted, or the previous best was measured under different conditions. Treat the old best as history, not current proof. See [Trust](trust.md#benchmark-drift).
 
+## Protected Benchmark Paths
+
+Project-relative files or folders that define the benchmark contract. Autoresearch snapshots them on the first metric-bearing baseline and warns or blocks when they change, go missing, or resolve outside the working directory. See [Trust](trust.md#benchmark-guardrails).
+
+## Secondary Metric Constraints
+
+Guardrails for known tradeoffs, such as `memory_mb <= baseline * 1.05` or `coverage >= baseline`. They do not replace the primary metric. Blocking constraints make violating keeps provisional so finalization cannot promote them silently. See [Trust](trust.md#benchmark-guardrails).
+
 ## Session Files
 
 The durable state files written into the target project:

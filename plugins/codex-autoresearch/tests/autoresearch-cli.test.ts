@@ -1779,6 +1779,59 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
   });
 });
 
+test("lane-runner records big-idea lanes as approval-gated advice only", async () => {
+  await withTempDir("lane-runner-big-idea", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "big idea", "--metric-name", "quality_gap"]);
+
+    const blockedCommand = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--mode",
+      "big_idea",
+      "--command",
+      "node -e \"console.log('METRIC quality_gap=0')\"",
+    ]);
+    assert.notEqual(blockedCommand.code, 0);
+    assert.match(blockedCommand.stderr, /cannot run commands/i);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "architecture-scout",
+      "--mode",
+      "big_idea",
+      "--summary",
+      "Explore a distant architecture split for benchmark isolation.",
+      "--recommendation",
+      "Ask the operator before creating an implementation lane.",
+      "--evidence",
+      "Current loop has repeated local tweaks; benchmark trust is the bottleneck.",
+      "--risks",
+      "Architecture work can invalidate current metric history.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.lane.mode, "big_idea");
+    assert.equal(payload.result.command, "");
+    assert.equal(payload.result.approvalRequired, true);
+    assert.equal(payload.result.approvalGate.required, true);
+    assert.deepEqual(payload.result.approvalGate.requiredBefore, [
+      "implementation_lane",
+      "measured_packet",
+    ]);
+    assert.match(payload.result.summary, /distant architecture/i);
+    assert.match(payload.result.recommendation, /operator/i);
+    assert.match(payload.result.evidence.join("\n"), /benchmark trust/i);
+    assert.match(payload.result.risks.join("\n"), /invalidate/i);
+    assert.equal(payload.coordinatorRecommendation.status, "awaiting_human_approval");
+    assert.match(payload.coordinatorRecommendation.measuredPacket, /Blocked/i);
+  });
+});
+
 test("empty lane-runner records are planned breadcrumbs, not watchdog progress", async () => {
   await withTempDir("lane-runner-empty-planned", async (dir) => {
     await runCli([

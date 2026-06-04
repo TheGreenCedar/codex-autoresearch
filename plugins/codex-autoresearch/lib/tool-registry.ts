@@ -8,6 +8,22 @@ export type ActionPolicy =
   | "process_start"
   | "destructive"
   | "unsafe_open_world";
+export type CommandCategory =
+  | "happy_path"
+  | "setup"
+  | "diagnostic"
+  | "advanced"
+  | "integration"
+  | "dangerous";
+export type CommandAudience = "default" | "advanced" | "maintainer";
+
+interface ToolRegistryEntry {
+  actionPolicy: ActionPolicy;
+  audience: CommandAudience;
+  category: CommandCategory;
+  cliCommand: string;
+  name: string;
+}
 
 export const COMMAND_ARGUMENT_FIELDS = [
   "command",
@@ -20,44 +36,52 @@ export const COMMAND_ARGUMENT_FIELDS = [
 ];
 
 const TOOL_REGISTRY = [
-  { name: "setup_plan", cliCommand: "setup-plan", actionPolicy: "read" },
-  { name: "guided_setup", cliCommand: "guide", actionPolicy: "read" },
-  { name: "prompt_plan", cliCommand: "prompt-plan", actionPolicy: "read" },
-  { name: "onboarding_packet", cliCommand: "onboarding-packet", actionPolicy: "read" },
-  { name: "recommend_next", cliCommand: "recommend-next", actionPolicy: "read" },
-  { name: "codex_goal_bridge", cliCommand: "codex-goal-brief", actionPolicy: "read" },
-  { name: "session_forensics", cliCommand: "session-forensics", actionPolicy: "read" },
-  { name: "list_recipes", cliCommand: "recipes", actionPolicy: "read" },
-  { name: "setup_session", cliCommand: "setup", actionPolicy: "state_mutation" },
-  { name: "setup_research_session", cliCommand: "research-setup", actionPolicy: "state_mutation" },
-  { name: "research_fanout", cliCommand: "research-fanout", actionPolicy: "read" },
-  { name: "lane_runner", cliCommand: "lane-runner", actionPolicy: "read" },
-  { name: "configure_session", cliCommand: "config", actionPolicy: "state_mutation" },
-  { name: "init_experiment", cliCommand: "init", actionPolicy: "state_mutation" },
-  { name: "run_experiment", cliCommand: "run", actionPolicy: "process_start" },
-  { name: "next_experiment", cliCommand: "next", actionPolicy: "process_start" },
-  { name: "partial_results", cliCommand: "partial-results", actionPolicy: "read" },
-  { name: "log_experiment", cliCommand: "log", actionPolicy: "git_mutation" },
-  { name: "read_state", cliCommand: "state", actionPolicy: "read" },
-  { name: "measure_quality_gap", cliCommand: "quality-gap", actionPolicy: "read" },
-  { name: "gap_candidates", cliCommand: "gap-candidates", actionPolicy: "preview" },
-  { name: "finalize_preview", cliCommand: "finalize-preview", actionPolicy: "read" },
+  registryEntry("setup_plan", "setup-plan", "read", "setup", "default"),
+  registryEntry("guided_setup", "guide", "read", "setup", "default"),
+  registryEntry("prompt_plan", "prompt-plan", "read", "setup", "default"),
+  registryEntry("onboarding_packet", "onboarding-packet", "read", "setup", "default"),
+  registryEntry("recommend_next", "recommend-next", "read", "diagnostic", "default"),
+  registryEntry("codex_goal_bridge", "codex-goal-brief", "read", "integration", "advanced"),
+  registryEntry("session_forensics", "session-forensics", "read", "diagnostic", "advanced"),
+  registryEntry("list_recipes", "recipes", "read", "setup", "advanced"),
+  registryEntry("setup_session", "setup", "state_mutation", "happy_path", "default"),
+  registryEntry(
+    "setup_research_session",
+    "research-setup",
+    "state_mutation",
+    "advanced",
+    "advanced",
+  ),
+  registryEntry("research_fanout", "research-fanout", "read", "advanced", "advanced"),
+  registryEntry("lane_runner", "lane-runner", "read", "advanced", "advanced"),
+  registryEntry("configure_session", "config", "state_mutation", "advanced", "advanced"),
+  registryEntry("init_experiment", "init", "state_mutation", "advanced", "maintainer"),
+  registryEntry("run_experiment", "run", "process_start", "advanced", "advanced"),
+  registryEntry("next_experiment", "next", "process_start", "happy_path", "default"),
+  registryEntry("partial_results", "partial-results", "read", "diagnostic", "advanced"),
+  registryEntry("log_experiment", "log", "git_mutation", "happy_path", "default"),
+  registryEntry("read_state", "state", "read", "happy_path", "default"),
+  registryEntry("measure_quality_gap", "quality-gap", "read", "diagnostic", "advanced"),
+  registryEntry("gap_candidates", "gap-candidates", "preview", "diagnostic", "advanced"),
+  registryEntry("finalize_preview", "finalize-preview", "read", "happy_path", "default"),
   {
     name: "finalize_current_tree",
     cliCommand: "finalize-current-tree",
     actionPolicy: "artifact_write",
+    category: "dangerous",
+    audience: "advanced",
   },
-  { name: "integrations", cliCommand: "integrations", actionPolicy: "read" },
-  { name: "benchmark_inspect", cliCommand: "benchmark-inspect", actionPolicy: "read" },
-  { name: "checks_inspect", cliCommand: "checks-inspect", actionPolicy: "read" },
-  { name: "benchmark_lint", cliCommand: "benchmark-lint", actionPolicy: "read" },
-  { name: "new_segment", cliCommand: "new-segment", actionPolicy: "state_mutation" },
-  { name: "promote_gate", cliCommand: "promote-gate", actionPolicy: "state_mutation" },
-  { name: "export_dashboard", cliCommand: "export", actionPolicy: "artifact_write" },
-  { name: "serve_dashboard", cliCommand: "serve", actionPolicy: "process_start" },
-  { name: "doctor_session", cliCommand: "doctor", actionPolicy: "read" },
-  { name: "clear_session", cliCommand: "clear", actionPolicy: "destructive" },
-];
+  registryEntry("integrations", "integrations", "read", "integration", "advanced"),
+  registryEntry("benchmark_inspect", "benchmark-inspect", "read", "diagnostic", "advanced"),
+  registryEntry("checks_inspect", "checks-inspect", "read", "diagnostic", "advanced"),
+  registryEntry("benchmark_lint", "benchmark-lint", "read", "diagnostic", "default"),
+  registryEntry("new_segment", "new-segment", "state_mutation", "advanced", "advanced"),
+  registryEntry("promote_gate", "promote-gate", "state_mutation", "advanced", "advanced"),
+  registryEntry("export_dashboard", "export", "artifact_write", "advanced", "advanced"),
+  registryEntry("serve_dashboard", "serve", "process_start", "advanced", "default"),
+  registryEntry("doctor_session", "doctor", "read", "happy_path", "default"),
+  registryEntry("clear_session", "clear", "destructive", "dangerous", "maintainer"),
+] satisfies ToolRegistryEntry[];
 
 export const toolRegistry = Object.freeze(
   Object.fromEntries(TOOL_REGISTRY.map((tool) => [tool.name, Object.freeze({ ...tool })])),
@@ -157,4 +181,14 @@ function enabledArg(value: unknown): boolean {
   if (value == null || value === false) return false;
   if (typeof value === "string") return !["", "0", "false", "no"].includes(value.toLowerCase());
   return true;
+}
+
+function registryEntry(
+  name: string,
+  cliCommand: string,
+  actionPolicy: ActionPolicy,
+  category: CommandCategory,
+  audience: CommandAudience,
+): ToolRegistryEntry {
+  return { name, cliCommand, actionPolicy, category, audience };
 }

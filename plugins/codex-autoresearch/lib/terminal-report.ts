@@ -34,6 +34,10 @@ export interface TerminalReportSummary {
     recommendation: string;
     command: string;
   };
+  commandExecutionBoundary: {
+    mode: string;
+    detail: string;
+  } | null;
   metric: {
     name: string;
     best: number | null;
@@ -113,6 +117,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     packet,
   });
   const dashboard = dashboardSummary(state);
+  const commandExecutionBoundary = commandExecutionBoundarySummary(state);
   const gate = {
     posture: stringValue(gateQuality?.posture) || "unknown",
     detail: detailFromParts([
@@ -163,6 +168,9 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     `Packet: ${packetSummary.status}${
       packetSummary.recommendation ? ` - ${packetSummary.recommendation}` : ""
     }`,
+    commandExecutionBoundary
+      ? `Command boundary: ${commandExecutionBoundary.mode} - ${commandExecutionBoundary.detail}`
+      : "",
     `Portfolio: ${portfolioSummary.kind} (${portfolioSummary.confidence})${
       portfolioSummary.recommendation ? ` - ${portfolioSummary.recommendation}` : ""
     }`,
@@ -180,6 +188,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
       dashboard,
       cleanliness,
       packet: packetSummary,
+      commandExecutionBoundary,
       metric,
       freshness,
       lanes,
@@ -187,6 +196,19 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
       portfolio: portfolioSummary,
       lines,
     },
+  };
+}
+
+function commandExecutionBoundarySummary(state: JsonRecord) {
+  const boundary = recordOrNull(state.commandExecutionBoundary);
+  if (!boundary) return null;
+  const mode = stringValue(boundary.mode);
+  if (!mode) return null;
+  return {
+    mode,
+    detail:
+      stringValue(boundary.note) ||
+      "Benchmark and checks commands run with the current user's local permissions.",
   };
 }
 

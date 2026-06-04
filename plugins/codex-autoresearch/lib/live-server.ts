@@ -13,6 +13,7 @@ export async function serveAutoresearch(args: LooseObject) {
   const viewModel = args.viewModel;
   const startedAt = String(args.startedAt || new Date().toISOString());
   const version = String(args.pluginVersion || args.version || "");
+  const debugLedger = args.debugLedger === true;
   let serverPort = 0;
   const server = http.createServer(async (req, res) => {
     try {
@@ -22,6 +23,18 @@ export async function serveAutoresearch(args: LooseObject) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/autoresearch.jsonl") {
+        if (!debugLedger) {
+          sendJson(
+            res,
+            {
+              ok: false,
+              error:
+                "Raw ledger endpoint is disabled. Restart the live dashboard with --debug-ledger to inspect the redacted ledger.",
+            },
+            404,
+          );
+          return;
+        }
         const jsonl = await fsp.readFile(path.join(workDir, "autoresearch.jsonl"), "utf8");
         send(res, 200, "application/jsonl; charset=utf-8", redactJsonl(jsonl, { workDir }));
         return;
@@ -77,6 +90,7 @@ export async function serveAutoresearch(args: LooseObject) {
     cwd: workDir,
     startedAt,
     version,
+    debugLedger,
     server,
   };
 }
