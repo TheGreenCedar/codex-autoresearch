@@ -24,6 +24,7 @@ export interface ProtectedBenchmarkGuard {
     | "changed"
     | "dirty"
     | "baseline-missing"
+    | "missing"
     | "quarantined"
     | "invalid-config";
   code: string;
@@ -160,16 +161,33 @@ export async function buildProtectedBenchmarkGuard({
         "Fix protectedBenchmarkPaths so every configured path and realpath stays inside the working directory.",
     });
   }
+  const missingPaths = missingProtectedPaths(current);
+  if (missingPaths.length > 0) {
+    return guardResult({
+      configured: true,
+      ok: false,
+      status: "missing",
+      code: "protected_benchmark_path_missing",
+      severity: "error",
+      baselineRun: runNumber(baselineRun),
+      baselineSegment: segmentNumber(baselineRun),
+      current,
+      dirtyPaths: dirtyProtectedPaths,
+      message: `Protected benchmark paths are missing: ${missingPaths.join(", ")}.`,
+      action:
+        "Create the protected benchmark paths, correct protectedBenchmarkPaths, or remove stale protected paths before logging a trusted baseline.",
+    });
+  }
 
   if (!baselineRun) {
     return guardResult({
       configured: true,
-      ok: true,
+      ok: dirtyProtectedPaths.length ? false : true,
       status: dirtyProtectedPaths.length ? "baseline-pending-dirty" : "baseline-pending",
       code: dirtyProtectedPaths.length
         ? "protected_benchmark_baseline_pending_dirty"
         : "protected_benchmark_baseline_pending",
-      severity: dirtyProtectedPaths.length ? "warning" : "info",
+      severity: dirtyProtectedPaths.length ? "error" : "info",
       current,
       dirtyPaths: dirtyProtectedPaths,
       message: dirtyProtectedPaths.length
@@ -653,6 +671,12 @@ function quarantineSummary(snapshot: ProtectedBenchmarkSnapshot): string {
   return snapshot.quarantined
     .map((entry) => `${entry.path || "<unknown>"} (${entry.reason || "quarantined"})`)
     .join(", ");
+}
+
+function missingProtectedPaths(snapshot: ProtectedBenchmarkSnapshot): string[] {
+  return snapshot.files
+    .filter((entry) => entry.missing === true)
+    .map((entry) => String(entry.path || "<unknown>"));
 }
 
 function fileType(stats: { isFIFO?: () => boolean; isSocket?: () => boolean }): string {

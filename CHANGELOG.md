@@ -22,10 +22,10 @@ This project uses a root-only changelog because the root README is the public do
 
 - Empty or unavailable secondary metrics are no longer treated as zero.
 - Source/package hygiene checks now catch local agent/editor artifacts, stale formatter config, missing Node engine metadata, and dashboard-only runtime dependencies before release verification.
-- Absolute dashboard Autoresearch launcher paths must point inside the installed/source plugin package, not arbitrary `scripts/autoresearch.mjs` lookalikes.
+- Dashboard Autoresearch launcher paths must point to canonical package-local launchers, not arbitrary absolute or relative `scripts/autoresearch.mjs` lookalikes.
 - Stubborn timed-out child processes now resolve through a fallback instead of leaving runner paths waiting indefinitely.
 - Unbounded sessions no longer create a bogus segment-transition blocker before the first packet.
-- `config` can now update or intentionally clear protected benchmark paths, secondary metric constraints, commit paths, packet budgets, wall-clock budgets, and budget notes through the normal CLI/tool path.
+- `config` can now update or intentionally clear protected benchmark paths, secondary metric constraints, commit paths, packet budgets, wall-clock budgets, and budget notes through the normal CLI/tool path; tool callers get explicit budget-clear flags.
 
 ## 2.1.0
 

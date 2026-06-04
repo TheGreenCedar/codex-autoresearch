@@ -98,6 +98,69 @@ test("protected benchmark edits block next and keep until a new segment", async 
   });
 });
 
+test("missing protected benchmark paths block trusted baseline capture", async () => {
+  await withTempDir("protected-benchmark-missing-baseline", async (dir) => {
+    const guard = await buildProtectedBenchmarkGuard({
+      workDir: dir,
+      config: { protectedBenchmarkPaths: ["fixtures/bench.mjs"] },
+      state: { current: [] },
+    });
+
+    assert.equal(guard.ok, false);
+    assert.equal(guard.status, "missing");
+    assert.match(guard.message, /missing/i);
+    assert.match(guard.action, /Create the protected benchmark paths/i);
+  });
+});
+
+test("dirty protected benchmark paths block the first keep baseline", async () => {
+  await withTempDir("protected-benchmark-dirty-baseline", async (dir) => {
+    await initGit(dir);
+    const benchmarkPath = path.join(dir, "bench.mjs");
+    await writeFile(benchmarkPath, "console.log('METRIC seconds=1')\n", "utf8");
+    await runGit(dir, ["add", "bench.mjs"]);
+    await runGit(dir, ["commit", "-m", "benchmark contract"]);
+
+    await assertCliOk([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "dirty protected baseline",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      `node ${quoteForShell(benchmarkPath)}`,
+      "--benchmark-prints-metric",
+      "true",
+      "--protected-benchmark-paths",
+      "bench.mjs",
+    ]);
+
+    await writeFile(benchmarkPath, "console.log('METRIC seconds=0.5')\n", "utf8");
+
+    const keep = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "0.5",
+      "--status",
+      "keep",
+      "--description",
+      "dirty first baseline",
+    ]);
+    assert.notEqual(keep.code, 0);
+    assert.match(keep.stderr, /dirty before the first baseline/i);
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const nextPayload = JSON.parse(next.stdout);
+    assert.equal(nextPayload.ok, false);
+    assert.match(JSON.stringify(nextPayload), /dirty before the first baseline/i);
+  });
+});
+
 test("protected benchmark guard quarantines symlink realpath escapes", async (t) => {
   await withTempDir("protected-benchmark-symlink", async (dir) => {
     const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
