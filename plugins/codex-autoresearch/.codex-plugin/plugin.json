@@ -25,7 +25,7 @@
     "defaultPrompt": [
       "Use Codex Autoresearch to improve this repo.",
       "Plan an Autoresearch loop from this prompt.",
-      "Open the live dashboard and continue."
+      "Serve the live dashboard when useful."
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.svg",

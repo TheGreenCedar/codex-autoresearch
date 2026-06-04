@@ -174,7 +174,7 @@ The plan uses current ASI and experiment memory to propose read-only scout lanes
 
 Dispatch scout lanes in parallel first. `lane-runner` records or runs one lane with a bounded time budget and returns one coordinator recommendation for the next measured packet. Completed lane results update lane status and count as watchdog progress. Read-only scout lanes do not need a worktree, block commands that look mutating, and fail closed outside Git when running commands unless `--allow-non-git-command` is explicitly passed. Implementation lanes must pass `--worktree <path>` or `--write-scope <paths>` before they can run.
 
-Use `lane-runner --mode big_idea` for distant architecture hypotheses that might escape a local optimum. Big-idea lanes are advice-only: they cannot run commands, declare worktrees, or claim write scope. They write a bounded recommendation with evidence and risks, then require human approval before an implementation lane or measured packet uses the recommendation.
+Use `lane-runner --mode big_idea` for distant architecture hypotheses that might escape a local optimum. Big-idea lanes are advice-only: they cannot run commands, declare worktrees, or claim write scope. They write a bounded recommendation with evidence and risks, then require human approval before an implementation lane or measured packet uses the recommendation. Record that approval on the follow-up lane with `lane-runner --mode implementation --human-approval --worktree <path>` or keep the recommendation as provisional ASI until the operator approves it.
 
 ## ASI
 

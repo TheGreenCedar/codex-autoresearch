@@ -496,7 +496,7 @@ const checks = [
         includesAll(promptText, [
           "Use Codex Autoresearch to improve this repo.",
           "Plan an Autoresearch loop from this prompt.",
-          "Open the live dashboard and continue.",
+          "Serve the live dashboard when useful.",
         ]) &&
         manifest.interface?.longDescription?.includes("one skill surface")
         ? pass()

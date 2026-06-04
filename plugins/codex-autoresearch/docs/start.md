@@ -49,7 +49,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should check Git, create or resume the session, verify the metric, serve the dashboard, run one packet, and log the decision with ASI.
+Codex should check Git, create or resume the session, verify the metric, run one packet, and log the decision with ASI. Serve the dashboard when the operator asks for it, when packet freshness matters in the browser, or when the CLI readout is not enough.
 Before spending another packet, Codex should read `recommend-next --compact` and clear any operator-checklist, watchdog, runtime-provenance, lane-lifecycle, packet-diagnostic, or finalization-pressure blocker.
 
 ## CLI Path
@@ -67,20 +67,20 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
-`serve` is the live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `setup-plan`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
+`serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `setup-plan`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
 
-Optional stop conditions can be recorded during setup:
+After setup, optional stop conditions can be recorded with `config`:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after the first focused pass."
+node scripts/autoresearch.mjs config --cwd <project> --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after the first focused pass."
 ```
 
 Budget exhaustion is a stop/rescope signal. It does not mean the optimization goal is complete, and Autoresearch does not track API or billing spend without an external integration.
 
-For benchmark-sensitive loops, record the files that define the measurement and any secondary guardrails up front:
+For benchmark-sensitive loops, record the files that define the measurement and any secondary guardrails after the real benchmark is configured:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --protected-benchmark-paths "bench.mjs,fixtures/" --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
+node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/" --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
 ```
 
 The primary metric still drives the loop. Secondary metric constraints only guard tradeoffs; blocking constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
@@ -135,7 +135,7 @@ Use `measure` for a baseline or diagnostic, and `discard`, `crash`, or `checks_f
 
 - `doctor` has no blocking issues.
 - The benchmark emits the configured primary metric.
-- The live dashboard URL is available.
+- The live dashboard URL is available when a fresh visual readout is needed.
 - The last packet is fresh before logging.
 - ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
 

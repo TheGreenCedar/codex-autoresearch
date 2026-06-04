@@ -167,8 +167,13 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
   }
 });
 
-test("dashboard command safety accepts generated Windows launcher paths", () => {
-  const command = String.raw`node "C:\\Users\\alber\\source\\repos\\autoresearch\\plugins\\codex-autoresearch\\scripts\\autoresearch.mjs" state --cwd "C:\\work\\repo" --report`;
+test("dashboard command safety accepts generated package launcher paths", () => {
+  const packageLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "scripts",
+    "autoresearch.mjs",
+  );
+  const command = `node "${packageLauncher}" state --cwd "C:\\work\\repo" --report`;
   const result = dashboardCommandSafety(command);
 
   assert.equal(result.safe, true, result.reason);

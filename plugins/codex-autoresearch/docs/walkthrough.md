@@ -135,7 +135,7 @@ Total kept commits: 15
 Files affected: src/indexer.ts, src/cache.ts
 Estimated overlap: safe to collapse
 
-Next step: Run 'node scripts/finalize-autoresearch.mjs plan' from the main branch.
+Next step: Review `finalize-preview`, approve branch creation, then run `node scripts/finalize-autoresearch.mjs plan` from the source branch that owns the kept work.
 ```
 
 The loop is complete, documented, and ready for human review.
