@@ -45,11 +45,22 @@ test.afterEach(() => {
 });
 
 test("dashboard command safety accepts read-only autoresearch commands", () => {
+  const packageLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "scripts",
+    "autoresearch.mjs",
+  );
+  const packageDistLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "dist",
+    "scripts",
+    "autoresearch.mjs",
+  );
   const commands = [
     "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
     "node ./scripts/autoresearch.mjs state --cwd C:/repo",
-    "node C:/repo/plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd C:/repo",
-    "node C:/repo/plugins/codex-autoresearch/dist/scripts/autoresearch.mjs state --cwd C:/repo",
+    `node "${packageLauncher}" state --cwd C:/repo`,
+    `node "${packageDistLauncher}" state --cwd C:/repo`,
     "node scripts/autoresearch.mjs state --cwd C:/repo",
     "node scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node scripts/autoresearch.mjs recommend-next --cwd C:/repo --compact",
@@ -141,7 +152,9 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
   const commands = [
     "node autoresearch.mjs state --cwd C:/repo --report",
     "node C:/tmp/autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node C:/tmp/not-scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/malicious/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
     "node scripts/autoresearch.mjs.bak state --cwd C:/repo --report",
     "node scripts/not-autoresearch.mjs state --cwd C:/repo --report",
   ];

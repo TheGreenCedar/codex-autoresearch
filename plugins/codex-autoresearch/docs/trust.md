@@ -92,6 +92,8 @@ If ASI says to stop, broaden validation, rerun on holdout, or invalidate a famil
 
 `protectedBenchmarkPaths` records the project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after the baseline snapshot, or resolve outside the working directory through symlinks. Intentional benchmark changes should start a new segment or promotion gate so old and new evidence are not mixed.
 
+Keep protected paths tight. Directory snapshots recursively walk leaves and hash file contents, so large generated, cache, fixture, or data folders can make normal `doctor`, `next`, and logging preflights expensive. Prefer a small manifest, fixture list, or benchmark contract file that represents the measurement surface.
+
 Secondary metric constraints add explicit tradeoff checks without replacing the primary metric contract:
 
 ```bash

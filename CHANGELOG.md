@@ -15,6 +15,11 @@ This project uses a root-only changelog because the root README is the public do
 
 - Added source/package hygiene checks so local agent/editor artifacts, stale formatter config, missing Node engine metadata, and dashboard-only runtime dependencies are caught before release-style verification.
 - Fixed unbounded sessions so `remainingIterations: null` no longer creates a bogus segment-transition blocker before the first packet.
+- Fixed `config` so protected benchmark paths, secondary metric constraints, commit paths, packet budgets, wall-clock budgets, and budget notes can be updated or intentionally cleared through the normal CLI/tool path.
+- Fixed secondary metric constraint evaluation so per-constraint blocking/advisory modes are preserved and blank metric strings are treated as unavailable instead of zero.
+- Hardened dashboard command safety so absolute Autoresearch launcher paths must point inside the installed/source plugin package, not arbitrary `scripts/autoresearch.mjs` lookalikes.
+- Added runner timeout fallback resolution after kill attempts so stubborn child processes do not leave main runner paths waiting indefinitely.
+- Reduced the Codex-facing skill entrypoint and moved deeper loop, dashboard/trust, and finalization guidance into deferred reference files.
 
 ## 2.1.0
 
