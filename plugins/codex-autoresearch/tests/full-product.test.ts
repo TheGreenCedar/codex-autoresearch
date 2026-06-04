@@ -1183,6 +1183,10 @@ test("live server exposes health and view-model endpoints", async () => {
       }
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
+      assert.equal(Array.isArray(viewModel.ledgerEntries), true);
+      assert.equal(viewModel.ledgerEntries.length, 2);
+      assert.equal(viewModel.ledgerEntries[0].type, "config");
+      assert.equal(viewModel.ledgerEntries[1].description, "Baseline");
     });
   });
 });
@@ -1229,6 +1233,8 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
 
       assertNoSensitiveEvidence(html);
       assertNoSensitiveEvidence(viewModelText);
+      assert.equal(Array.isArray(viewModel.ledgerEntries), true);
+      assert.match(JSON.stringify(viewModel.ledgerEntries), /api_key=<redacted>/);
       assert.equal(ledger.status, 404);
     });
 
