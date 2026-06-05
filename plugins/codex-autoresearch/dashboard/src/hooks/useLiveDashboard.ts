@@ -88,23 +88,39 @@ function liveStatusFor(mode: DashboardMode, meta: DashboardMeta): LiveStatus {
 }
 
 async function fetchLiveDashboardSnapshot(): Promise<LiveDashboardSnapshot> {
-  const [jsonlResponse, viewModelResponse] = await Promise.all([
-    fetch("autoresearch.jsonl", { cache: "no-store" }),
-    fetch("view-model.json", { cache: "no-store" }),
-  ]);
-  const failures = [
-    responseFailure(jsonlResponse, "autoresearch.jsonl"),
-    responseFailure(viewModelResponse, "view-model.json"),
-  ].filter(Boolean);
-  if (failures.length) throw new Error(failures.join("; "));
+  const viewModelResponse = await fetch("view-model.json", { cache: "no-store" });
+  const failure = responseFailure(viewModelResponse, "view-model.json");
+  if (failure) throw new Error(failure);
 
-  const text = await jsonlResponse.text();
   const payload = (await viewModelResponse.json()) as DashboardViewModel;
+  const embeddedEntries = entriesFromViewModel(payload);
   return {
-    entries: parseJsonl(text),
+    entries: embeddedEntries ?? (await fetchLegacyLedgerEntries()),
     generatedAt: new Date().toISOString(),
     viewModel: payload || {},
   };
+}
+
+async function fetchLegacyLedgerEntries(): Promise<DashboardEntry[]> {
+  const jsonlResponse = await fetch("autoresearch.jsonl", { cache: "no-store" });
+  const failure = responseFailure(jsonlResponse, "autoresearch.jsonl");
+  if (failure) throw new Error(failure);
+  return parseJsonl(await jsonlResponse.text());
+}
+
+function entriesFromViewModel(
+  payload: DashboardViewModel | null | undefined,
+): DashboardEntry[] | null {
+  if (!payload) return null;
+  for (const key of ["ledgerEntries", "entries", "dashboardEntries"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value.filter(isDashboardEntry);
+  }
+  return null;
+}
+
+function isDashboardEntry(value: unknown): value is DashboardEntry {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveStatus {

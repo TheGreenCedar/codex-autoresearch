@@ -4,6 +4,17 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.5
+
+### Fixed
+
+- Restored served dashboard live refresh from the redacted view model path while keeping raw ledger access limited to the debug surface.
+- Added live-refresh tests and type coverage so dashboard snapshots can update without reintroducing raw-session payload exposure.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.5`.
+
 ## 2.1.4
 
 ### Fixed

@@ -40,7 +40,8 @@ export async function serveAutoresearch(args: LooseObject) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/view-model.json") {
-        sendJson(res, redactEvidenceObject(await viewModel(), { workDir }));
+        const ledgerEntries = await readRedactedLedgerEntries(workDir, { workDir });
+        sendJson(res, redactEvidenceObject({ ...(await viewModel()), ledgerEntries }, { workDir }));
         return;
       }
       if (req.method === "GET" && url.pathname === "/health") {
@@ -119,4 +120,36 @@ function redactJsonl(text: string, context: LooseObject): string {
       }
     })
     .join("\n");
+}
+
+async function readRedactedLedgerEntries(
+  workDir: string,
+  context: LooseObject,
+): Promise<LooseObject[]> {
+  const text = await fsp
+    .readFile(path.join(workDir, "autoresearch.jsonl"), "utf8")
+    .catch((error: unknown) => {
+      if (isFileNotFound(error)) return "";
+      throw error;
+    });
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const entry = redactEvidenceObject(JSON.parse(line), context);
+        return isLooseObject(entry) ? [entry] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isLooseObject(value: unknown): value is LooseObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
