@@ -28,6 +28,7 @@ export interface ProcessRunOptions {
 
 export interface ShellRunOptions {
   env?: NodeJS.ProcessEnv;
+  envMode?: "inherit" | "minimal";
   maxFullOutputBytes?: number;
   maxMetricOutputBytes?: number;
   maxOutputBytes?: number;
@@ -185,9 +186,10 @@ export async function runShell(
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
   return await new Promise<ShellRunResult>((resolve) => {
+    const env = shellEnvironment(options);
     const child = spawn(command, {
       cwd,
-      env: options.env ? { ...process.env, ...options.env } : process.env,
+      env,
       shell: true,
       detached: process.platform !== "win32",
       windowsHide: true,
@@ -315,6 +317,20 @@ export async function runShell(
       );
     });
   });
+}
+
+function shellEnvironment(options: ShellRunOptions): NodeJS.ProcessEnv {
+  const base = options.envMode === "minimal" ? minimalProcessEnvironment() : { ...process.env };
+  return options.env ? { ...base, ...options.env } : base;
+}
+
+function minimalProcessEnvironment(): NodeJS.ProcessEnv {
+  const allowed = new Set(["path", "systemroot", "temp", "tmp"]);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (allowed.has(key.toLowerCase()) && value != null) env[key] = value;
+  }
+  return env;
 }
 
 export async function runProcess(

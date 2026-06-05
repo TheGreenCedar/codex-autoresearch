@@ -8,6 +8,8 @@ import { toolSchemas } from "../lib/tool-schemas.js";
 import { toolRegistry } from "../lib/tool-registry.js";
 
 type RegistryEntry = {
+  audience: string;
+  category: string;
   name: string;
   cliCommand: string;
   public: boolean;
@@ -32,11 +34,21 @@ type CommandSurfaceMap = {
   registry: RegistryEntry[];
   scans: SourceScan[];
   missingPublicReferences: string[];
+  metadataIssues: string[];
   internalReferences: string[];
   argumentIssues: string[];
 };
 
 const ROOT = resolvePackageRoot(import.meta.url);
+const VALID_CATEGORIES = new Set([
+  "happy_path",
+  "setup",
+  "diagnostic",
+  "advanced",
+  "integration",
+  "dangerous",
+]);
+const VALID_AUDIENCES = new Set(["default", "advanced", "maintainer"]);
 
 export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
   const registry = registryEntries();
@@ -49,7 +61,7 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
   const scans = await Promise.all([
     scanCommandSource({
       label: "cli-help",
-      candidates: ["scripts/autoresearch.ts", "dist/scripts/autoresearch.mjs"],
+      candidates: ["lib/cli/help.ts", "dist/lib/cli/help.mjs"],
       extractCommands: extractUsageCommands,
       required: true,
       registryCommands: publicCommands,
@@ -73,6 +85,7 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
     }),
   ]);
   const argumentIssues = await validateArgumentCoherence();
+  const metadataIssues = validateRegistryMetadata(registry);
 
   const missingPublicReferences = scans
     .flatMap((scan) => {
@@ -87,10 +100,11 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
     .concat(argumentIssues);
 
   return {
-    ok: missingPublicReferences.length === 0,
+    ok: missingPublicReferences.length === 0 && metadataIssues.length === 0,
     registry,
     scans,
     missingPublicReferences,
+    metadataIssues,
     argumentIssues,
     internalReferences: registry
       .filter((entry) => entry.internal)
@@ -141,6 +155,8 @@ function registryEntries(): RegistryEntry[] {
       return {
         name,
         cliCommand: String(entry.cliCommand || ""),
+        category: String(entry.category || ""),
+        audience: String(entry.audience || ""),
         public: !internal,
         internal,
         source: "lib/tool-registry.ts",
@@ -148,6 +164,21 @@ function registryEntries(): RegistryEntry[] {
     })
     .filter((entry) => entry.cliCommand)
     .sort((a, b) => a.cliCommand.localeCompare(b.cliCommand));
+}
+
+function validateRegistryMetadata(registry: RegistryEntry[]): string[] {
+  return registry
+    .filter((entry) => entry.public)
+    .flatMap((entry) => {
+      const issues = [];
+      if (!VALID_CATEGORIES.has(entry.category)) {
+        issues.push(`${entry.cliCommand}: missing or invalid category`);
+      }
+      if (!VALID_AUDIENCES.has(entry.audience)) {
+        issues.push(`${entry.cliCommand}: missing or invalid audience`);
+      }
+      return issues;
+    });
 }
 
 async function scanCommandSource({
@@ -260,6 +291,10 @@ function escapeRegExp(value: string): string {
 export function formatCommandSurfaceMap(map: CommandSurfaceMap): string {
   const lines = ["Command surface map", ""];
   lines.push(`Registry commands: ${map.registry.filter((entry) => entry.public).length} public`);
+  lines.push(`metadata: missing=${map.metadataIssues.length}`);
+  if (map.metadataIssues.length) {
+    lines.push(`  metadata issues: ${map.metadataIssues.join(", ")}`);
+  }
   for (const scan of map.scans) {
     const missing = scan.missingCommands.length + scan.missingToolNames.length;
     const unregistered = scan.unregisteredCommands.length + scan.unregisteredToolNames.length;

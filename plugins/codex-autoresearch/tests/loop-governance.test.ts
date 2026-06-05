@@ -6,8 +6,10 @@ import { buildCompactRecommendNextResponse } from "../lib/commands/recommend-nex
 import { acceptedCurrentTreeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { buildGoalFrame } from "../lib/goal-frame.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
+import { buildBudgetStatus } from "../lib/benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "../lib/loop-governance.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import { buildDecisionEnvelope } from "../lib/session-core.js";
 import {
   buildSessionDecisionCapsule,
   matchDecisionRules,
@@ -55,6 +57,64 @@ test("numeric loop priorities choose strongest action independent of append orde
     ["safety-blocker", "lane-cleanup"],
   );
   assert.equal(status.strongestAction?.kind, "safety-blocker");
+});
+
+test("budget exhaustion is a segment-transition blocker, not goal completion", () => {
+  const state = {
+    config: { bestDirection: "lower", metricName: "seconds" },
+    current: [{ run: 1, metric: 1, status: "keep" }],
+    results: [{ run: 1, metric: 1, status: "keep" }],
+    limit: {
+      budgetStatus: buildBudgetStatus({
+        state: { current: [{ run: 1, metric: 1, status: "keep" }] },
+        runtimeConfig: {
+          packetBudget: 1,
+          budgetStartedAt: "2026-04-24T00:00:00.000Z",
+          budgetNote: "one packet only",
+        },
+      }),
+    },
+  };
+  const envelope = buildDecisionEnvelope({
+    state,
+    nextAction: "Run another packet.",
+  });
+  const status = buildLoopContractStatus(envelope);
+
+  assert.equal(envelope.budgetStatus.exhausted, true);
+  assert.equal(envelope.segmentTransition.triggeredBy[0], "budget");
+  assert.match(envelope.segmentTransition.nextAction, /Budget exhausted/);
+  assert.equal(status.ok, false);
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.strongestAction?.kind, "segment-transition");
+  assert.doesNotMatch(status.strongestAction?.reason || "", /complete/i);
+});
+
+test("unbounded iteration budget does not trigger segment transition", () => {
+  const state = {
+    config: { bestDirection: "lower", metricName: "seconds" },
+    current: [],
+    results: [],
+    limit: {
+      maxIterations: null,
+      remainingIterations: null,
+      limitReached: false,
+      budgetStatus: buildBudgetStatus({
+        state: { current: [] },
+        runtimeConfig: {},
+      }),
+    },
+  };
+  const envelope = buildDecisionEnvelope({
+    state,
+    nextAction: "Run another packet.",
+  });
+  const status = buildLoopContractStatus(envelope);
+
+  assert.equal(envelope.segmentTransition, null);
+  assert.equal(status.ok, true);
+  assert.equal(status.canRunNextPacket, true);
+  assert.equal(status.blockers.length, 0);
 });
 
 test("partial salvage outranks fresh packet logging within packet brakes", () => {

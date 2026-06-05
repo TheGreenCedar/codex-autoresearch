@@ -56,7 +56,7 @@ If anything changed, rerun `next` before logging. If the data came from a raw `r
 
 When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result.
 
-Fresh packets also carry a packet evidence bundle: packet id, command identity, timeout, exit status, bounded stdout/stderr tails, parsed metrics, artifacts, checks result, and a freshness fingerprint. Use that bundle to review what actually ran; do not infer promotion readiness from "a metric was parsed."
+Fresh packets also carry a packet evidence bundle: packet id, command identity, command execution boundary, timeout, exit status, bounded stdout/stderr tails, parsed metrics, artifacts, checks result, and a freshness fingerprint. Use that bundle to review what actually ran; do not infer promotion readiness from "a metric was parsed."
 
 ## Benchmark Drift
 
@@ -87,6 +87,20 @@ Common labels:
 - `blocked`: evidence cannot support the next claim
 
 If ASI says to stop, broaden validation, rerun on holdout, or invalidate a family, honor that over remaining iteration budget.
+
+## Benchmark Guardrails
+
+`protectedBenchmarkPaths` records the project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after the baseline snapshot, or resolve outside the working directory through symlinks. Intentional benchmark changes should start a new segment or promotion gate so old and new evidence are not mixed.
+
+Secondary metric constraints add explicit tradeoff checks without replacing the primary metric contract:
+
+```bash
+node scripts/autoresearch.mjs config --cwd <project> --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
+```
+
+Supported thresholds are numeric values, `baseline`, `baseline * N`, `N * baseline`, and `baseline +/- N`. Advisory constraints record pass/fail/unavailable status. Blocking constraints keep the primary packet evidence but make violating keeps provisional and non-promotable until the constraint is satisfied or the operator intentionally changes the rule.
+
+This is not Pareto optimization. Autoresearch still chooses by one primary `METRIC name=value`; constraints are guardrails for known secondary risks.
 
 ## Git Safety
 
@@ -125,6 +139,14 @@ Command-bearing setup and inspection paths require deliberate approval before ma
 - setup guidance materialized from external recipe catalogs, admitted with `--trust-catalog`
 
 Prefer project-local `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
+
+Autoresearch does not sandbox benchmark or checks commands. Approved commands run as local shell processes with the current user's permissions, environment access, and filesystem reach from the target working directory. Packet evidence, `state --report`, the dashboard trust state, and `doctor --check-benchmark --explain` can surface this as `commandExecutionBoundary: not_sandboxed` when command-bearing evidence exists.
+
+Review generated commands before running them, keep secrets out of command lines and benchmark output, and use project-local wrappers when the command needs careful environment setup. Prefer `--command-file` and `--packet-env-file` for commands or environment overrides that would otherwise need fragile inline quoting.
+
+`run` and `next` default to `--packet-env-mode inherit`, which preserves the current process environment and overlays keys from `--packet-env-file`. Use `--packet-env-mode minimal` when you want a smaller environment: Autoresearch keeps only `PATH`, `SystemRoot`, `TEMP`, and `TMP` from the parent process, then overlays explicit packet env file keys. Packet evidence records the mode and explicit key names, not env values.
+
+Evidence redaction is best-effort, not a confidentiality guarantee. Dashboard, ledger, and packet evidence paths try to scrub common secrets, credentials, home paths, and env-file references, but sensitive data should not be emitted into Autoresearch evidence in the first place.
 
 Trusted external recipes store catalog provenance in session config. `doctor` and `next` revalidate that provenance and block when the recipe or catalog has drifted, cannot be fetched, or no longer matches the trusted hash.
 

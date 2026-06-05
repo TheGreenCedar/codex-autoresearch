@@ -244,6 +244,20 @@ function buildResearchIntegrityMessages({
       "Latest improvement is pending repeat; promotion is blocked until repeat passes.",
     );
   }
+  const secondaryMetricConstraints = latest?.secondaryMetricConstraints;
+  if (secondaryMetricConstraints?.configured === true) {
+    const messages = Array.isArray(secondaryMetricConstraints.messages)
+      ? secondaryMetricConstraints.messages.map(String).filter(Boolean)
+      : [];
+    if (secondaryMetricConstraints.blockPromotion === true) {
+      blockers.push(
+        messages[0] ||
+          "Blocking secondary metric constraints failed or were unavailable; promotion is blocked.",
+      );
+    } else {
+      warnings.push(...messages);
+    }
+  }
   if (!hasIntegrityGuard && (current.length === 0 || parsedMetrics)) {
     warnings.push(
       "Research integrity is incomplete: no holdout, repeat, contamination, or promotion guard is configured.",

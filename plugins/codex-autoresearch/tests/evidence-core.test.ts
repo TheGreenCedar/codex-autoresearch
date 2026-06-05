@@ -99,6 +99,36 @@ test("runner parses early metrics from full output while retaining only bounded 
   });
 });
 
+test("runner minimal env mode keeps explicit env without inheriting unrelated parent keys", async () => {
+  await withTempDir("minimal-env-mode", async (dir) => {
+    const parentKey = `AR_PARENT_SECRET_${Date.now()}`;
+    process.env[parentKey] = "should-not-leak";
+    try {
+      const script = [
+        `console.log("PARENT=" + (process.env[${JSON.stringify(parentKey)}] || ""));`,
+        'console.log("EXPLICIT=" + (process.env.AR_EXPLICIT_PACKET || ""));',
+        'console.log("METRIC seconds=1");',
+      ].join("");
+      const result = await runShell(
+        `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`,
+        dir,
+        5,
+        {
+          envMode: "minimal",
+          env: { AR_EXPLICIT_PACKET: "visible" },
+        },
+      );
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.output, /PARENT=\s/);
+      assert.match(result.output, /EXPLICIT=visible/);
+      assert.equal(result.parsedMetrics.seconds, 1);
+    } finally {
+      delete process.env[parentKey];
+    }
+  });
+});
+
 test("metricless crash and checks_failed entries remain metricless in current state", async () => {
   await withTempDir("metricless-failures", async (dir) => {
     appendJsonl(dir, { type: "config", name: "evidence", metricName: "seconds" });

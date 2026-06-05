@@ -2206,6 +2206,50 @@ test("dashboard decision envelope priority ladder is stable across competing sig
   }
 });
 
+test("dashboard surfaces exhausted packet budget as a rescope blocker", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "budgeted run",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [{ run: 1, metric: 1, status: "keep", description: "Baseline" }],
+      results: [{ run: 1, metric: 1, status: "keep", description: "Baseline" }],
+      baseline: 1,
+      best: 1,
+      limit: {
+        limitReached: true,
+        budgetStatus: {
+          configured: true,
+          exhausted: true,
+          packetBudget: 1,
+          packetsUsed: 1,
+          packetsRemaining: 0,
+          stopReason: "Packet budget exhausted (1/1 packets used).",
+          nextAction:
+            "Budget exhausted; stop packet work and ask whether to extend, rescope, or start a new segment.",
+        },
+      },
+    },
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
+      {
+        label: "New segment",
+        command: "node scripts/autoresearch.mjs new-segment --cwd . --dry-run",
+      },
+    ],
+  });
+
+  assert.equal(viewModel.decisionEnvelope.budgetStatus.exhausted, true);
+  assert.equal(viewModel.decisionEnvelope.segmentTransition.triggeredBy[0], "budget");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "segment-transition");
+  assert.match(viewModel.nextBestAction.detail, /Budget exhausted/);
+  assert.doesNotMatch(viewModel.nextBestAction.detail, /complete/i);
+});
+
 test("dashboard action rail treats finalization readiness as the next decision after active blockers", () => {
   const viewModel = buildDashboardViewModel({
     state: {
@@ -2295,6 +2339,34 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
 
   assert.equal(dirty.trustState.status, "needs-attention");
   assert.match(dirty.decisionWarnings.join("\n"), /dirty/);
+
+  const commandBearing = buildTrustState({
+    state: {
+      config: {
+        name: "trust command",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      current: [
+        {
+          run: 1,
+          metric: 5,
+          status: "keep",
+          description: "Baseline",
+          commandExecutionBoundary: "not_sandboxed",
+        },
+      ],
+      baseline: 5,
+      best: 5,
+    },
+    settings: { deliveryMode: "live-server", pluginVersion: PLUGIN_VERSION },
+  });
+
+  assert.equal(commandBearing.trustState.status, "trusted");
+  assert.equal(commandBearing.trustState.commandExecutionBoundary.mode, "not_sandboxed");
+  assert.match(commandBearing.trustState.commandExecutionBoundary.note, /current user's/);
+  assert.deepEqual(commandBearing.decisionWarnings, []);
 });
 
 test("dashboard distinguishes static snapshots from served readouts", async () => {

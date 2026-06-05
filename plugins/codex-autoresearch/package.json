@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "Codex plugin for autonomous benchmark and optimization loops.",
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
@@ -42,19 +42,13 @@
     "test:compiled:cli": "node dist/scripts/run-test-shards.mjs --jobs 6 dist/tests/autoresearch-cli.test.mjs 24 dist/tests/full-product.test.mjs 4 dist/tests/perfection-benchmark.test.mjs 1",
     "test:compiled:dashboard": "node --test --test-concurrency=8 dist/tests/dashboard-verification.test.mjs",
     "test:compiled:finalize": "node dist/scripts/run-test-shards.mjs --jobs 6 dist/tests/finalize-report.test.mjs 12",
-    "test:compiled:core": "node --test --test-concurrency=8 dist/tests/evidence-core.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/command-builders.test.mjs dist/tests/loop-governance.test.mjs dist/tests/packet-diagnostics.test.mjs dist/tests/dashboard-server-registry.test.mjs dist/tests/decision-guidance-dashboard-health.test.mjs dist/tests/decision-guidance-gate-quality.test.mjs dist/tests/decision-guidance-lane-briefs.test.mjs dist/tests/decision-guidance-runtime-drift.test.mjs dist/tests/decision-guidance-task-artifacts.test.mjs dist/tests/decision-guidance-terminal-report.test.mjs",
+    "test:compiled:core": "node --test --test-concurrency=8 dist/tests/evidence-core.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/command-builders.test.mjs dist/tests/check-runner.test.mjs dist/tests/benchmark-constraints.test.mjs dist/tests/cli/help.test.mjs dist/tests/cli/lane-runner.test.mjs dist/tests/loop-governance.test.mjs dist/tests/packet-diagnostics.test.mjs dist/tests/source-hygiene.test.mjs dist/tests/hostile-workflow.test.mjs dist/tests/dashboard-server-registry.test.mjs dist/tests/decision-guidance-dashboard-health.test.mjs dist/tests/decision-guidance-gate-quality.test.mjs dist/tests/decision-guidance-lane-briefs.test.mjs dist/tests/decision-guidance-runtime-drift.test.mjs dist/tests/decision-guidance-task-artifacts.test.mjs dist/tests/decision-guidance-terminal-report.test.mjs",
     "test:cli": "run-s build:node test:compiled:cli",
     "test:dashboard": "run-s build:node test:compiled:dashboard",
     "test:finalize": "run-s build:node test:compiled:finalize",
     "test:core": "run-s build:node test:compiled:core",
     "check:product": "npm run build:node && node scripts/check.mjs",
     "check": "run-p typecheck lint format:check && npm run check:product"
-  },
-  "dependencies": {
-    "lucide-react": "^1.8.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -63,11 +57,18 @@
     "@typescript/native-preview": "^7.0.0-dev.20260423.1",
     "@vitejs/plugin-react": "^6.0.1",
     "jsdom": "^29.0.2",
+    "lucide-react": "^1.8.0",
     "npm-run-all2": "^8.0.4",
     "oxfmt": "^0.46.0",
     "oxlint": "^1.61.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "recharts": "^3.8.1",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.3",
     "vite": "^8.0.9"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
