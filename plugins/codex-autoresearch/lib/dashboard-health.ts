@@ -1,3 +1,5 @@
+import { unknownRecordOrNull } from "./types/json.js";
+
 export type DashboardHealthLiveness = "alive" | "dead" | "unknown";
 
 export interface DashboardHealthInput {
@@ -101,9 +103,7 @@ function previousLiveness(previous: unknown): DashboardHealthLiveness {
 }
 
 function recordValue(record: unknown, key: string): unknown {
-  return record && typeof record === "object" && !Array.isArray(record)
-    ? (record as Record<string, unknown>)[key]
-    : undefined;
+  return unknownRecordOrNull(record)?.[key];
 }
 
 function dashboardIsAlive(payload: unknown, summary: DashboardHealthSummary): boolean {

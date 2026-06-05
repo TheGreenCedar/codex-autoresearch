@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
+import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import {
   readActiveSessionDecisionCapsule,
@@ -423,9 +424,17 @@ export function buildDecisionEnvelope({
   );
   const codes = warningCodes(warningDetails);
   const limit = state?.limit || {};
+  const budgetStatus = limit.budgetStatus || state?.budgetStatus || null;
+  const remainingIterations =
+    limit.remainingIterations === null || limit.remainingIterations === undefined
+      ? null
+      : Number(limit.remainingIterations);
   const limitReached =
     limit.limitReached === true ||
-    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
+    budgetStatus?.exhausted === true ||
+    (remainingIterations != null &&
+      Number.isFinite(remainingIterations) &&
+      remainingIterations <= 0);
   const qualityRound = qualityRoundState(qualityGap);
   const cleanliness = sourceCleanliness(state);
   const segmentTransitionRequired =
@@ -533,14 +542,17 @@ export function buildDecisionEnvelope({
           nextAction:
             segmentTransition?.nextAction ||
             segmentTransition?.reason ||
+            budgetStatus?.nextAction ||
             (qualityRound.done === true
               ? "The active quality round is closed; refresh gaps or preview finalization."
               : "The active segment reached its limit; extend the limit or start a new segment."),
           triggeredBy:
             segmentTransition?.triggeredBy ||
+            (budgetStatus?.exhausted === true ? ["budget"] : null) ||
             (qualityRound.done === true ? ["qualityRound"] : ["limit"]),
         }
       : null,
+    budgetStatus,
     watchdog: watchdog
       ? {
           status: watchdog.status || "",
@@ -1241,20 +1253,26 @@ function firstFreshnessContextMismatch(expected: LooseObject, actual: LooseObjec
 }
 
 export function iterationLimitInfo(state: SessionState, runtimeConfig: LooseObject) {
+  const budgetStatus = buildBudgetStatus({ state, runtimeConfig });
   const maxIterations = Number(runtimeConfig.maxIterations);
   if (!Number.isFinite(maxIterations) || maxIterations <= 0) {
     return {
       maxIterations: null,
       remainingIterations: null,
-      limitReached: false,
+      limitReached: budgetStatus.exhausted,
+      stopReason: budgetStatus.stopReason,
+      budgetStatus,
     };
   }
   const max = Math.floor(maxIterations);
   const remaining = Math.max(0, max - state.current.length);
+  const maxReached = state.current.length >= max;
   return {
     maxIterations: max,
     remainingIterations: remaining,
-    limitReached: state.current.length >= max,
+    limitReached: maxReached || budgetStatus.exhausted,
+    stopReason: budgetStatus.stopReason || (maxReached ? `maxIterations reached (${max}).` : ""),
+    budgetStatus,
   };
 }
 

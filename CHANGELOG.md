@@ -4,6 +4,22 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.1
+
+### Changed
+
+- Clarified public onboarding and trust docs around scoped staging/revert/finalization boundaries, bounded packet stop conditions, the Node.js 24 development floor, non-sandboxed benchmark/check commands, and best-effort evidence redaction.
+- Added explicit benchmark guardrails for protected benchmark paths, packet/wall-clock budgets, secondary metric non-regression constraints, and approval-gated big-idea lanes.
+
+### Fixed
+
+- Added source/package hygiene checks so local agent/editor artifacts, stale formatter config, missing Node engine metadata, and dashboard-only runtime dependencies are caught before release-style verification.
+- Fixed unbounded sessions so `remainingIterations: null` no longer creates a bogus segment-transition blocker before the first packet.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.1`.
+
 ## 2.1.0
 
 ### Added

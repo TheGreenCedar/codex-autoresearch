@@ -1,3 +1,5 @@
+import { type UnknownRecord, unknownRecordOrEmpty } from "./types/json.js";
+
 export interface DecisionThresholdConfig {
   compactions: number;
   goalTokensUsed: number;
@@ -34,13 +36,8 @@ export const DEFAULT_DECISION_THRESHOLDS: DecisionThresholdConfig = {
   segmentVisibleLabelChars: 48,
 };
 
-export function resolveDecisionThresholds(
-  config: Record<string, unknown> = {},
-): DecisionThresholdConfig {
-  const nested =
-    config.decisionThresholds && typeof config.decisionThresholds === "object"
-      ? (config.decisionThresholds as Record<string, unknown>)
-      : {};
+export function resolveDecisionThresholds(config: UnknownRecord = {}): DecisionThresholdConfig {
+  const nested = unknownRecordOrEmpty(config.decisionThresholds);
   const merged = { ...config, ...nested };
   return {
     compactions: positiveInt(merged.compactions, DEFAULT_DECISION_THRESHOLDS.compactions),

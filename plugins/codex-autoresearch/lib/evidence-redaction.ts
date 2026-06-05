@@ -1,6 +1,6 @@
 import path from "node:path";
 
-type LooseObject = Record<string, any>;
+import { type UnknownRecord } from "./types/json.js";
 
 const SECRET_ASSIGNMENT =
   /\b(api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|password|secret|token)\b\s*[:=]\s*["']?([A-Za-z0-9._~+/\-=]{8,})["']?/gi;
@@ -30,7 +30,7 @@ const SENSITIVE_VALUE_KEYS = new Set([
   "token",
 ]);
 
-export function redactEvidenceObject<T = unknown>(value: T, context: LooseObject = {}): T {
+export function redactEvidenceObject<T = unknown>(value: T, context: UnknownRecord = {}): T {
   if (isSensitiveEvidenceKey(context.key) && value != null && value !== "") {
     return "<redacted>" as T;
   }
@@ -38,14 +38,14 @@ export function redactEvidenceObject<T = unknown>(value: T, context: LooseObject
   if (Array.isArray(value)) return value.map((item) => redactEvidenceObject(item, context)) as T;
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value as LooseObject).map(([key, child]) => [
+    Object.entries(value as UnknownRecord).map(([key, child]) => [
       key,
       redactEvidenceObject(child, { ...context, key }),
     ]),
   ) as T;
 }
 
-export function redactEvidenceText(value: unknown, context: LooseObject = {}): string {
+export function redactEvidenceText(value: unknown, context: UnknownRecord = {}): string {
   let text = String(value || "");
   text = text.replace(URL_CREDENTIALS, "$1<credentials>@");
   text = text.replace(SECRET_ASSIGNMENT, (_match, key) => `${key}=<redacted>`);
@@ -100,7 +100,7 @@ function isSensitiveEvidenceKey(key: unknown): boolean {
   );
 }
 
-export function redactCommandDisplay(value: unknown, context: LooseObject = {}): string {
+export function redactCommandDisplay(value: unknown, context: UnknownRecord = {}): string {
   return redactEvidenceText(value, context);
 }
 

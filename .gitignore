@@ -1,4 +1,20 @@
+# Agent/editor-local state
+.cursor/
 .learnings/
+
+# Generated superpowers plans
+docs/superpowers/plans/
+
+# Generated output and scratch space
+archive/
+archives/
+cache/
+caches/
+logs/
+output/
+outputs/
+temp/
+tmp/
 
 # Codex Autoresearch session artifacts
 /autoresearch.md

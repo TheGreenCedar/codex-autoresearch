@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { resolveSafeResearchPath } from "./research-path-guard.js";
+import { unknownRecordOrEmpty, unknownRecordOrNull } from "./types/json.js";
 
 export interface EvidenceIndex {
   schemaVersion: 1;
@@ -38,9 +39,9 @@ export async function readEvidenceIndex(cwd: string, slug: string): Promise<Evid
   const filePath = path.join(outputDir, "evidence-index.json");
   try {
     return normalizeEvidenceIndex(JSON.parse(await fsp.readFile(filePath, "utf8")));
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return emptyEvidenceIndex();
-    throw new Error(`Invalid evidence-index.json: ${error.message || error}`);
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT") return emptyEvidenceIndex();
+    throw new Error(`Invalid evidence-index.json: ${errorMessage(error)}`);
   }
 }
 
@@ -103,13 +104,14 @@ function emptyEvidenceIndex(): EvidenceIndex {
   return { schemaVersion: 1, claims: [] };
 }
 
-function normalizeEvidenceIndex(value: any): EvidenceIndex {
-  if (!value || typeof value !== "object") return emptyEvidenceIndex();
-  if (value.schemaVersion !== 1) {
-    if (value.claims == null) return emptyEvidenceIndex();
-    throw new Error(`unsupported schema version ${value.schemaVersion}`);
+function normalizeEvidenceIndex(value: unknown): EvidenceIndex {
+  const record = unknownRecordOrNull(value);
+  if (!record) return emptyEvidenceIndex();
+  if (record.schemaVersion !== 1) {
+    if (record.claims == null) return emptyEvidenceIndex();
+    throw new Error(`unsupported schema version ${record.schemaVersion}`);
   }
-  const claims = Array.isArray(value.claims) ? value.claims.map(normalizeEvidenceClaim) : [];
+  const claims = Array.isArray(record.claims) ? record.claims.map(normalizeEvidenceClaim) : [];
   const seen = new Set<string>();
   for (const claim of claims) {
     if (seen.has(claim.id)) throw new Error(`duplicate evidence claim id ${claim.id}`);
@@ -118,18 +120,19 @@ function normalizeEvidenceIndex(value: any): EvidenceIndex {
   return { schemaVersion: 1, claims };
 }
 
-function normalizeEvidenceClaim(value: any): EvidenceClaim {
-  const claim = String(value?.claim || "").trim();
-  const source = String(value?.source || "").trim();
+function normalizeEvidenceClaim(value: unknown): EvidenceClaim {
+  const record = unknownRecordOrEmpty(value);
+  const claim = String(record.claim || "").trim();
+  const source = String(record.source || "").trim();
   if (!claim) throw new Error("evidence claim is required");
   if (!source) throw new Error("evidence source is required");
-  const id = String(value?.id || claimIdFor({ claim, source })).trim();
+  const id = String(record.id || claimIdFor({ claim, source })).trim();
   if (!/^ev-[a-f0-9]{12}$/.test(id)) throw new Error(`invalid evidence claim id: ${id}`);
   return {
     id,
     claim,
     source,
-    evidenceType: enumValue(value.evidenceType, [
+    evidenceType: enumValue(record.evidenceType, [
       "session",
       "benchmark-artifact",
       "commit",
@@ -137,16 +140,25 @@ function normalizeEvidenceClaim(value: any): EvidenceClaim {
       "test",
       "manual-report",
     ]),
-    freshness: enumValue(value.freshness, ["current", "historical", "stale", "unknown"]),
-    confidence: enumValue(value.confidence, ["low", "medium", "high"]),
-    promotionRelevance: enumValue(value.promotionRelevance, [
+    freshness: enumValue(record.freshness, ["current", "historical", "stale", "unknown"]),
+    confidence: enumValue(record.confidence, ["low", "medium", "high"]),
+    promotionRelevance: enumValue(record.promotionRelevance, [
       "none",
       "diagnostic",
       "setup-gate",
       "promotion-gate",
     ]),
-    ...(value.validatedBy ? { validatedBy: String(value.validatedBy) } : {}),
+    ...(record.validatedBy ? { validatedBy: String(record.validatedBy) } : {}),
   };
+}
+
+function errorCode(error: unknown): unknown {
+  return unknownRecordOrNull(error)?.code;
+}
+
+function errorMessage(error: unknown): string {
+  const message = unknownRecordOrNull(error)?.message;
+  return typeof message === "string" && message ? message : String(error);
 }
 
 function mergeClaim(existing: EvidenceClaim, next: EvidenceClaim): EvidenceClaim {

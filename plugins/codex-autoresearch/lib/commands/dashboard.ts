@@ -138,6 +138,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
       port: args.port,
+      debugLedger: deps.boolOption(args.debugLedger ?? args.debug_ledger, false),
       pluginVersion: deps.pluginVersion,
       startedAt: startedAtIso,
       scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
@@ -227,6 +228,14 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       verified: dashboardVerified,
       healthUrl: dashboardHealth.healthUrl || healthUrl,
       registryPath: registryWrite.path,
+      debugLedger: {
+        enabled: serveResult.debugLedger === true,
+        endpoint: new URL("autoresearch.jsonl", serveResult.url).toString(),
+        guidance:
+          serveResult.debugLedger === true
+            ? "Debug ledger endpoint is enabled and returns redacted ledger lines."
+            : "Raw ledger endpoint is disabled by default; restart with --debug-ledger only for local debugging.",
+      },
       dashboardHealth,
       checkedAt: new Date().toISOString(),
       registry: {
