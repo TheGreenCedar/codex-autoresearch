@@ -67,7 +67,7 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
-Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `setup-plan`, `benchmark-lint`, `recommend-next`, `serve`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
+`serve` is the live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `setup-plan`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
 
 Optional stop conditions can be recorded during setup:
 

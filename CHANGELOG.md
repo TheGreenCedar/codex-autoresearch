@@ -4,6 +4,23 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.2
+
+### Changed
+
+- Reduced the Codex-facing skill entrypoint and moved deeper loop, dashboard/trust, and finalization guidance into deferred reference files.
+
+### Fixed
+
+- Fixed `config` so protected benchmark paths, secondary metric constraints, commit paths, packet budgets, wall-clock budgets, and budget notes can be updated or intentionally cleared through the normal CLI/tool path.
+- Fixed secondary metric constraint evaluation so per-constraint blocking/advisory modes are preserved and blank metric strings are treated as unavailable instead of zero.
+- Hardened dashboard command safety so absolute Autoresearch launcher paths must point inside the installed/source plugin package, not arbitrary `scripts/autoresearch.mjs` lookalikes.
+- Added runner timeout fallback resolution after kill attempts so stubborn child processes do not leave main runner paths waiting indefinitely.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.2`.
+
 ## 2.1.1
 
 ### Changed

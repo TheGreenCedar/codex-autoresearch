@@ -5569,6 +5569,97 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
   });
 });
 
+test("config updates and clears guardrails and budgets", async () => {
+  await withTempDir("config-clears-guardrails-budgets", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "config clears", "--metric-name", "seconds"]);
+
+    const configured = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--commit-paths",
+      "src,tests",
+      "--protected-benchmark-paths",
+      "bench.mjs,fixtures",
+      "--secondary-metric-constraints",
+      "memory_mb <= baseline * 1.05",
+      "--secondary-metric-constraint-mode",
+      "blocking",
+      "--packet-budget",
+      "3",
+      "--wall-clock-budget-seconds",
+      "60",
+      "--budget-note",
+      "short cap",
+    ]);
+    assert.equal(configured.code, 0, configured.stderr);
+    const configuredPayload = JSON.parse(configured.stdout);
+    assert.deepEqual(configuredPayload.updates.commitPaths, ["src", "tests"]);
+    assert.deepEqual(configuredPayload.updates.protectedBenchmarkPaths, ["bench.mjs", "fixtures"]);
+    assert.equal(configuredPayload.updates.secondaryMetricConstraintMode, "blocking");
+    assert.equal(configuredPayload.updates.secondaryMetricConstraints[0].mode, undefined);
+    assert.equal(configuredPayload.updates.packetBudget, 3);
+    assert.equal(configuredPayload.updates.wallClockBudgetSeconds, 60);
+    assert.equal(configuredPayload.updates.budgetNote, "short cap");
+    assert.match(configuredPayload.updates.budgetStartedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const resetBudget = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--wall-clock-budget-seconds",
+      "120",
+    ]);
+    assert.equal(resetBudget.code, 0, resetBudget.stderr);
+    const resetPayload = JSON.parse(resetBudget.stdout);
+    assert.equal(resetPayload.updates.wallClockBudgetSeconds, 120);
+    assert.notEqual(
+      resetPayload.updates.budgetStartedAt,
+      configuredPayload.updates.budgetStartedAt,
+    );
+
+    const cleared = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--commit-paths",
+      "",
+      "--protected-benchmark-paths",
+      "",
+      "--secondary-metric-constraints",
+      "",
+      "--packet-budget",
+      "",
+      "--wall-clock-budget-seconds",
+      "",
+      "--budget-note",
+      "",
+    ]);
+    assert.equal(cleared.code, 0, cleared.stderr);
+    const clearedPayload = JSON.parse(cleared.stdout);
+    assert.deepEqual(clearedPayload.updates.commitPaths, []);
+    assert.deepEqual(clearedPayload.updates.protectedBenchmarkPaths, []);
+    assert.deepEqual(clearedPayload.updates.secondaryMetricConstraints, []);
+    assert.equal(clearedPayload.updates.packetBudget, null);
+    assert.equal(clearedPayload.updates.wallClockBudgetSeconds, null);
+    assert.equal(clearedPayload.updates.budgetNote, "");
+    assert.equal(clearedPayload.updates.budgetStartedAt, null);
+
+    const configFile = JSON.parse(
+      await readFile(path.join(dir, "autoresearch.config.json"), "utf8"),
+    );
+    assert.deepEqual(configFile.commitPaths, []);
+    assert.deepEqual(configFile.protectedBenchmarkPaths, []);
+    assert.deepEqual(configFile.secondaryMetricConstraints, []);
+    assert.equal(configFile.packetBudget, null);
+    assert.equal(configFile.wallClockBudgetSeconds, null);
+    assert.equal(configFile.budgetNote, "");
+    assert.equal(configFile.budgetStartedAt, null);
+  });
+});
+
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "asi file", "--metric-name", "seconds"]);

@@ -89,7 +89,7 @@ export function evaluateSecondaryMetricConstraints({
   const constraints = normalizeSecondaryMetricConstraints(
     config.secondaryMetricConstraints ?? config.secondary_metric_constraints,
     mode,
-  ).map((constraint) => ({ ...constraint, mode }));
+  );
   if (constraints.length === 0) {
     return {
       configured: false,
@@ -372,7 +372,8 @@ function compare(actual: number, operator: SecondaryMetricConstraintOperator, th
 }
 
 function numberValue(value: unknown): number | null {
-  if (value == null || value === "") return null;
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

@@ -209,6 +209,9 @@ export async function runShell(
     let metricOutputTruncated = false;
     let lastOutputAt: string | null = null;
     let timedOut = false;
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    let timeoutFallback: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
     const maxOutputBytes = positiveByteLimit(options.maxOutputBytes, OUTPUT_CAPTURE_BYTES);
     const maxFullOutputBytes = positiveByteLimit(
@@ -256,10 +259,45 @@ export async function runShell(
       output = boundedOutput.text;
       outputTruncated = outputTruncated || boundedOutput.truncated;
     };
-    const timeout = setTimeout(
+    const finish = ({
+      exitCode,
+      output: resultOutput,
+      fullOutput: resultFullOutput,
+    }: {
+      exitCode: number | null;
+      output: string;
+      fullOutput: string;
+    }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (timeoutFallback) clearTimeout(timeoutFallback);
+      if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
+      const retainedMetricOutput = retainedMetricText(retainedMetricLines);
+      resolve(
+        shellRunResult({
+          command,
+          exitCode,
+          timedOut,
+          startedAt,
+          startedAtIso,
+          lastOutputAt,
+          output: resultOutput,
+          fullOutput: resultFullOutput,
+          metricOutput,
+          retainedMetricOutput,
+          metricOutputTruncated,
+          outputTruncated,
+          fullOutputTruncated,
+          parsedMetrics: metricCollector.finish(),
+        }),
+      );
+    };
+    timeout = setTimeout(
       () => {
         timedOut = true;
         killProcess(child.pid);
+        timeoutFallback = setTimeout(() => finish({ exitCode: null, output, fullOutput }), 5000);
       },
       Math.max(1, timeoutSeconds) * 1000,
     );
@@ -270,51 +308,15 @@ export async function runShell(
       appendOutput(chunk.toString("utf8"));
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
       const errorText = String(error.stack || error.message || error);
-      const retainedMetricOutput = retainedMetricText(retainedMetricLines);
-      resolve(
-        shellRunResult({
-          command,
-          exitCode: null,
-          timedOut,
-          startedAt,
-          startedAtIso,
-          lastOutputAt,
-          output: errorText,
-          fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
-          metricOutput,
-          retainedMetricOutput,
-          metricOutputTruncated,
-          outputTruncated,
-          fullOutputTruncated,
-          parsedMetrics: metricCollector.finish(),
-        }),
-      );
+      finish({
+        exitCode: null,
+        output: errorText,
+        fullOutput: `${fullOutput}${fullOutput ? "\n" : ""}${errorText}`,
+      });
     });
     child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
-      const retainedMetricOutput = retainedMetricText(retainedMetricLines);
-      resolve(
-        shellRunResult({
-          command,
-          exitCode: code,
-          timedOut,
-          startedAt,
-          startedAtIso,
-          lastOutputAt,
-          output,
-          fullOutput,
-          metricOutput,
-          retainedMetricOutput,
-          metricOutputTruncated,
-          outputTruncated,
-          fullOutputTruncated,
-          parsedMetrics: metricCollector.finish(),
-        }),
-      );
+      finish({ exitCode: code, output, fullOutput });
     });
   });
 }
@@ -359,6 +361,9 @@ export async function runProcess(
     let stderrTruncated = false;
     let lastOutputAt: string | null = null;
     let timedOut = false;
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    let timeoutFallback: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
     const appendOutput = (target: "stdout" | "stderr", text: string) => {
       lastOutputAt = new Date().toISOString();
@@ -376,10 +381,40 @@ export async function runProcess(
         stderrTruncated = truncated;
       }
     };
-    const timeout = setTimeout(
+    const finish = ({
+      exitCode,
+      stdout: resultStdout,
+      stderr: resultStderr,
+    }: {
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+    }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (timeoutFallback) clearTimeout(timeoutFallback);
+      resolve(
+        processResult({
+          commandDisplay,
+          exitCode,
+          stdout: resultStdout,
+          stderr: resultStderr,
+          stdoutTruncated,
+          stderrTruncated,
+          timedOut,
+          startedAt,
+          startedAtIso,
+          lastOutputAt,
+          parsedMetrics: metricCollector.finish(),
+        }),
+      );
+    };
+    timeout = setTimeout(
       () => {
         timedOut = true;
         killProcess(child.pid);
+        timeoutFallback = setTimeout(() => finish({ exitCode: null, stdout, stderr }), 5000);
       },
       Math.max(1, Number(timeoutSeconds) || 1) * 1000,
     );
@@ -390,40 +425,14 @@ export async function runProcess(
       appendOutput("stderr", chunk.toString("utf8"));
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      resolve(
-        processResult({
-          commandDisplay,
-          exitCode: null,
-          stdout,
-          stderr: `${stderr}${stderr ? "\n" : ""}${error.message || String(error)}`,
-          stdoutTruncated,
-          stderrTruncated,
-          timedOut,
-          startedAt,
-          startedAtIso,
-          lastOutputAt,
-          parsedMetrics: metricCollector.finish(),
-        }),
-      );
+      finish({
+        exitCode: null,
+        stdout,
+        stderr: `${stderr}${stderr ? "\n" : ""}${error.message || String(error)}`,
+      });
     });
     child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve(
-        processResult({
-          commandDisplay,
-          exitCode: code,
-          stdout,
-          stderr,
-          stdoutTruncated,
-          stderrTruncated,
-          timedOut,
-          startedAt,
-          startedAtIso,
-          lastOutputAt,
-          parsedMetrics: metricCollector.finish(),
-        }),
-      );
+      finish({ exitCode: code, stdout, stderr });
     });
   });
 }

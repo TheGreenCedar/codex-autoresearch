@@ -3964,6 +3964,23 @@ async function writeRuntimeConfig(sessionCwd: any, updates: any) {
 
 function runtimeConfigUpdatesFromArgs(args: LooseObject) {
   const updates: LooseObject = {};
+  const hasPacketBudget = hasAnyArg(args, "packet_budget", "packetBudget");
+  const hasWallClockBudgetSeconds = hasAnyArg(
+    args,
+    "wall_clock_budget_seconds",
+    "wallClockBudgetSeconds",
+  );
+  const hasBudgetNote = hasAnyArg(args, "budget_note", "budgetNote");
+  const hasProtectedBenchmarkPaths = hasAnyArg(
+    args,
+    "protected_benchmark_paths",
+    "protectedBenchmarkPaths",
+  );
+  const hasSecondaryMetricConstraints = hasAnyArg(
+    args,
+    "secondary_metric_constraints",
+    "secondaryMetricConstraints",
+  );
   const autonomyMode = enumOption(
     args.autonomy_mode ?? args.autonomyMode,
     AUTONOMY_MODES,
@@ -4006,8 +4023,10 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
     null,
     "secondaryMetricConstraintMode",
   );
+  const rawSecondaryMetricConstraints =
+    args.secondary_metric_constraints ?? args.secondaryMetricConstraints;
   const secondaryMetricConstraints = normalizeSecondaryMetricConstraints(
-    args.secondary_metric_constraints ?? args.secondaryMetricConstraints,
+    rawSecondaryMetricConstraints,
     normalizeSecondaryMetricConstraintMode(secondaryMetricConstraintMode, "advisory"),
   );
   if (autonomyMode) updates.autonomyMode = autonomyMode;
@@ -4015,24 +4034,57 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
   if (keepPolicy) updates.keepPolicy = keepPolicy;
   if (dashboardRefreshSeconds != null)
     updates.dashboardRefreshSeconds = Math.max(1, Math.floor(dashboardRefreshSeconds));
-  if (packetBudget != null) updates.packetBudget = packetBudget;
-  if (wallClockBudgetSeconds != null) updates.wallClockBudgetSeconds = wallClockBudgetSeconds;
-  if (budgetNote) updates.budgetNote = budgetNote;
-  if (protectedBenchmarkPaths.length > 0) updates.protectedBenchmarkPaths = protectedBenchmarkPaths;
+  if (hasPacketBudget) updates.packetBudget = packetBudget;
+  if (hasWallClockBudgetSeconds) updates.wallClockBudgetSeconds = wallClockBudgetSeconds;
+  if (hasBudgetNote) updates.budgetNote = budgetNote;
+  if (hasProtectedBenchmarkPaths) updates.protectedBenchmarkPaths = protectedBenchmarkPaths;
   if (secondaryMetricConstraintMode)
     updates.secondaryMetricConstraintMode = secondaryMetricConstraintMode;
-  if (secondaryMetricConstraints.length > 0)
-    updates.secondaryMetricConstraints = secondaryMetricConstraints.map((constraint) => ({
+  if (hasSecondaryMetricConstraints)
+    updates.secondaryMetricConstraints = serializeSecondaryMetricConstraints(
+      rawSecondaryMetricConstraints,
+      secondaryMetricConstraints,
+    );
+  if (packetBudget != null || wallClockBudgetSeconds != null) {
+    updates.budgetStartedAt = new Date().toISOString();
+  } else if (hasWallClockBudgetSeconds) {
+    updates.budgetStartedAt = null;
+  }
+  return updates;
+}
+
+function hasAnyArg(args: LooseObject, ...names: string[]): boolean {
+  return names.some((name) => Object.hasOwn(args, name) && args[name] !== undefined);
+}
+
+function serializeSecondaryMetricConstraints(
+  rawInput: unknown,
+  constraints: Array<{
+    expression: string;
+    id: string;
+    metric: string;
+    mode: "advisory" | "blocking";
+    operator: string;
+  }>,
+): LooseObject[] {
+  return constraints.map((constraint, index) => {
+    const serialized: LooseObject = {
       id: constraint.id,
       metric: constraint.metric,
       operator: constraint.operator,
       expression: constraint.expression,
-      mode: constraint.mode,
-    }));
-  if (packetBudget != null || wallClockBudgetSeconds != null) {
-    updates.budgetStartedAt = new Date().toISOString();
+    };
+    if (secondaryConstraintModeWasExplicit(rawInput, index)) serialized.mode = constraint.mode;
+    return serialized;
+  });
+}
+
+function secondaryConstraintModeWasExplicit(rawInput: unknown, index: number): boolean {
+  if (Array.isArray(rawInput)) {
+    const item = rawInput[index];
+    return Boolean(item && typeof item === "object" && Object.hasOwn(item, "mode"));
   }
-  return updates;
+  return Boolean(rawInput && typeof rawInput === "object" && Object.hasOwn(rawInput, "mode"));
 }
 
 async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject) {
@@ -4742,6 +4794,7 @@ async function configureSession(args: LooseObject) {
     "maxIterations",
   );
   const extend = nonNegativeIntegerOption(args.extend ?? args.extendLimit, null, "extend");
+  const hasCommitPaths = hasAnyArg(args, "commit_paths", "commitPaths");
   const commitPaths = normalizeRelativePaths(args.commit_paths ?? args.commitPaths, "commitPaths");
   if (maxIterations != null) updates.maxIterations = maxIterations;
   if (extend != null) {
@@ -4752,7 +4805,7 @@ async function configureSession(args: LooseObject) {
       : activeRuns;
     updates.maxIterations = Math.max(currentMax, activeRuns) + extend;
   }
-  if (commitPaths.length > 0) updates.commitPaths = commitPaths;
+  if (hasCommitPaths) updates.commitPaths = commitPaths;
   const nextConfig = await writeRuntimeConfig(sessionCwd, updates);
   return {
     ok: true,

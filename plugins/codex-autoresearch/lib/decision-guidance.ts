@@ -2,8 +2,9 @@ import path from "node:path";
 import { evaluateGateQuality } from "./gate-quality.js";
 import { buildPreflightAudit } from "./preflight-audit.js";
 import { inspectRuntimeDrift } from "./runtime-drift-doctor.js";
+import { unknownRecordOrEmpty, unknownRecordOrNull, type UnknownRecord } from "./types/json.js";
 
-type LooseObject = Record<string, any>;
+type LooseObject = UnknownRecord;
 
 export interface DecisionGuidanceInput {
   workDir: string;
@@ -40,12 +41,15 @@ export async function buildDecisionGuidanceContext({
   shellQuote,
   errorMessage,
 }: DecisionGuidanceInput): Promise<LooseObject> {
+  const configRecord = unknownRecordOrEmpty(config);
+  const stateRecord = unknownRecordOrEmpty(state);
+  const stateConfig = unknownRecordOrEmpty(stateRecord.config);
   const resolvedBenchmarkCommand =
     cleanString(benchmarkCommand) ||
     (await defaultBenchmarkCommandOrEmpty(defaultBenchmarkCommand, workDir));
   const resolvedChecksCommand =
     cleanString(checksCommand) || cleanString(await defaultChecksCommand(workDir));
-  const metricName = state?.config?.metricName || config?.metricName || "metric";
+  const metricName = cleanString(stateConfig.metricName || configRecord.metricName) || "metric";
   const benchmarkLintCommand = resolvedBenchmarkCommand
     ? `node ${shellQuote(path.join(pluginRoot, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(resolvedBenchmarkCommand)}`
     : "";
@@ -66,9 +70,9 @@ export async function buildDecisionGuidanceContext({
   const gateQuality = evaluateGateQuality({
     benchmarkCommand: resolvedBenchmarkCommand,
     checksCommand: resolvedChecksCommand,
-    checksPolicy: config?.checksPolicy || "always",
+    checksPolicy: cleanString(configRecord.checksPolicy) || "always",
     checksRequired: stringList(setupMissing).includes("checks_command"),
-    promotion: state?.promotion || null,
+    promotion: unknownRecordOrNull(stateRecord.promotion),
     holdout: holdoutMetadata(config),
   });
 
@@ -84,7 +88,7 @@ export async function buildDecisionGuidanceContext({
       warningDetails,
       runtimeDrift: runtimeSummary,
       setupMissing,
-      runs: Array.isArray(state?.current) ? state.current.length : state?.runs,
+      runs: Array.isArray(stateRecord.current) ? stateRecord.current.length : stateRecord.runs,
     }),
     runtimeDriftSummary: runtimeSummary,
   };
@@ -102,7 +106,8 @@ async function defaultBenchmarkCommandOrEmpty(
 }
 
 function holdoutMetadata(config: LooseObject | null | undefined): LooseObject | null {
-  if (!config) return null;
+  const record = unknownRecordOrEmpty(config);
+  if (!Object.keys(record).length) return null;
   const fields = [
     "holdoutCommand",
     "holdout_command",
@@ -114,7 +119,7 @@ function holdoutMetadata(config: LooseObject | null | undefined): LooseObject | 
     "benchmark_integrity_command",
   ];
   for (const field of fields) {
-    if (config[field]) return { [field]: config[field] };
+    if (record[field]) return { [field]: record[field] };
   }
   return null;
 }
