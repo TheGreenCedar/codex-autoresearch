@@ -13,11 +13,29 @@ const DEFAULT_USAGE_LINES = [
   "  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]",
 ];
 
+const SETUP_GUIDANCE_FLAGS = [
+  "[--recipe <id>]",
+  "[--catalog <path-or-url>]",
+  "[--trust-catalog]",
+  "[--name <name>]",
+  "[--metric-name <name>]",
+  "[--benchmark-command <cmd>]",
+  "[--checks-command <cmd>]",
+  "[--commit-paths <paths>]",
+  "[--protected-benchmark-paths <paths>]",
+  "[--secondary-metric-constraints <rules>]",
+  "[--secondary-metric-constraint-mode advisory|blocking]",
+  "[--max-iterations <n>]",
+  "[--packet-budget <n>]",
+  "[--wall-clock-budget-seconds <n>]",
+  "[--budget-note <text>]",
+].join(" ");
+
 const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
   "  node scripts/autoresearch.mjs setup --cwd <project> --interactive",
-  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
-  "  node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--commit-paths <paths>] [--max-iterations <n>]",
+  `  node scripts/autoresearch.mjs setup-plan --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
+  `  node scripts/autoresearch.mjs guide --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
   "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
   "  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]",
   "  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]",

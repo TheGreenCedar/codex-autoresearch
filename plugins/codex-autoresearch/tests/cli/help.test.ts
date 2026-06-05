@@ -23,3 +23,22 @@ test("full help preserves advanced and maintainer commands", () => {
   assert.match(help, /clear --cwd <project>/);
   assert.doesNotMatch(help, /Run `--help --all`/);
 });
+
+test("full help documents shared setup guardrails for guide", () => {
+  const help = renderCliHelp({ all: true });
+  const guideLine = help
+    .split("\n")
+    .find((line) => line.includes("node scripts/autoresearch.mjs guide --cwd <project>"));
+
+  assert.ok(guideLine, "guide usage line should be present");
+  for (const flag of [
+    "--protected-benchmark-paths",
+    "--secondary-metric-constraints",
+    "--secondary-metric-constraint-mode",
+    "--packet-budget",
+    "--wall-clock-budget-seconds",
+    "--budget-note",
+  ]) {
+    assert.match(guideLine, new RegExp(flag));
+  }
+});
