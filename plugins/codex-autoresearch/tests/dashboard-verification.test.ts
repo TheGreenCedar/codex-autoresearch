@@ -3020,6 +3020,14 @@ test("served dashboard live refresh starts by default and can be stopped", async
   const viewModel = {
     summary: { segment: 0, baseline: 1, best: 1, confidence: 1 },
   };
+  const refreshedEntries = [
+    ...entries,
+    { type: "run", run: 2, metric: 0, status: "keep", description: "Improved", confidence: 2 },
+  ];
+  const liveViewModel = {
+    summary: { segment: 0, baseline: 1, best: 0, confidence: 2, runs: 2 },
+    ledgerEntries: refreshedEntries,
+  };
   const { getById, dom } = await runDashboard(
     entries,
     {
@@ -3037,11 +3045,13 @@ test("served dashboard live refresh starts by default and can be stopped", async
         window.fetch = async (url) => {
           window.__refreshFetches.push(String(url));
           if (String(url).includes("view-model")) {
-            return { ok: true, json: async () => viewModel };
+            return { ok: true, json: async () => liveViewModel };
           }
           return {
-            ok: true,
-            text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n"),
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
           };
         };
         window.setInterval = (callback, ms) => {
@@ -3064,16 +3074,17 @@ test("served dashboard live refresh starts by default and can be stopped", async
 
   assert.equal(dom.window.__liveInterval.ms, 1234);
   await waitFor(
-    () => dom.window.__refreshFetches.length >= 2,
+    () => dom.window.__refreshFetches.length >= 1,
     "Live dashboard did not refresh immediately.",
   );
-  assert.deepEqual(dom.window.__refreshFetches.slice(0, 2), [
-    "autoresearch.jsonl",
-    "view-model.json",
-  ]);
+  await waitFor(
+    () => getById("runs-value").textContent === "2 (2 kept)",
+    "Live dashboard did not refresh from embedded view-model entries.",
+  );
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(dom.window.__liveIntervalCalls, 1);
-  assert.equal(dom.window.__refreshFetches.length, 2);
+  assert.equal(dom.window.__refreshFetches.length, 1);
   assert.deepEqual(dom.window.__clearedLiveIntervals, []);
 
   getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
