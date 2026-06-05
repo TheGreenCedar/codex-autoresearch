@@ -98,6 +98,7 @@ When behavior, architecture, command surfaces, dashboard behavior, safety rules,
 - CLI help, schemas, tests, and `scripts/perfection-benchmark.mjs` when command contracts or product expectations change
 
 Keep root-relative links valid. Prefer rewriting stale guidance over appending duplicates.
+Removed invocation surfaces need migration notes.
 
 ## Autoresearch Safety
 
