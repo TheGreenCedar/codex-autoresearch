@@ -78,7 +78,7 @@ const TOOL_REGISTRY = [
   registryEntry("new_segment", "new-segment", "state_mutation", "advanced", "advanced"),
   registryEntry("promote_gate", "promote-gate", "state_mutation", "advanced", "advanced"),
   registryEntry("export_dashboard", "export", "artifact_write", "advanced", "advanced"),
-  registryEntry("serve_dashboard", "serve", "process_start", "advanced", "default"),
+  registryEntry("serve_dashboard", "serve", "process_start", "advanced", "advanced"),
   registryEntry("doctor_session", "doctor", "read", "happy_path", "default"),
   registryEntry("clear_session", "clear", "destructive", "dangerous", "maintainer"),
 ] satisfies ToolRegistryEntry[];

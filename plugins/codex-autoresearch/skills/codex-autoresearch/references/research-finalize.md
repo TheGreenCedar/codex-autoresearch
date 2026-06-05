@@ -10,7 +10,7 @@ Use research loops for broad, qualitative, product-study, UX, architecture, or d
 
 ## Fanout
 
-Use `research-fanout --dry-run` when serial packets are burning time. Dispatch read-only scout lanes first. Implementation lanes need an explicit worktree or write scope before mutating commands run. Big-idea lanes are advice only and require human approval before measured packet work.
+Use `research-fanout --dry-run` when serial packets are burning time. Dispatch read-only scout lanes first. Implementation lanes need an explicit worktree or write scope before mutating commands run. Big-idea lanes are advice only and require human approval before measured packet work; record approval on the follow-up lane with `lane-runner --mode implementation --human-approval --worktree <path>`.
 
 ## Finalization
 

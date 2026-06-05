@@ -9,7 +9,7 @@
 
 Codex Autoresearch helps Codex turn "make this better" into a measured loop.
 
-Give Codex a goal, a benchmark contract, and scoped staging, revert, and finalization boundaries. Codex can run small experiment packets, keep or discard changes with evidence, preserve ASI and metrics across context loss, and package useful work for review.
+Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs each keep or discard with evidence, preserves ASI and metrics across context loss, and turns useful changes into reviewable branches.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
@@ -50,7 +50,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, starting the dashboard, running one packet, and logging the result with experiment details.
+Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one packet, and logging the result with experiment details. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
 
 ## Install
 
@@ -93,7 +93,7 @@ Codex Autoresearch helps Codex:
 5. inspect the compact state before spending another packet
 6. preview finalization into reviewable branches when the kept evidence is ready
 
-That happy path is the default help surface. `serve` is the live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
+That happy path is the default help surface. `serve` is an optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
@@ -117,7 +117,8 @@ Use Codex Autoresearch when:
 
 * the goal can be measured
 * the benchmark is repeatable
-* known tradeoffs can be expressed as protected benchmark files or secondary metric constraints
+* benchmark-contract files can be protected from quiet drift
+* known tradeoffs can be expressed as secondary metric constraints
 * correctness checks exist or can be added
 * the editable scope is small enough to review
 * kept work should become reviewable commits or branches
@@ -134,7 +135,7 @@ Protected benchmark folders are recursively inspected and hashed. Keep them smal
 
 ## Dashboard
 
-Ask codex to boot up the dashboard if it hasn't already.
+Ask Codex to serve the dashboard when you want a live visual readout, packet freshness matters, or a stale/static export is confusing the decision.
 
 The dashboard shows:
 
