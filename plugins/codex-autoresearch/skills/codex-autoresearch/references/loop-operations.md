@@ -21,7 +21,7 @@ Setup and config can record `packetBudget`, `wallClockBudgetSeconds`, and `budge
 
 - `config --packet-budget <n>` updates the packet budget.
 - `config --wall-clock-budget-seconds <n>` resets the wall-clock window from the time of config.
-- `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""` clears those budget fields.
+- `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""` clears those budget fields in the CLI; tool callers can use `clear_packet_budget` and `clear_wall_clock_budget`.
 - Packet and wall-clock budgets are not API spend tracking. Treat them as stop/rescope signals.
 
 ## Logging Discipline

@@ -22,7 +22,7 @@ CLI commands return structured content; prefer `--json-full`, `--compact`, or th
 
 Setup can record `packetBudget`, `wallClockBudgetSeconds`, and `budgetNote`. State, report, and dashboard decision guidance treat exhausted budgets as stop/rescope signals: extend the budget, start a new segment, preview finalization, or ask the operator what to trade off next.
 
-Use `config --packet-budget <n>` to change the packet cap. Use `config --wall-clock-budget-seconds <n>` to change the wall-clock cap and reset the wall-clock window from the time of configuration. Pass an empty value intentionally to clear a budget field, for example `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""`.
+Use `config --packet-budget <n>` to change the packet cap. Use `config --wall-clock-budget-seconds <n>` to change the wall-clock cap and reset the wall-clock window from the time of configuration. Packet-only changes do not reset the wall-clock window. Pass an empty value intentionally to clear a budget field in the CLI, for example `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""`; tool callers can use `clear_packet_budget` and `clear_wall_clock_budget`.
 
 Do not describe a packet or wall-clock budget as API spend tracking. Autoresearch only tracks the configured packet count and elapsed wall-clock budget unless an external integration supplies separate spend evidence.
 
