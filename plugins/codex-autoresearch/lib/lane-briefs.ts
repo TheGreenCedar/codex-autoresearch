@@ -11,6 +11,27 @@ type LaneBriefRecord = Record<string, unknown>;
 
 const MAX_LESSONS = 8;
 const MAX_LESSON_LENGTH = 180;
+const MAX_RECOMMENDATION_LENGTH = 700;
+const MAX_RECOMMENDATION_ITEMS = 5;
+const MAX_RECOMMENDATION_ITEM_LENGTH = 220;
+
+export interface BoundedLaneRecommendation {
+  summary: string;
+  recommendation: string;
+  evidence: string[];
+  risks: string[];
+  approvalRequired: boolean;
+  approvalGate: string;
+}
+
+export interface BoundedLaneRecommendationInput {
+  summary?: unknown;
+  recommendation?: unknown;
+  evidence?: unknown;
+  risks?: unknown;
+  fallbackSummary?: string;
+  fallbackRecommendation?: string;
+}
 
 function isRecord(value: unknown): value is LaneBriefRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -29,7 +50,9 @@ function normalizeString(value: unknown, fallback: string): string {
 
 function normalizeStringList(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) {
-    return fallback.filter((item) => item.trim().length > 0).map((item) => item.trim());
+    const split = splitStringList(value);
+    const source = split.length > 0 ? split : fallback;
+    return source.filter((item) => item.trim().length > 0).map((item) => item.trim());
   }
 
   return value
@@ -51,6 +74,38 @@ export function normalizeLaneBrief(input: unknown, fallback: LaneBrief): LaneBri
       fallback.expectedDecisionOutput,
     ),
     lessonsToAvoid: normalizeStringList(record.lessonsToAvoid, fallback.lessonsToAvoid ?? []),
+  };
+}
+
+export function normalizeBoundedLaneRecommendation(
+  input: BoundedLaneRecommendationInput,
+): BoundedLaneRecommendation {
+  const summary = boundedText(
+    input.summary,
+    input.fallbackSummary || "Architecture hypothesis recorded for human review.",
+    MAX_RECOMMENDATION_LENGTH,
+  );
+  const recommendation = boundedText(
+    input.recommendation,
+    input.fallbackRecommendation ||
+      "Ask the operator to approve or reject this architecture direction before implementation.",
+    MAX_RECOMMENDATION_LENGTH,
+  );
+  const evidence = boundedList(input.evidence, [
+    "Lane author did not provide separate evidence; read the summary before approving.",
+  ]);
+  const risks = boundedList(input.risks, [
+    "Architecture-scale changes can invalidate local metric evidence and should not start without operator approval.",
+  ]);
+
+  return {
+    summary,
+    recommendation,
+    evidence,
+    risks,
+    approvalRequired: true,
+    approvalGate:
+      "Human approval is required before any implementation lane or measured packet uses this recommendation.",
   };
 }
 
@@ -123,4 +178,33 @@ export function summarizeLaneLessons(results: unknown[]): string[] {
   }
 
   return lessons;
+}
+
+function boundedText(value: unknown, fallback: string, maxLength: number): string {
+  const text = normalizeString(value, fallback).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const breakpoint = text.lastIndexOf(" ", maxLength - 3);
+  const end = breakpoint > 0 ? breakpoint : maxLength - 3;
+  return `${text.slice(0, end).trimEnd()}...`;
+}
+
+function boundedList(value: unknown, fallback: string[]): string[] {
+  const items = normalizeStringList(value, fallback)
+    .map((item) => boundedText(item, "", MAX_RECOMMENDATION_ITEM_LENGTH))
+    .filter((item) => item.length > 0);
+  return items.slice(0, MAX_RECOMMENDATION_ITEMS);
+}
+
+function splitStringList(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(/\r?\n|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

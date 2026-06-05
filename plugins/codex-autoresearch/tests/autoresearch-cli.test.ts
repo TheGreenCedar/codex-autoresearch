@@ -1638,6 +1638,80 @@ test("command and env files are included in benchmark contract drift", async () 
   });
 });
 
+test("packet env mode is part of benchmark contract and doctor recheck", async () => {
+  await withTempDir("packet-env-mode-contract", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "env mode contract",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    const scriptPath = path.join(dir, "env-mode-runner.mjs");
+    await writeFile(
+      scriptPath,
+      [
+        "const inherited = process.env.AUTORESEARCH_ENV_MODE_REVIEW === 'parent';",
+        "console.log(`METRIC score=${inherited ? 2 : 1}`);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const command = `${quoteForShell(process.execPath)} ${quoteForShell(scriptPath)}`;
+    const previous = process.env.AUTORESEARCH_ENV_MODE_REVIEW;
+    process.env.AUTORESEARCH_ENV_MODE_REVIEW = "parent";
+    try {
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        command,
+        "--packet-env-mode",
+        "minimal",
+        "--checks-policy",
+        "manual",
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+      assert.equal(JSON.parse(packet.stdout).run.parsedPrimary, 1);
+
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "keep",
+        "--description",
+        "Keep minimal env packet",
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+      const loggedPayload = JSON.parse(logged.stdout);
+      assert.equal(loggedPayload.experiment.benchmarkContract.packetEnvMode, "minimal");
+
+      const doctor = await runCli([
+        "doctor",
+        "--cwd",
+        dir,
+        "--command",
+        command,
+        "--check-benchmark",
+      ]);
+      assert.equal(doctor.code, 0, doctor.stderr);
+      const doctorPayload = JSON.parse(doctor.stdout);
+      assert.equal(doctorPayload.benchmark.packetEnvMode, "minimal");
+      assert.equal(doctorPayload.benchmark.parsedMetrics.score, 1);
+    } finally {
+      if (previous == null) delete process.env.AUTORESEARCH_ENV_MODE_REVIEW;
+      else process.env.AUTORESEARCH_ENV_MODE_REVIEW = previous;
+    }
+  });
+});
+
 test("state separates development best from promotion-grade best", async () => {
   await withTempDir("promotion-tracks", async (dir) => {
     await runCli([
@@ -1776,6 +1850,59 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
     assert.equal(lane.status, "completed");
     assert.equal(lane.evidenceStatus, "accepted");
     assert.equal(typeof lane.brief.objective, "string");
+  });
+});
+
+test("lane-runner records big-idea lanes as approval-gated advice only", async () => {
+  await withTempDir("lane-runner-big-idea", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "big idea", "--metric-name", "quality_gap"]);
+
+    const blockedCommand = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--mode",
+      "big_idea",
+      "--command",
+      "node -e \"console.log('METRIC quality_gap=0')\"",
+    ]);
+    assert.notEqual(blockedCommand.code, 0);
+    assert.match(blockedCommand.stderr, /cannot run commands/i);
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "architecture-scout",
+      "--mode",
+      "big_idea",
+      "--summary",
+      "Explore a distant architecture split for benchmark isolation.",
+      "--recommendation",
+      "Ask the operator before creating an implementation lane.",
+      "--evidence",
+      "Current loop has repeated local tweaks; benchmark trust is the bottleneck.",
+      "--risks",
+      "Architecture work can invalidate current metric history.",
+      "--yes",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.lane.mode, "big_idea");
+    assert.equal(payload.result.command, "");
+    assert.equal(payload.result.approvalRequired, true);
+    assert.equal(payload.result.approvalGate.required, true);
+    assert.deepEqual(payload.result.approvalGate.requiredBefore, [
+      "implementation_lane",
+      "measured_packet",
+    ]);
+    assert.match(payload.result.summary, /distant architecture/i);
+    assert.match(payload.result.recommendation, /operator/i);
+    assert.match(payload.result.evidence.join("\n"), /benchmark trust/i);
+    assert.match(payload.result.risks.join("\n"), /invalidate/i);
+    assert.equal(payload.coordinatorRecommendation.status, "awaiting_human_approval");
+    assert.match(payload.coordinatorRecommendation.measuredPacket, /Blocked/i);
   });
 });
 
@@ -5516,6 +5643,122 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
   });
 });
 
+test("config updates and clears guardrails and budgets", async () => {
+  await withTempDir("config-clears-guardrails-budgets", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "config clears", "--metric-name", "seconds"]);
+
+    const configured = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--commit-paths",
+      "src,tests",
+      "--protected-benchmark-paths",
+      "bench.mjs,fixtures",
+      "--secondary-metric-constraints",
+      "memory_mb <= baseline * 1.05",
+      "--secondary-metric-constraint-mode",
+      "blocking",
+      "--packet-budget",
+      "3",
+      "--wall-clock-budget-seconds",
+      "60",
+      "--budget-note",
+      "short cap",
+    ]);
+    assert.equal(configured.code, 0, configured.stderr);
+    const configuredPayload = JSON.parse(configured.stdout);
+    assert.deepEqual(configuredPayload.updates.commitPaths, ["src", "tests"]);
+    assert.deepEqual(configuredPayload.updates.protectedBenchmarkPaths, ["bench.mjs", "fixtures"]);
+    assert.equal(configuredPayload.updates.secondaryMetricConstraintMode, "blocking");
+    assert.equal(configuredPayload.updates.secondaryMetricConstraints[0].mode, undefined);
+    assert.equal(configuredPayload.updates.packetBudget, 3);
+    assert.equal(configuredPayload.updates.wallClockBudgetSeconds, 60);
+    assert.equal(configuredPayload.updates.budgetNote, "short cap");
+    assert.match(configuredPayload.updates.budgetStartedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const resetBudget = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--wall-clock-budget-seconds",
+      "120",
+    ]);
+    assert.equal(resetBudget.code, 0, resetBudget.stderr);
+    const resetPayload = JSON.parse(resetBudget.stdout);
+    assert.equal(resetPayload.updates.wallClockBudgetSeconds, 120);
+    assert.notEqual(
+      resetPayload.updates.budgetStartedAt,
+      configuredPayload.updates.budgetStartedAt,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const packetOnlyBudget = await runCli(["config", "--cwd", dir, "--packet-budget", "10"]);
+    assert.equal(packetOnlyBudget.code, 0, packetOnlyBudget.stderr);
+    const packetOnlyPayload = JSON.parse(packetOnlyBudget.stdout);
+    assert.equal(packetOnlyPayload.updates.packetBudget, 10);
+    assert.equal(packetOnlyPayload.updates.budgetStartedAt, undefined);
+    const packetOnlyConfigFile = JSON.parse(
+      await readFile(path.join(dir, "autoresearch.config.json"), "utf8"),
+    );
+    assert.equal(packetOnlyConfigFile.budgetStartedAt, resetPayload.updates.budgetStartedAt);
+
+    const missingPacketBudget = await runCli(["config", "--cwd", dir, "--packet-budget"]);
+    assert.notEqual(missingPacketBudget.code, 0);
+    assert.match(missingPacketBudget.stderr, /Expected a number, got true/);
+
+    const missingWallClockBudget = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--wall-clock-budget-seconds",
+    ]);
+    assert.notEqual(missingWallClockBudget.code, 0);
+    assert.match(missingWallClockBudget.stderr, /Expected a number, got true/);
+
+    const cleared = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--commit-paths",
+      "",
+      "--protected-benchmark-paths",
+      "",
+      "--secondary-metric-constraints",
+      "",
+      "--packet-budget",
+      "",
+      "--wall-clock-budget-seconds",
+      "",
+      "--budget-note",
+      "",
+    ]);
+    assert.equal(cleared.code, 0, cleared.stderr);
+    const clearedPayload = JSON.parse(cleared.stdout);
+    assert.deepEqual(clearedPayload.updates.commitPaths, []);
+    assert.deepEqual(clearedPayload.updates.protectedBenchmarkPaths, []);
+    assert.deepEqual(clearedPayload.updates.secondaryMetricConstraints, []);
+    assert.equal(clearedPayload.updates.packetBudget, null);
+    assert.equal(clearedPayload.updates.wallClockBudgetSeconds, null);
+    assert.equal(clearedPayload.updates.budgetNote, "");
+    assert.equal(clearedPayload.updates.budgetStartedAt, null);
+
+    const configFile = JSON.parse(
+      await readFile(path.join(dir, "autoresearch.config.json"), "utf8"),
+    );
+    assert.deepEqual(configFile.commitPaths, []);
+    assert.deepEqual(configFile.protectedBenchmarkPaths, []);
+    assert.deepEqual(configFile.secondaryMetricConstraints, []);
+    assert.equal(configFile.packetBudget, null);
+    assert.equal(configFile.wallClockBudgetSeconds, null);
+    assert.equal(configFile.budgetNote, "");
+    assert.equal(configFile.budgetStartedAt, null);
+  });
+});
+
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "asi file", "--metric-name", "seconds"]);
@@ -5696,6 +5939,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const readState = toolSchemas.find((tool) => tool.name === "read_state");
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
+  const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
 
   assert.ok(guided);
   assert.ok(researchFanout);
@@ -5704,6 +5948,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(readState);
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
+  assert.ok(configureSession);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -5729,6 +5974,8 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.outputSchema.properties.workDir.type, "string");
   assert.equal(guided.inputSchema.properties.start_dashboard.type, "boolean");
   assert.equal(guided.inputSchema.properties.port.type, "number");
+  assert.equal(configureSession.inputSchema.properties.clear_packet_budget.type, "boolean");
+  assert.equal(configureSession.inputSchema.properties.clear_wall_clock_budget.type, "boolean");
   assert.equal(readState.inputSchema.properties.report.type, "boolean");
   assert.equal(readState.outputSchema.properties.report.type, "object");
   assert.equal(readState.outputSchema.properties.dashboardHealth.type, "object");
@@ -5910,6 +6157,22 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     }),
   );
   assert.equal(normalizeToolArguments("clear_session", { yes: true }).confirm, true);
+
+  const configArgs = validateToolArguments("configure_session", {
+    workingDir: "C:/repo",
+    clearPacketBudget: true,
+    clearWallClockBudget: true,
+  });
+  assert.deepEqual(configArgs, {
+    working_dir: "C:/repo",
+    clear_packet_budget: true,
+    clear_wall_clock_budget: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("configure_session", configArgs), {
+    cwd: "C:/repo",
+    clearPacketBudget: true,
+    clearWallClockBudget: true,
+  });
 
   const laneRunnerArgs = validateToolArguments("lane_runner", {
     workingDir: "C:/repo",

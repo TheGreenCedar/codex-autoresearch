@@ -1,4 +1,5 @@
 import type { ShellRunResult } from "../runner.js";
+import { normalizeBoundedLaneRecommendation } from "../lane-briefs.js";
 
 type LooseObject = Record<string, any>;
 
@@ -70,6 +71,10 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     const mode = deps.normalizeLaneMode(args.mode, lane.mode);
     const dryRun = deps.boolOption(args.dry_run ?? args.dryRun, !deps.boolOption(args.yes, false));
     const command = String(args.command || "").trim();
+    const humanApproval = deps.boolOption(
+      args.human_approval ?? args.humanApproval ?? args.approved,
+      false,
+    );
     const timeBudgetSeconds =
       deps.positiveIntegerOption(
         args.time_budget_seconds ??
@@ -86,6 +91,18 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     const worktreePath = String(
       args.worktree_path || args.worktreePath || args.worktree || "",
     ).trim();
+    if (mode === "big_idea") {
+      if (command) {
+        throw new Error(
+          "Big-idea lanes are read-only advice lanes and cannot run commands. Record summary, evidence, risks, and recommendation instead.",
+        );
+      }
+      if (worktreePath || writeScope.length > 0) {
+        throw new Error(
+          "Big-idea lanes cannot declare worktrees or write scopes because they cannot mutate source files.",
+        );
+      }
+    }
     if (mode === "implementation" && !worktreePath && writeScope.length === 0) {
       throw new Error(
         "Implementation lanes require explicit isolation: pass --worktree <path> or --write-scope <paths> before running.",
@@ -158,28 +175,63 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     const explicitRecommendation = String(
       args.recommendation || args.next_action || args.nextAction || "",
     ).trim();
+    const bigIdeaRecommendation =
+      mode === "big_idea"
+        ? normalizeBoundedLaneRecommendation({
+            summary: explicitSummary,
+            recommendation: explicitRecommendation || lane.nextActionHint,
+            evidence: args.evidence,
+            risks: args.risks,
+            fallbackSummary:
+              lane.brief?.objective || "Distant architecture hypothesis recorded for human review.",
+            fallbackRecommendation:
+              lane.nextActionHint ||
+              "Ask the operator to approve or reject this architecture direction before implementation.",
+          })
+        : null;
     const resultStatus =
       args.result_status ||
       args.resultStatus ||
+      (humanApproval ? "approved" : "") ||
       (commandResult
         ? commandResult.code === 0 && !commandResult.timedOut
           ? "completed"
           : "failed"
-        : explicitSummary || explicitRecommendation
+        : explicitSummary || explicitRecommendation || bigIdeaRecommendation
           ? "completed"
           : "planned");
     const commandSucceeded =
       commandResult && Number(commandResult.code) === 0 && commandResult.timedOut !== true;
+    const normalizedResultStatus = String(resultStatus).toLowerCase();
     const evidenceAccepted = Boolean(
-      String(resultStatus).toLowerCase() === "completed" &&
+      (normalizedResultStatus === "completed" || normalizedResultStatus === "approved") &&
       (commandSucceeded || explicitSummary || explicitRecommendation),
     );
     const result = {
       status: resultStatus,
       summary:
-        explicitSummary || (commandResult ? "Lane command completed." : "Lane result recorded."),
-      recommendation: explicitRecommendation || lane.nextActionHint,
+        bigIdeaRecommendation?.summary ||
+        explicitSummary ||
+        (commandResult ? "Lane command completed." : "Lane result recorded."),
+      recommendation:
+        bigIdeaRecommendation?.recommendation || explicitRecommendation || lane.nextActionHint,
       evidenceAccepted,
+      evidence: bigIdeaRecommendation?.evidence || [],
+      risks: bigIdeaRecommendation?.risks || [],
+      boundedRecommendation: bigIdeaRecommendation,
+      approvalRequired: mode === "big_idea" && !humanApproval,
+      humanApproval,
+      approvalGate:
+        mode === "big_idea"
+          ? {
+              required: !humanApproval,
+              humanApproval,
+              requiredBefore: ["implementation_lane", "measured_packet"],
+              message:
+                bigIdeaRecommendation?.approvalGate ||
+                "Human approval is required before implementation or measured packet work.",
+            }
+          : null,
       command: command || "",
       timeBudgetSeconds,
       isolation: {
@@ -208,6 +260,16 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       laneResults,
       fallbackLane: lane,
     });
+    if (mode === "big_idea" && !humanApproval) {
+      coordinatorRecommendation.status = "awaiting_human_approval";
+      coordinatorRecommendation.nextAction =
+        "Ask the operator to approve or reject the big-idea architecture recommendation before starting an implementation lane or measured packet.";
+      coordinatorRecommendation.measuredPacket =
+        "Blocked until human approval is recorded for this big-idea lane.";
+      coordinatorRecommendation.commandHint = "";
+      coordinatorRecommendation.approvalRequired = true;
+      coordinatorRecommendation.approvalGate = result.approvalGate;
+    }
     if (!dryRun) deps.appendJsonl(workDir, entry);
     return {
       ok: true,

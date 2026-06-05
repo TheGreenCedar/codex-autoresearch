@@ -45,11 +45,22 @@ test.afterEach(() => {
 });
 
 test("dashboard command safety accepts read-only autoresearch commands", () => {
+  const packageLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "scripts",
+    "autoresearch.mjs",
+  );
+  const packageDistLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "dist",
+    "scripts",
+    "autoresearch.mjs",
+  );
   const commands = [
     "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
     "node ./scripts/autoresearch.mjs state --cwd C:/repo",
-    "node C:/repo/plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd C:/repo",
-    "node C:/repo/plugins/codex-autoresearch/dist/scripts/autoresearch.mjs state --cwd C:/repo",
+    `node "${packageLauncher}" state --cwd C:/repo`,
+    `node "${packageDistLauncher}" state --cwd C:/repo`,
     "node scripts/autoresearch.mjs state --cwd C:/repo",
     "node scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node scripts/autoresearch.mjs recommend-next --cwd C:/repo --compact",
@@ -141,7 +152,13 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
   const commands = [
     "node autoresearch.mjs state --cwd C:/repo --report",
     "node C:/tmp/autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node C:/tmp/not-scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node C:/malicious/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+    "node ../scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node ../malicious/scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node ./tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node scripts/autoresearch.mjs.bak state --cwd C:/repo --report",
     "node scripts/not-autoresearch.mjs state --cwd C:/repo --report",
   ];
@@ -154,8 +171,13 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
   }
 });
 
-test("dashboard command safety accepts generated Windows launcher paths", () => {
-  const command = String.raw`node "C:\\Users\\alber\\source\\repos\\autoresearch\\plugins\\codex-autoresearch\\scripts\\autoresearch.mjs" state --cwd "C:\\work\\repo" --report`;
+test("dashboard command safety accepts generated package launcher paths", () => {
+  const packageLauncher = path.join(
+    resolvePackageRoot(import.meta.url),
+    "scripts",
+    "autoresearch.mjs",
+  );
+  const command = `node "${packageLauncher}" state --cwd "C:\\work\\repo" --report`;
   const result = dashboardCommandSafety(command);
 
   assert.equal(result.safe, true, result.reason);
@@ -2206,6 +2228,50 @@ test("dashboard decision envelope priority ladder is stable across competing sig
   }
 });
 
+test("dashboard surfaces exhausted packet budget as a rescope blocker", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "budgeted run",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      segment: 0,
+      current: [{ run: 1, metric: 1, status: "keep", description: "Baseline" }],
+      results: [{ run: 1, metric: 1, status: "keep", description: "Baseline" }],
+      baseline: 1,
+      best: 1,
+      limit: {
+        limitReached: true,
+        budgetStatus: {
+          configured: true,
+          exhausted: true,
+          packetBudget: 1,
+          packetsUsed: 1,
+          packetsRemaining: 0,
+          stopReason: "Packet budget exhausted (1/1 packets used).",
+          nextAction:
+            "Budget exhausted; stop packet work and ask whether to extend, rescope, or start a new segment.",
+        },
+      },
+    },
+    commands: [
+      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
+      {
+        label: "New segment",
+        command: "node scripts/autoresearch.mjs new-segment --cwd . --dry-run",
+      },
+    ],
+  });
+
+  assert.equal(viewModel.decisionEnvelope.budgetStatus.exhausted, true);
+  assert.equal(viewModel.decisionEnvelope.segmentTransition.triggeredBy[0], "budget");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "segment-transition");
+  assert.match(viewModel.nextBestAction.detail, /Budget exhausted/);
+  assert.doesNotMatch(viewModel.nextBestAction.detail, /complete/i);
+});
+
 test("dashboard action rail treats finalization readiness as the next decision after active blockers", () => {
   const viewModel = buildDashboardViewModel({
     state: {
@@ -2295,6 +2361,34 @@ test("dashboard trust builder separates read-only mode from decision blockers", 
 
   assert.equal(dirty.trustState.status, "needs-attention");
   assert.match(dirty.decisionWarnings.join("\n"), /dirty/);
+
+  const commandBearing = buildTrustState({
+    state: {
+      config: {
+        name: "trust command",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+      },
+      current: [
+        {
+          run: 1,
+          metric: 5,
+          status: "keep",
+          description: "Baseline",
+          commandExecutionBoundary: "not_sandboxed",
+        },
+      ],
+      baseline: 5,
+      best: 5,
+    },
+    settings: { deliveryMode: "live-server", pluginVersion: PLUGIN_VERSION },
+  });
+
+  assert.equal(commandBearing.trustState.status, "trusted");
+  assert.equal(commandBearing.trustState.commandExecutionBoundary.mode, "not_sandboxed");
+  assert.match(commandBearing.trustState.commandExecutionBoundary.note, /current user's/);
+  assert.deepEqual(commandBearing.decisionWarnings, []);
 });
 
 test("dashboard distinguishes static snapshots from served readouts", async () => {
@@ -2926,6 +3020,14 @@ test("served dashboard live refresh starts by default and can be stopped", async
   const viewModel = {
     summary: { segment: 0, baseline: 1, best: 1, confidence: 1 },
   };
+  const refreshedEntries = [
+    ...entries,
+    { type: "run", run: 2, metric: 0, status: "keep", description: "Improved", confidence: 2 },
+  ];
+  const liveViewModel = {
+    summary: { segment: 0, baseline: 1, best: 0, confidence: 2, runs: 2 },
+    ledgerEntries: refreshedEntries,
+  };
   const { getById, dom } = await runDashboard(
     entries,
     {
@@ -2943,11 +3045,13 @@ test("served dashboard live refresh starts by default and can be stopped", async
         window.fetch = async (url) => {
           window.__refreshFetches.push(String(url));
           if (String(url).includes("view-model")) {
-            return { ok: true, json: async () => viewModel };
+            return { ok: true, json: async () => liveViewModel };
           }
           return {
-            ok: true,
-            text: async () => entries.map((entry) => JSON.stringify(entry)).join("\n"),
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
           };
         };
         window.setInterval = (callback, ms) => {
@@ -2970,16 +3074,17 @@ test("served dashboard live refresh starts by default and can be stopped", async
 
   assert.equal(dom.window.__liveInterval.ms, 1234);
   await waitFor(
-    () => dom.window.__refreshFetches.length >= 2,
+    () => dom.window.__refreshFetches.length >= 1,
     "Live dashboard did not refresh immediately.",
   );
-  assert.deepEqual(dom.window.__refreshFetches.slice(0, 2), [
-    "autoresearch.jsonl",
-    "view-model.json",
-  ]);
+  await waitFor(
+    () => getById("runs-value").textContent === "2 (2 kept)",
+    "Live dashboard did not refresh from embedded view-model entries.",
+  );
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(dom.window.__liveIntervalCalls, 1);
-  assert.equal(dom.window.__refreshFetches.length, 2);
+  assert.equal(dom.window.__refreshFetches.length, 1);
   assert.deepEqual(dom.window.__clearedLiveIntervals, []);
 
   getById("live-toggle").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));

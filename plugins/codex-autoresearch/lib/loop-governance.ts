@@ -26,6 +26,7 @@ const LOOP_PRIORITY = {
   validationGate: 3,
   setupOrDecision: 4,
   boundedDecisionCapsule: 6,
+  segmentTransition: 7,
   currentTreeFinalization: 8,
   finalizationReadiness: 9,
   nextPacket: 10,
@@ -256,6 +257,21 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
         ["latestPacketFreshness"],
       ),
     );
+  }
+
+  const segmentTransition = objectValue(envelope.segmentTransition);
+  if (segmentTransition?.required === true) {
+    const action = loopAction(
+      "segment-transition",
+      LOOP_PRIORITY.segmentTransition,
+      segmentTransition.nextAction ||
+        segmentTransition.reason ||
+        "Resolve the active segment transition before another packet.",
+      segmentTransition.command,
+      segmentTransition.triggeredBy || ["segmentTransition"],
+    );
+    if (action.triggeredBy.includes("qualityRound")) action.label = "Review completion state";
+    blockers.push(action);
   }
 
   const metricSaturation = firstWorkflowFrictionByKind(

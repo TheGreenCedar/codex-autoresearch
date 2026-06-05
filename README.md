@@ -9,7 +9,7 @@
 
 Codex Autoresearch helps Codex turn "make this better" into a measured loop.
 
-Give Codex a goal, a benchmark contract, and a safe edit scope. Codex can run small experiment packets, keep or discard changes with evidence, preserve ASI and metrics across context loss, and package useful work for review.
+Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs each keep or discard with evidence, preserves ASI and metrics across context loss, and turns useful changes into reviewable branches.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
@@ -27,7 +27,8 @@ Use $Codex Autoresearch to improve the speed of my indexer's pipeline, while kee
 
 ```text
 Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with
-the most obvious low hanging fruits. Keep doing this 100 times.
+the most obvious low hanging fruits. Run at most 5 packets or 30 minutes,
+stop if checks fail twice, and report the best kept change.
 ```
 
 You can also hand it a sharper investigation:
@@ -49,7 +50,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, starting the dashboard, running one packet, and logging the result with experiment details.
+Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one packet, and logging the result with experiment details. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
 
 ## Install
 
@@ -73,30 +74,26 @@ TheGreenCedar Autoresearch -> codex-autoresearch -> Install plugin
 
 Start a new Codex thread after installation.
 
+This is not an npm install path for operators. The plugin package is private; `npm install` under `plugins/codex-autoresearch` is for local development and verification only.
+
 ## How it works
 
 A normal session follows this shape:
 
 ```text
-Target -> Onboard -> Setup -> Doctor -> Dashboard -> Packet -> Log -> Continue or Finalize
+setup -> doctor -> next -> log -> state -> finalize-preview
 ```
 
 Codex Autoresearch helps Codex:
 
-1. identify the target repo or child package
-2. check for an existing session
-3. preserve the goal as machine-readable session state
-4. import bounded forensics from long Codex sessions into durable research notes when context loss becomes the bottleneck
-5. return a shared next-step contract with stage, reason, CLI command, safety, blockers, and missing essentials
-6. verify the benchmark contract
-7. run a measured packet with command identity, output tails, metrics, artifacts, checks, progress, and a freshness fingerprint
-8. summarize gate quality, preflight readiness, runtime drift, dashboard liveness, packet diagnostics, and portfolio guidance before suggesting packet work
-9. log the result as `keep`, `discard`, `measure`, `crash`, or `checks_failed`
-10. salvage diagnostic partial-result rows and optional `task_manifest` artifacts from failed packet output before rerunning expensive work
-11. split stuck serial work into read-only scout lanes and isolated implementation lanes
-12. preserve ASI, packet fingerprints, promotion labels, evidence status, evidence claims, and metrics in durable files
-13. stop on watchdog, runtime-provenance, packet-diagnostic, gate-quality, or finalization-pressure blockers before spending another packet
-14. continue safely or preview finalization into reviewable branches
+1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface
+2. verify the benchmark contract and optional checks with `doctor`
+3. run one measured packet with `next`
+4. log the result as `keep`, `discard`, `measure`, `crash`, or `checks_failed`
+5. inspect the compact state before spending another packet
+6. preview finalization into reviewable branches when the kept evidence is ready
+
+That happy path is the default help surface. `serve` is an optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
@@ -120,6 +117,8 @@ Use Codex Autoresearch when:
 
 * the goal can be measured
 * the benchmark is repeatable
+* benchmark-contract files can be protected from quiet drift
+* known tradeoffs can be expressed as secondary metric constraints
 * correctness checks exist or can be added
 * the editable scope is small enough to review
 * kept work should become reviewable commits or branches
@@ -132,9 +131,11 @@ Use a regular Codex task when:
 * the metric can improve by weakening the benchmark
 * secrets, deployment paths, or unrelated dirty files are in scope
 
+Protected benchmark folders are recursively inspected and hashed. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory.
+
 ## Dashboard
 
-Ask codex to boot up the dashboard if it hasn't already.
+Ask Codex to serve the dashboard when you want a live visual readout, packet freshness matters, or a stale/static export is confusing the decision.
 
 The dashboard shows:
 
@@ -144,6 +145,7 @@ The dashboard shows:
 * Codex brief and strategy lanes
 * next safe action, evidence label, proof gaps, and why the action is safe
 * packet economics, workflow friction, partial-result candidates, and stale-progress warnings
+* protected benchmark path and secondary metric constraint signals
 * operator checklist, loop contract, ledger entries, ASI, and handoff context
 * best kept change and recent failures
 * fanout plans, lane status, scaffold health, research integrity, runtime provenance, packet diagnostics, and finalization readiness
@@ -206,7 +208,7 @@ plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md
 
 ## Development
 
-The plugin and dashboard source are written in TypeScript.
+The plugin and dashboard source are written in TypeScript and developed on Node.js 24 or newer.
 
 The package uses `tsdown` for Node builds, `tsgo` for typechecking, `oxlint` for linting, `oxfmt` for formatting, Vite for the dashboard, and `npm-run-all2` for combined gates.
 

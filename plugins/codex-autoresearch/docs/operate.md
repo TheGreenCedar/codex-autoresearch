@@ -18,6 +18,14 @@ For broad new requests, start with `prompt-plan`, then `onboarding-packet`, `rec
 
 CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
 
+## Budgets
+
+Setup can record `packetBudget`, `wallClockBudgetSeconds`, and `budgetNote`. State, report, and dashboard decision guidance treat exhausted budgets as stop/rescope signals: extend the budget, start a new segment, preview finalization, or ask the operator what to trade off next.
+
+Use `config --packet-budget <n>` to change the packet cap. Use `config --wall-clock-budget-seconds <n>` to change the wall-clock cap and reset the wall-clock window from the time of configuration. Packet-only changes do not reset the wall-clock window. Pass an empty value intentionally to clear a budget field in the CLI, for example `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""`; tool callers can use `clear_packet_budget` and `clear_wall_clock_budget`.
+
+Do not describe a packet or wall-clock budget as API spend tracking. Autoresearch only tracks the configured packet count and elapsed wall-clock budget unless an external integration supplies separate spend evidence.
+
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
 
 On resume, treat `goalFrame.authoritativeGoal` and `operatorHandoff.goal` as the research objective. The latest Codex/user prompt is an operator instruction unless `goalFrame.codexObjectiveRole` says it matches the durable research goal. When `goalFrame.warning` is present, say the warning out loud before running packet work. `recommend-next --compact` exposes the same data under `compactState.goalFrame` and `compactState.operatorHandoff`.
@@ -165,6 +173,8 @@ node scripts/autoresearch.mjs lane-runner --cwd <project> --lane-id read-only-sc
 The plan uses current ASI and experiment memory to propose read-only scout lanes, benchmark-contract checks, isolated implementation candidates, and promotion-readiness lanes. Fanout plans are segment-scoped: after `new-segment`, run a fresh `research-fanout --yes` for the new segment or rely on memory/default lanes until you do. `state --compact` exposes `fanoutProvenance` so you can see whether the active segment has a matching plan.
 
 Dispatch scout lanes in parallel first. `lane-runner` records or runs one lane with a bounded time budget and returns one coordinator recommendation for the next measured packet. Completed lane results update lane status and count as watchdog progress. Read-only scout lanes do not need a worktree, block commands that look mutating, and fail closed outside Git when running commands unless `--allow-non-git-command` is explicitly passed. Implementation lanes must pass `--worktree <path>` or `--write-scope <paths>` before they can run.
+
+Use `lane-runner --mode big_idea` for distant architecture hypotheses that might escape a local optimum. Big-idea lanes are advice-only: they cannot run commands, declare worktrees, or claim write scope. They write a bounded recommendation with evidence and risks, then require human approval before an implementation lane or measured packet uses the recommendation. Record that approval on the follow-up lane with `lane-runner --mode implementation --human-approval --worktree <path>` or keep the recommendation as provisional ASI until the operator approves it.
 
 ## ASI
 

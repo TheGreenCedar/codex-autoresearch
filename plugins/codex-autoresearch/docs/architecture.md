@@ -123,6 +123,8 @@ The `.mjs` launchers bootstrap the packaged runtime before loading compiled code
 
 ## CLI Command Path
 
+The default help view keeps the happy path short: `setup -> doctor -> next -> log -> state -> finalize-preview`. Advanced diagnostics and maintainer commands remain on the same CLI surface behind `--help --all`.
+
 ```mermaid
 sequenceDiagram
   participant Codex

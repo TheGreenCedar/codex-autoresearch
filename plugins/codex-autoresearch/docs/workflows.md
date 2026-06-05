@@ -14,13 +14,16 @@ flowchart TD
   E --> F["doctor --explain"]
   F --> G{"Benchmark prints METRIC?"}
   G -- "No" --> H["benchmark-lint and repair command"]
-  G -- "Yes" --> I["serve live dashboard"]
+  G -- "Yes" --> I["next: run one packet"]
   H --> F
-  I --> J["next: run one packet"]
-  J --> K["log keep/discard/measure/crash/checks_failed with ASI"]
-  K --> L{"continuation says continue?"}
-  L -- "Yes" --> J
-  L -- "No" --> M["finalize-preview or report blocker"]
+  I --> J["log keep/discard/measure/crash/checks_failed with ASI"]
+  J --> K{"Need a live visual readout?"}
+  K -- "Yes" --> L["serve live dashboard"]
+  K -- "No" --> M["state or recommend-next"]
+  L --> M
+  M --> N{"continuation says continue?"}
+  N -- "Yes" --> I
+  N -- "No" --> O["finalize-preview or report blocker"]
 ```
 
 ## Prompt To Loop

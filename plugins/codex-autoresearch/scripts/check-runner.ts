@@ -10,6 +10,11 @@ export interface CommandResult {
   timedOut: boolean;
 }
 
+export interface ResolvedSpawnCommand {
+  args: string[];
+  command: string;
+}
+
 export function runCommand(
   [label, command, args]: CommandSpec,
   {
@@ -20,12 +25,11 @@ export function runCommand(
   }: { cwd: string; env?: NodeJS.ProcessEnv; streamOutput?: boolean; timeoutSeconds?: number },
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const needsShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
+    const resolved = resolveSpawnCommand(command, args);
+    const child = spawn(resolved.command, resolved.args, {
       cwd,
       detached: process.platform !== "win32",
       env,
-      shell: needsShell,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -70,6 +74,23 @@ export function runCommand(
       finish({ label, code: timedOut ? null : code, stdout, stderr, timedOut }),
     );
   });
+}
+
+export function resolveSpawnCommand(
+  command: string,
+  args: string[],
+  {
+    comSpec = process.env.ComSpec,
+    platform = process.platform,
+  }: { comSpec?: string; platform?: NodeJS.Platform } = {},
+): ResolvedSpawnCommand {
+  if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    return {
+      command: comSpec || "cmd.exe",
+      args: ["/d", "/c", "call", command, ...args],
+    };
+  }
+  return { command, args };
 }
 
 function killCommandProcess(pid?: number): void {

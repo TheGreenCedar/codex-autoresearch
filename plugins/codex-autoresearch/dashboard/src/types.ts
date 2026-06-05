@@ -306,6 +306,7 @@ export interface AiSummaryModel {
 
 export interface DashboardViewModel {
   summary?: DashboardSummary;
+  ledgerEntries?: DashboardEntry[];
   decisionEnvelope?: DecisionEnvelopeModel | null;
   decisionEnvelopeSummary?: DecisionEnvelopeSummary;
   nextBestAction?: NextBestAction;
