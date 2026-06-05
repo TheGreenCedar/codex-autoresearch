@@ -5620,6 +5620,19 @@ test("config updates and clears guardrails and budgets", async () => {
       configuredPayload.updates.budgetStartedAt,
     );
 
+    const missingPacketBudget = await runCli(["config", "--cwd", dir, "--packet-budget"]);
+    assert.notEqual(missingPacketBudget.code, 0);
+    assert.match(missingPacketBudget.stderr, /Expected a number, got true/);
+
+    const missingWallClockBudget = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--wall-clock-budget-seconds",
+    ]);
+    assert.notEqual(missingWallClockBudget.code, 0);
+    assert.match(missingWallClockBudget.stderr, /Expected a number, got true/);
+
     const cleared = await runCli([
       "config",
       "--cwd",

@@ -508,7 +508,7 @@ const CONTRACTS = {
   serve_dashboard: {
     purpose: "Start the live local dashboard and return its URL.",
     whenToUse:
-      "Use after setup or resume before running experiments so the operator gets the live link.",
+      "Use when the operator asks for the dashboard, a browser readout matters, or stale/static state needs a fresh liveness check.",
     contrast: "Use export_dashboard only for an offline fallback snapshot.",
     safety:
       "Starts a local server bound to 127.0.0.1. Raw ledger access stays disabled unless debug_ledger is explicitly true.",

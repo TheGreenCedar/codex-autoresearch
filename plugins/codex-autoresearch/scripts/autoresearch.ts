@@ -359,6 +359,7 @@ function numberOption(value: unknown, fallback: null): number | null;
 function numberOption(value: unknown, fallback: number | null): number | null;
 function numberOption(value: unknown, fallback: number | null): number | null {
   if (value == null || value === "") return fallback;
+  if (typeof value === "boolean") throw new Error(`Expected a number, got ${value}`);
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
   return parsed;
@@ -1214,7 +1215,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   const nextAction =
     missing.length > 0
       ? `Confirm ${missing.join(", ")} or accept the suggested recipe before setup.`
-      : "Run setup, doctor, live dashboard, then one packet.";
+      : "Run setup, doctor, then one packet. Serve the live dashboard only if the operator asks or freshness needs a browser readout.";
   return {
     loopKind,
     confidence: promptPlanConfidence({
@@ -2386,7 +2387,7 @@ function agentReportTemplates(config: LooseObject = {}) {
   const metric = config.metricName || "metric";
   return {
     firstResponse:
-      "I found the Autoresearch session, checked state/doctor, verified or restarted the live dashboard, and the next safe action is: <action>. Dashboard: <verified url or command>.",
+      "I found the Autoresearch session, checked state/doctor, and the next safe action is: <action>. Dashboard: <verified URL only when requested/useful, otherwise optional>.",
     progress: `Tried: <plain-English hypothesis>. Result: ${metric}=<value>, status=<pending|keep|discard|measure|crash|checks_failed>. Meaning: <what changed versus baseline/incumbent>. Decision: <log/keep/discard/measure>. Next: <ASI next_action_hint or continuation>.`,
     final:
       "Changed: <files/behavior>. Verified: <commands>. Autoresearch: <runs/kept/best/next>. Risks: <remaining blockers>.",

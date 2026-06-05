@@ -4,6 +4,18 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.3
+
+### Changed
+
+- Clarified onboarding, marketplace prompts, and generated prompt-plan/report handoffs so the default loop stays on the short CLI path, with the live dashboard available when a fresh visual readout is useful.
+- Documented that benchmark and checks commands are not sandboxed, packet environments inherit local state by default, and evidence redaction is best-effort rather than a confidentiality guarantee.
+- Reframed docs, skill guidance, default prompts, and tests around dashboard-optional operation instead of dashboard-first workflow.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.3`.
+
 ## 2.1.2
 
 ### Changed

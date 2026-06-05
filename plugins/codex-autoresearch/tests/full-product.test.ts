@@ -400,6 +400,8 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(promptPayload.kind, "codex-autoresearch-prompt-plan");
     assert.equal(promptPayload.intent.metric.name, "seconds");
     assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
+    assert.match(promptPayload.intent.nextAction, /Run setup, doctor, then one packet/);
+    assert.doesNotMatch(promptPayload.intent.nextAction, /live dashboard, then one packet/i);
     assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
 
     const compositePromptPlan = await runCli([

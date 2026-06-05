@@ -29,8 +29,8 @@ UX, the user experience:
 
 - Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
-- At session start and resume, run `guide`, start or reuse the live dashboard with `serve`, verify liveness, and directly provide the live dashboard URL, normally `http://127.0.0.1:<port>/`.
-- Report the operator story: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, dashboard URL, and verification.
+- At session start and resume, stay on the CLI happy path unless setup is ambiguous, the user asks for the dashboard, packet freshness needs a browser readout, or the canonical action is blocked.
+- Report the operator story: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, optional dashboard URL, and verification.
 
 ## Documentation Awareness
 
@@ -49,14 +49,15 @@ Use docs only as needed; do not load everything by default.
 4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
 5. Use `setup-plan` for read-only setup guidance when essentials are unclear. Use `setup` only when essentials are known and files should be created.
 6. Run `doctor --cwd <project> --check-benchmark --explain` before the first trusted packet or any drift-sensitive metric.
-7. Run `serve --cwd <project>`, verify the health URL or liveness field, and directly provide the live dashboard URL.
-8. Use the happy path first: `setup -> doctor -> next -> log -> state -> finalize-preview`.
-9. Read `decisionEnvelope` / `resumeAudit`, `operatorChecklist`, `loopContract`, `runtimeProvenance`, `runtimeDriftSummary`, `gateQuality`, `preflight`, `sourceCleanliness`, `portfolioRecommendation`, `laneLifecycle`, and `packetDiagnostics` before spending another packet.
-10. `state --report` and `state` expose the full compact decision-guidance set. `recommend-next --compact` carries the canonical next action plus governance/portfolio fields.
-11. `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
-12. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and symlink/realpath escapes without invalidating unrelated metric evidence.
-13. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
-14. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
+7. Use the happy path first: `setup -> doctor -> next -> log -> state -> finalize-preview`.
+8. Before another packet, read `recommend-next --compact` or `state --compact`; obey blockers; open detailed diagnostics only when the canonical action is blocked, stale, or unclear.
+9. Use `state --report` when you want a terminal-first `report.text`; `state --report` and `state` expose `operatorChecklist`, `loopContract`, `sessionDecisionCapsule`, `runtimeProvenance`, `runtimeDriftSummary`, `gateQuality`, `preflight`, `sourceCleanliness`, `portfolioRecommendation`, `laneLifecycle`, and `packetDiagnostics`.
+10. `recommend-next --compact` carries the canonical next action plus governance and portfolio fields, including `decision-capsule` blockers.
+11. Run `serve --cwd <project>`, verify liveness, and directly provide the live dashboard URL only when the user asks, the browser readout matters, or CLI state is not enough.
+12. `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
+13. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and symlink/realpath escapes without invalidating unrelated metric evidence.
+14. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
+15. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
 
 Happy-path CLI from `plugins/codex-autoresearch`:
 
@@ -96,7 +97,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 
 ## Dashboard
 
-Prefer the served dashboard:
+Use the served dashboard when a live readout is useful:
 
 - Use `scripts/autoresearch.mjs serve --cwd <project>`.
 - Share the served `http://127.0.0.1:<port>/` URL by default.
@@ -117,7 +118,7 @@ Use a deep-research loop for broad, qualitative, product-study, UX, architecture
 7. Log implementation or rejection with ASI.
 8. Start a fresh round before claiming there are no more high-impact gaps.
 
-`quality_gap=0 only means` the accepted checklist for the current round is closed. It does not prove discovery is complete. Read `freshRoundSuggested`, `researchIntegrity`, `sourceCleanliness`, finalization readiness, and plateau reason fields before deciding whether to start another round, run a promotion gate, finalize, or start a new segment.
+quality_gap=0 only means the accepted checklist for the current round is closed. It does not prove discovery is complete. Read `freshRoundSuggested`, `researchIntegrity`, `sourceCleanliness`, finalization readiness, and plateau reason fields before deciding whether to start another round, run a promotion gate, finalize, or start a new segment.
 
 ## Finalize
 
