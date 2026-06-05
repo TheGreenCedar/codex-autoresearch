@@ -155,6 +155,10 @@ test("dashboard command safety rejects non-plugin autoresearch launcher lookalik
     "node C:/tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node C:/tmp/not-scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node C:/malicious/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+    "node ../scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node ../malicious/scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
+    "node ./tmp/scripts/autoresearch.mjs state --cwd C:/repo --report",
     "node scripts/autoresearch.mjs.bak state --cwd C:/repo --report",
     "node scripts/not-autoresearch.mjs state --cwd C:/repo --report",
   ];

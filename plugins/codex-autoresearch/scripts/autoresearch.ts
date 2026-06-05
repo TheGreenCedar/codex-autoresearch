@@ -3549,22 +3549,24 @@ async function benchmarkContractSnapshot(workDir: string, context: LooseObject =
   const checksCommand = String(context.checksCommand || "").trim();
   const commandFile = contractPathLabel(workDir, context.commandFile);
   const envFile = contractPathLabel(workDir, context.envFile);
+  const hasPacketEnvMode = Object.hasOwn(context, "packetEnvMode");
+  const packetEnvMode = hasPacketEnvMode ? packetEnvModeFromArgs(context) : "";
   for (const [label, filePath] of [
     [commandFile, context.commandFile],
     [envFile, context.envFile],
   ]) {
     if (filePath) fileFingerprints.push(await contractFileFingerprint(workDir, filePath, label));
   }
-  const surfaceHash = hashText(
-    JSON.stringify({
-      command,
-      checksCommand,
-      commandFile,
-      envFile,
-      files: fileFingerprints,
-    }),
-  );
-  return {
+  const contractSurface: LooseObject = {
+    command,
+    checksCommand,
+    commandFile,
+    envFile,
+    files: fileFingerprints,
+  };
+  if (hasPacketEnvMode) contractSurface.packetEnvMode = packetEnvMode;
+  const surfaceHash = hashText(JSON.stringify(contractSurface));
+  const snapshot: LooseObject = {
     command,
     checksCommand,
     commandFile,
@@ -3573,6 +3575,8 @@ async function benchmarkContractSnapshot(workDir: string, context: LooseObject =
     files: fileFingerprints,
     capturedAt: new Date().toISOString(),
   };
+  if (hasPacketEnvMode) snapshot.packetEnvMode = packetEnvMode;
+  return snapshot;
 }
 
 async function contractFileFingerprint(workDir: string, filePath: string, label: any = "") {
@@ -3603,16 +3607,45 @@ function contractPathLabel(workDir: string, filePath: string) {
     : resolved;
 }
 
+function latestBenchmarkContractEntry(
+  workDir: string,
+  state: LooseObject | null | undefined,
+): LooseObject | null {
+  const fromState = latestBenchmarkContractEntryFromState(state);
+  if (fromState) return fromState;
+  try {
+    const fromCurrentState = latestBenchmarkContractEntryFromState(currentState(workDir));
+    if (fromCurrentState) return fromCurrentState;
+  } catch {
+    // Fall back to the raw ledger below if state reconstruction is unavailable.
+  }
+  return (
+    [...readJsonl(workDir)].reverse().find((entry: LooseObject) => {
+      return entry?.benchmarkContract?.surfaceHash;
+    }) || null
+  );
+}
+
+function latestBenchmarkContractEntryFromState(
+  state: LooseObject | null | undefined,
+): LooseObject | null {
+  const current = Array.isArray(state?.current) ? state.current : [];
+  return (
+    [...current].reverse().find((run: LooseObject) => run?.benchmarkContract?.surfaceHash) || null
+  );
+}
+
 async function benchmarkContractDrift(workDir: string, state: any) {
-  const latest = [...(state.current || [])]
-    .reverse()
-    .find((run: any) => run?.benchmarkContract?.surfaceHash);
+  const latest = latestBenchmarkContractEntry(workDir, state);
   if (!latest) return null;
   const current = await benchmarkContractSnapshot(workDir, {
     command: latest.benchmarkContract.command,
     checksCommand: latest.benchmarkContract.checksCommand,
     commandFile: latest.benchmarkContract.commandFile,
     envFile: latest.benchmarkContract.envFile,
+    ...(Object.hasOwn(latest.benchmarkContract, "packetEnvMode")
+      ? { packetEnvMode: latest.benchmarkContract.packetEnvMode }
+      : {}),
   });
   if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
   return {
@@ -3966,10 +3999,15 @@ async function writeRuntimeConfig(sessionCwd: any, updates: any) {
 function runtimeConfigUpdatesFromArgs(args: LooseObject) {
   const updates: LooseObject = {};
   const hasPacketBudget = hasAnyArg(args, "packet_budget", "packetBudget");
+  const clearPacketBudget = boolOption(args.clear_packet_budget ?? args.clearPacketBudget, false);
   const hasWallClockBudgetSeconds = hasAnyArg(
     args,
     "wall_clock_budget_seconds",
     "wallClockBudgetSeconds",
+  );
+  const clearWallClockBudget = boolOption(
+    args.clear_wall_clock_budget ?? args.clearWallClockBudget,
+    false,
   );
   const hasBudgetNote = hasAnyArg(args, "budget_note", "budgetNote");
   const hasProtectedBenchmarkPaths = hasAnyArg(
@@ -4035,8 +4073,10 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
   if (keepPolicy) updates.keepPolicy = keepPolicy;
   if (dashboardRefreshSeconds != null)
     updates.dashboardRefreshSeconds = Math.max(1, Math.floor(dashboardRefreshSeconds));
-  if (hasPacketBudget) updates.packetBudget = packetBudget;
-  if (hasWallClockBudgetSeconds) updates.wallClockBudgetSeconds = wallClockBudgetSeconds;
+  if (clearPacketBudget) updates.packetBudget = null;
+  else if (hasPacketBudget) updates.packetBudget = packetBudget;
+  if (clearWallClockBudget) updates.wallClockBudgetSeconds = null;
+  else if (hasWallClockBudgetSeconds) updates.wallClockBudgetSeconds = wallClockBudgetSeconds;
   if (hasBudgetNote) updates.budgetNote = budgetNote;
   if (hasProtectedBenchmarkPaths) updates.protectedBenchmarkPaths = protectedBenchmarkPaths;
   if (secondaryMetricConstraintMode)
@@ -4046,9 +4086,12 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
       rawSecondaryMetricConstraints,
       secondaryMetricConstraints,
     );
-  if (packetBudget != null || wallClockBudgetSeconds != null) {
+  if (!clearWallClockBudget && hasWallClockBudgetSeconds && wallClockBudgetSeconds != null) {
     updates.budgetStartedAt = new Date().toISOString();
-  } else if (hasWallClockBudgetSeconds) {
+  } else if (
+    clearWallClockBudget ||
+    (hasWallClockBudgetSeconds && wallClockBudgetSeconds == null)
+  ) {
     updates.budgetStartedAt = null;
   }
   return updates;
@@ -6943,7 +6986,7 @@ function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: L
     const entry = latestByLane.get(lane.id);
     if (!entry?.result) return lane;
     const resultStatus = String(entry.result.status || "").toLowerCase();
-    const completed = resultStatus === "completed";
+    const completed = resultStatus === "completed" || resultStatus === "approved";
     const accepted = completed && laneResultHasAcceptedEvidence(entry.result);
     return {
       ...lane,
@@ -7328,7 +7371,7 @@ function synthesizeLaneDecision({
   fallbackLane?: LooseObject | null;
 }) {
   const completed = laneResults
-    .filter((entry) => entry?.result?.status === "completed")
+    .filter((entry) => selectableLaneResult(entry?.result))
     .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
   const selected = completed.find((entry) => entry.result?.recommendation || entry.result?.summary);
   const nextAction =
@@ -7346,6 +7389,14 @@ function synthesizeLaneDecision({
       "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
     commandHint: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`,
   };
+}
+
+function selectableLaneResult(result: LooseObject | null | undefined): boolean {
+  const status = String(result?.status || "").toLowerCase();
+  return (
+    (status === "completed" || status === "approved") &&
+    (result?.evidenceAccepted === true || Boolean(result?.recommendation || result?.summary))
+  );
 }
 
 async function researchFanout(args: LooseObject) {
@@ -7579,6 +7630,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const benchmark: LooseObject = {
     checked: false,
     command: args.command || "",
+    packetEnvMode: null,
     emitsPrimary: null,
     parsedMetrics: {},
     exitCode: null,
@@ -7601,11 +7653,18 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
       issues.push(benchmark.metricError);
     } else {
+      const latestContract = latestBenchmarkContractEntry(workDir, state)?.benchmarkContract;
+      const doctorPacketEnvMode =
+        latestContract && Object.hasOwn(latestContract, "packetEnvMode")
+          ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
+          : "inherit";
+      benchmark.packetEnvMode = doctorPacketEnvMode;
       const run = await runShell(
         benchmark.command,
         workDir,
         numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
         {
+          envMode: doctorPacketEnvMode,
           retainMetricNames: [state.config.metricName],
         },
       );

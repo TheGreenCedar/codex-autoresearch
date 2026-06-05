@@ -344,10 +344,15 @@ function isAllowedNodeAutoresearchInvocation(tokens: string[]): boolean {
 
 function isAutoresearchScript(token: string): boolean {
   const normalized = token.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
-  if (!/(?:^|\/)(?:dist\/)?scripts\/autoresearch\.(?:mjs|js|ts)$/.test(normalized)) {
-    return false;
+  if (!isAbsolutePathToken(token)) {
+    return (
+      normalized === "scripts/autoresearch.mjs" ||
+      normalized === "./scripts/autoresearch.mjs" ||
+      normalized === "dist/scripts/autoresearch.mjs" ||
+      normalized === "./dist/scripts/autoresearch.mjs"
+    );
   }
-  if (!isAbsolutePathToken(token)) return true;
+  if (!/(?:^|\/)(?:dist\/)?scripts\/autoresearch\.mjs$/.test(normalized)) return false;
   const packageRoot = resolvePackageRoot(import.meta.url)
     .replace(/\\/g, "/")
     .toLowerCase();

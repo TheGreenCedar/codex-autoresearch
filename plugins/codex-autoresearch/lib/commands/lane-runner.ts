@@ -202,8 +202,9 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
           : "planned");
     const commandSucceeded =
       commandResult && Number(commandResult.code) === 0 && commandResult.timedOut !== true;
+    const normalizedResultStatus = String(resultStatus).toLowerCase();
     const evidenceAccepted = Boolean(
-      String(resultStatus).toLowerCase() === "completed" &&
+      (normalizedResultStatus === "completed" || normalizedResultStatus === "approved") &&
       (commandSucceeded || explicitSummary || explicitRecommendation),
     );
     const result = {

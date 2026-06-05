@@ -4,6 +4,18 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.4
+
+### Fixed
+
+- Added explicit tool/CLI handling for clearing packet budgets, wall-clock budgets, and budget notes without accepting bare numeric budget flags.
+- Hardened protected benchmark path and dashboard launcher validation with regression coverage for hostile edits and canonical package-local launchers.
+- Kept lane-runner budget behavior aligned with the guarded loop contract when budget values are updated or cleared.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.4`.
+
 ## 2.1.3
 
 ### Changed

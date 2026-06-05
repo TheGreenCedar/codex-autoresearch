@@ -114,5 +114,31 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(laneEntries.length, 1);
     assert.equal(laneEntries[0].lane.mode, "big_idea");
     assert.equal(laneEntries[0].result.approvalGate.required, true);
+
+    const approved = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "architecture-scout",
+      "--mode",
+      "big_idea",
+      "--summary",
+      "Approved architecture direction.",
+      "--recommendation",
+      "Run one isolated implementation lane.",
+      "--approved",
+      "--yes",
+    ]);
+    assert.equal(approved.code, 0, approved.stderr);
+    const approvedPayload = JSON.parse(approved.stdout);
+    assert.equal(approvedPayload.result.status, "approved");
+    assert.equal(approvedPayload.result.evidenceAccepted, true);
+    assert.equal(approvedPayload.result.approvalRequired, false);
+    assert.equal(approvedPayload.coordinatorRecommendation.status, "ready");
+    assert.equal(
+      approvedPayload.coordinatorRecommendation.nextAction,
+      "Run one isolated implementation lane.",
+    );
   });
 });
