@@ -5,8 +5,10 @@ import {
   toolNameForCliCommand,
   toolRegistry,
 } from "./tool-registry.js";
+import { resolvePackageRoot } from "./runtime-paths.js";
+import type { UnknownRecord } from "./types/json.js";
 
-type LooseObject = Record<string, any>;
+type LooseObject = UnknownRecord;
 
 export const DASHBOARD_COMMAND_KEY_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   doctorExplain: "doctor",
@@ -342,7 +344,21 @@ function isAllowedNodeAutoresearchInvocation(tokens: string[]): boolean {
 
 function isAutoresearchScript(token: string): boolean {
   const normalized = token.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
-  return /(?:^|\/)(?:dist\/)?scripts\/autoresearch\.(?:mjs|js|ts)$/.test(normalized);
+  if (!/(?:^|\/)(?:dist\/)?scripts\/autoresearch\.(?:mjs|js|ts)$/.test(normalized)) {
+    return false;
+  }
+  if (!isAbsolutePathToken(token)) return true;
+  const packageRoot = resolvePackageRoot(import.meta.url)
+    .replace(/\\/g, "/")
+    .toLowerCase();
+  return (
+    normalized === `${packageRoot}/scripts/autoresearch.mjs` ||
+    normalized === `${packageRoot}/dist/scripts/autoresearch.mjs`
+  );
+}
+
+function isAbsolutePathToken(token: string): boolean {
+  return /^[a-z]:[\\/]/i.test(token) || token.startsWith("/") || token.startsWith("\\\\");
 }
 
 function isNodeExecutable(token: string): boolean {

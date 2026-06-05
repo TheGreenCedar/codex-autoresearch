@@ -22,6 +22,8 @@ CLI commands return structured content; prefer `--json-full`, `--compact`, or th
 
 Setup can record `packetBudget`, `wallClockBudgetSeconds`, and `budgetNote`. State, report, and dashboard decision guidance treat exhausted budgets as stop/rescope signals: extend the budget, start a new segment, preview finalization, or ask the operator what to trade off next.
 
+Use `config --packet-budget <n>` to change the packet cap. Use `config --wall-clock-budget-seconds <n>` to change the wall-clock cap and reset the wall-clock window from the time of configuration. Pass an empty value intentionally to clear a budget field, for example `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""`.
+
 Do not describe a packet or wall-clock budget as API spend tracking. Autoresearch only tracks the configured packet count and elapsed wall-clock budget unless an external integration supplies separate spend evidence.
 
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.

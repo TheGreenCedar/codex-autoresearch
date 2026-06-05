@@ -74,6 +74,8 @@ TheGreenCedar Autoresearch -> codex-autoresearch -> Install plugin
 
 Start a new Codex thread after installation.
 
+This is not an npm install path for operators. The plugin package is private; `npm install` under `plugins/codex-autoresearch` is for local development and verification only.
+
 ## How it works
 
 A normal session follows this shape:
@@ -91,7 +93,7 @@ Codex Autoresearch helps Codex:
 5. inspect the compact state before spending another packet
 6. preview finalization into reviewable branches when the kept evidence is ready
 
-That happy path is the default help surface. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, `serve`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
+That happy path is the default help surface. `serve` is the live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
@@ -127,6 +129,8 @@ Use a regular Codex task when:
 * the benchmark is flaky or very expensive
 * the metric can improve by weakening the benchmark
 * secrets, deployment paths, or unrelated dirty files are in scope
+
+Protected benchmark folders are recursively inspected and hashed. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory.
 
 ## Dashboard
 

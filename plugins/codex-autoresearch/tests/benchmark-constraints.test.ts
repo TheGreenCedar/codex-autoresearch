@@ -149,6 +149,51 @@ test("secondary metric constraint mode changes reclassify existing constraints",
   });
 });
 
+test("per-constraint blocking mode overrides advisory global mode", () => {
+  const evaluation = evaluateSecondaryMetricConstraints({
+    config: {
+      secondaryMetricConstraintMode: "advisory",
+      secondaryMetricConstraints: [
+        {
+          metric: "memory_mb",
+          operator: "<=",
+          threshold: { kind: "literal", value: 100 },
+          mode: "blocking",
+        },
+      ],
+    },
+    state: {
+      config: { metricName: "seconds" },
+      current: [{ run: 1, metric: 1, status: "keep", metrics: { memory_mb: 90 } }],
+    },
+    runMetrics: { seconds: 0.8, memory_mb: 110 },
+  });
+
+  assert.equal(evaluation.mode, "advisory");
+  assert.equal(evaluation.results[0].mode, "blocking");
+  assert.equal(evaluation.results[0].status, "failed");
+  assert.equal(evaluation.blockPromotion, true);
+});
+
+test("blank secondary metric values are unavailable instead of numeric zero", () => {
+  const evaluation = evaluateSecondaryMetricConstraints({
+    config: {
+      secondaryMetricConstraintMode: "blocking",
+      secondaryMetricConstraints: ["memory_mb <= baseline * 1.05"],
+    },
+    state: {
+      config: { metricName: "seconds" },
+      current: [{ run: 1, metric: 1, status: "keep", metrics: { memory_mb: 100 } }],
+    },
+    runMetrics: { seconds: 0.8, memory_mb: " " },
+  });
+
+  assert.equal(evaluation.status, "unavailable");
+  assert.equal(evaluation.results[0].actual, null);
+  assert.equal(evaluation.results[0].status, "unavailable");
+  assert.equal(evaluation.blockPromotion, true);
+});
+
 async function initConstraintLoop(dir, name) {
   const init = await runCli(["init", "--cwd", dir, "--name", name, "--metric-name", "seconds"]);
   assert.equal(init.code, 0, init.stderr);
