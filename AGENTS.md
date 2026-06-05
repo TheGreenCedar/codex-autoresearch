@@ -1,126 +1,172 @@
 # AGENTS.md
 
-## Project Shape
+## First Principles
 
-- This repository is a wrapper for the Codex Autoresearch plugin. The active product code lives under `plugins/codex-autoresearch`.
-- Treat `plugins/codex-autoresearch` as the package root for implementation, checks, tests, release metadata, the main plugin skill, CLI code, and dashboard assets.
-- The root `README.md` is the only README and the public-facing documentation surface. Keep root-relative links valid.
-- Do not put AI/operator self-instructions, implementation notes, or workflow reminders in the root `README.md`; keep it friendly for users evaluating or installing the plugin.
-- When leaving instructions for future Codex work, update only this `AGENTS.md`, the AI-facing plugin skill at `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`, or the plugin docs under `plugins/codex-autoresearch/docs/`.
-- The root `CHANGELOG.md` is the release-note surface. Update it for user-facing behavior, docs, skill, command-surface, dashboard, migration, or version changes.
-- Do not assume root-level npm scripts exist. The package scripts live in `plugins/codex-autoresearch/package.json`.
+- Optimize for evidence, resumability, and small reviewable diffs.
+- Treat this file as repo-local operating guidance for Codex. Keep it practical and current; move long procedures into `plugins/codex-autoresearch/docs/` or the plugin skill.
+- Identify the owning repo/package before running Git, installs, builds, tests, release commands, or Autoresearch commands. This wrapper root is not the package root.
+- Use the repo-local source checkout for Autoresearch work in this repo before trusting a globally installed or marketplace-cache copy.
+- Do not present source edits as live plugin behavior until the active runtime surface has been checked when runtime drift is possible.
 
-## Product Intent
+## Repository Shape
 
-- Codex Autoresearch is a measured, resumable optimization loop for Codex: choose one metric, run a benchmark, keep or discard changes with evidence, preserve ASI, export the dashboard, and finalize kept work into reviewable branches.
-- Preserve the core contract: benchmark commands print `METRIC name=value`; primary metrics drive decisions; secondary metrics explain tradeoffs.
-- Prefer durable loop state over chat memory. Important session knowledge belongs in `autoresearch.md`, `autoresearch.ideas.md`, `autoresearch.jsonl`, `autoresearch.research/<slug>/`, dashboard snapshots, and ASI.
-- For qualitative or broad product-study work, convert accepted findings into a `quality_gap` checklist. `quality_gap=0` closes the accepted checklist for the current round; it does not mean discovery is permanently complete.
-- The main product gap from prior work is guided decision flow. When product direction is ambiguous, prioritize making the next safe action obvious over adding more raw panels or low-level knobs.
+- The active product package lives in `plugins/codex-autoresearch`.
+- The root `README.md` is the public front door. Keep it friendly for users evaluating or installing the plugin; do not put AI/operator self-instructions there.
+- The root `CHANGELOG.md` is the release-note surface for user-facing behavior, docs, skill, command-surface, dashboard, migration, or version changes.
+- The main Codex-facing skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`. It is the single skill surface; do not revive old dashboard/finalizer subskills or slash-command docs.
+- Topic docs live under `plugins/codex-autoresearch/docs/`. Use docs for durable workflow detail, not ad hoc notes in chat.
+- Package scripts live in `plugins/codex-autoresearch/package.json`. Root `npm run check` and root `npm test` are not product evidence unless root scripts are added later.
+- The package is private and distributed as a Codex plugin marketplace package, not as an operator-facing npm install.
 
-## Local Plugin Routing
+## Product Contract
 
-- When this repo is the target, use the repo-local plugin over any globally installed or marketplace-cache copy.
-- From the repository root, prefer:
+Codex Autoresearch turns "make this better" into a measured loop:
+
+```text
+setup -> doctor -> next -> log -> state -> finalize-preview
+```
+
+- Benchmark commands must print `METRIC name=value`. The primary metric drives decisions; secondary metrics explain or guard tradeoffs.
+- Use `ARTIFACT name=path` only for benchmark-produced evidence that resolves inside the target working directory.
+- Prefer durable loop state over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.config.json`, `autoresearch.ideas.md`, `autoresearch.last-run.json`, `autoresearch.research/<slug>/`, evidence index files, and ASI.
+- `keep`, ordinary `discard`, and `measure` need a finite primary metric. `crash` and `checks_failed` must not invent sentinel metric values.
+- Use `measure` for baselines, no-change probes, environment checks, and diagnostic evidence. It is not a keep and not a finalizer input.
+- `quality_gap=0` only closes the accepted checklist for the current research round. It does not prove discovery is complete forever.
+- Accepted/current kept evidence can drive finalization. Rejected, provisional, superseded, quarantined, invalidated, later-discarded, or reverted evidence is audit-visible only.
+
+## Local Command Routing
+
+From the wrapper root:
 
 ```bash
 node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
-node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
-node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
+node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark --explain
+node plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd plugins/codex-autoresearch --report
 node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
 ```
 
-- From `plugins/codex-autoresearch`, use `node scripts/autoresearch.mjs ...` and pass the target project with `--cwd`.
-- The canonical agent workflow doc is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`. Update it when command flow, safety rules, dashboard reporting behavior, or finalization behavior changes.
+From the package root:
+
+```bash
+node scripts/autoresearch.mjs --help
+node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
+node scripts/autoresearch.mjs state --cwd . --report
+```
+
+- Use `setup-plan` or `prompt-plan` for read-only planning when essentials are unclear. Use `setup` only when the goal, benchmark, primary metric, direction, and scope are known enough to create files.
+- Use `benchmark-lint` before trusting a new benchmark or ambiguous output.
+- After `next`, log the fresh packet with `log --from-last`; do not retype parsed metrics unless you are deliberately recording a raw probe with `--metric`.
+- Before spending another packet, read `state --report`, `state --compact`, or `recommend-next --compact` and obey blockers.
+- Use advanced diagnostics only when the short path is blocked, stale, expensive, or too vague: `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `checks-inspect`, `partial-results`, `session-forensics`, `research-fanout`, `lane-runner`, `new-segment`, `promote-gate`, `codex-goal-brief`, and `guide`.
 
 ## Implementation Map
 
-- CLI command handling is split between `scripts/autoresearch.mjs` and `lib/cli-handlers.mjs`.
-- CLI command validation and internal tool argument normalization live in `lib/tool-schemas.mjs`.
-- Session state and metrics logic live in `lib/session-core.mjs`; keep script-facing and library-facing behavior in sync.
-- Dashboard data shaping lives in `lib/dashboard-view-model.mjs`; dashboard HTML/CSS/JS lives in `assets/template.html`.
-- Runner behavior lives in `lib/runner.mjs`; recipes and research-gap logic live in `lib/recipes.mjs` and `lib/research-gaps.mjs`.
-- Finalization behavior lives in `scripts/finalize-autoresearch.mjs` and related tests.
-- Product-quality expectations are encoded in `scripts/perfection-benchmark.mjs`. Update this benchmark when public commands, docs, CLI contracts, or session hygiene expectations intentionally change.
-- Keep `skills/codex-autoresearch/SKILL.md`, the root README, the root changelog, tests, and CLI/internal tool schemas synchronized when user-facing contracts change.
-
-## Runtime And Cache Drift
-
-- The plugin is CLI/skill-only. Do not add a default MCP server declaration unless product direction explicitly changes again.
-- For CLI startup failures, do not guess. Check the direct smoke path first:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
-```
-
-- If the installed Codex plugin behaves differently from source, inspect the versioned cache under the user's Codex plugin cache. Source files and installed runtime can drift.
-- Typical failure layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, command metadata mismatch, and slow full-CLI imports. Identify the layer before changing timeouts.
-
-## Autoresearch Workflow Safety
-
-- Before starting or resuming a loop, check Git state. If the tree is dirty, distinguish user edits from experiment edits and avoid broad cleanup.
-- After `next`, log the packet with `--from-last` instead of retyping parsed metrics. Choose `keep`, `discard`, `crash`, or `checks_failed` deliberately.
-- Include useful ASI on every log entry: hypothesis, evidence, rollback reason when relevant, and a specific next-action hint.
-- In Git repos, kept results should use configured `commitPaths` or `--commit-paths`. Use `--allow-add-all` only when every dirty file belongs in the kept commit.
-- Discard, crash, and checks-failed cleanup should use scoped `commitPaths` or `revertPaths`. Do not use broad dirty-tree cleanup unless the user explicitly accepts that risk.
-- If a change was already committed outside the helper, log it with `--commit <hash>` so autoresearch records the truth instead of staging again.
+- Public launchers live in `scripts/*.mjs`. Keep them tiny bootstrap shims where intended; `scripts/bootstrap-runtime.mjs` hydrates the packaged `dist/` runtime for source-shaped plugin installs.
+- Authored Node/CLI code is TypeScript under `scripts/*.ts` and `lib/**/*.ts`. Keep tracked `.mjs` surfaces synchronized when the product gate expects them.
+- CLI dispatch and command behavior live in `scripts/autoresearch.ts`, `lib/cli-handlers.ts`, `lib/commands/*`, `lib/tool-schemas.ts`, `lib/tool-registry.ts`, and `lib/action-metadata.ts`.
+- Session state, metrics, packet evidence, runner behavior, recipes, research gaps, and source hygiene live in `lib/session-core.ts`, `lib/runner.ts`, `lib/recipes.ts`, `lib/research-gaps.ts`, `lib/evidence-*`, `lib/task-artifact-indexer.ts`, and `lib/cli/source-hygiene.ts`.
+- Decision guidance lives in `lib/decision-guidance.ts`, `lib/loop-governance.ts`, `lib/operator-checklist.ts`, `lib/session-decision-capsule.ts`, `lib/gate-quality.ts`, `lib/preflight-audit.ts`, `lib/packet-diagnostics.ts`, `lib/runtime-drift-doctor.ts`, `lib/source-cleanliness.ts`, `lib/portfolio-advisor.ts`, and `lib/lane-lifecycle.ts`.
+- Finalization behavior lives in `scripts/finalize-autoresearch.ts`, `scripts/finalize-autoresearch.mjs`, `lib/finalize-preview.ts`, `lib/finalization-plan.ts`, and `lib/finalization-acceptance.ts`.
+- Dashboard data shaping and live-readout behavior live in `lib/dashboard-view-model.ts`, `lib/live-server.ts`, `lib/dashboard-health.ts`, `lib/dashboard-server-registry.ts`, and `lib/dashboard-command-safety.ts`.
+- Dashboard UI source lives in `dashboard/src/`; generated bundled dashboard assets live in `assets/dashboard-build/` and are intentionally checked in.
+- Product-quality gates live in `scripts/check.ts`, `scripts/check.mjs`, `scripts/perfection-benchmark.ts`, and `scripts/perfection-benchmark.mjs`.
 
 ## Dashboard Rules
 
-- Be explicit about dashboard mode. `autoresearch-dashboard.html` is a static read-only export with embedded data and no inert live controls or command-copy panel.
-- The served dashboard from `node scripts/autoresearch.mjs serve --cwd <project>` is the live readout.
-- Keep dashboard behavior readout-only. Use the CLI for setup, packets, logging, export, and finalization preview.
-- Mutating finalization stays outside the dashboard surface.
-- After dashboard or view-model changes, export or serve a dashboard and inspect the result, not just the tests.
-- Whenever dashboard UI, layout, or visual copy changes, refresh the checked-in demo in the same pass. Update `examples/demo-session/autoresearch-dashboard.html`, `assets/showcase/dashboard-demo.png`, and any compact manifest preview asset that visually represents the dashboard so the public demo stays aligned with the current UI.
+- The dashboard is a read-only readout, not a control plane. Setup, packet execution, logging, gap review, export, and finalization stay in the CLI.
+- Be explicit about mode. `serve --cwd <project>` returns a live local readout; `export --cwd <project>` writes a static read-only snapshot.
+- Do not add visible live mutation controls, action routes, command-copy panels for mutating commands, or finalization mutations to the dashboard.
+- Dashboard and terminal reports must agree on the canonical next action, blockers, runtime provenance, packet diagnostics, source cleanliness, and finalization pressure.
+- After dashboard UI, dashboard model, visual copy, or generated asset changes, rebuild and inspect the dashboard surface. Refresh the checked-in demo/export/showcase assets that represent the UI, especially `examples/demo-session/autoresearch-dashboard.html`, `assets/dashboard-build/*`, `assets/showcase/dashboard-demo.png`, and any manifest screenshot asset affected by the change.
+
+## Runtime And Packaging Truth
+
+- This plugin is CLI/skill-only. Do not add a default MCP server declaration or MCP launcher unless the product direction explicitly changes and the docs, package checks, and migration notes change with it.
+- Source checkouts intentionally do not track `plugins/codex-autoresearch/dist/`. Release/package artifacts must include `dist/`.
+- The package artifact must include `.codex-plugin/`, `docs/`, `skills/`, dashboard-build assets, small launcher scripts, and compiled `dist/`; it must not leak authored source, tests, examples, MCP config, or stale MCP launchers.
+- If installed Codex behavior differs from source, inspect the active cache under the user's Codex plugin cache and compare version plus built-entrypoint fingerprint before editing source again.
+- Common drift layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, command metadata mismatch, generated asset drift, and slow full-CLI imports. Identify the layer before retrying the same live-service action.
+
+## Documentation And Skill Sync
+
+When behavior, architecture, command surfaces, dashboard behavior, safety rules, release behavior, or file structure changes, update the nearest durable surface:
+
+- root `README.md` for the public promise and short start path
+- root `CHANGELOG.md` for user-facing changes and migration notes
+- `skills/codex-autoresearch/SKILL.md` for Codex operator behavior
+- the closest topic doc under `plugins/codex-autoresearch/docs/`
+- CLI help, schemas, tests, and `scripts/perfection-benchmark.mjs` when command contracts or product expectations change
+
+Keep root-relative links valid. Prefer rewriting stale guidance over appending duplicates.
+Removed invocation surfaces need migration notes.
+
+## Autoresearch Safety
+
+- Check Git state before setup, packet work, logging, discard cleanup, finalization, version bumps, or release work.
+- Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos. Use `--allow-add-all` only when every dirty file belongs in the kept commit.
+- Use scoped `revertPaths` for discard cleanup. Do not run broad cleanup on a dirty tree unless the user explicitly accepts that risk.
+- If a change was already committed outside the helper, log it with the real commit hash so the ledger records truth instead of staging again.
+- Treat protected benchmark path drift, secondary metric constraint violations, stale last-run packets, corrupt JSONL, runtime drift, dirty source, missing commit paths, and failed checks as trust blockers until resolved or explicitly accepted.
+- Autoresearch does not sandbox benchmark or checks commands. Review generated commands, avoid secrets in command lines/output, and prefer `--command-file` or `--packet-env-file` for fragile or sensitive setup.
 
 ## Version And Release Work
 
-- For a version bump, update all version surfaces together:
-  - `plugins/codex-autoresearch/package.json`
-  - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
-  - `plugins/codex-autoresearch/scripts/autoresearch.mjs` `serverInfo.version`
-  - `CHANGELOG.md`
-  - any tests or docs that intentionally assert or display the version
-- For non-versioned user-facing changes, add or refresh the newest dated or versioned `CHANGELOG.md` entry. Removed invocation surfaces need migration notes.
-- Run the plugin verification gate before committing or publishing a release.
-- If the user says `bump`, `push`, `publish`, `promote`, or asks whether the release is live, treat it as an end-to-end request when credentials and risk allow: update, verify, commit, push, refresh or inspect the installed runtime, and report the live evidence.
+For a version bump, update synchronized version surfaces together:
+
+- `plugins/codex-autoresearch/package.json`
+- `plugins/codex-autoresearch/package-lock.json`
+- `plugins/codex-autoresearch/.codex-plugin/plugin.json`
+- root `CHANGELOG.md`
+- any tests or docs that intentionally assert or display the version
+
+- Run the package verification gate before committing or publishing release work.
+- Do not push release tags by hand. Current workflows build, check, pack, smoke-test, and create the release/tag after the version bump lands on the release branch. Inspect `.github/workflows/` before claiming a release is live.
+- If the user says `bump`, `push`, `publish`, `promote`, or asks whether the release is live, treat it as an end-to-end request when credentials and risk allow: update surfaces, verify, commit, push, inspect workflow/runtime evidence, and report concrete status.
 
 ## Verification
 
-- Use the narrowest relevant check while iterating, then run the plugin gate before claiming done.
-- Useful targeted checks:
-
-```bash
-node --check plugins/codex-autoresearch/scripts/autoresearch.mjs
-node --test plugins/codex-autoresearch/tests/autoresearch-cli.test.mjs
-node --test plugins/codex-autoresearch/tests/dashboard-verification.test.mjs
-node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
-git diff --check
-```
-
-- Full plugin checks from `plugins/codex-autoresearch`:
+Use the narrowest relevant check while iterating. Before claiming plugin work is done, run the package gate from `plugins/codex-autoresearch` unless the change is clearly outside package behavior:
 
 ```bash
 npm run check
-npm test
 ```
 
-- `npm run check` is the main product/release gate. It includes syntax checks, the perfection benchmark with `quality_gap=0`, help checks, and the test suite.
-- Root `npm run check` or root `npm test` may fail with missing scripts; that is a repo-shape issue, not product evidence.
-- If full verification is not possible, say exactly which check was skipped and why.
+`npm run check` covers typecheck, lint, format check, syntax checks, source hygiene, dashboard rebuild parity, demo trust, source-checkout launcher rules, dogfood health, compiled tests, and package smoke.
+
+Targeted checks:
+
+```bash
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run test:cli
+npm run test:dashboard
+npm run test:finalize
+npm run test:core
+node scripts/autoresearch.mjs --help
+node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
+node scripts/autoresearch.mjs benchmark-lint --cwd .
+git diff --check
+```
+
+- For dashboard/view-model changes, build or serve/export the dashboard and inspect the readout. Tests alone do not prove the operator surface is understandable.
+- For packaging/release changes, inspect the packed artifact and smoke the extracted launcher path.
+- For docs-only or AGENTS-only changes, at minimum inspect the changed markdown and run `git diff --check`.
+- If full verification is not possible, state exactly what was skipped and why.
 
 ## Git And Change Hygiene
 
 - Keep diffs tight and reviewable. Avoid drive-by cleanup, unrelated renames, and style churn.
-- Do not overwrite or revert user changes. If unrelated files are dirty, work around them.
-- Avoid destructive Git commands unless the user explicitly requested them.
-- Prefer direct, non-interactive Git commands. On this repo, the usual branch is `main` and the remote is `origin`.
-- For final responses after code changes, report what changed, where it changed, what was verified, and any remaining risk.
+- Never overwrite, revert, or clean up user changes unless explicitly asked.
+- Do not use destructive Git commands unless the user explicitly requested them.
+- Prefer direct non-interactive Git commands.
+- Do not assume the active branch is `main`; inspect branch and remotes before finalization, push, or release claims.
+- Do not commit secrets, local credentials, generated caches, private logs, or unrelated experiment artifacts.
 
-## Communication Defaults
+## Communication
 
-- The user usually wants execution after direction is clear. Do not stop at analysis when implementation and verification are feasible.
-- Report from evidence: command output, file state, tests, version checks, dashboard exports, or runtime probes.
-- When debugging live plugin behavior, avoid repeating a failed reinstall or retry unless a precondition changed. Find the failing layer first.
-- When asked for product study or delight improvements, start from the current docs, roadmap, dashboard behavior, and existing `autoresearch.research/*` artifacts before inventing a new direction.
+- Report from evidence: command output, file state, tests, runtime probes, dashboard URLs, package smoke, workflow status, or Git state.
+- When debugging live plugin behavior, do not repeat a failed reinstall, retry, or cache refresh unless a precondition changed.
+- When asked for product study or delight improvements, start from current docs, roadmap-like artifacts, dashboard behavior, existing `autoresearch.research/*` artifacts, and command/report output before inventing a direction.
+- Final responses after code changes should say what changed, where it changed, what was verified, and any remaining risk or assumption.
