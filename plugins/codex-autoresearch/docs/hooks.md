@@ -28,7 +28,7 @@ Codex Goal mode:
 - run or suggest `onboarding-packet --compact`
 - surface the current next safe action
 - surface `goalAdvice` when a session has a durable goal
-- remind the agent to start the live dashboard
+- remind the agent to start the live dashboard when the operator asked for it or a fresh browser readout would help
 
 `PostToolUse`:
 

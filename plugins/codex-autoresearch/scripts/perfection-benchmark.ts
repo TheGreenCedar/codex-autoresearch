@@ -458,8 +458,9 @@ const checks = [
       "CLI help and internal tool schemas expose research setup and quality-gap measurement.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.ts");
+      const help = await readText("lib/cli/help.ts");
       const contracts = await readText("lib/tool-schemas.ts");
-      return includesAll(`${cli}\n${contracts}`, [
+      return includesAll(`${cli}\n${help}\n${contracts}`, [
         "research-setup --cwd <project>",
         "quality-gap --cwd <project>",
         "setup_research_session",
@@ -495,7 +496,7 @@ const checks = [
         includesAll(promptText, [
           "Use Codex Autoresearch to improve this repo.",
           "Plan an Autoresearch loop from this prompt.",
-          "Open the live dashboard and continue.",
+          "Serve the live dashboard when useful.",
         ]) &&
         manifest.interface?.longDescription?.includes("one skill surface")
         ? pass()
@@ -812,9 +813,10 @@ const checks = [
       "CLI exposes guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
       const cli = await readText("scripts/autoresearch.ts");
+      const help = await readText("lib/cli/help.ts");
       const cliHandlers = await readText("lib/cli-handlers.ts");
       const contracts = await readText("lib/tool-schemas.ts");
-      return includesAll(cli + cliHandlers + contracts, [
+      return includesAll(cli + help + cliHandlers + contracts, [
         "setup-plan --cwd <project>",
         "prompt-plan --cwd <project>",
         "onboarding-packet --cwd <project>",

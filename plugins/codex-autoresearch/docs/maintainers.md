@@ -50,6 +50,8 @@ For non-versioned user-facing changes, refresh the newest dated changelog entry.
 
 Use the narrowest relevant check while iterating. Before claiming plugin work is done, run the product gate from `plugins/codex-autoresearch`:
 
+Develop and verify the local source checkout on Node.js 24 or newer. The package metadata and CI matrix treat Node 24 as the supported development floor.
+
 ```bash
 npm run check
 ```

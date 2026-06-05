@@ -468,6 +468,16 @@ function setupStateFromDashboardInput({ guidedSetup, setupPlan }: LooseObject) {
 
 function segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }: LooseObject) {
   const limit = guidedSetup?.state?.limit || guidedSetup?.limit || state?.limit || {};
+  const budgetStatus = limit.budgetStatus || state?.budgetStatus || {};
+  if (budgetStatus.exhausted === true) {
+    return {
+      required: true,
+      nextAction:
+        cleanText(budgetStatus.nextAction) ||
+        "Budget exhausted; stop packet work and ask whether to extend, rescope, or start a new segment.",
+      triggeredBy: ["budget"],
+    };
+  }
   const limitReached =
     limit.limitReached === true ||
     (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
@@ -661,7 +671,13 @@ function summaryFromCanonicalNextAction(
   return {
     kind,
     priority: canonicalPriorityLabel(canonical.priority),
-    title: cleanText(canonical.title) || canonicalTitle(kind),
+    title:
+      cleanText(canonical.title) ||
+      (kind === "segment-transition" &&
+      Array.isArray(canonical.triggeredBy) &&
+      canonical.triggeredBy.includes("qualityRound")
+        ? "Review completion state"
+        : canonicalTitle(kind)),
     detail:
       cleanText(canonical.reason) || cleanText(envelope?.nextAction) || "Review before continuing.",
     command: cleanText(canonical.command),
@@ -777,6 +793,8 @@ export function buildTrustState({
     (state.scaffoldHealth?.checks || []).map((check: LooseObject) => check.message || check.code),
     true,
   );
+  const latestConstraintEvaluation = latestSecondaryMetricConstraints(state);
+  addReasons("secondary-metric-constraints", latestConstraintEvaluation?.messages, true);
   addReasons("research-integrity", state.researchIntegrity?.warnings, true);
   addReasons("research-integrity", state.researchIntegrity?.blockers, true);
   addReasons("guided-setup", guidedSetup?.warnings, true);
@@ -784,6 +802,7 @@ export function buildTrustState({
   addReasons("operator", warnings, true);
   addReasons("finalize", finalizePreview?.warnings, false, false);
 
+  const commandExecutionBoundary = commandExecutionBoundaryFromState(state);
   const uniqueReasons = unique(taggedReasons.map((reason) => reason.text));
   const attention = taggedReasons.some(
     (reason) => reason.decisionRelevant || isTrustDecisionReason(reason.text),
@@ -806,10 +825,41 @@ export function buildTrustState({
       runtimeDrift: summarizeRuntimeDrift(settings.runtimeDrift || drift),
       generatedAt: cleanText(settings.generatedAt) || null,
       sourceCwd: cleanText(settings.sourceCwd) || UNKNOWN,
+      commandExecutionBoundary,
     },
     decisionWarnings: unique(
       taggedReasons.filter((reason) => reason.decisionRelevant).map((reason) => reason.text),
     ),
+  };
+}
+
+function latestSecondaryMetricConstraints(state: LooseObject): LooseObject | null {
+  return (
+    [...(Array.isArray(state.current) ? state.current : [])]
+      .reverse()
+      .map((run: LooseObject) => run.secondaryMetricConstraints || null)
+      .find((evaluation: LooseObject | null) => evaluation?.configured === true) || null
+  );
+}
+
+function commandExecutionBoundaryFromState(state: LooseObject): LooseObject | null {
+  const direct = state.commandExecutionBoundary;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    return {
+      mode: cleanText(direct.mode) || "not_sandboxed",
+      note:
+        cleanText(direct.note) ||
+        "Benchmark and checks commands run with the current user's local permissions.",
+    };
+  }
+  const latest = [...(Array.isArray(state.current) ? state.current : [])]
+    .reverse()
+    .map((run: LooseObject) => cleanText(run.commandExecutionBoundary))
+    .find(Boolean);
+  if (!latest) return null;
+  return {
+    mode: latest,
+    note: "Benchmark and checks commands run with the current user's local permissions.",
   };
 }
 

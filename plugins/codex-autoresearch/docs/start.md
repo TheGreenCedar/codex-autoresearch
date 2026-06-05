@@ -12,7 +12,7 @@ Use this page for the first five minutes of a Codex Autoresearch session. The go
 - a scoped file surface for commits and reverts
 - Codex plugin marketplace access
 - Git for reviewable kept work
-- Node/npm only when developing the local source checkout
+- Node.js 24 or newer, plus npm, when developing the local source checkout
 
 The benchmark must print:
 
@@ -49,7 +49,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should check Git, create or resume the session, verify the metric, serve the dashboard, run one packet, and log the decision with ASI.
+Codex should check Git, create or resume the session, verify the metric, run one packet, and log the decision with ASI. Serve the dashboard when the operator asks for it, when packet freshness matters in the browser, or when the CLI readout is not enough.
 Before spending another packet, Codex should read `recommend-next --compact` and clear any operator-checklist, watchdog, runtime-provenance, lane-lifecycle, packet-diagnostic, or finalization-pressure blocker.
 
 ## CLI Path
@@ -57,17 +57,33 @@ Before spending another packet, Codex should read `recommend-next --compact` and
 From `plugins/codex-autoresearch`:
 
 ```bash
-node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
-node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "Use Codex Autoresearch to improve speed while keeping memory efficient"
-node scripts/autoresearch.mjs setup-plan --cwd <project>
-node scripts/autoresearch.mjs benchmark-lint --cwd <project> --sample "METRIC seconds=1.23" --metric-name seconds
 node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
-node scripts/autoresearch.mjs serve --cwd <project>
-node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs state --cwd <project> --report
+node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
+
+Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
+
+`serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `setup-plan`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
+
+After setup, optional stop conditions can be recorded with `config`:
+
+```bash
+node scripts/autoresearch.mjs config --cwd <project> --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after the first focused pass."
+```
+
+Budget exhaustion is a stop/rescope signal. It does not mean the optimization goal is complete, and Autoresearch does not track API or billing spend without an external integration.
+
+For benchmark-sensitive loops, record the files that define the measurement and any secondary guardrails after the real benchmark is configured:
+
+```bash
+node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/" --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
+```
+
+The primary metric still drives the loop. Secondary metric constraints only guard tradeoffs; blocking constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
 
 Before the first expensive `next`, prove the loop shape cheaply:
 
@@ -119,7 +135,7 @@ Use `measure` for a baseline or diagnostic, and `discard`, `crash`, or `checks_f
 
 - `doctor` has no blocking issues.
 - The benchmark emits the configured primary metric.
-- The live dashboard URL is available.
+- The live dashboard URL is available when a fresh visual readout is needed.
 - The last packet is fresh before logging.
 - ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
 

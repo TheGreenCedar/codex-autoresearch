@@ -4,6 +4,75 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.5
+
+### Fixed
+
+- Restored served dashboard live refresh from the redacted view model path while keeping raw ledger access limited to the debug surface.
+- Added live-refresh tests and type coverage so dashboard snapshots can update without reintroducing raw-session payload exposure.
+- Corrected `--help --all` so `guide` documents the same setup guardrail and budget flags as the read-only setup planning flow.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.5`.
+
+## 2.1.4
+
+### Fixed
+
+- Added explicit tool/CLI handling for clearing packet budgets, wall-clock budgets, and budget notes without accepting bare numeric budget flags.
+- Hardened protected benchmark path and dashboard launcher validation with regression coverage for hostile edits and canonical package-local launchers.
+- Kept lane-runner budget behavior aligned with the guarded loop contract when budget values are updated or cleared.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.4`.
+
+## 2.1.3
+
+### Changed
+
+- Clarified onboarding, marketplace prompts, and generated prompt-plan/report handoffs so the default loop stays on the short CLI path, with the live dashboard available when a fresh visual readout is useful.
+- Documented that benchmark and checks commands are not sandboxed, packet environments inherit local state by default, and evidence redaction is best-effort rather than a confidentiality guarantee.
+- Reframed docs, skill guidance, default prompts, and tests around dashboard-optional operation instead of dashboard-first workflow.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.3`.
+
+## 2.1.2
+
+### Changed
+
+- Reduced the Codex-facing skill entrypoint and moved deeper loop, dashboard/trust, and finalization guidance into deferred reference files.
+
+### Fixed
+
+- Fixed `config` so protected benchmark paths, secondary metric constraints, commit paths, packet budgets, wall-clock budgets, and budget notes can be updated or intentionally cleared through the normal CLI/tool path.
+- Fixed secondary metric constraint evaluation so per-constraint blocking/advisory modes are preserved and blank metric strings are treated as unavailable instead of zero.
+- Hardened dashboard command safety so absolute Autoresearch launcher paths must point inside the installed/source plugin package, not arbitrary `scripts/autoresearch.mjs` lookalikes.
+- Added runner timeout fallback resolution after kill attempts so stubborn child processes do not leave main runner paths waiting indefinitely.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.2`.
+
+## 2.1.1
+
+### Changed
+
+- Clarified public onboarding and trust docs around scoped staging/revert/finalization boundaries, bounded packet stop conditions, the Node.js 24 development floor, non-sandboxed benchmark/check commands, and best-effort evidence redaction.
+- Added explicit benchmark guardrails for protected benchmark paths, packet/wall-clock budgets, secondary metric non-regression constraints, and approval-gated big-idea lanes.
+
+### Fixed
+
+- Added source/package hygiene checks so local agent/editor artifacts, stale formatter config, missing Node engine metadata, and dashboard-only runtime dependencies are caught before release-style verification.
+- Fixed unbounded sessions so `remainingIterations: null` no longer creates a bogus segment-transition blocker before the first packet.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.1`.
+
 ## 2.1.0
 
 ### Added
