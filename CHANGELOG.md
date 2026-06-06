@@ -14,6 +14,7 @@ This project uses a root-only changelog because the root README is the public do
 - Corrected `--help --all` so `guide` documents the same setup guardrail and budget flags as the read-only setup planning flow.
 - Hardened artifact evidence and dashboard exports so symlinks or junctions cannot make trusted paths escape `--cwd`.
 - Corrected first-run baseline docs to log `measure`, hardened live dashboard refresh ordering and chart semantics, and made maintainer verification guidance match the source-checkout scripts.
+- Hardened source-checkout runtime hydration so missing `dist/` is filled only from a matching release tarball with a verified adjacent SHA-256 checksum and matching packaged name/version.
 
 ### Release
 

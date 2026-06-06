@@ -121,13 +121,21 @@ jobs:
         run: npm run build:dashboard
 
       - name: Create package artifact
-        run: npm pack
+        run: |
+          set -euo pipefail
+          tarball="codex-autoresearch-${{ steps.version.outputs.version }}.tgz"
+          npm pack
+          test -f "$tarball"
+          sha256sum "$tarball" > "$tarball.sha256"
+          sha256sum -c "$tarball.sha256"
 
       - name: Smoke release package
         run: |
           set -euo pipefail
           tarball="codex-autoresearch-${{ steps.version.outputs.version }}.tgz"
           test -f "$tarball"
+          test -f "$tarball.sha256"
+          sha256sum -c "$tarball.sha256"
           mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
           node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
@@ -140,7 +148,8 @@ jobs:
         run: |
           set -euo pipefail
           tarball="codex-autoresearch-${VERSION}.tgz"
-          gh release create "$TAG" "$tarball#$tarball" \
+          checksum="$tarball.sha256"
+          gh release create "$TAG" "$tarball#$tarball" "$checksum#$checksum" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
