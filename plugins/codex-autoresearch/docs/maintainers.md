@@ -60,8 +60,8 @@ Useful targeted checks:
 
 ```bash
 node --check scripts/autoresearch.mjs
-node --test tests/autoresearch-cli.test.mjs
-node --test tests/dashboard-verification.test.mjs
+npm run test:cli
+npm run test:dashboard
 node scripts/autoresearch.mjs --help
 npm pack
 git diff --check
@@ -85,10 +85,10 @@ Use recurring PR and review evidence to choose the next hardening drill. Each dr
 
 | Skill track | Evidence pattern | Practice task | Validation gate |
 | --- | --- | --- | --- |
-| Security evidence hygiene | CodeQL or review findings around escaping, redaction, receipts, paths, env files, or stack traces | Add a failing leak fixture, fix the boundary, and prove dashboard/live/session payloads stay scrubbed | `node --test dist/tests/evidence-core.test.mjs` plus the dashboard redaction case in `full-product.test.mjs` |
-| Release workflow design | Failed or brittle release, tag, tarball, package, or version-surface behavior | Turn the release invariant into a workflow or product-check assertion before changing the workflow | `npm run check` and `github-actionlint` on CI, CodeQL, auto-release, and release workflows |
-| Prompt taxonomy and regression design | Natural-language goals routed to the wrong benchmark or loop type | Add prompt-plan cases for qualitative quality-gap loops and explicit measured contracts | `node --test dist/tests/full-product.test.mjs` |
-| Dashboard/operator UX contracts | Dashboard copy or controls imply live mutation, stale truth, or unclear next action | Remove the misleading affordance and test live/static mode, toolbar state, and absent action routes | `node --test dist/tests/dashboard-verification.test.mjs` plus live-server route checks |
+| Security evidence hygiene | CodeQL or review findings around escaping, redaction, receipts, paths, env files, or stack traces | Add a failing leak fixture, fix the boundary, and prove dashboard/live/session payloads stay scrubbed | `npm run test:core` plus `npm run test:cli` for full-product export cases |
+| Release workflow design | Failed or brittle release, tag, tarball, package, or version-surface behavior | Turn the release invariant into a workflow or product-check assertion before changing the workflow | `npm run check`, workflow YAML review, CodeQL, auto-release, and release workflow evidence |
+| Prompt taxonomy and regression design | Natural-language goals routed to the wrong benchmark or loop type | Add prompt-plan cases for qualitative quality-gap loops and explicit measured contracts | `npm run test:cli` |
+| Dashboard/operator UX contracts | Dashboard copy or controls imply live mutation, stale truth, or unclear next action | Remove the misleading affordance and test live/static mode, toolbar state, and absent action routes | `npm run test:dashboard` plus live-server route checks |
 | Cross-surface release discipline | Docs, skill guidance, changelog, demo export, package metadata, or version surfaces drift | Update the nearest user/operator surface and add product-gate coverage when drift would be easy to repeat | `npm run check`, `git diff --check`, and demo export leak/version inspection |
 
 ## Version Surfaces

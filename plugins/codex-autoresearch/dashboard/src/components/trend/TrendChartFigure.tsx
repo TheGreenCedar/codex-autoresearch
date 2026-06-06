@@ -116,7 +116,6 @@ export function TrendChartFigure({
     <figure
       id="trend-chart"
       className="chart-frame"
-      role="img"
       aria-labelledby="trend-chart-title trend-chart-desc"
     >
       <figcaption id="trend-chart-title" className="sr-only">

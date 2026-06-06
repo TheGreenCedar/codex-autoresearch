@@ -13,6 +13,7 @@ This project uses a root-only changelog because the root README is the public do
 - Added live-refresh tests and type coverage so dashboard snapshots can update without reintroducing raw-session payload exposure.
 - Corrected `--help --all` so `guide` documents the same setup guardrail and budget flags as the read-only setup planning flow.
 - Hardened artifact evidence and dashboard exports so symlinks or junctions cannot make trusted paths escape `--cwd`.
+- Corrected first-run baseline docs to log `measure`, hardened live dashboard refresh ordering and chart semantics, and made maintainer verification guidance match the source-checkout scripts.
 
 ### Release
 
