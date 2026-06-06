@@ -7296,7 +7296,7 @@ test("source launcher rejects checksum manifests for the wrong release asset", a
     await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
       await assert.rejects(
         () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
-        /Checksum manifest expected asset codex-autoresearch-2\.1\.5\.tgz, got codex-autoresearch-0\.0\.0\.tgz/,
+        /Checksum manifest expected asset codex-autoresearch-2\.1\.6\.tgz, got codex-autoresearch-0\.0\.0\.tgz/,
       );
     });
     await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
@@ -7314,7 +7314,7 @@ test("source launcher rejects checksummed tarballs for the wrong package version
     await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
       await assert.rejects(
         () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
-        /Release tarball package version mismatch: expected 2\.1\.5, got 0\.0\.0/,
+        /Release tarball package version mismatch: expected 2\.1\.6, got 0\.0\.0/,
       );
     });
     await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
