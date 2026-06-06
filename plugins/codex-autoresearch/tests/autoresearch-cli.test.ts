@@ -1477,6 +1477,80 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
   });
 });
 
+test("ARTIFACT paths through linked directories outside the workdir are quarantined", async (t) => {
+  await withTempDir("linked-external-artifact", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      await writeFile(path.join(outsideDir, "manifest.json"), '{"secret":true}\n', "utf8");
+      const linkPath = path.join(dir, "linked-out");
+      try {
+        await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        t.skip(
+          `directory symlink creation unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return;
+      }
+
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "linked external artifact",
+        "--metric-name",
+        "score",
+        "--direction",
+        "higher",
+      ]);
+      await writeFile(
+        path.join(dir, "packet-runner.mjs"),
+        [
+          "console.log('METRIC score=7');",
+          "console.log('ARTIFACT manifest=linked-out/manifest.json');",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        `${quoteForShell(process.execPath)} packet-runner.mjs`,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const payload = JSON.parse(packet.stdout);
+      assert.equal(payload.run.artifacts.manifest, "<outside-workdir>");
+      assert.equal(payload.packetEvidence.artifacts[0].exists, false);
+      assert.equal(payload.packetEvidence.artifacts[0].quarantined, true);
+      assert.match(payload.packetEvidence.artifactWarnings.join("\n"), /quarantined/);
+      assert.doesNotMatch(JSON.stringify(payload.packetEvidence), /secret/);
+
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "keep",
+        "--description",
+        "Keep linked external artifact evidence",
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+      assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+      const state = await runCli(["state", "--cwd", dir]);
+      assert.equal(state.code, 0, state.stderr);
+      const statePayload = JSON.parse(state.stdout);
+      assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
+      assert.equal(statePayload.evidenceRegistry.counts.rejected, 1);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("accepted logged artifacts become current evidence in state registry", async () => {
   await withTempDir("accepted-artifact-registry", async (dir) => {
     await runCli([
@@ -6314,6 +6388,49 @@ test("export refuses to write outside the working directory", async () => {
     const result = await runCli(["export", "--cwd", dir, "--output", "../escape.html"]);
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /outside the working directory/);
+  });
+});
+
+test("export refuses to write through linked directories outside the working directory", async (t) => {
+  await withTempDir("linked-contained-export", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "linked export", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      const linkPath = path.join(dir, "linked-output");
+      try {
+        await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        t.skip(
+          `directory symlink creation unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return;
+      }
+
+      const result = await runCli([
+        "export",
+        "--cwd",
+        dir,
+        "--output",
+        "linked-output/escape.html",
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /outside the working directory/);
+      await assert.rejects(readFile(path.join(outsideDir, "escape.html"), "utf8"));
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
