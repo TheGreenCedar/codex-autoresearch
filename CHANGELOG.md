@@ -4,6 +4,16 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.6
+
+### Fixed
+
+- Hardened source-checkout runtime hydration so missing `dist/` is filled only from a matching release tarball with a verified adjacent SHA-256 checksum and matching packaged name/version.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.6`.
+
 ## 2.1.5
 
 ### Fixed

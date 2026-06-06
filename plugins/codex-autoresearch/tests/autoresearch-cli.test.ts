@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -189,6 +190,112 @@ function addressPort(server) {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Server did not bind a TCP port");
   return address.port;
+}
+
+async function runTar(args, cwd) {
+  const result = await new Promise((resolve) => {
+    const child = spawn("tar", args, {
+      cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
+    );
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, `tar ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
+}
+
+async function writeFakeSourcePlugin(dir, version = PLUGIN_VERSION) {
+  const pluginDir = path.join(dir, "source-plugin");
+  const scriptsDir = path.join(pluginDir, "scripts");
+  await mkdir(scriptsDir, { recursive: true });
+  await writeFile(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({ name: "codex-autoresearch", version }, null, 2),
+    "utf8",
+  );
+  return {
+    pluginDir,
+    importerUrl: pathToFileURL(path.join(scriptsDir, "autoresearch.mjs")).href,
+  };
+}
+
+async function createRuntimeReleaseAsset(
+  dir,
+  {
+    sourceVersion = PLUGIN_VERSION,
+    packageVersion = sourceVersion,
+    packageName = "codex-autoresearch",
+    checksumFileName,
+    checksumHash,
+    writeChecksum = true,
+  } = {},
+) {
+  const releaseDir = path.join(dir, `release-${Math.random().toString(16).slice(2)}`);
+  const packageParent = path.join(dir, `package-parent-${Math.random().toString(16).slice(2)}`);
+  const packageDir = path.join(packageParent, "package");
+  const tarballName = `codex-autoresearch-${sourceVersion}.tgz`;
+  const checksumName = `${tarballName}.sha256`;
+  const tarballPath = path.join(releaseDir, tarballName);
+  const checksumPath = path.join(releaseDir, checksumName);
+
+  await mkdir(path.join(packageDir, "dist", "scripts"), { recursive: true });
+  await mkdir(releaseDir, { recursive: true });
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: packageName, version: packageVersion }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(packageDir, "dist", "scripts", "autoresearch.mjs"),
+    "export const hydratedRuntime = true;\n",
+    "utf8",
+  );
+
+  await runTar(["-czf", tarballPath, "-C", packageParent, "package"], dir);
+  const actualHash = createHash("sha256")
+    .update(await readFile(tarballPath))
+    .digest("hex");
+  if (writeChecksum) {
+    await writeFile(
+      checksumPath,
+      `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`,
+      "utf8",
+    );
+  }
+
+  return { releaseDir, tarballName, checksumName, tarballPath, checksumPath, actualHash };
+}
+
+async function withReleaseServer(releaseDir, version, fn) {
+  const server = createServer(async (request, response) => {
+    try {
+      const requestPath = new URL(request.url || "/", `http://${request.headers.host}`).pathname;
+      const fileName = path.basename(decodeURIComponent(requestPath));
+      const bytes = await readFile(path.join(releaseDir, fileName));
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(bytes);
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    }
+  });
+  await listenOnRandomPort(server);
+  try {
+    return await fn(`http://127.0.0.1:${addressPort(server)}/releases/download/v${version}`);
+  } finally {
+    await closeServer(server);
+  }
 }
 
 async function renderExportedDashboard(html) {
@@ -7086,6 +7193,10 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
   );
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
+  assert.match(bootstrap, /verifyRuntimeTarballIntegrity/);
+  assert.match(bootstrap, /\.tgz\.sha256/);
+  assert.match(bootstrap, /Checksum manifest expected asset/);
+  assert.match(bootstrap, /Release tarball package version mismatch/);
   assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
 });
@@ -7111,5 +7222,101 @@ test("source launcher direct-script detection survives normalized paths", async 
     } catch (error) {
       if (process.platform !== "win32") throw error;
     }
+  });
+});
+
+test("source launcher hydrates runtime only after release checksum verification", async () => {
+  await withTempDir("runtime-hydration-integrity", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir);
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+      const runtimeText = await readFile(new URL(runtimeHref), "utf8");
+      assert.equal(runtimeText, "export const hydratedRuntime = true;\n");
+
+      const runtime = await import(`${runtimeHref}?integrity=${Date.now()}`);
+      assert.equal(runtime.hydratedRuntime, true);
+      await access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"));
+    });
+  });
+});
+
+test("source launcher fails closed when release checksum metadata is missing", async () => {
+  await withTempDir("runtime-hydration-missing-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { writeChecksum: false });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /\.tgz\.sha256: HTTP 404/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher fails closed when release checksum mismatches", async () => {
+  await withTempDir("runtime-hydration-bad-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { checksumHash: "0".repeat(64) });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Release tarball integrity mismatch/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects checksum manifests for the wrong release asset", async () => {
+  await withTempDir("runtime-hydration-wrong-asset", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, {
+      checksumFileName: "codex-autoresearch-0.0.0.tgz",
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Checksum manifest expected asset codex-autoresearch-2\.1\.6\.tgz, got codex-autoresearch-0\.0\.0\.tgz/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects checksummed tarballs for the wrong package version", async () => {
+  await withTempDir("runtime-hydration-wrong-version", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { packageVersion: "0.0.0" });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Release tarball package version mismatch: expected 2\.1\.6, got 0\.0\.0/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
   });
 });
