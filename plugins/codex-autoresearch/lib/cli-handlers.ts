@@ -415,6 +415,7 @@ function setupArgs(args: LooseObject): LooseObject {
     benchmarkCommand: args.benchmarkCommand,
     benchmarkPrintsMetric: args.benchmarkPrintsMetric,
     checksCommand: args.checksCommand,
+    shell: args.shell,
     filesInScope: args.filesInScope,
     offLimits: args.offLimits,
     constraints: args.constraints,

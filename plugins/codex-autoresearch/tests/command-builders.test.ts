@@ -7,6 +7,28 @@ import {
 } from "../lib/commands/recommend-next.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+
+test("command rendering quotes hostile benchmark args for the selected shell", () => {
+  const benchmark =
+    "node -e \"console.log('METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path')\"";
+
+  assert.equal(
+    quoteShellArg(benchmark, "powershell"),
+    "'node -e \"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\"'",
+  );
+  assert.equal(
+    quoteShellArg(benchmark, "bash"),
+    "'node -e \"console.log('\"'\"'METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'\"'\"')\"'",
+  );
+  assert.equal(
+    renderShellCommand(
+      ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "--flag", benchmark],
+      "powershell",
+    ),
+    "& 'C:\\Program Files\\nodejs\\node.exe' scripts\\autoresearch.mjs --flag 'node -e \"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\"'",
+  );
+});
 
 test("recommend-next response preserves stable fields and optional governance fields", () => {
   const response = buildRecommendNextResponse({

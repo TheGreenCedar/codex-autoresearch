@@ -30,6 +30,13 @@ import {
 import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import {
+  defaultCommandShell,
+  normalizeCommandShell,
+  quoteShellArg,
+  renderShellCommand,
+  type CommandShell,
+} from "../lib/command-rendering.js";
+import {
   actionSafeActionForKind,
   actionTitleForKind,
   isPacketBrakeKind,
@@ -420,8 +427,15 @@ function evidenceStatusOption(value: unknown, status: string) {
   );
 }
 
-function shellQuote(value: unknown): string {
-  return JSON.stringify(String(value));
+function commandLine(
+  argv: readonly unknown[],
+  shell: CommandShell = defaultCommandShell(),
+): string {
+  return renderShellCommand(argv, shell);
+}
+
+function shellQuote(value: unknown, shell: CommandShell = defaultCommandShell()): string {
+  return quoteShellArg(value, shell);
 }
 
 function slashPath(value: unknown): string {
@@ -537,11 +551,8 @@ function replaceAllText(text: string, replacements: Record<string, unknown>): st
   return out;
 }
 
-function shellKindFromArgs(args: LooseObject): string {
-  const requested = String(args.shell || args.script || "").toLowerCase();
-  if (["bash", "sh", "posix"].includes(requested)) return "bash";
-  if (["powershell", "pwsh", "ps1", "windows"].includes(requested)) return "powershell";
-  return process.platform === "win32" ? "powershell" : "bash";
+function shellKindFromArgs(args: LooseObject): CommandShell {
+  return normalizeCommandShell(args.shell ?? args.script);
 }
 
 async function withRecipeDefaults(args: LooseObject): Promise<LooseObject> {
@@ -696,88 +707,154 @@ async function setupPlan(args: any) {
         : "This explicit benchmark command will be wrapped and timed by the generated script."
       : "No explicit benchmark command was provided; generated placeholder wrappers must be replaced before use.",
   };
-  const command = [
+  const commandArgs = [
     "node",
-    shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
+    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
     "setup",
     "--cwd",
-    shellQuote(workDir),
+    workDir,
     "--name",
-    shellQuote(planArgs.name || "Autoresearch session"),
-    planArgs.goal ? `--goal ${shellQuote(planArgs.goal)}` : "",
+    planArgs.name || "Autoresearch session",
+    ...(planArgs.goal ? ["--goal", planArgs.goal] : []),
     "--metric-name",
-    shellQuote(metricName),
-    planArgs.metric_unit || planArgs.metricUnit
-      ? `--metric-unit ${shellQuote(planArgs.metric_unit ?? planArgs.metricUnit)}`
-      : "",
+    metricName,
+    ...(planArgs.metric_unit || planArgs.metricUnit
+      ? ["--metric-unit", planArgs.metric_unit ?? planArgs.metricUnit]
+      : []),
     "--direction",
-    shellQuote(planArgs.direction || "lower"),
+    planArgs.direction || "lower",
     "--shell",
-    shellQuote(shellKind),
-    benchmarkCommand ? `--benchmark-command ${shellQuote(benchmarkCommand)}` : "",
-    planArgs.benchmark_prints_metric != null || planArgs.benchmarkPrintsMetric != null
-      ? `--benchmark-prints-metric ${shellQuote(planArgs.benchmark_prints_metric ?? planArgs.benchmarkPrintsMetric)}`
-      : "",
-    checksCommand ? `--checks-command ${shellQuote(checksCommand)}` : "",
-    listOption(planArgs.files_in_scope ?? planArgs.filesInScope).length
-      ? `--files-in-scope ${shellQuote(listOption(planArgs.files_in_scope ?? planArgs.filesInScope).join(","))}`
-      : "",
-    listOption(planArgs.off_limits ?? planArgs.offLimits).length
-      ? `--off-limits ${shellQuote(listOption(planArgs.off_limits ?? planArgs.offLimits).join(","))}`
-      : "",
-    listOption(planArgs.constraints).length
-      ? `--constraints ${shellQuote(listOption(planArgs.constraints).join(","))}`
-      : "",
-    listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
-      ? `--secondary-metrics ${shellQuote(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).join(","))}`
-      : "",
-    listOption(planArgs.secondary_metric_constraints ?? planArgs.secondaryMetricConstraints).length
-      ? `--secondary-metric-constraints ${shellQuote(
+    shellKind,
+    ...(benchmarkCommand ? ["--benchmark-command", benchmarkCommand] : []),
+    ...(planArgs.benchmark_prints_metric != null || planArgs.benchmarkPrintsMetric != null
+      ? [
+          "--benchmark-prints-metric",
+          planArgs.benchmark_prints_metric ?? planArgs.benchmarkPrintsMetric,
+        ]
+      : []),
+    ...(checksCommand ? ["--checks-command", checksCommand] : []),
+    ...(listOption(planArgs.files_in_scope ?? planArgs.filesInScope).length
+      ? ["--files-in-scope", listOption(planArgs.files_in_scope ?? planArgs.filesInScope).join(",")]
+      : []),
+    ...(listOption(planArgs.off_limits ?? planArgs.offLimits).length
+      ? ["--off-limits", listOption(planArgs.off_limits ?? planArgs.offLimits).join(",")]
+      : []),
+    ...(listOption(planArgs.constraints).length
+      ? ["--constraints", listOption(planArgs.constraints).join(",")]
+      : []),
+    ...(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
+      ? [
+          "--secondary-metrics",
+          listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).join(","),
+        ]
+      : []),
+    ...(listOption(planArgs.secondary_metric_constraints ?? planArgs.secondaryMetricConstraints)
+      .length
+      ? [
+          "--secondary-metric-constraints",
           listOption(
             planArgs.secondary_metric_constraints ?? planArgs.secondaryMetricConstraints,
           ).join(","),
-        )}`
-      : "",
-    (planArgs.secondary_metric_constraint_mode ?? planArgs.secondaryMetricConstraintMode)
-      ? `--secondary-metric-constraint-mode ${shellQuote(
+        ]
+      : []),
+    ...((planArgs.secondary_metric_constraint_mode ?? planArgs.secondaryMetricConstraintMode)
+      ? [
+          "--secondary-metric-constraint-mode",
           planArgs.secondary_metric_constraint_mode ?? planArgs.secondaryMetricConstraintMode,
-        )}`
-      : "",
-    listOption(planArgs.protected_benchmark_paths ?? planArgs.protectedBenchmarkPaths).length
-      ? `--protected-benchmark-paths ${shellQuote(
+        ]
+      : []),
+    ...(listOption(planArgs.protected_benchmark_paths ?? planArgs.protectedBenchmarkPaths).length
+      ? [
+          "--protected-benchmark-paths",
           listOption(planArgs.protected_benchmark_paths ?? planArgs.protectedBenchmarkPaths).join(
             ",",
           ),
-        )}`
-      : "",
-    setupMaxIterations != null ? `--max-iterations ${shellQuote(setupMaxIterations)}` : "",
-    (planArgs.packet_budget ?? planArgs.packetBudget)
-      ? `--packet-budget ${shellQuote(planArgs.packet_budget ?? planArgs.packetBudget)}`
-      : "",
-    (planArgs.wall_clock_budget_seconds ?? planArgs.wallClockBudgetSeconds)
-      ? `--wall-clock-budget-seconds ${shellQuote(
+        ]
+      : []),
+    ...(setupMaxIterations != null ? ["--max-iterations", setupMaxIterations] : []),
+    ...((planArgs.packet_budget ?? planArgs.packetBudget)
+      ? ["--packet-budget", planArgs.packet_budget ?? planArgs.packetBudget]
+      : []),
+    ...((planArgs.wall_clock_budget_seconds ?? planArgs.wallClockBudgetSeconds)
+      ? [
+          "--wall-clock-budget-seconds",
           planArgs.wall_clock_budget_seconds ?? planArgs.wallClockBudgetSeconds,
-        )}`
-      : "",
-    (planArgs.budget_note ?? planArgs.budgetNote)
-      ? `--budget-note ${shellQuote(planArgs.budget_note ?? planArgs.budgetNote)}`
-      : "",
-    commitPaths.length > 0 ? `--commit-paths ${shellQuote(commitPaths.join(","))}` : "",
-    recommended ? `--recipe ${shellQuote(recommended.id)}` : "",
-    args.catalog ? `--catalog ${shellQuote(args.catalog)}` : "",
-    args.catalog && trustCatalogOption(args) ? "--trust-catalog" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
+        ]
+      : []),
+    ...((planArgs.budget_note ?? planArgs.budgetNote)
+      ? ["--budget-note", planArgs.budget_note ?? planArgs.budgetNote]
+      : []),
+    ...(commitPaths.length > 0 ? ["--commit-paths", commitPaths.join(",")] : []),
+    ...(recommended ? ["--recipe", recommended.id] : []),
+    ...(args.catalog ? ["--catalog", args.catalog] : []),
+    ...(args.catalog && trustCatalogOption(args) ? ["--trust-catalog"] : []),
+  ];
+  const command = commandLine(commandArgs, shellKind);
+  const doctorCommand = commandLine(
+    [
+      "node",
+      path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+      "doctor",
+      "--cwd",
+      workDir,
+      "--check-benchmark",
+    ],
+    shellKind,
+  );
   const benchmarkLintCommand = benchmarkCommand
-    ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`
+    ? commandLine(
+        [
+          "node",
+          path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+          "benchmark-lint",
+          "--cwd",
+          workDir,
+          "--metric-name",
+          metricName,
+          "--command",
+          benchmarkCommand,
+        ],
+        shellKind,
+      )
     : hasDefaultBenchmarkCommand
-      ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(await defaultBenchmarkCommand(workDir))}`
+      ? commandLine(
+          [
+            "node",
+            path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+            "benchmark-lint",
+            "--cwd",
+            workDir,
+            "--metric-name",
+            metricName,
+            "--command",
+            await defaultBenchmarkCommand(workDir),
+          ],
+          shellKind,
+        )
       : "";
-  const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
-  const guideCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} guide --cwd ${shellQuote(workDir)}`;
+  const baselineCommand = commandLine(
+    ["node", path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"), "next", "--cwd", workDir],
+    shellKind,
+  );
+  const logCommand = commandLine(
+    [
+      "node",
+      path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+      "log",
+      "--cwd",
+      workDir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Describe the kept change",
+    ],
+    shellKind,
+  );
+  const guideCommand = commandLine(
+    ["node", path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"), "guide", "--cwd", workDir],
+    shellKind,
+  );
   const scopeWarnings = scopeWarningsFromArgs(planArgs);
   const integrityPreflight = await benchmarkIntegrityPreflight(workDir, config, state);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -803,16 +880,28 @@ async function setupPlan(args: any) {
             ".gitattributes",
           ],
           commands: [
-            `git add -- ${[
-              "autoresearch.md",
-              "autoresearch.ideas.md",
-              shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
-              "autoresearch.config.json",
-              ".gitattributes",
-            ]
-              .map(shellQuote)
-              .join(" ")}`,
-            `git commit -m ${shellQuote(`Start autoresearch session: ${planArgs.name || "Autoresearch session"}`)}`,
+            commandLine(
+              [
+                "git",
+                "add",
+                "--",
+                "autoresearch.md",
+                "autoresearch.ideas.md",
+                shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
+                "autoresearch.config.json",
+                ".gitattributes",
+              ],
+              shellKind,
+            ),
+            commandLine(
+              [
+                "git",
+                "commit",
+                "-m",
+                `Start autoresearch session: ${planArgs.name || "Autoresearch session"}`,
+              ],
+              shellKind,
+            ),
           ],
           note: "Run after setup creates files and before the first experiment-scoped keep commit.",
         }
@@ -1063,7 +1152,13 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     trust_catalog: args.trust_catalog ?? args.trustCatalog ?? setupDefaults.trustCatalog,
   };
   const setup = await setupPlan(setupArgs);
-  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
+  const dashboardCommand = commandLine([
+    "node",
+    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    "serve",
+    "--cwd",
+    workDir,
+  ]);
   return {
     ok: true,
     workDir,
@@ -1072,7 +1167,15 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     intent,
     setup,
     commands: {
-      promptPlan: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} prompt-plan --cwd ${shellQuote(workDir)} --prompt ${shellQuote(prompt)}`,
+      promptPlan: commandLine([
+        "node",
+        path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+        "prompt-plan",
+        "--cwd",
+        workDir,
+        "--prompt",
+        prompt,
+      ]),
       setup: setup.nextCommand,
       doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command || "",
       dashboard: dashboardCommand,
@@ -1699,10 +1802,27 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     lastRun,
     setup.defaultBenchmarkCommandReady,
   );
-  const dashboardCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} serve --cwd ${shellQuote(workDir)}`;
+  const dashboardCommand = commandLine([
+    "node",
+    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    "serve",
+    "--cwd",
+    workDir,
+  ]);
   const baselineCommand = setup.baselineCommand;
   const logCommand = lastRun
-    ? `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status ${shellQuote(lastRunLogStatus)} --description ${shellQuote("Describe the last packet")}`
+    ? commandLine([
+        "node",
+        path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+        "log",
+        "--cwd",
+        workDir,
+        "--from-last",
+        "--status",
+        lastRunLogStatus,
+        "--description",
+        "Describe the last packet",
+      ])
     : setup.guidedFlow.find((step: any) => step.step === "log")?.command;
   let stage = "ready";
   let nextAction = "Run the next measured packet.";
@@ -1736,7 +1856,14 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     logLast: logCommand,
     replaceLast: replaceLastRunCommand,
     dashboard: dashboardCommand,
-    newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
+    newSegmentDryRun: commandLine([
+      "node",
+      path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+      "new-segment",
+      "--cwd",
+      workDir,
+      "--dry-run",
+    ]),
   };
   const canonicalGuideAction = canonicalActionForGuidedSetup({
     doctor,
@@ -2410,7 +2537,7 @@ function replacementNextCommandFromLastRun(
   ];
   const command = packet?.history?.replayCommand || packet?.run?.command;
   if (command) {
-    parts.push("--command", copyCommandArg(command));
+    parts.push("--command", shellQuote(command));
   } else if (!defaultBenchmarkCommandReady) {
     return "";
   }
@@ -2420,7 +2547,7 @@ function replacementNextCommandFromLastRun(
   }
   const checksCommand = packet?.history?.replayChecksCommand || packet?.run?.checks?.command;
   if (checksCommand) {
-    parts.push("--checks-command", copyCommandArg(checksCommand));
+    parts.push("--checks-command", shellQuote(checksCommand));
   }
   return parts.join(" ");
 }
@@ -2436,14 +2563,6 @@ async function replacementNextCommandForLastRun(
       ? defaultBenchmarkCommandReady
       : await defaultBenchmarkCommandExists(workDir);
   return replacementNextCommandFromLastRun(workDir, packet, defaultReady);
-}
-
-function copyCommandArg(value: unknown): string {
-  const text = String(value);
-  if (process.platform === "win32") {
-    return `'${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "''")}'`;
-  }
-  return shellQuote(text);
 }
 
 function replaySafeCommand(value: unknown, context: LooseObject): string {
@@ -2712,7 +2831,7 @@ function renderMissingCommandScript(shellKind: string, kind: string, optionName:
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       "",
-      `printf '%s\\n' ${shellQuote(message)} >&2`,
+      `printf '%s\\n' ${shellQuote(message, "bash")} >&2`,
       "exit 2",
       "",
     ].join("\n");
@@ -2720,7 +2839,7 @@ function renderMissingCommandScript(shellKind: string, kind: string, optionName:
   return [
     '$ErrorActionPreference = "Stop"',
     "",
-    `Write-Error ${shellQuote(message)}`,
+    `Write-Error ${shellQuote(message, "powershell")}`,
     "exit 2",
     "",
   ].join("\n");
@@ -2745,14 +2864,14 @@ function renderResearchBenchmarkScript(slug: string, shellKind: string) {
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       "",
-      `${shellQuote(process.execPath)} ${shellQuote(script)} quality-gap --cwd . --research-slug ${shellQuote(slug)}`,
+      `${shellQuote(process.execPath, "bash")} ${shellQuote(script, "bash")} quality-gap --cwd . --research-slug ${shellQuote(slug, "bash")}`,
       "",
     ].join("\n");
   }
   return [
     '$ErrorActionPreference = "Stop"',
     "",
-    `& ${shellQuote(process.execPath)} ${shellQuote(script)} quality-gap --cwd . --research-slug ${shellQuote(slug)}`,
+    `& ${shellQuote(process.execPath, "powershell")} ${shellQuote(script, "powershell")} quality-gap --cwd . --research-slug ${shellQuote(slug, "powershell")}`,
     "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
     "",
   ].join("\n");
@@ -3914,7 +4033,7 @@ function setupCheckpointGuidance(workDir: string, files: any[], name: string) {
     paths,
     commands: paths.length
       ? [
-          `git add -- ${paths.map(shellQuote).join(" ")}`,
+          `git add -- ${paths.map((item) => shellQuote(item)).join(" ")}`,
           `git commit -m ${shellQuote(`Start autoresearch session: ${name}`)}`,
         ]
       : [],
@@ -4436,7 +4555,7 @@ async function decisionGuidance({
     checksCommand,
     defaultBenchmarkCommand,
     defaultChecksCommand,
-    shellQuote,
+    renderCommand: commandLine,
     errorMessage,
   });
 }
