@@ -94,8 +94,8 @@ function usage() {
   return `Finalize an autoresearch branch into independent review branches.
 
 Usage:
-  node scripts/finalize-autoresearch.mjs plan --output groups.json [--goal short-slug] [--trunk main] [--collapse-overlap]
-  node scripts/finalize-autoresearch.mjs groups.json
+  node scripts/finalize-autoresearch.mjs plan --cwd <repo> --output groups.json [--goal short-slug] [--trunk main] [--collapse-overlap]
+  node scripts/finalize-autoresearch.mjs --cwd <repo> groups.json
 
 groups.json:
 {
@@ -143,6 +143,17 @@ function parseCliArgs(argv: string[]): CliArgs {
     }
   }
   return out;
+}
+
+function resolveFinalizerCwd(args: CliArgs): string {
+  const raw = args.cwd ?? args.workingDir;
+  if (raw == null || raw === "" || raw === true) return process.cwd();
+  return path.resolve(String(raw));
+}
+
+function resolveCliPath(input: unknown, cwd: string): string {
+  const text = String(input || "");
+  return path.isAbsolute(text) ? text : path.resolve(cwd, text);
 }
 
 async function run(
@@ -904,7 +915,7 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   }
   plan = { ...plan, plan_fingerprint: planFingerprint(plan) };
   const output = args.output
-    ? path.resolve(args.output)
+    ? resolveCliPath(args.output, cwd)
     : path.join(await gitCommonDir(cwd), REPORT_DIRNAME, `${safeSlug(plan.goal)}.groups.json`);
   await fsp.mkdir(path.dirname(output), { recursive: true });
   await fsp.writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
@@ -936,7 +947,7 @@ async function main() {
     console.log(usage());
     return;
   }
-  const cwd = process.cwd();
+  const cwd = resolveFinalizerCwd(cli);
   if (command === "plan") {
     await withPhase(
       "plan generation",
@@ -947,7 +958,7 @@ async function main() {
     );
     return;
   }
-  const configPath = path.resolve(file);
+  const configPath = resolveCliPath(file, cwd);
   const config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
     const parsed = JSON.parse(await fsp.readFile(configPath, "utf8"));
     if (!parsed.base || !parsed.final_tree || !parsed.goal || !Array.isArray(parsed.groups)) {

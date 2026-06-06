@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 
 import { redactPathDisplay } from "./evidence-redaction.js";
+import { resolvePathInsideRootSync } from "./path-containment.js";
 import { isKeepStatus, isRejectedRunStatus } from "./run-status.js";
 
 type LooseObject = Record<string, any>;
@@ -199,14 +199,17 @@ function evidenceStatusCounts(entries: EvidenceRegistryEntry[]): Record<Evidence
 
 export function artifactList(artifacts: LooseObject = {}, workDir = "") {
   return Object.entries(artifacts || {}).map(([name, artifactPath]) => {
-    const quarantined = String(artifactPath || "") === "<outside-workdir>";
+    const value = String(artifactPath || "");
+    const resolved =
+      value && value !== "<outside-workdir>"
+        ? resolvePathInsideRootSync(workDir || process.cwd(), value)
+        : null;
+    const quarantined = value === "<outside-workdir>" || Boolean(resolved && !resolved.inside);
     return {
       id: `artifact-${name}`,
       name,
-      path: quarantined
-        ? "<outside-workdir>"
-        : redactPathDisplay(String(artifactPath || ""), workDir),
-      exists: quarantined ? false : artifactExists(String(artifactPath || ""), workDir),
+      path: quarantined ? "<outside-workdir>" : redactPathDisplay(value, workDir),
+      exists: quarantined ? false : artifactExists(value, workDir),
       quarantined,
       warning: quarantined ? "Artifact path is outside the working directory." : "",
     };
@@ -215,8 +218,6 @@ export function artifactList(artifacts: LooseObject = {}, workDir = "") {
 
 function artifactExists(artifactPath: string, workDir: string) {
   if (!artifactPath) return false;
-  const resolved = path.isAbsolute(artifactPath)
-    ? artifactPath
-    : path.resolve(workDir || process.cwd(), artifactPath);
-  return fs.existsSync(resolved);
+  const resolved = resolvePathInsideRootSync(workDir || process.cwd(), artifactPath);
+  return resolved.inside && fs.existsSync(resolved.absolutePath);
 }

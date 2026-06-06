@@ -650,7 +650,11 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
   }
   for (const expected of [
     "github.com/TheGreenCedar/codex-autoresearch/releases/download",
-    'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
+    "${PACKAGE_NAME}-${version}.tgz",
+    "verifyRuntimeTarballIntegrity",
+    ".tgz.sha256",
+    "Checksum manifest expected asset",
+    "Release tarball package version mismatch",
     "tar",
     "dist",
     "Run `node scripts/autoresearch.mjs --help`",

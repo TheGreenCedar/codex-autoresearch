@@ -60,7 +60,7 @@ From `plugins/codex-autoresearch`:
 node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
@@ -126,10 +126,10 @@ node scripts/autoresearch.mjs next --cwd <project>
 Then log from the last packet:
 
 ```bash
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Baseline packet"
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 ```
 
-Use `measure` for a baseline or diagnostic, and `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
+Use `measure` for a baseline or diagnostic. Use `keep` only after a changed packet is safe to preserve, and use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
 
 ## What Good Looks Like
 

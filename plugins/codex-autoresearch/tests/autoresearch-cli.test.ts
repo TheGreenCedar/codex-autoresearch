@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -189,6 +190,112 @@ function addressPort(server) {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Server did not bind a TCP port");
   return address.port;
+}
+
+async function runTar(args, cwd) {
+  const result = await new Promise((resolve) => {
+    const child = spawn("tar", args, {
+      cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
+    );
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, `tar ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
+}
+
+async function writeFakeSourcePlugin(dir, version = PLUGIN_VERSION) {
+  const pluginDir = path.join(dir, "source-plugin");
+  const scriptsDir = path.join(pluginDir, "scripts");
+  await mkdir(scriptsDir, { recursive: true });
+  await writeFile(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({ name: "codex-autoresearch", version }, null, 2),
+    "utf8",
+  );
+  return {
+    pluginDir,
+    importerUrl: pathToFileURL(path.join(scriptsDir, "autoresearch.mjs")).href,
+  };
+}
+
+async function createRuntimeReleaseAsset(
+  dir,
+  {
+    sourceVersion = PLUGIN_VERSION,
+    packageVersion = sourceVersion,
+    packageName = "codex-autoresearch",
+    checksumFileName,
+    checksumHash,
+    writeChecksum = true,
+  } = {},
+) {
+  const releaseDir = path.join(dir, `release-${Math.random().toString(16).slice(2)}`);
+  const packageParent = path.join(dir, `package-parent-${Math.random().toString(16).slice(2)}`);
+  const packageDir = path.join(packageParent, "package");
+  const tarballName = `codex-autoresearch-${sourceVersion}.tgz`;
+  const checksumName = `${tarballName}.sha256`;
+  const tarballPath = path.join(releaseDir, tarballName);
+  const checksumPath = path.join(releaseDir, checksumName);
+
+  await mkdir(path.join(packageDir, "dist", "scripts"), { recursive: true });
+  await mkdir(releaseDir, { recursive: true });
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: packageName, version: packageVersion }, null, 2),
+    "utf8",
+  );
+  await writeFile(
+    path.join(packageDir, "dist", "scripts", "autoresearch.mjs"),
+    "export const hydratedRuntime = true;\n",
+    "utf8",
+  );
+
+  await runTar(["-czf", tarballPath, "-C", packageParent, "package"], dir);
+  const actualHash = createHash("sha256")
+    .update(await readFile(tarballPath))
+    .digest("hex");
+  if (writeChecksum) {
+    await writeFile(
+      checksumPath,
+      `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`,
+      "utf8",
+    );
+  }
+
+  return { releaseDir, tarballName, checksumName, tarballPath, checksumPath, actualHash };
+}
+
+async function withReleaseServer(releaseDir, version, fn) {
+  const server = createServer(async (request, response) => {
+    try {
+      const requestPath = new URL(request.url || "/", `http://${request.headers.host}`).pathname;
+      const fileName = path.basename(decodeURIComponent(requestPath));
+      const bytes = await readFile(path.join(releaseDir, fileName));
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(bytes);
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    }
+  });
+  await listenOnRandomPort(server);
+  try {
+    return await fn(`http://127.0.0.1:${addressPort(server)}/releases/download/v${version}`);
+  } finally {
+    await closeServer(server);
+  }
 }
 
 async function renderExportedDashboard(html) {
@@ -1474,6 +1581,80 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
     assert.equal(statePayload.evidenceRegistry.counts.rejected, 1);
+  });
+});
+
+test("ARTIFACT paths through linked directories outside the workdir are quarantined", async (t) => {
+  await withTempDir("linked-external-artifact", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      await writeFile(path.join(outsideDir, "manifest.json"), '{"secret":true}\n', "utf8");
+      const linkPath = path.join(dir, "linked-out");
+      try {
+        await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        t.skip(
+          `directory symlink creation unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return;
+      }
+
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "linked external artifact",
+        "--metric-name",
+        "score",
+        "--direction",
+        "higher",
+      ]);
+      await writeFile(
+        path.join(dir, "packet-runner.mjs"),
+        [
+          "console.log('METRIC score=7');",
+          "console.log('ARTIFACT manifest=linked-out/manifest.json');",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        `${quoteForShell(process.execPath)} packet-runner.mjs`,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const payload = JSON.parse(packet.stdout);
+      assert.equal(payload.run.artifacts.manifest, "<outside-workdir>");
+      assert.equal(payload.packetEvidence.artifacts[0].exists, false);
+      assert.equal(payload.packetEvidence.artifacts[0].quarantined, true);
+      assert.match(payload.packetEvidence.artifactWarnings.join("\n"), /quarantined/);
+      assert.doesNotMatch(JSON.stringify(payload.packetEvidence), /secret/);
+
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "keep",
+        "--description",
+        "Keep linked external artifact evidence",
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+      assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
+      const state = await runCli(["state", "--cwd", dir]);
+      assert.equal(state.code, 0, state.stderr);
+      const statePayload = JSON.parse(state.stdout);
+      assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
+      assert.equal(statePayload.evidenceRegistry.counts.rejected, 1);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -5372,8 +5553,8 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.match(payload.nextCommand, /METRIC seconds=1/);
     assert.match(payload.nextCommand, /--checks-command/);
     assert.match(payload.nextCommand, /process\.exit\(0\)/);
-    assert.match(payload.nextCommand, /--commit-paths "src,tests"/);
-    assert.match(payload.nextCommand, /--max-iterations "7"/);
+    assert.match(payload.nextCommand, /--commit-paths ['"]?src,tests['"]?/);
+    assert.match(payload.nextCommand, /--max-iterations ['"]?7['"]?/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
     assert.equal(payload.missingEssentials.length, 0);
@@ -5398,6 +5579,64 @@ test("setup-plan preserves explicit command and state inputs", async () => {
   });
 });
 
+test("setup-plan renders benchmark command arguments for the requested shell", async () => {
+  await withTempDir("setup-plan-shell-quoting", async (dir) => {
+    const benchmark =
+      "node -e \"console.log('METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path')\"";
+
+    const powershellResult = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "shell quoting",
+      "--metric-name",
+      "seconds",
+      "--shell",
+      "powershell",
+      "--benchmark-command",
+      benchmark,
+    ]);
+    assert.equal(powershellResult.code, 0, powershellResult.stderr);
+    const powershellPayload = JSON.parse(powershellResult.stdout);
+    assert.match(
+      powershellPayload.nextCommand,
+      /^& \{ \$PSNativeCommandArgumentPassing = 'Legacy'; /,
+    );
+    assert.match(
+      powershellPayload.nextCommand,
+      /--benchmark-command 'node -e \\"console\.log\(''METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path''\)\\"/,
+    );
+    assert.doesNotMatch(powershellPayload.nextCommand, /--benchmark-command "/);
+    assert.match(
+      powershellPayload.benchmarkLintCommand,
+      /--command 'node -e \\"console\.log\(''METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path''\)\\"/,
+    );
+
+    const bashResult = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "shell quoting",
+      "--metric-name",
+      "seconds",
+      "--shell",
+      "bash",
+      "--benchmark-command",
+      benchmark,
+    ]);
+    assert.equal(bashResult.code, 0, bashResult.stderr);
+    const bashPayload = JSON.parse(bashResult.stdout);
+    assert.match(bashPayload.nextCommand, /--benchmark-command 'node -e "console\.log\('/);
+    assert.match(
+      bashPayload.nextCommand,
+      /'"'"'METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path'"'"'/,
+    );
+    assert.doesNotMatch(bashPayload.nextCommand, /--benchmark-command "/);
+  });
+});
+
 test("setup-plan treats recommended recipe benchmark as configured", async () => {
   await withTempDir("setup-plan-recipe-defaults", async (dir) => {
     await writeFile(
@@ -5413,7 +5652,10 @@ test("setup-plan treats recommended recipe benchmark as configured", async () =>
     assert.deepEqual(payload.missing, []);
     assert.deepEqual(payload.missingEssentials, []);
     assert.doesNotMatch(payload.nextStep.nextAction.reason, /benchmark_command/);
-    assert.match(payload.nextCommand, /--recipe "node-test-runtime"/);
+    assert.match(
+      payload.nextCommand,
+      /--recipe (?:'node-test-runtime'|"node-test-runtime"|node-test-runtime)\b/,
+    );
   });
 });
 
@@ -6317,6 +6559,49 @@ test("export refuses to write outside the working directory", async () => {
   });
 });
 
+test("export refuses to write through linked directories outside the working directory", async (t) => {
+  await withTempDir("linked-contained-export", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "linked export", "--metric-name", "seconds"]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+    ]);
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      const linkPath = path.join(dir, "linked-output");
+      try {
+        await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        t.skip(
+          `directory symlink creation unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return;
+      }
+
+      const result = await runCli([
+        "export",
+        "--cwd",
+        dir,
+        "--output",
+        "linked-output/escape.html",
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /outside the working directory/);
+      await assert.rejects(readFile(path.join(outsideDir, "escape.html"), "utf8"));
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("export is compact by default and full with json-full", async () => {
   await withTempDir("compact-export", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "compact export", "--metric-name", "seconds"]);
@@ -6908,6 +7193,10 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
   );
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
+  assert.match(bootstrap, /verifyRuntimeTarballIntegrity/);
+  assert.match(bootstrap, /\.tgz\.sha256/);
+  assert.match(bootstrap, /Checksum manifest expected asset/);
+  assert.match(bootstrap, /Release tarball package version mismatch/);
   assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
 });
@@ -6933,5 +7222,101 @@ test("source launcher direct-script detection survives normalized paths", async 
     } catch (error) {
       if (process.platform !== "win32") throw error;
     }
+  });
+});
+
+test("source launcher hydrates runtime only after release checksum verification", async () => {
+  await withTempDir("runtime-hydration-integrity", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir);
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+      const runtimeText = await readFile(new URL(runtimeHref), "utf8");
+      assert.equal(runtimeText, "export const hydratedRuntime = true;\n");
+
+      const runtime = await import(`${runtimeHref}?integrity=${Date.now()}`);
+      assert.equal(runtime.hydratedRuntime, true);
+      await access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"));
+    });
+  });
+});
+
+test("source launcher fails closed when release checksum metadata is missing", async () => {
+  await withTempDir("runtime-hydration-missing-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { writeChecksum: false });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /\.tgz\.sha256: HTTP 404/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher fails closed when release checksum mismatches", async () => {
+  await withTempDir("runtime-hydration-bad-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { checksumHash: "0".repeat(64) });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Release tarball integrity mismatch/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects checksum manifests for the wrong release asset", async () => {
+  await withTempDir("runtime-hydration-wrong-asset", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, {
+      checksumFileName: "codex-autoresearch-0.0.0.tgz",
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Checksum manifest expected asset codex-autoresearch-2\.1\.6\.tgz, got codex-autoresearch-0\.0\.0\.tgz/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects checksummed tarballs for the wrong package version", async () => {
+  await withTempDir("runtime-hydration-wrong-version", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, { packageVersion: "0.0.0" });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /Release tarball package version mismatch: expected 2\.1\.6, got 0\.0\.0/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
   });
 });

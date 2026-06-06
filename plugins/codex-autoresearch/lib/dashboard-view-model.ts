@@ -2455,6 +2455,8 @@ function defaultAvoidance(kind: string): string {
   if (kind === "fix-blocker")
     return "Avoids trusting a loop while doctor or drift warnings are unresolved.";
   if (kind === "baseline") return "Avoids optimizing before a comparison floor exists.";
+  if (kind === "current-tree-finalization")
+    return "Avoids packaging stale kept-commit history when the current branch tree is the review unit.";
   if (kind === "plateau")
     return "Avoids repeating the same experiment family after signal has flattened.";
   if (kind === "finalize-preview")
@@ -2477,6 +2479,8 @@ function defaultProof(kind: string): string {
     return "Doctor confirms the command emits the configured primary metric.";
   if (kind === "fix-blocker") return "Doctor returns without blocking issues or drift warnings.";
   if (kind === "baseline") return "Run 1 is logged and future changes compare against its metric.";
+  if (kind === "current-tree-finalization")
+    return "A finalize-current-tree preview or prerequisite logging covers the current non-session diff before review branch creation.";
   if (kind === "plateau") return "A different lane produces new evidence or a better metric.";
   if (kind === "finalize-preview")
     return "Finalize preview reports a ready review packet with no unresolved blockers.";

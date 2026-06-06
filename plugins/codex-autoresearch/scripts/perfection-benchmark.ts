@@ -534,7 +534,11 @@ const checks = [
         !packageFiles.includes("autoresearch-mcp") &&
         includesAll(bootstrap, [
           "github.com/TheGreenCedar/codex-autoresearch/releases/download",
-          'codex-autoresearch-${version.replace(/^v/, "")}.tgz',
+          "${PACKAGE_NAME}-${version}.tgz",
+          "verifyRuntimeTarballIntegrity",
+          ".tgz.sha256",
+          "Checksum manifest expected asset",
+          "Release tarball package version mismatch",
           "package.json",
           "tar",
           "dist",
@@ -547,10 +551,12 @@ const checks = [
           "npm pack",
           "--help",
           "codex-autoresearch-${VERSION}.tgz",
+          "$tarball.sha256",
+          "sha256sum -c",
         ])
         ? pass()
         : fail(
-            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, the CLI launcher should bootstrap missing dist from the matching GitHub release tarball, no MCP launcher/config should ship, and release CI should smoke the tarball before creating the release tag.",
+            "Release tarball runtime contract is incomplete: dist should be ignored in Git, package files should include built dist, the CLI launcher should verify the matching GitHub release tarball checksum before hydrating missing dist, no MCP launcher/config should ship, and release CI should checksum plus smoke the tarball before creating the release tag.",
           );
     },
   },

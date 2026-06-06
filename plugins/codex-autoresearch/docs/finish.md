@@ -52,7 +52,7 @@ Use this for current-final-tree finalization after stale bests, contaminated eva
 From the autoresearch source branch:
 
 ```bash
-node scripts/finalize-autoresearch.mjs plan --goal <short-goal>
+node scripts/finalize-autoresearch.mjs plan --cwd <project> --output groups.json --goal <short-goal>
 ```
 
 Review the plan before mutation:

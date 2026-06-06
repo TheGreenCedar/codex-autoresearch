@@ -4,13 +4,26 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.6
+
+### Fixed
+
+- Hardened source-checkout runtime hydration so missing `dist/` is filled only from a matching release tarball with a verified adjacent SHA-256 checksum and matching packaged name/version.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.6`.
+
 ## 2.1.5
 
 ### Fixed
 
+- Render generated commands with explicit PowerShell/POSIX shell quoting, and include `--cwd` in finalizer plan suggestions so copied finalizer commands target the previewed repo.
 - Restored served dashboard live refresh from the redacted view model path while keeping raw ledger access limited to the debug surface.
 - Added live-refresh tests and type coverage so dashboard snapshots can update without reintroducing raw-session payload exposure.
 - Corrected `--help --all` so `guide` documents the same setup guardrail and budget flags as the read-only setup planning flow.
+- Hardened artifact evidence and dashboard exports so symlinks or junctions cannot make trusted paths escape `--cwd`.
+- Corrected first-run baseline docs to log `measure`, hardened live dashboard refresh ordering and chart semantics, and made maintainer verification guidance match the source-checkout scripts.
 
 ### Release
 
