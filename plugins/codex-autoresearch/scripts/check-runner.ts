@@ -25,7 +25,19 @@ export function runCommand(
   }: { cwd: string; env?: NodeJS.ProcessEnv; streamOutput?: boolean; timeoutSeconds?: number },
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const resolved = resolveSpawnCommand(command, args);
+    let resolved: ResolvedSpawnCommand;
+    try {
+      resolved = resolveSpawnCommand(command, args);
+    } catch (error) {
+      resolve({
+        label,
+        code: -1,
+        stdout: "",
+        stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+        timedOut: false,
+      });
+      return;
+    }
     const child = spawn(resolved.command, resolved.args, {
       cwd,
       detached: process.platform !== "win32",
@@ -79,16 +91,12 @@ export function runCommand(
 export function resolveSpawnCommand(
   command: string,
   args: string[],
-  {
-    comSpec = process.env.ComSpec,
-    platform = process.platform,
-  }: { comSpec?: string; platform?: NodeJS.Platform } = {},
+  { platform = process.platform }: { platform?: NodeJS.Platform } = {},
 ): ResolvedSpawnCommand {
   if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
-    return {
-      command: comSpec || "cmd.exe",
-      args: ["/d", "/c", "call", command, ...args],
-    };
+    throw new Error(
+      `Refusing to run Windows command script without an explicit native wrapper: ${command}`,
+    );
   }
   return { command, args };
 }
