@@ -8124,7 +8124,21 @@ async function taskManifestPathsForRun(run: LooseObject) {
   const warnings: string[] = [];
 
   for (const [name, artifactPath] of Object.entries(run.artifacts || {})) {
-    if (!/task[_-]?manifest/i.test(name) || !isUsableArtifactPath(artifactPath)) continue;
+    if (!/task[_-]?manifest/i.test(name)) continue;
+    if (!isUsableArtifactPath(artifactPath)) {
+      if (artifactPath === "<outside-workdir>") {
+        quarantineTaskManifestPath({
+          resolved: "<outside-workdir>",
+          reason: "outside_workdir",
+          detail:
+            "path escapes the working directory and was quarantined before task manifest indexing",
+          workDir,
+          quarantinedTasks,
+          warnings,
+        });
+      }
+      continue;
+    }
 
     const artifactValue = String(artifactPath);
     const resolved = path.isAbsolute(artifactValue)
