@@ -65,7 +65,7 @@ Happy-path CLI from `plugins/codex-autoresearch`:
 node scripts/autoresearch.mjs setup --cwd <project> --name "<session>" --metric-name <metric> --direction lower --benchmark-command "<command>"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```

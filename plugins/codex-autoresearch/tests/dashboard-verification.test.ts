@@ -416,6 +416,59 @@ test("dashboard segment transition command matches its safe action metadata", ()
   assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bgap-candidates\b/);
 });
 
+test("dashboard current-tree finalization explains proof without packet fallback", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "current tree finalization",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+      current: [
+        {
+          run: 1,
+          metric: 10,
+          status: "keep",
+          description: "Kept baseline",
+          confidence: 1,
+        },
+      ],
+      baseline: 10,
+      best: 10,
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "current-tree-finalization",
+          priority: 5,
+          reason:
+            "Use finalize-current-tree because commit-level kept evidence does not describe the current branch tree cleanly.",
+          command: "",
+        },
+      },
+    },
+    settings: {},
+    finalizePreview: {
+      ready: false,
+      nextAction:
+        "Use finalize-current-tree because commit-level kept evidence does not describe the current branch tree cleanly.",
+    },
+    commands: [
+      {
+        label: "Finalize preview",
+        command: "node scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+      },
+    ],
+  } as any);
+
+  assert.equal(viewModel.nextBestAction.kind, "current-tree-finalization");
+  assert.match(viewModel.nextBestAction.explanation.proof, /finalize-current-tree/);
+  assert.match(viewModel.nextBestAction.explanation.avoids, /current branch tree/);
+  assert.doesNotMatch(
+    viewModel.nextBestAction.explanation.proof,
+    /next (?:run|packet) produces evidence/i,
+  );
+  assert.match(viewModel.decisionReceipt.proof, /current non-session diff/);
+});
+
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
   const entries = [
     dashboardConfigEntry({ name: "zero path", metricName: "seconds", metricUnit: "s" }),
@@ -464,6 +517,37 @@ test("dashboard DOM renders non-blank next action in operator rail", async () =>
   assert.match(getById("metric-construction-formula").textContent, /METRIC seconds=<number>/);
   assert.match(getById("metric-fallback-note").textContent, /Metric metadata is incomplete/);
   assert.match(getById("metric-detail-primary").textContent, /METRIC seconds=4\.8s/);
+});
+
+test("dashboard chart does not place interactive point buttons under an image role", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "chart semantics", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 4, status: "keep", description: "Improved", confidence: 2 },
+  ];
+
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const chart = getById("trend-chart");
+  const buttons = [...dom.window.document.querySelectorAll(".chart-point-button")];
+  const chartSource = readFileSync(
+    path.join(
+      resolvePackageRoot(import.meta.url),
+      "dashboard",
+      "src",
+      "components",
+      "trend",
+      "TrendChartFigure.tsx",
+    ),
+    "utf8",
+  );
+
+  assert.equal(chart.getAttribute("role"), null);
+  assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
+  assert.match(chartSource, /className="chart-point-button"/);
+  for (const button of buttons) {
+    assert.equal(button.closest('[role="img"]'), null);
+  }
+  dom.window.close();
 });
 
 test("dashboard styles latest rejected evidence as rejected, not kept", async () => {
@@ -3092,6 +3176,80 @@ test("served dashboard live refresh starts by default and can be stopped", async
     () => dom.window.__clearedLiveInterval === 1,
     "Live toggle did not clear the interval.",
   );
+  dom.window.close();
+});
+
+test("served dashboard ignores stale live refresh responses that resolve out of order", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "served dashboard",
+      metricName: "quality_gap",
+      bestDirection: "lower",
+      metricUnit: "gaps",
+    },
+    { type: "run", run: 1, metric: 2, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const staleEntries = [
+    ...entries,
+    { type: "run", run: 2, metric: 1, status: "keep", description: "Older", confidence: 2 },
+  ];
+  const latestEntries = [
+    ...staleEntries,
+    { type: "run", run: 3, metric: 0, status: "keep", description: "Latest", confidence: 3 },
+  ];
+  const staleViewModel = {
+    summary: { segment: 0, baseline: 2, best: 1, confidence: 2, runs: 2 },
+    ledgerEntries: staleEntries,
+  };
+  const latestViewModel = {
+    summary: { segment: 0, baseline: 2, best: 0, confidence: 3, runs: 3 },
+    ledgerEntries: latestEntries,
+  };
+  const { getById, dom } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 60000,
+      viewModel: { summary: { segment: 0, baseline: 2, best: 2, confidence: 1 } },
+    },
+    {
+      beforeParse(window) {
+        window.__refreshFetches = [];
+        window.__refreshResolvers = {};
+        window.fetch = async (url) => {
+          const requestNumber = window.__refreshFetches.push(String(url));
+          const viewModel = requestNumber === 1 ? staleViewModel : latestViewModel;
+          return new Promise((resolve) => {
+            window.__refreshResolvers[requestNumber] = () =>
+              resolve({ ok: true, json: async () => viewModel });
+          });
+        };
+        window.setInterval = (callback, ms) => {
+          window.__liveInterval = { callback, id: 1, ms };
+          return 1;
+        };
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(() => dom.window.__refreshResolvers?.[1], "Initial live refresh did not start.");
+  getById("refresh-now").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => dom.window.__refreshResolvers?.[2], "Manual live refresh did not start.");
+
+  dom.window.__refreshResolvers[2]();
+  await waitFor(
+    () => getById("runs-value").textContent === "3 (3 kept)",
+    "Latest refresh response did not update the dashboard.",
+  );
+  dom.window.__refreshResolvers[1]();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(getById("runs-value").textContent, "3 (3 kept)");
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json", "view-model.json"]);
   dom.window.close();
 });
 
