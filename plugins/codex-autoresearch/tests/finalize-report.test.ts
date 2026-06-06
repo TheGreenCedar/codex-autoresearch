@@ -368,6 +368,65 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalize preview suggested plan command keeps the target cwd",
+  "autoresearch-finalize-preview-cwd-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    const otherCwd = path.join(root, "other-cwd");
+    await fsp.mkdir(repo, { recursive: true });
+    await fsp.mkdir(otherCwd, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/autoresearch-preview-cwd"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "kept metric improvement"], repo);
+    const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "preview cwd",
+          metricName: "score",
+          bestDirection: "higher",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "kept metric improvement",
+          commit: kept,
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const payload = JSON.parse(preview.stdout);
+    const command = payload.suggestedCommands.finalizerPlan.argv;
+    assert.deepEqual(command.slice(0, 5), [process.execPath, finalizer, "plan", "--cwd", repo]);
+
+    const result = await run(command[0], command.slice(1), otherCwd);
+    assert.match(result.stdout, /Wrote draft groups/);
+
+    const outputFlag = command.indexOf("--output");
+    assert.ok(outputFlag > -1);
+    const plan = JSON.parse(await fsp.readFile(command[outputFlag + 1], "utf8"));
+    assert.equal(plan.source_branch, "codex/autoresearch-preview-cwd");
+    assert.equal(plan.final_tree, kept);
+    assert.equal(plan.groups[0].last_commit, kept);
+  },
+);
+
+testWithTempRoot(
   "finalize preview refuses hard decision capsules",
   "autoresearch-finalize-capsule-",
   async (root) => {

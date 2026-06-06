@@ -8,6 +8,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Fixed
 
+- Render generated commands with explicit PowerShell/POSIX shell quoting, and include `--cwd` in finalizer plan suggestions so copied finalizer commands target the previewed repo.
 - Restored served dashboard live refresh from the redacted view model path while keeping raw ledger access limited to the debug surface.
 - Added live-refresh tests and type coverage so dashboard snapshots can update without reintroducing raw-session payload exposure.
 - Corrected `--help --all` so `guide` documents the same setup guardrail and budget flags as the read-only setup planning flow.

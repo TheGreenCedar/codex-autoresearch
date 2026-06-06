@@ -1091,7 +1091,10 @@ test("finalize-preview summarizes kept commits without creating branches", async
 
     const developPreview = await runCli(["finalize-preview", "--cwd", dir, "--trunk", "develop"]);
     assert.equal(developPreview.code, 0, developPreview.stderr);
-    assert.match(JSON.parse(developPreview.stdout).suggestedCommand, /--trunk "develop"/);
+    assert.match(
+      JSON.parse(developPreview.stdout).suggestedCommand,
+      /--trunk (?:'develop'|"develop"|develop)\b/,
+    );
 
     const branches = await git(dir, ["branch", "--list", "autoresearch-review/*"]);
     assert.equal(branches, "");

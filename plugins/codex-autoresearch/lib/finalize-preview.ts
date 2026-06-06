@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
@@ -120,6 +121,8 @@ export async function finalizePreview(args: LooseObject) {
     process.execPath,
     path.join(PLUGIN_ROOT, "scripts", "finalize-autoresearch.mjs"),
     "plan",
+    "--cwd",
+    workDir,
     "--output",
     planOutput,
     "--goal",
@@ -171,12 +174,12 @@ export async function finalizePreview(args: LooseObject) {
       sessionDecisionCapsule,
       overlaps,
       warnings,
-      suggestedCommand: planArgv.map(shellQuote).join(" "),
+      suggestedCommand: renderShellCommand(planArgv),
       suggestedCommands: {
         finalizerPlan: {
           argv: planArgv,
           cwd: workDir,
-          display: planArgv.map(shellQuote).join(" "),
+          display: renderShellCommand(planArgv),
           purpose: "Write a review-branch plan without dirtying the source branch.",
           mutates: false,
         },
@@ -823,12 +826,6 @@ function safeSlug(value: unknown): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 80) || "autoresearch"
   );
-}
-
-function shellQuote(value: unknown): string {
-  const text = String(value);
-  if (/^--[A-Za-z0-9-]+$/.test(text) || text === "plan") return text;
-  return `"${text.replace(/[\\"]/g, "\\$&")}"`;
 }
 
 async function git(args: string[], cwd: string): Promise<GitResult> {

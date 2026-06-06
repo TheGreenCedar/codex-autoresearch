@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -7,6 +8,47 @@ import {
 } from "../lib/commands/recommend-next.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+
+test("command rendering quotes hostile benchmark args for the selected shell", () => {
+  const benchmark =
+    "node -e \"console.log('METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path')\"";
+
+  assert.equal(
+    quoteShellArg(benchmark, "powershell"),
+    "'node -e \\\"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\\\"'",
+  );
+  assert.equal(
+    quoteShellArg(benchmark, "bash"),
+    "'node -e \"console.log('\"'\"'METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'\"'\"')\"'",
+  );
+  assert.equal(
+    renderShellCommand(
+      ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "--flag", benchmark],
+      "powershell",
+    ),
+    "& { $PSNativeCommandArgumentPassing = 'Legacy'; & 'C:\\Program Files\\nodejs\\node.exe' scripts\\autoresearch.mjs --flag 'node -e \\\"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\\\"' }",
+  );
+});
+
+if (process.platform === "win32") {
+  test("PowerShell command rendering preserves argv with embedded double quotes", () => {
+    const benchmark =
+      "node -e \"console.log('METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path')\"";
+    const rendered = renderShellCommand(
+      [process.execPath, "-e", "process.stdout.write(process.argv[1])", benchmark],
+      "powershell",
+    );
+
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "-"], {
+      encoding: "utf8",
+      input: rendered,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, benchmark);
+  });
+}
 
 test("recommend-next response preserves stable fields and optional governance fields", () => {
   const response = buildRecommendNextResponse({

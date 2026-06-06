@@ -20,7 +20,7 @@ export interface DecisionGuidanceInput {
   checksCommand?: unknown;
   defaultBenchmarkCommand: (workDir: string) => Promise<string> | string;
   defaultChecksCommand: (workDir: string) => Promise<string | null> | string | null;
-  shellQuote: (value: string) => string;
+  renderCommand: (argv: readonly unknown[]) => string;
   errorMessage: (error: unknown) => string;
 }
 
@@ -38,7 +38,7 @@ export async function buildDecisionGuidanceContext({
   checksCommand = "",
   defaultBenchmarkCommand,
   defaultChecksCommand,
-  shellQuote,
+  renderCommand,
   errorMessage,
 }: DecisionGuidanceInput): Promise<LooseObject> {
   const configRecord = unknownRecordOrEmpty(config);
@@ -51,9 +51,27 @@ export async function buildDecisionGuidanceContext({
     cleanString(checksCommand) || cleanString(await defaultChecksCommand(workDir));
   const metricName = cleanString(stateConfig.metricName || configRecord.metricName) || "metric";
   const benchmarkLintCommand = resolvedBenchmarkCommand
-    ? `node ${shellQuote(path.join(pluginRoot, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(resolvedBenchmarkCommand)}`
+    ? renderCommand([
+        "node",
+        path.join(pluginRoot, "scripts", "autoresearch.mjs"),
+        "benchmark-lint",
+        "--cwd",
+        workDir,
+        "--metric-name",
+        metricName,
+        "--command",
+        resolvedBenchmarkCommand,
+      ])
     : "";
-  const doctorCommand = `node ${shellQuote(path.join(pluginRoot, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark --explain`;
+  const doctorCommand = renderCommand([
+    "node",
+    path.join(pluginRoot, "scripts", "autoresearch.mjs"),
+    "doctor",
+    "--cwd",
+    workDir,
+    "--check-benchmark",
+    "--explain",
+  ]);
   const runtimeSummary =
     runtimeDriftSummary ||
     (await inspectRuntimeDrift({

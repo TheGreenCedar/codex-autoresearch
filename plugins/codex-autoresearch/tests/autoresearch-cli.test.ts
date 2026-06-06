@@ -5446,8 +5446,8 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.match(payload.nextCommand, /METRIC seconds=1/);
     assert.match(payload.nextCommand, /--checks-command/);
     assert.match(payload.nextCommand, /process\.exit\(0\)/);
-    assert.match(payload.nextCommand, /--commit-paths "src,tests"/);
-    assert.match(payload.nextCommand, /--max-iterations "7"/);
+    assert.match(payload.nextCommand, /--commit-paths ['"]?src,tests['"]?/);
+    assert.match(payload.nextCommand, /--max-iterations ['"]?7['"]?/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
     assert.equal(payload.missingEssentials.length, 0);
@@ -5472,6 +5472,64 @@ test("setup-plan preserves explicit command and state inputs", async () => {
   });
 });
 
+test("setup-plan renders benchmark command arguments for the requested shell", async () => {
+  await withTempDir("setup-plan-shell-quoting", async (dir) => {
+    const benchmark =
+      "node -e \"console.log('METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path')\"";
+
+    const powershellResult = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "shell quoting",
+      "--metric-name",
+      "seconds",
+      "--shell",
+      "powershell",
+      "--benchmark-command",
+      benchmark,
+    ]);
+    assert.equal(powershellResult.code, 0, powershellResult.stderr);
+    const powershellPayload = JSON.parse(powershellResult.stdout);
+    assert.match(
+      powershellPayload.nextCommand,
+      /^& \{ \$PSNativeCommandArgumentPassing = 'Legacy'; /,
+    );
+    assert.match(
+      powershellPayload.nextCommand,
+      /--benchmark-command 'node -e \\"console\.log\(''METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path''\)\\"/,
+    );
+    assert.doesNotMatch(powershellPayload.nextCommand, /--benchmark-command "/);
+    assert.match(
+      powershellPayload.benchmarkLintCommand,
+      /--command 'node -e \\"console\.log\(''METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path''\)\\"/,
+    );
+
+    const bashResult = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "shell quoting",
+      "--metric-name",
+      "seconds",
+      "--shell",
+      "bash",
+      "--benchmark-command",
+      benchmark,
+    ]);
+    assert.equal(bashResult.code, 0, bashResult.stderr);
+    const bashPayload = JSON.parse(bashResult.stdout);
+    assert.match(bashPayload.nextCommand, /--benchmark-command 'node -e "console\.log\('/);
+    assert.match(
+      bashPayload.nextCommand,
+      /'"'"'METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path'"'"'/,
+    );
+    assert.doesNotMatch(bashPayload.nextCommand, /--benchmark-command "/);
+  });
+});
+
 test("setup-plan treats recommended recipe benchmark as configured", async () => {
   await withTempDir("setup-plan-recipe-defaults", async (dir) => {
     await writeFile(
@@ -5487,7 +5545,10 @@ test("setup-plan treats recommended recipe benchmark as configured", async () =>
     assert.deepEqual(payload.missing, []);
     assert.deepEqual(payload.missingEssentials, []);
     assert.doesNotMatch(payload.nextStep.nextAction.reason, /benchmark_command/);
-    assert.match(payload.nextCommand, /--recipe "node-test-runtime"/);
+    assert.match(
+      payload.nextCommand,
+      /--recipe (?:'node-test-runtime'|"node-test-runtime"|node-test-runtime)\b/,
+    );
   });
 });
 
