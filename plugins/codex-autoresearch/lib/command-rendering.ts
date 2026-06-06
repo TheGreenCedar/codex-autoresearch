@@ -22,7 +22,7 @@ export function quoteShellArg(value: unknown, shell: CommandShell = defaultComma
   if (text === "") return "''";
   const safePattern = shell === "powershell" ? POWERSHELL_SAFE_ARG : BASH_SAFE_ARG;
   if (safePattern.test(text)) return text;
-  if (shell === "powershell") return `'${text.replace(/"/g, '\\"').replace(/'/g, "''")}'`;
+  if (shell === "powershell") return `'${escapePowerShellNativeQuotes(text).replace(/'/g, "''")}'`;
   return `'${text.replace(/'/g, "'\"'\"'")}'`;
 }
 
@@ -34,4 +34,8 @@ export function renderShellCommand(
   if (args.length === 0) return "";
   if (shell === "powershell" && args[0].startsWith("'")) return `& ${args.join(" ")}`;
   return args.join(" ");
+}
+
+function escapePowerShellNativeQuotes(text: string): string {
+  return text.replace(/(\\*)"/g, (_match, slashes: string) => `${slashes}${slashes}\\"`);
 }
