@@ -22,7 +22,7 @@ export function quoteShellArg(value: unknown, shell: CommandShell = defaultComma
   if (text === "") return "''";
   const safePattern = shell === "powershell" ? POWERSHELL_SAFE_ARG : BASH_SAFE_ARG;
   if (safePattern.test(text)) return text;
-  if (shell === "powershell") return `'${text.replace(/'/g, "''")}'`;
+  if (shell === "powershell") return `'${text.replace(/"/g, '\\"').replace(/'/g, "''")}'`;
   return `'${text.replace(/'/g, "'\"'\"'")}'`;
 }
 

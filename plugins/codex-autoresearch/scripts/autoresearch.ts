@@ -2528,28 +2528,28 @@ function replacementNextCommandFromLastRun(
   packet: any,
   defaultBenchmarkCommandReady: boolean,
 ) {
-  const parts = [
+  const argv = [
     "node",
-    shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs")),
+    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
     "next",
     "--cwd",
-    shellQuote(workDir),
+    workDir,
   ];
   const command = packet?.history?.replayCommand || packet?.run?.command;
   if (command) {
-    parts.push("--command", shellQuote(command));
+    argv.push("--command", command);
   } else if (!defaultBenchmarkCommandReady) {
     return "";
   }
   const checksPolicy = packet?.run?.checksPolicy;
   if (CHECKS_POLICIES.has(checksPolicy)) {
-    parts.push("--checks-policy", shellQuote(checksPolicy));
+    argv.push("--checks-policy", checksPolicy);
   }
   const checksCommand = packet?.history?.replayChecksCommand || packet?.run?.checks?.command;
   if (checksCommand) {
-    parts.push("--checks-command", shellQuote(checksCommand));
+    argv.push("--checks-command", checksCommand);
   }
-  return parts.join(" ");
+  return commandLine(argv);
 }
 
 async function replacementNextCommandForLastRun(

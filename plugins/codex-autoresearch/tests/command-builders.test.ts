@@ -15,7 +15,7 @@ test("command rendering quotes hostile benchmark args for the selected shell", (
 
   assert.equal(
     quoteShellArg(benchmark, "powershell"),
-    "'node -e \"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\"'",
+    "'node -e \\\"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\\\"'",
   );
   assert.equal(
     quoteShellArg(benchmark, "bash"),
@@ -26,7 +26,7 @@ test("command rendering quotes hostile benchmark args for the selected shell", (
       ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "--flag", benchmark],
       "powershell",
     ),
-    "& 'C:\\Program Files\\nodejs\\node.exe' scripts\\autoresearch.mjs --flag 'node -e \"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\"'",
+    "& 'C:\\Program Files\\nodejs\\node.exe' scripts\\autoresearch.mjs --flag 'node -e \\\"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\\\"'",
   );
 });
 
