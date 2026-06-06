@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -594,6 +594,51 @@ test("evidence registry rejects quarantined artifacts and accepts current artifa
     assert.equal(outside?.evidenceStatus, "rejected");
     assert.equal(outside?.current, false);
     assert.equal(outside?.quarantined, true);
+  });
+});
+
+test("evidence registry rejects artifacts that resolve outside the workdir through links", async (t) => {
+  await withTempDir("evidence-registry-linked-artifacts", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      await writeFile(path.join(outsideDir, "accepted.json"), "{}\n", "utf8");
+      const linkPath = path.join(dir, "linked-out");
+      try {
+        await symlink(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+      } catch (error) {
+        t.skip(
+          `directory symlink creation unavailable: ${error instanceof Error ? error.message : error}`,
+        );
+        return;
+      }
+
+      const linked = artifactEvidenceList(
+        { manifest: "linked-out/accepted.json" },
+        dir,
+        "accepted",
+      );
+      assert.equal(linked[0].quarantined, true);
+      assert.equal(linked[0].exists, false);
+      assert.equal(linked[0].evidenceStatus, "rejected");
+      assert.equal(linked[0].path, "<outside-workdir>");
+
+      const registry = buildEvidenceRegistry({
+        runs: [
+          {
+            run: 1,
+            status: "keep",
+            evidenceStatus: "accepted",
+            artifactEvidence: linked,
+          },
+        ],
+      });
+
+      assert.equal(registry.currentArtifacts.length, 0);
+      assert.equal(registry.counts.rejected, 1);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 

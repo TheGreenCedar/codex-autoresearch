@@ -68,6 +68,7 @@ import {
   artifactList,
   defaultEvidenceStatusForRun,
 } from "../lib/evidence-registry.js";
+import { resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
@@ -461,12 +462,11 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
 }
 
 function resolveOutputInside(workDir: string, output: string) {
-  const target = path.resolve(workDir, output || "autoresearch-dashboard.html");
-  const relative = path.relative(workDir, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Dashboard output is outside the working directory: ${target}`);
+  const resolved = resolvePathInsideRootSync(workDir, output || "autoresearch-dashboard.html");
+  if (!resolved.inside) {
+    throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
   }
-  return target;
+  return resolved.absolutePath;
 }
 
 async function pathExists(filePath: string) {
@@ -2950,10 +2950,9 @@ function parseArtifactLines(output: string, workDir: string) {
     const name = match[1];
     const value = match[2].trim();
     if (!value) continue;
-    const absolute = path.isAbsolute(value) ? value : path.resolve(workDir, value);
-    const relative = path.relative(workDir, absolute);
-    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-      artifacts[name] = relative.replace(/\\/g, "/");
+    const resolved = resolvePathInsideRootSync(workDir, value);
+    if (resolved.inside && resolved.relativePath) {
+      artifacts[name] = resolved.relativePath;
     } else {
       artifacts[name] = "<outside-workdir>";
       artifactWarnings.push(
@@ -8125,7 +8124,21 @@ async function taskManifestPathsForRun(run: LooseObject) {
   const warnings: string[] = [];
 
   for (const [name, artifactPath] of Object.entries(run.artifacts || {})) {
-    if (!/task[_-]?manifest/i.test(name) || !isUsableArtifactPath(artifactPath)) continue;
+    if (!/task[_-]?manifest/i.test(name)) continue;
+    if (!isUsableArtifactPath(artifactPath)) {
+      if (artifactPath === "<outside-workdir>") {
+        quarantineTaskManifestPath({
+          resolved: "<outside-workdir>",
+          reason: "outside_workdir",
+          detail:
+            "path escapes the working directory and was quarantined before task manifest indexing",
+          workDir,
+          quarantinedTasks,
+          warnings,
+        });
+      }
+      continue;
+    }
 
     const artifactValue = String(artifactPath);
     const resolved = path.isAbsolute(artifactValue)
