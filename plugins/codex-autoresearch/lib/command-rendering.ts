@@ -32,8 +32,12 @@ export function renderShellCommand(
 ): string {
   const args = argv.map((value) => quoteShellArg(value, shell));
   if (args.length === 0) return "";
-  if (shell === "powershell" && args[0].startsWith("'")) return `& ${args.join(" ")}`;
-  return args.join(" ");
+  const command =
+    shell === "powershell" && args[0].startsWith("'") ? `& ${args.join(" ")}` : args.join(" ");
+  if (shell === "powershell") {
+    return `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${command} }`;
+  }
+  return command;
 }
 
 function escapePowerShellNativeQuotes(text: string): string {

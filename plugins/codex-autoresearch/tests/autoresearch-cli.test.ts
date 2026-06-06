@@ -5420,6 +5420,10 @@ test("setup-plan renders benchmark command arguments for the requested shell", a
     const powershellPayload = JSON.parse(powershellResult.stdout);
     assert.match(
       powershellPayload.nextCommand,
+      /^& \{ \$PSNativeCommandArgumentPassing = 'Legacy'; /,
+    );
+    assert.match(
+      powershellPayload.nextCommand,
       /--benchmark-command 'node -e \\"console\.log\(''METRIC seconds=1 \$HOME \$\(whoami\) `whoami` C:\\bench path''\)\\"/,
     );
     assert.doesNotMatch(powershellPayload.nextCommand, /--benchmark-command "/);
