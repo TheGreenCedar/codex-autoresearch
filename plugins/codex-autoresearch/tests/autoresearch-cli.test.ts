@@ -5467,7 +5467,10 @@ test("setup-plan treats recommended recipe benchmark as configured", async () =>
     assert.deepEqual(payload.missing, []);
     assert.deepEqual(payload.missingEssentials, []);
     assert.doesNotMatch(payload.nextStep.nextAction.reason, /benchmark_command/);
-    assert.match(payload.nextCommand, /--recipe "node-test-runtime"/);
+    assert.match(
+      payload.nextCommand,
+      /--recipe (?:'node-test-runtime'|"node-test-runtime"|node-test-runtime)\b/,
+    );
   });
 });
 
