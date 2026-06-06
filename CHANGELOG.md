@@ -4,6 +4,17 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## 2.1.7
+
+### Fixed
+
+- Removed shell-routed Windows check commands from the maintainer gate and resolved npm through `npm-cli.js` instead, with a clear failure when a shell-free npm entrypoint cannot be found.
+- Added regression coverage for Windows npm resolution so the CodeQL fix does not break direct `node scripts/check.mjs` runs on normal Windows installs.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.7`.
+
 ## 2.1.6
 
 ### Fixed
