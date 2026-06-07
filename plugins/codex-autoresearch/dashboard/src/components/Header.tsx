@@ -91,7 +91,7 @@ export function Header({
               hidden={!mode.liveRefresh}
               onClick={refreshLiveData}
             >
-              Refresh live data
+              Refresh now
             </button>
             <button
               id="live-toggle"
@@ -99,8 +99,9 @@ export function Header({
               className="tool-button subtle"
               hidden={!mode.liveRefresh}
               onClick={() => setLiveEnabled((value) => !value)}
+              aria-pressed={liveEnabled}
             >
-              {liveEnabled ? "Auto-refresh on" : "Auto-refresh off"}
+              {liveEnabled ? "Pause auto-refresh" : "Resume auto-refresh"}
             </button>
             <button
               id="copy-dashboard-url"

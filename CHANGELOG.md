@@ -4,6 +4,20 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Changed
+
+- Made compact state, `recommend-next --compact`, `doctor --check-benchmark --explain`, terminal reports, and dashboard readouts share finalization readiness and canonical next-action authority.
+- Updated default help and start docs to show read-only `setup-plan`/`prompt-plan` before mutating `setup`.
+- Reframed the dashboard decision rail as a read-only "Do this first" surface and kept the ledger navigation target visible even before runs are logged.
+
+### Fixed
+
+- Stripped finalization command-shaped fields such as suggested commands, argv/display payloads, and plan-output paths from dashboard view models.
+- Added pending log-mutation receipts so interrupted keep/discard automation blocks later state, doctor, and log attempts until the ledger is reconciled.
+- Added a terminal `ready-with-warnings` status so advisory warnings no longer collapse into plain ready.
+
 ## 2.1.7
 
 ### Fixed

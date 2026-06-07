@@ -84,6 +84,14 @@ A normal session follows this shape:
 setup -> doctor -> next -> log -> state -> finalize-preview
 ```
 
+When the goal, benchmark, metric, or scope is still fuzzy, start with one of the read-only planning
+surfaces before creating files:
+
+```bash
+node plugins/codex-autoresearch/scripts/autoresearch.mjs setup-plan --cwd <project>
+node plugins/codex-autoresearch/scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<plain-language goal>"
+```
+
 Codex Autoresearch helps Codex:
 
 1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface

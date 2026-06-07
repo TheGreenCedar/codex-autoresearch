@@ -332,7 +332,7 @@ test("terminal report blocked fallbacks skip process-starting commands", () => {
   assert.doesNotMatch(report.json.nextCommand, /--check-benchmark|benchmark-lint/);
 });
 
-test("terminal report does not turn advisory warnings into blocked next", () => {
+test("terminal report distinguishes ready-with-warnings from blocked next", () => {
   const report = buildTerminalReport({
     ok: true,
     workDir: "C:/work/project",
@@ -362,12 +362,13 @@ test("terminal report does not turn advisory warnings into blocked next", () => 
     },
   });
 
-  assert.equal(report.json.status, "ready");
+  assert.equal(report.json.status, "ready-with-warnings");
   assert.equal(report.json.blocker, "");
   assert.equal(
     report.json.nextCommand,
     "node scripts/autoresearch.mjs next --cwd C:/work/project --compact",
   );
+  assert.match(report.text, /Status: ready-with-warnings/);
 });
 
 test("hard terminal blockers do not fall back to next", () => {
