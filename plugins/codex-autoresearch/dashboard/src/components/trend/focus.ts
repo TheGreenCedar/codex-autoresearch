@@ -1,10 +1,42 @@
 export type ChartPointOpener = HTMLElement | SVGElement | null;
 
+type ChartPointLabelInput = {
+  best?: boolean;
+  description?: string;
+  heldMetric?: boolean;
+  latest?: boolean;
+  metricDisplay?: string;
+  rawMetric?: number | null;
+  runNumber: number;
+  statusLabel?: string;
+  timestampLabel?: string;
+};
+
 const FOCUSABLE_DIALOG_SELECTOR =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export function chartPointAriaLabel(runNumber: number): string {
-  return `Open details for run ${runNumber}`;
+export function chartPointAriaLabel(point: ChartPointLabelInput | number): string {
+  if (typeof point === "number") return `Open details for run ${point}`;
+  const markers = [
+    point.latest ? "latest plotted run" : "",
+    point.best ? "best kept run" : "",
+    point.heldMetric ? "plotted at nearest successful metric" : "",
+  ].filter(Boolean);
+  const metric =
+    point.rawMetric == null && point.heldMetric
+      ? `${point.metricDisplay || "metric held"}; original metric unavailable`
+      : point.metricDisplay || "metric unavailable";
+  const suffix = markers.length ? ` ${markers.join(", ")}.` : "";
+  return [
+    `Open details for run ${point.runNumber}.`,
+    point.statusLabel ? `Status: ${point.statusLabel}.` : "",
+    `Metric: ${metric}.`,
+    point.timestampLabel ? `Time: ${point.timestampLabel}.` : "",
+    point.description ? `Summary: ${point.description}.` : "",
+    suffix,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function restoreChartPointFocus(opener: ChartPointOpener, fallbackSelector: string) {

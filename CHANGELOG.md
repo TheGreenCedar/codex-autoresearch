@@ -8,6 +8,12 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Kept the dashboard chart-first while moving trust blockers, proof gaps, and process warnings into a below-chart disclosure; improved chart point accessible labels, focus recovery, mission state, refresh announcements, and generated dashboard/brand assets.
+- Centralized unsafe command approval for tool-style benchmark/check command arguments and added a live view-model cache with session-file invalidation.
+- Clarified Codex plugin install guidance around the workspace/plugin UI path, with the CLI marketplace command treated as build-dependent source-marketplace support.
+- Added real privacy and terms docs and aligned README/trust guidance around local-only session files, non-sandboxed benchmark commands, best-effort redaction, and user responsibility for secrets and external services.
+- Corrected demo and walkthrough docs so benchmark parsing, doctor readiness, finalization blockers, and illustrative output are not presented as the same level of proof.
+- Added local safety checkpoints before mutating log, discard, revert, and finalization examples.
 - Made compact state, `recommend-next --compact`, `doctor --check-benchmark --explain`, terminal reports, and dashboard readouts share finalization readiness and canonical next-action authority.
 - Updated default help and start docs to show read-only `setup-plan`/`prompt-plan` before mutating `setup`.
 - Reframed the dashboard decision rail as a read-only "Do this first" surface and kept the ledger navigation target visible even before runs are logged.

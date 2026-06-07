@@ -152,6 +152,14 @@ Evidence redaction is best-effort, not a confidentiality guarantee. Dashboard, l
 
 Trusted external recipes store catalog provenance in session config. `doctor` and `next` revalidate that provenance and block when the recipe or catalog has drifted, cannot be fetched, or no longer matches the trusted hash.
 
+## Privacy And Local Data
+
+Autoresearch has no hosted backend of its own. Session files, dashboard exports, ASI, packet evidence, benchmark output tails, and artifact indexes are local project records unless your own commands, Git workflow, Codex environment, or external services move them elsewhere.
+
+Treat `autoresearch.jsonl`, `autoresearch.md`, `autoresearch.research/**`, `autoresearch-dashboard.html`, and generated finalization previews as potentially sensitive. They may include command names, relative paths, metric values, summaries of attempted work, and artifact references. Keep secrets and private data out of benchmark output and ASI; do not rely on redaction as a security boundary.
+
+See [Privacy](privacy.md) and [Terms](terms.md) for the user-facing policy surfaces that match this trust model.
+
 ## Corrupt Or Partial State
 
 If `autoresearch.jsonl` is corrupt, surface the failing file and line. Do not silently continue from a partial ledger.

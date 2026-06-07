@@ -9,8 +9,21 @@ const STATE_CLASS: Record<string, string> = {
   idle: "mission-idle",
 };
 
+const STATE_LABEL: Record<string, string> = {
+  done: "Complete",
+  active: "Current",
+  ready: "Current",
+  blocked: "Blocked",
+  idle: "Pending",
+};
+
 function stateClass(state?: string): string {
   return STATE_CLASS[state || "idle"] || "mission-idle";
+}
+
+function stateLabel(state?: string, active?: boolean): string {
+  if (active) return "Current";
+  return STATE_LABEL[state || "idle"] || "Pending";
 }
 
 export function MissionControl({
@@ -56,15 +69,22 @@ function MissionStepItem({
   const { copied, copy } = useCopyText();
   const primary = step.primaryCommand as { label?: string; command?: string } | undefined;
   const cmd = primary?.command || step.command;
+  const label = stateLabel(step.state, active);
+  const title = step.title || step.id || "Step";
 
   return (
-    <li className={`mission-step ${stateClass(step.state)}${active ? " mission-current" : ""}`}>
+    <li
+      className={`mission-step ${stateClass(step.state)}${active ? " mission-current" : ""}`}
+      aria-current={active ? "step" : undefined}
+      aria-label={`${title}: ${label}. ${step.detail || ""}`.trim()}
+    >
       <div className="mission-indicator">
         <span className="mission-dot" aria-hidden="true" />
         {!last && <span className="mission-line" aria-hidden="true" />}
       </div>
       <div className="mission-body">
-        <strong className="mission-title">{step.title || step.id || "Step"}</strong>
+        <strong className="mission-title">{title}</strong>
+        <span className="mission-state-text">{label}</span>
         <span className="mission-detail">{step.detail || ""}</span>
         {active && showCommand && cmd && (
           <div className="mission-command">

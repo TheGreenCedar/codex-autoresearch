@@ -19,6 +19,7 @@ interface SignalItem {
 
 export function SignalStrip({ view, viewModel }: SignalStripProps) {
   const signals = buildSignals(viewModel);
+  const trustItems = buildTrustItems(viewModel);
   return (
     <section
       className={`signal-strip signal-strip--${view}`}
@@ -27,12 +28,33 @@ export function SignalStrip({ view, viewModel }: SignalStripProps) {
       data-view={view}
     >
       {signals.map((signal) => (
-        <article className={`signal-item ${signal.tone}`} key={signal.id}>
+        <article
+          className={`signal-item ${signal.tone}`}
+          key={signal.id}
+          title={`${signal.label}: ${signal.value}. ${signal.detail}`}
+          aria-label={`${signal.label}: ${signal.value}. ${signal.detail}`}
+        >
           <span className="signal-label">{signal.label}</span>
-          <strong aria-live={signal.live ? "polite" : undefined}>{signal.value}</strong>
-          <em>{signal.detail}</em>
+          <strong title={signal.value}>{truncate(signal.value, 34)}</strong>
+          <em title={signal.detail}>{truncate(signal.detail, 58)}</em>
         </article>
       ))}
+      {trustItems.length ? (
+        <details className="trust-detail-strip">
+          <summary>
+            Trust review: {trustItems.length} blocker, proof gap, or process warning
+            {trustItems.length === 1 ? "" : "s"}
+          </summary>
+          <ul>
+            {trustItems.map((item) => (
+              <li className={`trust-detail-item ${item.tone}`} key={item.id}>
+                <strong>{item.label}</strong>
+                <span>{item.text}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </section>
   );
 }
@@ -55,10 +77,10 @@ function nextSignal(viewModel: DashboardViewModel): SignalItem {
   return {
     id: "next",
     label: "Next",
-    value: truncate(title, 34),
+    value: title,
     detail: packetBrake
       ? "Do not run another packet"
-      : truncate(clean(action.priority) || clean(envelope.kind) || "Decision envelope", 58),
+      : clean(action.priority) || clean(envelope.kind) || "Decision envelope",
     tone: packetBrake || action.tone === "warn" ? "warn" : "neutral",
     live: true,
   };
@@ -78,7 +100,7 @@ function evidenceSignal(viewModel: DashboardViewModel): SignalItem {
   return {
     id: "evidence",
     label: "Evidence",
-    value: truncate(label, 34),
+    value: label,
     detail: evidenceDetail({ acceptedCurrent, auditOnly, provisional }),
     tone: promotable ? "good" : auditOnly > 0 ? "warn" : "neutral",
   };
@@ -94,7 +116,7 @@ function lanesSignal(viewModel: DashboardViewModel): SignalItem {
     id: "lanes",
     label: "Lanes",
     value: lanes.length ? `${active} active / ${completed} done` : "No lanes",
-    detail: truncate(fanoutStatus ? `Fanout ${fanoutStatus}` : "Strategy memory readiness", 58),
+    detail: fanoutStatus ? `Fanout ${fanoutStatus}` : "Strategy memory readiness",
     tone: lanes.length ? "good" : "neutral",
   };
 }
@@ -148,6 +170,49 @@ function finalizationDetail(status: string, ready: boolean) {
   return "Packaging stays in CLI";
 }
 
+function buildTrustItems(viewModel: DashboardViewModel) {
+  const trustState = recordFrom(viewModel.trustState || viewModel.trust);
+  const processHygiene = recordFrom(viewModel.processHygiene);
+  const finalizePreview = recordFrom(viewModel.finalizePreview);
+  const finalizationChecklist = recordFrom(viewModel.finalizationChecklist);
+  const researchTruth = recordFrom(viewModel.researchTruth || viewModel.truthMeter);
+  const items = [
+    ...labeledList("Trust blocker", viewModel.trustBlockers, "danger"),
+    ...labeledList("Trust reason", trustState.reasons, "warn"),
+    ...labeledList("Proof gap", viewModel.proofGaps, "warn"),
+    ...labeledList("Process warning", processHygiene.warnings, "warn"),
+    ...labeledList("Runtime warning", viewModel.trustWarnings, "warn"),
+    ...labeledList("Session warning", viewModel.warnings, "warn"),
+    ...labeledList("Finalization warning", finalizationChecklist.warnings, "warn"),
+    ...labeledList("Finalization warning", finalizePreview.warnings, "warn"),
+    ...labeledList("Research proof gap", researchTruth.suspiciousReasons, "warn"),
+    ...labeledList("Research proof gap", researchTruth.suspicious_reasons, "warn"),
+    ...labeledList("Research warning", researchTruth.suspiciousPerfectWarning, "warn"),
+  ];
+  return uniqueTrustItems(items);
+}
+
+function labeledList(label: string, value: unknown, tone: SignalItem["tone"]) {
+  return toList(value).map((text, index) => ({
+    id: `${label}-${index}-${text}`,
+    label,
+    text,
+    tone,
+  }));
+}
+
+function uniqueTrustItems<T extends { label: string; text: string }>(items: T[]) {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const key = `${item.label}\n${item.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
 function strategyLanes(viewModel: DashboardViewModel): StrategyLane[] {
   const memory = recordFrom(viewModel.experimentMemory);
   if (Array.isArray(viewModel.parallelLanes) && viewModel.parallelLanes.length) {
@@ -169,6 +234,30 @@ function titleCase(value: string) {
   const normalized = value.replace(/[_-]+/g, " ").trim();
   if (!normalized) return "Unknown";
   return normalized[0].toUpperCase() + normalized.slice(1);
+}
+
+function toList(value: unknown) {
+  if (!value) return [];
+  return (Array.isArray(value) ? value : [value])
+    .map((item) => {
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        return [
+          record.label || record.title || record.code || record.kind || "",
+          record.detail ||
+            record.message ||
+            record.reason ||
+            record.nextAction ||
+            record.text ||
+            "",
+        ]
+          .filter(Boolean)
+          .join(": ");
+      }
+      return String(item || "");
+    })
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function truncate(value: string, max: number) {

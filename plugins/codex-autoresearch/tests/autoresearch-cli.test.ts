@@ -6418,6 +6418,24 @@ test("tool schemas expose guidance and output contracts", async () => {
   );
   assert.equal(richDoctor.annotations.readOnlyHint, false);
   assert.equal(richDoctor.annotations.openWorldHint, true);
+  assert.match(
+    String(richDoctor.annotations.unsafeCommandGate),
+    /Tool-call custom command fields require allow_unsafe_command=true/,
+  );
+  for (const gatedToolName of [
+    "setup_plan",
+    "prompt_plan",
+    "setup_session",
+    "setup_research_session",
+    "promote_gate",
+  ]) {
+    const gatedTool = toolSchemas.find((tool) => tool.name === gatedToolName);
+    assert.match(
+      String(gatedTool?.annotations.unsafeCommandGate),
+      /Tool-call custom command fields require allow_unsafe_command=true/,
+      `${gatedToolName} should advertise the same unsafe command gate it enforces`,
+    );
+  }
   assert.equal(cliCommandForTool("next_experiment"), "next");
   assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
@@ -6526,6 +6544,33 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     () => requireUnsafeCommandGate("setup_session", { catalog: "recipes.json" }),
     /allow_unsafe_command=true/,
   );
+  assert.throws(
+    () =>
+      validateToolArguments("benchmark_lint", {
+        workingDir: "C:/repo",
+        command: "node bench.js",
+      }),
+    /allow_unsafe_command=true/,
+  );
+  assert.throws(
+    () =>
+      validateToolArguments("gap_candidates", {
+        workingDir: "C:/repo",
+        researchSlug: "study",
+        modelCommand: "node model.js",
+      }),
+    /allow_unsafe_command=true/,
+  );
+  assert.throws(
+    () =>
+      validateToolArguments("lane_runner", {
+        workingDir: "C:/repo",
+        laneId: "read-only-scout",
+        mode: "read_only_scout",
+        command: "git status --short",
+      }),
+    /allow_unsafe_command=true/,
+  );
   assert.doesNotThrow(() =>
     requireUnsafeCommandGate("prompt_plan", {
       catalog: "recipes.json",
@@ -6555,6 +6600,7 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     laneId: "read-only-scout",
     mode: "read_only_scout",
     command: "git status --short",
+    allowUnsafeCommand: true,
     yes: true,
   });
   assert.deepEqual(normalizeRuntimeToolArguments("lane_runner", laneRunnerArgs), {
@@ -6562,6 +6608,7 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     laneId: "read-only-scout",
     mode: "read_only_scout",
     command: "git status --short",
+    allow_unsafe_command: true,
     yes: true,
   });
 

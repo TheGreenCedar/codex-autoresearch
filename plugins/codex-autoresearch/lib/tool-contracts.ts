@@ -1,4 +1,8 @@
 import { actionPolicyForTool } from "./tool-registry.js";
+import {
+  TOOL_STYLE_UNSAFE_COMMAND_GATE,
+  toolSchemaRequiresUnsafeCommandGate,
+} from "./tool-unsafe-command-gate.js";
 
 type JsonSchema = {
   type?: string | string[];
@@ -605,8 +609,10 @@ type ToolName = keyof typeof CONTRACTS;
 type ToolSchema = {
   name: string;
   description?: string;
+  inputSchema: JsonSchema;
+  outputSchema?: JsonSchema;
   annotations?: Record<string, unknown>;
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 function contractFor(name: string) {
@@ -623,7 +629,7 @@ export function applyToolContracts(toolSchemas: ToolSchema[]): ToolSchema[] {
       outputSchema: contract.outputSchema,
       annotations: {
         ...tool.annotations,
-        ...toolHintAnnotations(tool.name),
+        ...toolHintAnnotations(tool.name, tool.inputSchema),
         safety: contract.safety,
       },
     };
@@ -656,16 +662,18 @@ export function outputContractFor(name: string) {
   return contractFor(name)?.outputSchema || null;
 }
 
-function toolHintAnnotations(name: string) {
+function toolHintAnnotations(name: string, inputSchema: JsonSchema) {
   const readOnly = READ_ONLY_TOOLS.has(name);
   const policy = actionPolicyForTool(name);
   const openWorld = policy === "process_start" || CONDITIONALLY_OPEN_WORLD_TOOLS.has(name);
+  const unsafeCommandGate = toolSchemaRequiresUnsafeCommandGate(name, inputSchema);
   return {
     title: humanizeToolName(name),
     readOnlyHint: readOnly,
     destructiveHint: DESTRUCTIVE_TOOLS.has(name),
     idempotentHint: readOnly,
     openWorldHint: openWorld,
+    unsafeCommandGate: unsafeCommandGate ? TOOL_STYLE_UNSAFE_COMMAND_GATE : undefined,
   };
 }
 

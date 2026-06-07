@@ -45,6 +45,16 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 - **Broad Git cleanup after discard**: using `--allow-add-all` or broad revert when only experiment files should change. Scope reverts with `revertPaths`.
 - **Skipping ASI**: logging decisions without hypothesis/evidence/next-action metadata. The next session then has no memory and repeats failed approaches.
 
+Before any command that can commit, discard, revert, or change branches, run a local checkpoint:
+
+```bash
+git status --short
+node scripts/autoresearch.mjs state --cwd <project> --compact
+node scripts/autoresearch.mjs doctor --cwd <project> --explain
+```
+
+If unrelated files, protected benchmark drift, stale last-run packets, pending log transactions, or runtime drift appear, resolve or isolate that layer before retrying the mutating command.
+
 ## Fast Diagnostics
 
 ```bash

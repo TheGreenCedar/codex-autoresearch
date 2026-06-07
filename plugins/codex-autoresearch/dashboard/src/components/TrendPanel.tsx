@@ -13,7 +13,7 @@ import {
   StatusLegend,
   TrendChartFigure,
 } from "./trend/TrendChartFigure";
-import { chartPointAriaLabel, restoreChartPointFocus, type ChartPointOpener } from "./trend/focus";
+import { restoreChartPointFocus, type ChartPointOpener } from "./trend/focus";
 import {
   AXIS_MODES,
   buildChartData,
@@ -56,7 +56,7 @@ export function TrendPanel({
   const detailPoint = selectedPoint || chartData.at(-1) || null;
   const openPoint = (point: ChartDatum, opener: ChartPointOpener) => {
     modalOpenerRef.current = opener;
-    modalOpenerSelectorRef.current = `[aria-label="${chartPointAriaLabel(point.runNumber)}"]`;
+    modalOpenerSelectorRef.current = `[data-chart-run="${point.runNumber}"]`;
     setSelectedPoint(point);
   };
   const closePoint = () => {

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
@@ -22,6 +24,7 @@ import {
 } from "../lib/dashboard-command-safety.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { serveAutoresearch } from "../lib/live-server.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -3264,6 +3267,61 @@ test("served dashboard live refresh starts by default and can be stopped", async
     "Live toggle did not clear the interval.",
   );
   dom.window.close();
+});
+
+test("live dashboard view model cache invalidates on session state changes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-"));
+  let recomputes = 0;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      return { summary: { runs: recomputes } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(first.summary.runs, 1);
+    assert.equal(second.summary.runs, 1);
+    assert.equal(recomputes, 1);
+
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        JSON.stringify({ type: "run", run: 2, status: "keep", metric: 0.5 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const third = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(third.summary.runs, 2);
+    assert.equal(recomputes, 2);
+    assert.equal(third.ledgerEntries.length, 3);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("served dashboard ignores stale live refresh responses that resolve out of order", async () => {
