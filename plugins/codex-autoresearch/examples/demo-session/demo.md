@@ -33,8 +33,11 @@ node scripts/autoresearch.mjs serve --cwd examples/demo-session
 Verify the default path with doctor:
 
 ```bash
-node scripts/autoresearch.mjs doctor --cwd examples/demo-session --check-benchmark
+node scripts/autoresearch.mjs benchmark-lint --cwd examples/demo-session
+node scripts/autoresearch.mjs doctor --cwd examples/demo-session --check-benchmark --explain
 ```
+
+The demo benchmark is expected to parse cleanly: `benchmark-lint` should report the configured `seconds` metric. That is narrower than full session readiness. In a source checkout, `doctor --check-benchmark --explain` may still return non-ready because finalization/current-tree coverage, dirty local files, stale runtime provenance, development-only evidence, or other trust blockers are real in the current checkout. Treat that as demo truth, not a broken metric parser.
 
 `autoresearch-dashboard.html` is the curated docs showcase that ships with the current dashboard build and bundled demo data. Refresh it with the portable showcase mode so local workstation paths and feature-branch Git warnings are not embedded in the public demo:
 

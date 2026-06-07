@@ -54,7 +54,13 @@ h6,
 .side-status strong,
 .toast-title,
 .chart-tooltip span {
-  font-family: "Outfit", sans-serif !important;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif !important;
 }
 
 body {
@@ -62,7 +68,6 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family:
-    "Inter",
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -615,6 +620,56 @@ p {
   border-radius: 8px;
   background: rgba(248, 250, 251, 0.78);
   padding: 8px;
+}
+
+.trust-detail-strip {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 8px;
+}
+
+.trust-detail-strip summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.trust-detail-strip ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trust-detail-item {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 8px;
+  border-left: 3px solid var(--line);
+  padding: 4px 8px;
+}
+
+.trust-detail-item.warn {
+  border-left-color: var(--amber);
+}
+
+.trust-detail-item.danger {
+  border-left-color: var(--coral);
+}
+
+.trust-detail-item strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.trust-detail-item span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .signal-item {
@@ -1351,7 +1406,6 @@ p {
 
 .chart-tooltip span {
   color: var(--teal-dark);
-  font-family: "Outfit", sans-serif;
   font-size: 11px;
   font-weight: 850;
   text-transform: uppercase;
@@ -1383,7 +1437,6 @@ p {
 }
 
 .chart-tooltip strong {
-  font-family: "Inter", sans-serif;
   font-size: 26px;
   font-weight: 700;
   line-height: 1;
@@ -1413,7 +1466,6 @@ p {
 
 .chart-tooltip-asi-item b {
   color: var(--ink);
-  font-family: "Outfit", sans-serif;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -1497,12 +1549,23 @@ p {
 }
 
 .mission-title {
-  font-family: Outfit, sans-serif;
   font-size: 13px;
   font-weight: 800;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+}
+
+.mission-state-text {
+  width: fit-content;
+  border: 1px solid var(--soft-line);
+  border-radius: 999px;
+  color: var(--muted);
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.15;
+  text-transform: uppercase;
 }
 
 .mission-detail {
@@ -1545,6 +1608,12 @@ p {
   color: var(--teal-dark);
 }
 
+.mission-done .mission-state-text {
+  border-color: rgba(15, 143, 136, 0.45);
+  background: var(--primary-bg);
+  color: var(--teal-dark);
+}
+
 .mission-current {
   background: linear-gradient(180deg, var(--cream) 0%, var(--surface) 100%);
   border-bottom: 3px solid var(--amber);
@@ -1559,8 +1628,21 @@ p {
   border-bottom: 3px solid var(--coral);
 }
 
+.mission-blocked .mission-state-text {
+  border-color: rgba(216, 86, 58, 0.45);
+  background: rgba(216, 86, 58, 0.07);
+  color: var(--coral-dark);
+}
+
 .mission-idle .mission-dot {
   background: var(--line);
+}
+
+.mission-active .mission-state-text,
+.mission-current .mission-state-text {
+  border-color: rgba(201, 138, 18, 0.5);
+  background: rgba(245, 230, 194, 0.58);
+  color: var(--amber-dark);
 }
 
 .mission-command {
@@ -1657,7 +1739,6 @@ p {
 }
 
 .toast-title {
-  font-family: "Outfit", sans-serif;
   font-size: 13px;
   font-weight: 700;
   color: var(--ink);
@@ -2612,6 +2693,10 @@ p {
     grid-template-columns: 1fr;
   }
 
+  .trust-detail-item {
+    grid-template-columns: 1fr;
+  }
+
   .toolbar-controls {
     display: grid;
   }
@@ -2867,6 +2952,19 @@ p {
 
 .dark-theme .mission-done .mission-title {
   color: var(--teal-light);
+}
+
+.dark-theme .mission-done .mission-state-text {
+  color: var(--teal-light);
+}
+
+.dark-theme .mission-active .mission-state-text,
+.dark-theme .mission-current .mission-state-text {
+  color: var(--amber);
+}
+
+.dark-theme .mission-blocked .mission-state-text {
+  color: var(--coral);
 }
 
 /* ── Dark chart: dot borders, win zone, crash dots, area fill ── */

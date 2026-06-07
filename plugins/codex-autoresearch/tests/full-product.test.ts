@@ -131,6 +131,26 @@ test("runner parses metrics, truncates tails, and reports timeouts", async () =>
   assert.equal(result.timedOut, true);
 });
 
+test("direct CLI command execution stays intentionally ungated", async () => {
+  await withTempDir("cli-direct-command-boundary", async (dir) => {
+    const command = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const lint = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "seconds",
+      "--command",
+      command,
+    ]);
+
+    assert.equal(lint.code, 0, lint.stderr);
+    const payload = JSON.parse(lint.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.parsedMetrics.seconds, 1);
+  });
+});
+
 test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", async () => {
   await withTempDir("setup-recipes", async (dir) => {
     await writeFile(

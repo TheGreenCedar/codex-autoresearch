@@ -72,6 +72,8 @@ Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
 `setup-plan` and `prompt-plan` are read-only planning surfaces. Use them before `setup` when essentials are ambiguous; skip them when the goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `onboarding-packet`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
 
+`benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block or warn because the worktree is dirty, the active runtime is stale, promotion metadata is missing, finalization/current-tree coverage is unresolved, or other trust checks fail.
+
 After setup, optional stop conditions can be recorded with `config`:
 
 ```bash
@@ -135,6 +137,13 @@ Then log from the last packet:
 ```bash
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 ```
+
+Before any mutating log, keep, discard, or revert-producing command, check Git state and scope:
+
+- `git status --short` has no unrelated source changes mixed into the packet.
+- `commitPaths` and `revertPaths` point only at files owned by the experiment.
+- protected benchmark paths are clean unless you are intentionally starting a new segment.
+- `state --compact` or `doctor --explain` does not show stale packet, dirty source, runtime drift, pending transaction, or finalization blocker that changes the decision.
 
 Use `measure` for a baseline or diagnostic. Use `keep` only after a changed packet is safe to preserve, and use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
 

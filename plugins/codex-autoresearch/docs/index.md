@@ -5,9 +5,11 @@ The root `README.md` is the front door. These pages cover the operator workflow,
 ## Start Here
 
 1. [Start](start.md): the happy path, first five minutes, session files, benchmark contract, and first packet.
-2. [Walkthrough](walkthrough.md): an end-to-end narrated loop showing inputs and real terminal output.
+2. [Walkthrough](walkthrough.md): an end-to-end narrated loop with copyable commands and explicitly illustrative output.
 3. [Trust](trust.md): metric integrity, stale packets, runtime provenance, packet diagnostics, evidence status, drift, dirty Git, static exports, and unsafe command gates.
-4. [Finish](finish.md): accepted/current evidence, finalization pressure, preview, review branches, merge/cleanup, and reporting.
+4. [Privacy](privacy.md): local session files, command evidence, redaction limits, external service boundaries, and deleting local data.
+5. [Terms](terms.md): local tooling terms, command responsibility, evidence limits, secrets, no warranty, and package/marketplace use.
+6. [Finish](finish.md): accepted/current evidence, finalization pressure, preview, review branches, merge/cleanup, and reporting.
 
 ## Advanced Diagnostics
 

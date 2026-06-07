@@ -52,15 +52,11 @@ Scope: test runner config and test helpers only
 
 Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one packet, and logging the result with experiment details. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
 
+Autoresearch stores its loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
+
 ## Install
 
-This repository is a Codex plugin marketplace. Add the marketplace:
-
-```bash
-codex plugin marketplace add TheGreenCedar/codex-autoresearch
-```
-
-Then open Codex in the repo you want to improve:
+For normal Codex use, install the plugin through the Codex plugin flow for your workspace. Open Codex in the repo you want to improve, then use:
 
 ```text
 /plugins
@@ -72,7 +68,15 @@ Choose:
 TheGreenCedar Autoresearch -> codex-autoresearch -> Install plugin
 ```
 
-Start a new Codex thread after installation.
+If your Codex build exposes terminal marketplace management for source marketplaces, add or refresh this marketplace first:
+
+```bash
+codex plugin marketplace add TheGreenCedar/codex-autoresearch
+```
+
+Some workspace plugin settings are managed from the Codex Apps/Plugins UI rather than the terminal. Use the UI path when the CLI marketplace command is unavailable.
+
+Start a new Codex thread after installation or refresh.
 
 This is not an npm install path for operators. The plugin package is private; `npm install` under `plugins/codex-autoresearch` is for local development and verification only.
 
@@ -196,6 +200,8 @@ Finalization should:
 * [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
 * [Operate](plugins/codex-autoresearch/docs/operate.md)
 * [Trust](plugins/codex-autoresearch/docs/trust.md)
+* [Privacy](plugins/codex-autoresearch/docs/privacy.md)
+* [Terms](plugins/codex-autoresearch/docs/terms.md)
 * [Finish](plugins/codex-autoresearch/docs/finish.md)
 * [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
@@ -241,29 +247,22 @@ git diff --check
 
 ## Update or remove
 
-Refresh the marketplace:
-
-```bash
-codex plugin marketplace upgrade thegreencedar-autoresearch
-```
-
-Remove the marketplace:
-
-```bash
-codex plugin marketplace remove thegreencedar-autoresearch
-```
-
-To uninstall the plugin, open Codex:
+For normal Codex use, refresh or uninstall the plugin from the Codex plugin surface:
 
 ```text
 /plugins
 ```
 
-Then choose:
+Then choose the installed `codex-autoresearch` plugin and use the available refresh or uninstall action.
 
-```text
-codex-autoresearch -> Uninstall plugin
+If your Codex build exposes terminal marketplace management for source marketplaces, these commands may be available:
+
+```bash
+codex plugin marketplace upgrade thegreencedar-autoresearch
+codex plugin marketplace remove thegreencedar-autoresearch
 ```
+
+Prefer the plugin UI when the terminal marketplace commands are unavailable.
 
 ## Changelog
 

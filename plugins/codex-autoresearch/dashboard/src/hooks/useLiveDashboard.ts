@@ -34,51 +34,58 @@ export function useLiveDashboard({
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const latestRefreshId = useRef(0);
   const activeAbortController = useRef<AbortController | null>(null);
+  const lastAutoAnnouncementAt = useRef(0);
 
-  const refreshLiveData = useCallback(async () => {
-    if (typeof fetch !== "function") {
-      setLiveStatus(refreshUnavailableStatus());
-      return;
-    }
-    const refreshId = latestRefreshId.current + 1;
-    latestRefreshId.current = refreshId;
-    activeAbortController.current?.abort();
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    activeAbortController.current = controller;
-    const isLatestRefresh = () => refreshId === latestRefreshId.current;
-    try {
-      setRefreshState("refreshing");
-      setLastError(null);
-      const snapshot = await fetchLiveDashboardSnapshot(controller?.signal ?? null);
-      if (!isLatestRefresh()) return;
-      setEntries(snapshot.entries);
-      setViewModel(snapshot.viewModel);
-      setMeta((current) => ({
-        ...current,
-        viewModel: snapshot.viewModel,
-        generatedAt: snapshot.generatedAt,
-      }));
-      setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
-      setRefreshState("idle");
-      setRefreshGeneration((value) => value + 1);
-    } catch (error) {
-      if (!isLatestRefresh() || isAbortError(error)) return;
-      const message = error instanceof Error ? error.message : String(error);
-      setLiveStatus(refreshFailureStatus(liveRefresh, message));
-      setRefreshState("error");
-      setLastError(message);
-    } finally {
-      if (activeAbortController.current === controller) {
-        activeAbortController.current = null;
+  const refreshLiveData = useCallback(
+    async (source: "auto" | "manual" = "manual") => {
+      if (typeof fetch !== "function") {
+        setLiveStatus(refreshUnavailableStatus());
+        return;
       }
-    }
-  }, [liveRefresh, refreshDone, setEntries, setMeta, setViewModel]);
+      const refreshId = latestRefreshId.current + 1;
+      latestRefreshId.current = refreshId;
+      activeAbortController.current?.abort();
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      activeAbortController.current = controller;
+      const isLatestRefresh = () => refreshId === latestRefreshId.current;
+      try {
+        setRefreshState("refreshing");
+        setLastError(null);
+        const snapshot = await fetchLiveDashboardSnapshot(controller?.signal ?? null);
+        if (!isLatestRefresh()) return;
+        setEntries(snapshot.entries);
+        setViewModel(snapshot.viewModel);
+        setMeta((current) => ({
+          ...current,
+          viewModel: snapshot.viewModel,
+          generatedAt: snapshot.generatedAt,
+        }));
+        if (source === "manual" || shouldAnnounceAutoRefresh(lastAutoAnnouncementAt.current)) {
+          if (source === "auto") lastAutoAnnouncementAt.current = Date.now();
+          setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
+        }
+        setRefreshState("idle");
+        setRefreshGeneration((value) => value + 1);
+      } catch (error) {
+        if (!isLatestRefresh() || isAbortError(error)) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setLiveStatus(refreshFailureStatus(liveRefresh, message));
+        setRefreshState("error");
+        setLastError(message);
+      } finally {
+        if (activeAbortController.current === controller) {
+          activeAbortController.current = null;
+        }
+      }
+    },
+    [liveRefresh, refreshDone, setEntries, setMeta, setViewModel],
+  );
 
   useEffect(() => {
     if (!liveEnabled || !liveRefresh) return undefined;
-    refreshLiveData();
+    refreshLiveData("auto");
     const refreshMs = Math.max(1, Number(meta.refreshMs || 5000));
-    const timer = setInterval(refreshLiveData, refreshMs);
+    const timer = setInterval(() => refreshLiveData("auto"), refreshMs);
     return () => {
       clearInterval(timer);
       activeAbortController.current?.abort();
@@ -183,4 +190,8 @@ function isAbortError(error: unknown): boolean {
     "name" in error &&
     String((error as { name?: unknown }).name) === "AbortError"
   );
+}
+
+function shouldAnnounceAutoRefresh(lastAnnouncementAt: number): boolean {
+  return Date.now() - lastAnnouncementAt > 30000;
 }

@@ -1,5 +1,10 @@
 import { applyToolContracts } from "./tool-contracts.js";
 import { resolveResearchSlugForQualityGapSync } from "./research-gaps.js";
+import {
+  UNSAFE_COMMAND_APPROVAL_FIELD,
+  UNSAFE_COMMAND_PROPERTY,
+  toolArgumentsContainUnsafeCommand,
+} from "./tool-unsafe-command-gate.js";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -40,10 +45,6 @@ const SETUP_SOURCE_PROPERTIES = {
   recipe_id: { type: "string" },
   catalog: { type: "string" },
   trust_catalog: { type: "boolean" },
-} satisfies Record<string, JsonSchema>;
-
-const UNSAFE_COMMAND_PROPERTY = {
-  allow_unsafe_command: { type: "boolean" },
 } satisfies Record<string, JsonSchema>;
 
 export const toolSchemas = applyToolContracts([
@@ -305,6 +306,7 @@ export const toolSchemas = applyToolContracts([
         timeout_seconds: { type: "integer" },
         dry_run: { type: "boolean" },
         yes: { type: "boolean" },
+        ...UNSAFE_COMMAND_PROPERTY,
         allow_non_git_command: { type: "boolean" },
       },
       required: ["working_dir"],
@@ -813,6 +815,9 @@ export function validateToolArguments(name: string, args: ToolArgs = {}, options
     assertSchemaArgument(key, value, property);
   }
   inferActiveResearchSlug(name, normalized);
+  if (options.enforceUnsafeCommandGate !== false) {
+    requireUnsafeCommandGate(name, normalized);
+  }
   return normalized;
 }
 
@@ -850,23 +855,8 @@ export function requireUnsafeCommandGate(
 ) {
   const schema = schemaForTool(toolName);
   const normalized: ToolArgs = schema ? normalizeToolArguments(toolName, args) : args || {};
-  const setupCatalogCanMaterializeCommands =
-    (toolName === "setup_plan" ||
-      toolName === "guided_setup" ||
-      toolName === "prompt_plan" ||
-      toolName === "setup_session") &&
-    Boolean(normalized.catalog);
-  const hasCustomCommand = Boolean(
-    normalized.command ||
-    normalized.command_file ||
-    normalized.env_file ||
-    normalized.packet_env_file ||
-    normalized.benchmark_command ||
-    normalized.checks_command ||
-    normalized.model_command ||
-    setupCatalogCanMaterializeCommands,
-  );
-  if (hasCustomCommand && !boolOption(normalized.allow_unsafe_command, false)) {
+  const hasCustomCommand = toolArgumentsContainUnsafeCommand(toolName, normalized);
+  if (hasCustomCommand && !boolOption(normalized[UNSAFE_COMMAND_APPROVAL_FIELD], false)) {
     throw new Error(
       `${toolName} custom shell commands require allow_unsafe_command=true. Prefer a configured autoresearch script when possible.`,
     );

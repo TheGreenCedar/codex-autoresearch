@@ -103,7 +103,7 @@ Use the served dashboard when a live readout is useful:
 - Share the served `http://127.0.0.1:<port>/` URL by default.
 - Static exports are read-only; use the served dashboard when packet freshness matters.
 - Treat the dashboard as a visual aid, not a control surface. Use the CLI for setup, packet runs, logging, gap review, export, `finalize-preview`, and finalization.
-- The dashboard read order is decision envelope, metric trend/readiness, Codex brief, current decision, ledger/ASI, finalization, quality-gap, runtime drift, and process hygiene.
+- Preserve the chart-first dashboard direction: the metric trend/readiness chart remains the first major evidence readout, with decision envelope, Codex brief, current decision, ledger/ASI, finalization, quality-gap, runtime drift, and process hygiene around or below that flow.
 
 ## Deep Research Loops
 

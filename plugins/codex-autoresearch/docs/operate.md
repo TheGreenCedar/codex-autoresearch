@@ -111,9 +111,13 @@ Normal loop:
 
 ```bash
 node scripts/autoresearch.mjs next --cwd <project>
+git status --short
+node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
 node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
+
+The `git status` and `state` checkpoint before `log` is deliberate. Do not let keep/discard automation touch unrelated dirty files, stale packets, pending log transactions, protected benchmark files, or paths outside the configured `commitPaths` / `revertPaths`.
 
 `next` is the packet-producing command. `run` is a raw benchmark probe; use it for quick diagnostics, but do not expect `log --from-last` to reuse it.
 

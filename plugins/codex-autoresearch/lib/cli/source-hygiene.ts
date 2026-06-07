@@ -32,7 +32,6 @@ const LOOSE_OBJECT_COMPATIBILITY_ALLOWLIST = new Set(
     "plugins/codex-autoresearch/lib/finalization-plan.ts",
     "plugins/codex-autoresearch/lib/finalize-preview.ts",
     "plugins/codex-autoresearch/lib/integrations.ts",
-    "plugins/codex-autoresearch/lib/live-server.ts",
     "plugins/codex-autoresearch/lib/recipes.ts",
     "plugins/codex-autoresearch/lib/research-gaps.ts",
     "plugins/codex-autoresearch/lib/runner-progress.ts",

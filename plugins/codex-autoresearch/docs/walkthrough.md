@@ -1,6 +1,6 @@
 # Walkthrough
 
-This walkthrough shows a complete, real-world Codex Autoresearch loop. We will start with a broad request, let Codex plan the loop, run two packets (one kept, one discarded), and finally preview the review branches.
+This walkthrough shows a complete Codex Autoresearch loop shape. The commands are copyable, but the JSON and terminal output below is illustrative example output; treat your local `doctor`, `state`, dashboard, and finalization readouts as the source of truth.
 
 ## 1. Prompt and Plan
 
@@ -10,7 +10,7 @@ You give Codex a broad request:
 Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex uses `prompt-plan` to convert this into a structured approach:
+Codex uses `prompt-plan` to convert this into a structured approach. Example output:
 
 ```json
 {
@@ -37,7 +37,7 @@ node scripts/autoresearch.mjs setup --cwd . --name "Indexer Optimization" --metr
 node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Doctor Checks
@@ -45,8 +45,10 @@ Doctor Checks
 - Benchmark Output: METRIC seconds=42.5
 - Primary Metric: seconds (lower is better)
 
-All checks passed. The session is ready.
+No blocking issues. The session is ready for a first bounded packet.
 ```
+
+If `benchmark-lint` passes but `doctor` reports dirty Git, runtime drift, finalization/current-tree coverage, missing promotion metadata, or stale packet blockers, repair those first. A parsed metric proves the benchmark line can be read; it does not prove the loop is finalization-ready.
 
 ## 3. The First Packet (Keep)
 
@@ -56,12 +58,12 @@ Codex runs the first experiment to tune batch sizing, then logs the result.
 node scripts/autoresearch.mjs next --cwd . --compact
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Packet Run
 Benchmark: npm run bench:indexer
-Output:
+Benchmark output:
   METRIC seconds=38.2
   METRIC memory_mb=512
 
@@ -71,10 +73,12 @@ Result: seconds improved from 42.5 to 38.2
 Codex logs the decision to keep the change:
 
 ```bash
+git status --short
+node scripts/autoresearch.mjs state --cwd . --compact
 node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Increased batch size from 100 to 500"
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Log entry saved.
@@ -91,25 +95,27 @@ Codex runs a second experiment to aggressively tune the cache.
 node scripts/autoresearch.mjs next --cwd . --compact
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Packet Run
 Benchmark: npm run bench:indexer
-Output:
+Benchmark output:
   METRIC seconds=37.9
   METRIC memory_mb=1200
 
 Result: seconds improved from 38.2 to 37.9
 ```
 
-Codex decides the memory tradeoff is too severe and discards the change, reverting the files.
+Codex decides the memory tradeoff is too severe and discards the change. Before any discard cleanup, confirm the revert scope is local to the packet:
 
 ```bash
+git status --short
+node scripts/autoresearch.mjs state --cwd . --compact
 node scripts/autoresearch.mjs log --cwd . --from-last --status discard --description "Aggressive cache tuning"
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Log entry saved.
@@ -123,10 +129,11 @@ Continuation: shouldContinue=true
 After running many packets, you want to review the kept changes.
 
 ```bash
+git status --short
 node scripts/autoresearch.mjs finalize-preview --cwd .
 ```
 
-Output:
+Illustrative output:
 
 ```text
 Finalization Preview

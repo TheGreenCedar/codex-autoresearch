@@ -10,6 +10,16 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Preview is read-only. It should report readiness, blockers, overlap, dirty-tree status, finalization readiness, current-tree fingerprints, included/excluded files, and a next action.
 
+Before any branch-changing finalization path, run a local safety checkpoint:
+
+```bash
+git status --short
+node scripts/autoresearch.mjs state --cwd <project> --report
+node scripts/autoresearch.mjs finalize-preview --cwd <project>
+```
+
+Proceed only when unrelated dirty files are isolated, session artifacts are intentionally handled, protected benchmark paths are not drifting silently, and the preview still describes the branch/review unit you intend to create.
+
 For slow or noisy source branches, add `--progress` to print heartbeat lines to stderr while preserving JSON stdout:
 
 ```bash
@@ -32,6 +42,8 @@ Rejected, provisional, superseded, quarantined, measured, discarded, crashed, fa
 If the branch contents are right but the commit-level kept evidence is stale, package the final branch content instead:
 
 ```bash
+git status --short
+node scripts/autoresearch.mjs finalize-preview --cwd <project>
 node scripts/autoresearch.mjs finalize-current-tree --cwd <project>
 ```
 
