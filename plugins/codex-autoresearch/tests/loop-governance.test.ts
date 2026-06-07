@@ -848,7 +848,7 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   );
   assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
   assert.match(response.whySafe, /compact state/);
-  assert.match(response.whySafe, /without dashboard-grade rendering/);
+  assert.match(response.whySafe, /shared decision envelope/);
   assert.equal(response.compactState, compactState);
   assert.equal(response.decisionEnvelope, compactState.decisionEnvelope);
   assert.equal(response.resumeAudit, compactState.resumeAudit);

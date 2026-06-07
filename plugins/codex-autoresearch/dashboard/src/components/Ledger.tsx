@@ -12,46 +12,49 @@ export function Ledger({ session, readout }: LedgerProps) {
   const newest = useMemo(() => [...session.runs].reverse(), [session.runs]);
   const totalHeight = newest.length * LEDGER_ROW_HEIGHT;
   return (
-    <section
-      className="panel ledger-panel"
-      id="ledger"
-      aria-label="Run log"
-      hidden={!session.runs.length}
-      tabIndex={-1}
-    >
+    <section className="panel ledger-panel" id="ledger" aria-label="Run log" tabIndex={-1}>
       <div className="panel-head">
         <div>
           <p className="eyebrow">Run log</p>
           <h2>Ledger, ASI</h2>
         </div>
         <span id="ledger-note" className="panel-note">
-          {`${session.runs.length} runs / newest first`}
+          {session.runs.length
+            ? `${session.runs.length} runs / newest first`
+            : "No runs logged yet"}
         </span>
       </div>
-      <div
-        className="ledger-scroll"
-        id="ledger-scroll"
-        role="table"
-        aria-label={`Run ledger, newest first, ${session.runs.length} total runs`}
-        aria-rowcount={session.runs.length + 1}
-      >
-        <div className="ledger-header" role="row">
-          <span role="columnheader">Run</span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader">Metric</span>
-          <span role="columnheader">Description and ASI</span>
+      {session.runs.length ? (
+        <div
+          className="ledger-scroll"
+          id="ledger-scroll"
+          role="table"
+          aria-label={`Run ledger, newest first, ${session.runs.length} total runs`}
+          aria-rowcount={session.runs.length + 1}
+        >
+          <div className="ledger-header" role="row">
+            <span role="columnheader">Run</span>
+            <span role="columnheader">Status</span>
+            <span role="columnheader">Metric</span>
+            <span role="columnheader">Description and ASI</span>
+          </div>
+          <div id="ledger-body" style={{ height: `${totalHeight}px` }}>
+            {newest.map((run, index) => (
+              <LedgerRow
+                key={`${run.segment}-${run.run}`}
+                run={run}
+                index={index}
+                readout={readout}
+              />
+            ))}
+          </div>
         </div>
-        <div id="ledger-body" style={{ height: `${totalHeight}px` }}>
-          {newest.map((run, index) => (
-            <LedgerRow
-              key={`${run.segment}-${run.run}`}
-              run={run}
-              index={index}
-              readout={readout}
-            />
-          ))}
+      ) : (
+        <div className="empty ledger-empty" role="status">
+          No decisions are in the ledger yet. Capture a baseline in the CLI, then refresh this
+          readout.
         </div>
-      </div>
+      )}
     </section>
   );
 }

@@ -4125,11 +4125,11 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.decisionEnvelope.activeSegment.segment, 0);
     assert.equal(statePayload.resumeAudit.latestPacketFreshness.fresh, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, false);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, null);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, false);
     assert.match(
       statePayload.decisionEnvelope.finalizationReadiness.nextAction,
-      /finalize-preview/,
+      /Git-backed autoresearch branch/,
     );
     assert.equal(typeof statePayload.decisionEnvelope.nextAction, "string");
 
@@ -4151,7 +4151,7 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
   });
 });
 
-test("recommend-next compact returns state-first handoff without dashboard-only finalization", async () => {
+test("recommend-next compact returns state-first handoff with shared finalization authority", async () => {
   await withTempDir("recommend-next-compact-state-first", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "compact recommend", "--metric-name", "seconds"]);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
@@ -4162,7 +4162,8 @@ test("recommend-next compact returns state-first handoff without dashboard-only 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, false);
     assert.match(statePayload.commands.state, /state --cwd/);
 
     const recommend = await runCli([
@@ -4182,9 +4183,9 @@ test("recommend-next compact returns state-first handoff without dashboard-only 
     );
     assert.equal(
       recommendPayload.compactState.decisionEnvelope.finalizationReadiness.available,
-      false,
+      true,
     );
-    assert.equal(recommendPayload.decisionEnvelope.finalizationReadiness.available, false);
+    assert.equal(recommendPayload.decisionEnvelope.finalizationReadiness.available, true);
     assert.equal(statePayload.canonicalNextAction.kind, "log-decision");
     assert.doesNotMatch(statePayload.operatorHandoff.command, /\bnext\b.*--compact/);
     assert.equal(
@@ -4199,15 +4200,86 @@ test("recommend-next compact returns state-first handoff without dashboard-only 
     assert.equal(recommendPayload.operatorChecklist.source, "latestPacketFreshness");
     assert.doesNotMatch(recommendPayload.operatorChecklist.command, /\bnext\b.*--compact/);
     assert.match(recommendPayload.whySafe, /compact state/);
-    assert.match(recommendPayload.whySafe, /without dashboard-grade rendering/);
+    assert.match(recommendPayload.whySafe, /shared decision envelope/);
+  });
+});
+
+test("pending log receipts block state, doctor, and new log attempts", async () => {
+  await withTempDir("pending-log-receipt", async (dir) => {
+    await git(dir, ["init"]);
+    await runCli(["init", "--cwd", dir, "--name", "pending receipt", "--metric-name", "seconds"]);
+    const receiptDir = path.join(dir, ".git", "autoresearch");
+    const receiptPath = path.join(receiptDir, "pending-log-transaction.json");
+    await mkdir(receiptDir, { recursive: true });
+    await writeFile(
+      receiptPath,
+      JSON.stringify(
+        {
+          type: "autoresearch.log.pending",
+          version: 1,
+          status: "keep",
+          intendedLedgerRun: 1,
+          ledgerAppended: false,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.report.json.status, "blocked");
+    assert.match(
+      statePayload.compactState.preflight.blockers.join("\n"),
+      /pending receipt|not be recorded in autoresearch\.jsonl/i,
+    );
+    assert.match(
+      statePayload.compactState.blockers.join("\n"),
+      /pending receipt|not be recorded in autoresearch\.jsonl/i,
+    );
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, false);
+    assert.ok(
+      doctorPayload.issues.some((issue) =>
+        /pending receipt|not be recorded in autoresearch\.jsonl/i.test(issue),
+      ),
+    );
+
+    const log = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "measure",
+      "--description",
+      "Blocked by receipt",
+    ]);
+    assert.notEqual(log.code, 0);
+    assert.match(log.stderr, /pending receipt|not be recorded in autoresearch\.jsonl/i);
   });
 });
 
 test("doctor explain preserves current-tree finalization blockers", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir);
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    const doctor = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--command",
+      benchmarkCommand,
+      "--check-benchmark",
+      "--explain",
+    ]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const payload = JSON.parse(doctor.stdout);
 
@@ -4218,6 +4290,64 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
     assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "current-tree-finalization");
     assert.match(payload.nextAction, /finalize-current-tree|Final tree coverage/i);
     assert.doesNotMatch(payload.canonicalNextAction.command, /\bnext\b/);
+  });
+});
+
+test("state, recommend-next, doctor, and dashboard share current-tree finalization authority", async () => {
+  await withTempDir("shared-current-tree-finalization", async (dir) => {
+    await prepareCurrentTreeFinalizationBlocker(dir);
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+
+    const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    const compactState = statePayload.compactState;
+    assert.equal(compactState.canonicalNextAction.kind, "current-tree-finalization");
+    assert.equal(compactState.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(statePayload.report.json.status, "blocked");
+
+    const recommend = await runCli([
+      "recommend-next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--operator-checklist",
+    ]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    assert.equal(
+      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
+      compactState.canonicalNextAction.kind,
+    );
+    assert.equal(
+      recommendPayload.compactState.decisionEnvelope.finalizationReadiness.available,
+      true,
+    );
+    assert.match(recommendPayload.operatorChecklist.source, /currentTree/);
+    assert.doesNotMatch(recommendPayload.commands.primary, /\bnext\b.*--compact/);
+
+    const doctor = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--command",
+      benchmarkCommand,
+      "--check-benchmark",
+      "--explain",
+    ]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.canonicalNextAction.kind, compactState.canonicalNextAction.kind);
+    assert.equal(doctorPayload.loopContract.canRunNextPacket, false);
+
+    const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const exportPayload = JSON.parse(exported.stdout);
+    assert.equal(
+      exportPayload.viewModel.decisionEnvelope.canonicalNextAction.kind,
+      compactState.canonicalNextAction.kind,
+    );
+    assert.equal(exportPayload.viewModel.nextBestAction.kind, "current-tree-finalization");
   });
 });
 

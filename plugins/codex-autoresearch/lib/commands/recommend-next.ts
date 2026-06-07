@@ -71,7 +71,7 @@ const DEFAULT_AVOIDS =
   "Avoids running a packet before setup, stale-last-run, or trust blockers are resolved.";
 const DEFAULT_PROOF = "The next command should update state or clear the blocker.";
 const COMPACT_WHY_SAFE =
-  "Derived from compact state without dashboard-grade rendering or live finalization preview.";
+  "Derived from compact state with the shared decision envelope and finalization authority.";
 const COMPACT_AVOIDS =
   "Avoids loading dashboard-only fields while handing off the compact loop contract.";
 const COMPACT_PROOF =

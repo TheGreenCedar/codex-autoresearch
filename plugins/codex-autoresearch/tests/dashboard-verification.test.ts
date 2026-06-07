@@ -276,6 +276,8 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("replaceLast"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("finalizeCurrentTree"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("cleanupCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("suggestedCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("planOutput"), true);
   assert.deepEqual(stripDashboardGuidanceCommandFields(payload), {
     nested: { detail: "Review the current state." },
     sourceCwd: "C:/repo",
@@ -293,6 +295,47 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
     "Next",
     "node scripts/autoresearch.mjs next --cwd C:/repo",
   ]);
+});
+
+test("dashboard finalization preview strips executable command-shaped fields", () => {
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "finalization sanitizer",
+        metricName: "seconds",
+        bestDirection: "lower",
+      },
+      current: [],
+    },
+    settings: {},
+    finalizePreview: {
+      ready: true,
+      nextAction: "Preview finalization readiness.",
+      warnings: ["Review final branch grouping."],
+      suggestedCommand: "node scripts/finalize-autoresearch.mjs plan --cwd C:/repo",
+      suggestedCommands: {
+        finalizerPlan: {
+          argv: ["node", "scripts/finalize-autoresearch.mjs", "plan", "--cwd", "C:/repo"],
+          display: "node scripts/finalize-autoresearch.mjs plan --cwd C:/repo",
+          mutates: false,
+        },
+      },
+      command: "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo",
+      commandsByStatus: {
+        ready: "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo",
+      },
+      liveAction: "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo",
+      planOutput: "C:/repo/autoresearch.research/finalizer-plan.json",
+    },
+  });
+
+  const serialized = JSON.stringify(viewModel);
+  assert.doesNotMatch(
+    serialized,
+    /suggestedCommand|suggestedCommands|commandsByStatus|liveAction|argv|planOutput/,
+  );
+  assert.doesNotMatch(serialized, /finalize-autoresearch|finalize-current-tree/);
+  assert.match(serialized, /Preview finalization readiness/);
 });
 
 test("dashboard action rail uses blocker metadata instead of next fallback", () => {
@@ -2681,8 +2724,9 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(getById("live-title").textContent, "Live Readout");
   assert.match(getById("live-detail").textContent || "", /refresh the view model/);
   assert.equal(queryById("trust-strip"), null);
-  assert.equal(getById("refresh-now").textContent, "Refresh live data");
-  assert.equal(getById("live-toggle").textContent, "Auto-refresh on");
+  assert.equal(getById("refresh-now").textContent, "Refresh now");
+  assert.equal(getById("live-toggle").textContent, "Pause auto-refresh");
+  assert.equal(getById("live-toggle").getAttribute("aria-pressed"), "true");
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-toggle").hidden, false);
   assert.equal(queryById("action-note"), null);
@@ -2979,7 +3023,7 @@ test("dashboard responsive styles keep readiness strip two-up until mobile", () 
   );
   assert.match(
     mobileBlock,
-    /\.toolbar-controls,[\s\S]*?\.signal-strip,[\s\S]*?grid-template-columns:\s*1fr/,
+    /\.toolbar-controls,[\s\S]*?\.signal-strip\s*\{[\s\S]*?grid-template-columns:\s*1fr/,
   );
 });
 
@@ -3061,6 +3105,11 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const trendPanel = dom.window.document.getElementById("trend-panel");
   const scoreStrip = dom.window.document.querySelector(".score-strip");
   assert.ok(decisionRail);
+  assert.equal(
+    dom.window.document.getElementById("next-action-title")?.textContent,
+    "Do this first",
+  );
+  assert.equal(dom.window.document.getElementById("decision-next-command"), null);
   assert.ok(trendPanel);
   assert.ok(scoreStrip);
   assert.equal(
@@ -3086,6 +3135,44 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       "-1",
       `${href} should be programmatically focusable`,
     );
+  }
+  dom.window.close();
+});
+
+test("dashboard keeps navigation targets visible when the ledger is empty", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "empty ledger",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+  ];
+  const { dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+  });
+
+  const ledger = dom.window.document.getElementById("ledger");
+  assert.ok(ledger);
+  assert.equal(ledger.hasAttribute("hidden"), false);
+  assert.equal(ledger.getAttribute("tabindex"), "-1");
+  assert.match(ledger.textContent || "", /No runs logged yet/);
+  assert.match(ledger.textContent || "", /No decisions are in the ledger yet/);
+  assert.equal(dom.window.document.getElementById("ledger-scroll"), null);
+
+  const links = [
+    ...dom.window.document.querySelectorAll(".skip-links a, .side-nav a"),
+  ] as HTMLAnchorElement[];
+  for (const link of links) {
+    const href = link.getAttribute("href") || "";
+    const target = dom.window.document.querySelector(href);
+    assert.ok(target, `Missing dashboard nav target ${href}`);
+    assert.equal(target.hasAttribute("hidden"), false, `${href} should be visible`);
+    assert.equal(target.closest("[hidden]"), null, `${href} should not be inside hidden content`);
   }
   dom.window.close();
 });

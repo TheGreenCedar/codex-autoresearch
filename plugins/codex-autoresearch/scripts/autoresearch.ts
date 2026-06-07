@@ -181,6 +181,7 @@ const SESSION_FILES = [
   "autoresearch.checks.ps1",
   "autoresearch.config.json",
   "autoresearch.last-run.json",
+  "autoresearch.pending-transaction.json",
 ];
 const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
   "# Codex Autoresearch ledger files",
@@ -216,6 +217,9 @@ const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
 const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
 const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
+const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
+const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
+const PENDING_LOG_TRANSACTION_FALLBACK_FILE = "autoresearch.pending-transaction.json";
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "runtimeDriftSummary",
   "gateQuality",
@@ -3349,6 +3353,78 @@ async function gitPrivatePath(cwd: string, relativePath: string) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
 }
 
+function fallbackPendingLogTransactionPath(workDir: string) {
+  return path.join(workDir, PENDING_LOG_TRANSACTION_FALLBACK_FILE);
+}
+
+async function pendingLogTransactionPath(workDir: string, inGit?: boolean) {
+  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
+  if (gitRepo) {
+    return await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH);
+  }
+  return fallbackPendingLogTransactionPath(workDir);
+}
+
+async function pendingLogTransactionCandidatePaths(workDir: string, inGit?: boolean) {
+  const candidates = [fallbackPendingLogTransactionPath(workDir)];
+  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
+  if (gitRepo) {
+    try {
+      candidates.unshift(await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH));
+    } catch {
+      // Fall back to the workspace marker below when Git cannot resolve its private path.
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+async function writePendingLogTransaction(workDir: string, inGit: boolean, receipt: LooseObject) {
+  const receiptPath = await pendingLogTransactionPath(workDir, inGit);
+  await fsp.mkdir(path.dirname(receiptPath), { recursive: true });
+  await fsp.writeFile(
+    receiptPath,
+    `${JSON.stringify(
+      {
+        type: "autoresearch.log.pending",
+        version: 1,
+        createdAt: new Date().toISOString(),
+        workDir,
+        ledgerPath: path.join(workDir, "autoresearch.jsonl"),
+        ...receipt,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return receiptPath;
+}
+
+async function clearPendingLogTransaction(receiptPath: string | null) {
+  if (!receiptPath) return;
+  await fsp.unlink(receiptPath).catch((error: any) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+}
+
+async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
+  const warnings = [];
+  for (const receiptPath of await pendingLogTransactionCandidatePaths(workDir, inGit)) {
+    if (!(await pathExists(receiptPath))) continue;
+    warnings.push({
+      code: PENDING_LOG_TRANSACTION_CODE,
+      severity: "blocker",
+      message:
+        "A previous log mutation has a pending receipt and may not be recorded in autoresearch.jsonl; inspect the receipt before another packet.",
+      action:
+        "Compare the receipt with git status and autoresearch.jsonl, then remove the receipt after recovery.",
+      path: receiptPath,
+      paths: [receiptPath],
+    });
+  }
+  return warnings;
+}
+
 async function assertNoGitIndexLock(workDir: string, phase: string = "git operation") {
   const lockPath = await gitPrivatePath(workDir, "index.lock");
   if (!(await pathExists(lockPath))) return;
@@ -3932,9 +4008,25 @@ function pathIsCoveredByScope(filePath: string, scopePath: any) {
   return file === scope || file.startsWith(`${scope}/`);
 }
 
-async function cleanupDiscardChanges(workDir: string, args: any, config: any) {
+function discardCleanupWillMutate(plan: LooseObject, args: LooseObject) {
+  if (Array.isArray(plan.scopedPaths) && plan.scopedPaths.length > 0) {
+    return Array.isArray(plan.ownedDirtyPaths) && plan.ownedDirtyPaths.length > 0;
+  }
+  return (
+    Array.isArray(plan.dirtyPaths) &&
+    plan.dirtyPaths.length > 0 &&
+    boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false)
+  );
+}
+
+async function cleanupDiscardChanges(
+  workDir: string,
+  args: any,
+  config: any,
+  precomputedPlan: LooseObject | null = null,
+) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
-  const plan = await discardCleanupPlan(workDir, args, config);
+  const plan = precomputedPlan || (await discardCleanupPlan(workDir, args, config));
   if (plan.scopedPaths.length > 0) {
     if (!plan.ownedDirtyPaths.length) {
       return `Git: no scoped experiment changes to revert; preserved ${plan.unownedDirtyPaths.length} unowned dirty path(s). cleanup=${plan.fingerprint.slice(0, 12)}.`;
@@ -4831,6 +4923,7 @@ async function operatorWarningsForWorkDir(workDir: string) {
   const config = readConfig(workDir);
   const state = currentState(workDir);
   const warnings = [];
+  warnings.push(...(await pendingLogTransactionWarnings(workDir, inGit)));
   if (inGit) {
     const dirtyPaths = await gitDirtyPathDetails(workDir);
     const sourceDirtyPaths = dirtyPaths.filter(
@@ -5299,6 +5392,10 @@ function operationProgress({
 
 async function logExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const existingPendingReceipts = await pendingLogTransactionWarnings(workDir);
+  if (existingPendingReceipts.length > 0) {
+    throw new Error(existingPendingReceipts[0].message);
+  }
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false)
     ? await readLastRunPacket(workDir)
     : null;
@@ -5417,6 +5514,8 @@ async function logExperiment(args: any) {
   }
   let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
   let revertMessage = "";
+  let pendingLogReceiptPath: string | null = null;
+  let pendingLogReceiptWarning = "";
 
   if (status === "keep" && inGit) {
     if (explicitCommit) {
@@ -5438,6 +5537,16 @@ async function logExperiment(args: any) {
       }
       if (commitPaths.length > 0) await assertCommitPathsExist(workDir, commitPaths);
       await assertNoGitIndexLock(workDir, "git add");
+      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
+        run: stateBefore.results.length + 1,
+        status,
+        description,
+        metric,
+        mutation: "keep-commit",
+        commitPaths,
+        allowAddAll,
+        explicitCommit: false,
+      });
       const addResult =
         commitPaths.length > 0
           ? await git(["add", "--", ...commitPaths], workDir)
@@ -5467,7 +5576,23 @@ async function logExperiment(args: any) {
       }
     }
   } else if (status !== "keep" && status !== "measure") {
-    revertMessage = await cleanupDiscardChanges(workDir, args, config);
+    const discardPlan = inGit ? await discardCleanupPlan(workDir, args, config) : null;
+    if (discardPlan && discardCleanupWillMutate(discardPlan, args)) {
+      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
+        run: stateBefore.results.length + 1,
+        status,
+        description,
+        metric,
+        mutation: "discard-cleanup",
+        revertPaths: discardPlan.scopedPaths || [],
+        willRevert: Array.isArray(discardPlan.willRevert)
+          ? discardPlan.willRevert.slice(0, 50)
+          : [],
+        cleanupFingerprint: discardPlan.fingerprint || "",
+        allowDirtyRevert: boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false),
+      });
+    }
+    revertMessage = await cleanupDiscardChanges(workDir, args, config, discardPlan);
   }
 
   const currentRuns = stateBefore.current;
@@ -5544,11 +5669,21 @@ async function logExperiment(args: any) {
     stateBefore.config.bestDirection,
   );
   appendJsonl(workDir, experiment);
+  if (pendingLogReceiptPath) {
+    try {
+      await clearPendingLogTransaction(pendingLogReceiptPath);
+    } catch (error: unknown) {
+      pendingLogReceiptWarning = `Pending receipt cleanup failed: ${errorMessage(error)}.`;
+    }
+  }
   if (lastPacket) await deleteLastRunPacket(workDir);
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
-  await appendSessionRunNote(workDir, experiment, stateAfter, { gitMessage, revertMessage });
+  await appendSessionRunNote(workDir, experiment, stateAfter, {
+    gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
+    revertMessage,
+  });
   return {
     ok: true,
     workDir,
@@ -5559,6 +5694,7 @@ async function logExperiment(args: any) {
     limit,
     git: gitMessage,
     revert: revertMessage,
+    recovery: pendingLogReceiptWarning,
     lastRunCleared: Boolean(lastPacket),
     continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
@@ -6371,7 +6507,12 @@ async function publicCompactState({
     ...continuation.commands,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
-  const compactFinalization = compactFinalizationPreview(workDir);
+  const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+    ok: false,
+    ready: false,
+    warnings: [error.message],
+    nextAction: "Fix finalization preview errors before relying on review readiness.",
+  }));
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: {
@@ -6385,7 +6526,7 @@ async function publicCompactState({
       scaffoldHealth,
       researchIntegrity,
       qualityGap,
-      finalization: compactFinalization,
+      finalization,
       experimentEconomics,
       salvageCandidates: partialResults.candidates,
       workflowFriction: [],
@@ -6471,7 +6612,9 @@ function compactPublicState(state: LooseObject) {
   const warningBlockers = Array.isArray(state.warningDetails)
     ? state.warningDetails
         .filter((warning: any) =>
-          ["git_dirty", "missing_commit_paths"].includes(String(warning?.code || "")),
+          ["git_dirty", "missing_commit_paths", PENDING_LOG_TRANSACTION_CODE].includes(
+            String(warning?.code || ""),
+          ),
         )
         .map((warning: any) => warning.message || warning.code)
     : [];
@@ -6657,16 +6800,6 @@ function compactPublicState(state: LooseObject) {
     laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
   });
-}
-
-function compactFinalizationPreview(workDir: string): LooseObject {
-  return {
-    available: false,
-    ready: null,
-    compact: true,
-    nextAction: `Run finalize-preview when review readiness is needed: ${continuationCommands(workDir).finalizePreview}`,
-    warnings: ["Finalization readiness is not checked in compact state."],
-  };
 }
 
 function commandExecutionBoundaryForState({
