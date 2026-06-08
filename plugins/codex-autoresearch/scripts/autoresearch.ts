@@ -711,6 +711,10 @@ async function setupPlan(args: any) {
         : "This explicit benchmark command will be wrapped and timed by the generated script."
       : "No explicit benchmark command was provided; generated placeholder wrappers must be replaced before use.",
   };
+  const catalogTrustArgs = [
+    ...(args.catalog ? ["--catalog", args.catalog] : []),
+    ...(args.catalog && trustCatalogOption(args) ? ["--trust-catalog"] : []),
+  ];
   const commandArgs = [
     "node",
     path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
@@ -790,8 +794,7 @@ async function setupPlan(args: any) {
       : []),
     ...(commitPaths.length > 0 ? ["--commit-paths", commitPaths.join(",")] : []),
     ...(recommended ? ["--recipe", recommended.id] : []),
-    ...(args.catalog ? ["--catalog", args.catalog] : []),
-    ...(args.catalog && trustCatalogOption(args) ? ["--trust-catalog"] : []),
+    ...catalogTrustArgs,
   ];
   const command = commandLine(commandArgs, shellKind);
   const doctorCommand = commandLine(
@@ -802,6 +805,7 @@ async function setupPlan(args: any) {
       "--cwd",
       workDir,
       "--check-benchmark",
+      ...catalogTrustArgs,
     ],
     shellKind,
   );
