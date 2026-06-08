@@ -121,6 +121,42 @@ const ADVISORY: SessionDecisionEnforcement = {
 
 export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
   {
+    kind: "product_bar_rejection",
+    severity: "blocker",
+    enforcement: {
+      ...BOUNDED_NEXT_REQUIRED,
+      blocksFinalization: true,
+      clearingCondition:
+        "Add claim coverage evidence or restart with explicit product-grade acceptance before finalization.",
+      commandHint: "node scripts/autoresearch.mjs state --cwd <project> --compact",
+    },
+    patterns: [],
+    message: "The session rejected done status because product-grade proof was missing.",
+    bottleneck:
+      "The immediate blocker is product proof: the loop must cover the shipped claim before finalization.",
+    nextExperiment:
+      "Add claim coverage evidence for the product claim, then rerun the narrow acceptance check.",
+    wrongNextActions: [
+      "Do not finalize from loop completion alone.",
+      "Do not treat a metric improvement as shippable product proof without claim coverage.",
+    ],
+  },
+  {
+    kind: "false_done_admission",
+    severity: "warning",
+    enforcement: BOUNDED_NEXT_REQUIRED,
+    patterns: [],
+    message: "The assistant admitted loop completion was mistaken for product proof.",
+    bottleneck:
+      "Evidence maturity is overstated; downgrade the claim or restart with product-grade acceptance.",
+    nextExperiment:
+      "Reclassify the evidence maturity, name the missing acceptance proof, and run a bounded acceptance packet.",
+    wrongNextActions: [
+      "Do not continue as if the previous done claim was valid.",
+      "Do not hide the maturity downgrade in summary prose.",
+    ],
+  },
+  {
     kind: "benchmark_contract_broken",
     severity: "blocker",
     enforcement: HARD_BENCHMARK_CONTRACT,
@@ -397,6 +433,8 @@ function selectRule(
   const kinds = new Set(signals.map((signal) => signal.kind));
   for (const kind of [
     "benchmark_contract_broken",
+    "product_bar_rejection",
+    "false_done_admission",
     "goal_frame_mismatch",
     "search_latency_bottleneck",
     "metric_reframe_feedback",
@@ -435,15 +473,19 @@ function prioritizedDecisionEvidence(
 ): CapsuleSignal[] {
   const priority = new Map([
     ["benchmark_contract_broken", 0],
-    ["goal_frame_mismatch", 1],
-    ["search_latency_bottleneck", 2],
-    ["metric_reframe_feedback", 3],
-    ["probe_churn_feedback", 4],
-    ["skill_preflight_feedback", 5],
-    ["carry_forward_request", 6],
-    ["context_distillation_required", 7],
-    ["output_budget_exceeded", 8],
-    ["quality_gap_wording", 9],
+    ["product_bar_rejection", 1],
+    ["false_done_admission", 2],
+    ["goal_frame_mismatch", 3],
+    ["search_latency_bottleneck", 4],
+    ["metric_reframe_feedback", 5],
+    ["probe_churn_feedback", 6],
+    ["skill_preflight_feedback", 7],
+    ["carry_forward_request", 8],
+    ["context_distillation_required", 9],
+    ["oversized_tool_output", 10],
+    ["closed_stdin_poll", 11],
+    ["output_budget_exceeded", 12],
+    ["quality_gap_wording", 13],
   ]);
   return [...productSignals, ...workflowWaste].sort(
     (left, right) => (priority.get(left.kind) ?? 99) - (priority.get(right.kind) ?? 99),
