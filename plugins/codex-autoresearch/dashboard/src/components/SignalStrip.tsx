@@ -6,6 +6,7 @@ import { laneActive, laneCompleted } from "./laneStatus";
 interface SignalStripProps {
   view: DashboardView;
   viewModel: DashboardViewModel;
+  priority?: boolean;
 }
 
 interface SignalItem {
@@ -17,12 +18,12 @@ interface SignalItem {
   live?: boolean;
 }
 
-export function SignalStrip({ view, viewModel }: SignalStripProps) {
+export function SignalStrip({ view, viewModel, priority = false }: SignalStripProps) {
   const signals = buildSignals(viewModel);
   const trustItems = buildTrustItems(viewModel);
   return (
     <section
-      className={`signal-strip signal-strip--${view}`}
+      className={`signal-strip signal-strip--${view}${priority ? " signal-strip--priority" : ""}`}
       id="v2-release-signals"
       aria-label="Run readiness signals"
       data-view={view}
@@ -60,13 +61,35 @@ export function SignalStrip({ view, viewModel }: SignalStripProps) {
 }
 
 function buildSignals(viewModel: DashboardViewModel): SignalItem[] {
-  return [
+  const modeledSignals = Array.isArray(viewModel.signals)
+    ? viewModel.signals.map(signalFromModel).filter((item): item is SignalItem => item !== null)
+    : [];
+  return uniqueSignals([
+    ...modeledSignals,
     nextSignal(viewModel),
     evidenceSignal(viewModel),
     lanesSignal(viewModel),
     watchdogSignal(viewModel),
     finalizationSignal(viewModel),
-  ];
+  ]);
+}
+
+function signalFromModel(value: unknown): SignalItem | null {
+  const record = recordFrom(value);
+  const id = clean(record.id) || clean(record.label).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const label = clean(record.label);
+  const detail = clean(record.detail) || clean(record.message);
+  if (!id || !label || !detail) return null;
+  const tone = clean(record.tone);
+  return {
+    id,
+    label,
+    value: clean(record.value) || label,
+    detail,
+    tone: ["good", "neutral", "warn", "danger"].includes(tone)
+      ? (tone as SignalItem["tone"])
+      : "warn",
+  };
 }
 
 function nextSignal(viewModel: DashboardViewModel): SignalItem {
@@ -213,6 +236,15 @@ function uniqueTrustItems<T extends { label: string; text: string }>(items: T[])
     unique.push(item);
   }
   return unique;
+}
+
+function uniqueSignals(items: SignalItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 function strategyLanes(viewModel: DashboardViewModel): StrategyLane[] {

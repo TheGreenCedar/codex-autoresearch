@@ -136,10 +136,10 @@ function DecisionCopyActions({
   return (
     <div className="decision-copy-actions" aria-label="Copyable decision outputs">
       <button type="button" className="tool-button subtle" onClick={copyReport}>
-        {reportCopied ? "Copied report" : "Copy report"}
+        {reportCopied ? "Copied report" : "Copy read-only report"}
       </button>
       <button type="button" className="tool-button subtle" onClick={copyHandoff}>
-        {handoffCopied ? "Copied handoff" : "Copy handoff"}
+        {handoffCopied ? "Copied handoff" : "Copy read-only handoff"}
       </button>
     </div>
   );
