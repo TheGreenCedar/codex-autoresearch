@@ -158,6 +158,37 @@ test("terminal report uses canonical gate-quality action ahead of packet fallbac
   assert.doesNotMatch(report.json.nextCommand, /partial-results/);
 });
 
+test("terminal report plateau pivot uses a non-packet recovery command", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    commands: {
+      next: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+      laneRunner:
+        "node scripts/autoresearch.mjs lane-runner --cwd C:/repo --lane-id constraint-removal --dry-run",
+      newSegmentDryRun: "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
+      state: "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+    },
+    decisionEnvelope: {
+      canonicalNextAction: {
+        kind: "plateau-pivot",
+        reason:
+          "Change a precondition, input corpus, benchmark contract, or implementation lane before retrying this family.",
+        command: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+      },
+      loopContract: {
+        ok: true,
+        canRunNextPacket: true,
+        blockers: [],
+        warnings: [],
+      },
+    },
+  });
+
+  assert.match(report.json.nextAction, /Change a precondition/);
+  assert.doesNotMatch(report.json.nextCommand, /\bnext\b/);
+  assert.match(report.json.nextCommand, /lane-runner|new-segment/);
+});
+
 test("terminal report prefers loop-contract blockers over advisory state blockers", () => {
   const report = buildTerminalReport({
     ok: false,

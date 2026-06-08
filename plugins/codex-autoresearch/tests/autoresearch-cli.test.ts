@@ -4204,6 +4204,81 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
   });
 });
 
+test("recommend-next compact refuses stale next command for plateau pivot", async () => {
+  await withTempDir("plateau-pivot-command", async (dir) => {
+    await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "plateau pivot",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=10')"`,
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi",
+      JSON.stringify({
+        family: "cache-size",
+        hypothesis: "baseline cache size",
+        evidence: "seconds=10",
+      }),
+    ]);
+    for (const [metric, description] of [
+      ["11", "cache size retry 1"],
+      ["11.0001", "cache size retry 2"],
+    ]) {
+      await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        metric,
+        "--status",
+        "discard",
+        "--description",
+        description,
+        "--asi",
+        JSON.stringify({
+          family: "cache-size",
+          rollback_reason: "slower than baseline",
+        }),
+      ]);
+    }
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--status",
+      "crash",
+      "--description",
+      "cache size retry 3",
+      "--asi",
+      JSON.stringify({
+        family: "cache-size",
+        rollback_reason: "crashed before producing a trusted metric",
+      }),
+    ]);
+
+    const result = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action?.kind, "plateau-pivot");
+    assert.doesNotMatch(payload.commands.primary, /\bnext\b/);
+    assert.match(payload.commands.primary, /lane-runner|new-segment/);
+  });
+});
+
 test("pending log receipts block state, doctor, and new log attempts", async () => {
   await withTempDir("pending-log-receipt", async (dir) => {
     await git(dir, ["init"]);
