@@ -88,6 +88,21 @@ Common labels:
 
 If ASI says to stop, broaden validation, rerun on holdout, or invalidate a family, honor that over remaining iteration budget.
 
+## Claim Coverage
+
+Accepted evidence is not automatically shippable evidence. Claim coverage describes whether the current accepted evidence proves the claim the operator is about to make.
+
+Vocabulary:
+
+- `experimental`: useful local or exploratory evidence exists, but the product claim is not covered.
+- `development`: some claim proof exists, but required proof is still missing.
+- `product_grade`: required proof is present for the active claim.
+- `missing_required_proof`: the named proof labels that must be added before product-grade finalization.
+
+For retrieval, search, ranking, lazy behavior, or performance claims, product-grade claim coverage usually needs accuracy or ranking proof plus behavior proof under the claimed mode. Examples include recall, MRR, hit@k, ranking quality, lazy behavior, sidecar safety, and docs or tests that keep the behavior from drifting.
+
+If claim coverage is missing, use experimental primitive or development wording. Finalization preview can still package a review branch, but it must not describe the work as shippable, merge-ready product proof.
+
 ## Benchmark Guardrails
 
 `protectedBenchmarkPaths` records the project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after the baseline snapshot, or resolve outside the working directory through symlinks. Intentional benchmark changes should start a new segment or promotion gate so old and new evidence are not mixed.

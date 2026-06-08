@@ -70,6 +70,24 @@ The command writes `session-digest.md`, `decisions.jsonl`, `quality-gaps.md`, an
 It also writes `decision-capsule.json`: a compact carry-forward note with the current bottleneck, evidence, next experiment, wrong next actions, and do-not-repeat command families. After importing, summarize the one carry-forward conclusion in ASI or `autoresearch.ideas.md`; otherwise the next session can know the old JSONL exists and still lose the actual lesson.
 The latest active capsule is exposed as `sessionDecisionCapsule` in `state --compact`, `recommend-next`, onboarding packets, and the dashboard packet brake. A capsule can make `decision-capsule` the canonical next action. Hard capsules block generic `next` and finalization until benchmark repair, a fresh segment, or an explicit capsule acknowledgement clears them; bounded-next capsules allow only explicit bounded packet work such as `next --timeout-seconds <n> --command-file <path>`.
 
+## Friction Recovery
+
+When a user rejects a done claim because accuracy, lazy behavior, ranking quality, or product-grade proof was not tested, stop packet work and downgrade the result to an experimental primitive. Run `state --compact` or `recommend-next --compact`, inspect claim coverage, and add the missing acceptance proof before finalization preview uses product-grade language.
+
+When benchmark-contract drift is intentional, use `new-segment` instead of editing the ledger by hand. A fresh segment is the boundary where a new benchmark command, protected benchmark path set, metric name, direction, or metric unit can become authoritative. If metric semantics change, call out that active and historical bests may not be directly comparable.
+
+When the dashboard handoff matters, prefer a served live readout over a static export:
+
+```bash
+node scripts/autoresearch.mjs serve --cwd <project>
+```
+
+Use the live URL for fresh status and health. Use `export` only for a static read-only snapshot. Copying or sharing a dashboard URL does not mutate session state.
+
+When exploration output gets oversized, do not paste or recursively search raw command bodies. Use bounded file-specific reads, `rg` on known paths, `partial-results --from-last`, `session-forensics --dry-run`, or an evidence index. `recommend-next --compact` should keep only the canonical next action, blockers, one command, top evidence notes, and top friction signals.
+
+When a foreground shell has completed and stdin is closed, stop polling that session. Restart only after the precondition changed: a new command, a repaired benchmark, a new segment, or a fresh live dashboard serve.
+
 ## Dashboard
 
 Serve the live local readout:
@@ -236,6 +254,8 @@ node scripts/autoresearch.mjs new-segment --cwd <project> --reason "fresh phase"
 This appends a new config segment to `autoresearch.jsonl` and preserves old history.
 
 Repeated exact-score shelves, max-iteration/tool-cap states, benchmark/config drift, or a quality round that needs fresh discovery should recommend scout/constraint-removal/new-segment work before another near-neighbor tweak.
+
+Use a new segment for benchmark-contract repair when the benchmark surface changed on purpose. Record the reason, then run `doctor --check-benchmark --explain` before the next packet so the new contract, not old drift, governs the active segment.
 
 ## Finalization Pressure
 

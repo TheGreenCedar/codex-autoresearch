@@ -6,6 +6,11 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+### Changed
+
+- Added product-grade claim coverage to Autoresearch guidance so shippable/final requests separate experimental primitive evidence from proof of accuracy, lazy behavior, ranking quality, and docs/tests coverage.
+- Documented the finalization preview ship bar, dashboard live handoff expectations, new-segment benchmark repair, oversized-output recovery, and speed-without-correctness troubleshooting across the main docs and Codex-facing skill.
+
 ## 2.1.8
 
 ### Changed

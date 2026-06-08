@@ -660,6 +660,38 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
   assert.match(codeql, /branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/);
 });
 
+test("docs and skill describe the product-grade finalization bar", async () => {
+  const relativePaths = [
+    "plugins/codex-autoresearch/docs/finish.md",
+    "plugins/codex-autoresearch/docs/operate.md",
+    "plugins/codex-autoresearch/docs/trust.md",
+    "plugins/codex-autoresearch/docs/start.md",
+    "plugins/codex-autoresearch/docs/troubleshooting.md",
+    "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
+  ];
+  const docs = await Promise.all(
+    relativePaths.map(async (relativePath) =>
+      readFile(path.join(repoRoot, relativePath), "utf8"),
+    ),
+  );
+  const combined = docs.join("\n");
+
+  for (const phrase of [
+    "product-grade",
+    "experimental primitive",
+    "claim coverage",
+    "accuracy",
+    "lazy behavior",
+    "finalization preview",
+  ]) {
+    assert.match(combined, new RegExp(phrase, "i"));
+  }
+  assert.match(
+    docs[0],
+    /Do not finalize an experimental primitive as a shippable deliverable/,
+  );
+});
+
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
   await withTempDir("cli-delight-tools", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "cli delight", "--metric-name", "score"]);

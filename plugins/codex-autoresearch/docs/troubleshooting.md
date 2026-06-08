@@ -8,6 +8,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | Source differs from Codex behavior | Installed runtime drift | Refresh the installed plugin/cache before changing source again. |
 | Benchmark has no primary metric | Benchmark contract | Run `benchmark-lint`; repair output to `METRIC <primary>=<number>`. |
 | Benchmark parses but is not promotable | Research integrity | Inspect `researchIntegrity`; add repeat/holdout/freshness/promotion metadata before treating a dev best as final. |
+| Speed metric improved but correctness was not checked | Quality constraint | Add a checks command or quality gate for accuracy, recall, ranking, accessibility, security, or data integrity before product-grade promotion. Treat the result as an experimental primitive until claim coverage is present. |
 | Perfect metric looks too good | Evaluator contamination or cache replay | Treat it as suspicious until breadth, freshness, holdout/adversarial coverage, and repeat evidence are present. |
 | Current benchmark is far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor/check-benchmark and start a new segment if the old phase is stale. |
 | Setup wrapper loops forever or calls itself | Scaffold health | Inspect `scaffoldHealth`; replace the self-recursive wrapper with the real workload or rerun setup with `--benchmark-command`. |
@@ -20,6 +21,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | Source is clean but session artifacts are dirty | Session artifact cleanliness | Read `sourceCleanliness`. Continue read/run work if needed, but before finalization temporarily stash or commit `autoresearch.*` / `autoresearch.research/**` artifacts; `finalize-current-tree` excludes them by default after the worktree is clean. |
 | Finalization or export looks hung | Slow command with quiet JSON stdout | Rerun with `--progress` to print heartbeat lines on stderr while keeping stdout machine-readable JSON. |
 | Finalization preview includes rejected or provisional evidence | Evidence status | Confirm runs are accepted/current keeps before finalization. Rejected, provisional, superseded, and quarantined evidence stays audit-only. |
+| Finalization preview sounds shippable without claim coverage | Product-grade bar | Re-run `state --compact` and `finalize-preview`; missing accuracy, lazy behavior, ranking, or docs/tests proof means the branch is experimental review only, not a shippable deliverable. |
 | `quality_gap=0` or `agent_value_gap=0` looks final | Research scope confusion | It closes or saturates the cheap metric only. Check `researchIntegrity`, promotion metadata, finalization readiness, and open quality gaps before declaring the work promotable or complete. |
 | Watchdog fires | No-progress window | Inspect the process, finalize useful kept work, rescope the segment, or start a fresh segment before running another packet. |
 | Operator checklist blocks `next` | Loop governance | Follow the checklist command first. It outranks another packet until the named blocker is cleared. |
