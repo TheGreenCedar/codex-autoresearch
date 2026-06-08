@@ -37,6 +37,23 @@ test("dashboard health summary derives read-only health metadata", () => {
   assert.equal(Object.hasOwn(summary, "actions"), false);
 });
 
+test("dashboard health summary names serve as the stale registry recovery command", () => {
+  const summary = buildDashboardHealthSummary({
+    ...baseInput,
+    cwd: "C:/work/project with spaces",
+    previous: {
+      stale: true,
+      liveness: "dead",
+    },
+  });
+
+  assert.equal(
+    summary.recoveryCommand,
+    'node scripts/autoresearch.mjs serve --cwd "C:/work/project with spaces"',
+  );
+  assert.doesNotMatch(summary.recoveryCommand, /^curl /);
+});
+
 test("dashboard health summary normalizes missing and invalid numeric values to null", () => {
   const summary = buildDashboardHealthSummary({
     ...baseInput,

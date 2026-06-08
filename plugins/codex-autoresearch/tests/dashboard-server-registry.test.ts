@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
 import { serveAutoresearch } from "../lib/live-server.js";
 import {
@@ -14,6 +15,72 @@ import {
   writeServeRegistry,
 } from "../lib/dashboard-server-registry.js";
 import { withTempDir } from "./helpers/process.js";
+
+test("serve dashboard command reuses a healthy registry instead of starting another server", async () => {
+  await withTempDir("autoresearch", "serve-registry-reuse", async (dir) => {
+    const startedAt = "2026-06-08T00:00:00.000Z";
+    const existing = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      startedAt,
+      dashboardHtml: async () => "<!doctype html><title>existing</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      await writeServeRegistry(dir, {
+        pid: existing.pid,
+        port: existing.port,
+        cwd: dir,
+        startedAt,
+        version: PLUGIN_VERSION,
+        healthUrl: new URL("health", existing.url).toString(),
+      });
+
+      let serveAttempts = 0;
+      const { serveDashboard } = createDashboardCommands({
+        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+        buildDriftReport: async () => {
+          throw new Error("registry reuse should not build drift before returning");
+        },
+        dashboardCommands: () => [],
+        dashboardHtml: () => "",
+        dashboardSettings: () => ({}),
+        dashboardViewModel: async () => ({}),
+        operationProgress: (options) => options,
+        pluginRoot: process.cwd(),
+        pluginVersion: PLUGIN_VERSION,
+        readJsonl: () => [],
+        resolveOutputInside: () => "",
+        resolveWorkDir: () => ({ workDir: dir, config: {} }),
+        serveAutoresearch: async () => {
+          serveAttempts += 1;
+          throw new Error("healthy registry should be reused");
+        },
+        shellQuote: JSON.stringify,
+        writeFile: async () => {},
+      });
+
+      const result = await serveDashboard({ cwd: dir });
+
+      assert.equal(serveAttempts, 0);
+      assert.equal(result.ok, true);
+      assert.equal(result.mode, "live");
+      assert.equal(result.registryReused, true);
+      assert.equal(result.detached, true);
+      assert.equal(result.url, existing.url);
+      assert.equal(result.dashboardUrl, existing.url);
+      assert.equal(result.healthUrl, new URL("health", existing.url).toString());
+      assert.equal(result.pid, process.pid);
+      assert.match(result.recoveryCommand, /node scripts\/autoresearch\.mjs serve --cwd /);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        existing.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
 
 test("serve registry writes pid port cwd and version in git repos", async () => {
   await withTempDir("autoresearch", "serve-registry-git", async (dir) => {
