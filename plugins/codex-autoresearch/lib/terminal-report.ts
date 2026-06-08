@@ -120,7 +120,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     canonicalNextAction,
     packet,
   });
-  const dashboard = dashboardSummary(state);
+  const dashboard = dashboardSummary(state, commands);
   const commandExecutionBoundary = commandExecutionBoundarySummary(state);
   const gate = {
     posture: stringValue(gateQuality?.posture) || "unknown",
@@ -352,20 +352,25 @@ function asiSummary(state: JsonRecord) {
   };
 }
 
-function dashboardSummary(state: JsonRecord): TerminalReportDashboard {
+function dashboardSummary(state: JsonRecord, commands: JsonRecord): TerminalReportDashboard {
   const health = recordOrNull(state.dashboardHealth);
   const liveness = stringValue(health?.liveness);
   const healthUrl = stringValue(health?.healthUrl);
   const healthProbeCommand = httpHealthProbeCommand(healthUrl);
+  const workDir = stringValue(state.workDir);
   if (liveness && liveness !== "unknown") {
     const stale = health?.stale === true ? "stale" : health?.stale === false ? "fresh" : "unknown";
     const shouldRestart = liveness === "dead" || health?.stale === true;
+    const serveCommand =
+      commandLookup(commands, "liveDashboard") ||
+      commandLookup(commands, "serve") ||
+      localServeCommand(workDir);
     return {
       status: liveness,
       detail: `${liveness} (${stale})${
-        shouldRestart ? "; restart the dashboard outside report command fields if needed" : ""
+        shouldRestart ? "; serve a fresh dashboard before using dashboard evidence" : ""
       }`,
-      command: healthProbeCommand,
+      command: shouldRestart ? serveCommand : healthProbeCommand,
       healthUrl,
     };
   }
@@ -511,4 +516,12 @@ function quoteForDisplay(value: string): string {
 
 function httpHealthProbeCommand(healthUrl: string): string {
   return /^https?:\/\//i.test(healthUrl) ? `curl ${quoteForDisplay(healthUrl)}` : "";
+}
+
+function localServeCommand(workDir: string): string {
+  return workDir ? `node scripts/autoresearch.mjs serve --cwd ${quoteCommandArg(workDir)}` : "";
+}
+
+function quoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : quoteForDisplay(value);
 }

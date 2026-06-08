@@ -4672,8 +4672,8 @@ test("state report marks registry-only dashboard health dead until HTTP responds
     const payload = JSON.parse(report.stdout);
     assert.equal(payload.report.json.dashboard.status, "dead");
     assert.match(payload.report.text, /Dashboard: dead/);
-    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
-    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+    assert.match(payload.report.json.dashboard.command ?? "", /scripts[\\/]autoresearch\.mjs serve/);
+    assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
@@ -4709,8 +4709,8 @@ test("state report does not call a fake same-process registry a live dashboard",
     const payload = JSON.parse(report.stdout);
     assert.notEqual(payload.report.json.dashboard.status, "alive");
     assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
-    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
-    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+    assert.match(payload.report.json.dashboard.command ?? "", /scripts[\\/]autoresearch\.mjs serve/);
+    assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
   });
 });
 

@@ -547,10 +547,47 @@ test("terminal report renders compact metric freshness lane and ASI contract fie
   assert.match(report.text, /ASI: risk missing-rollback-reason/);
   assert.match(
     report.text,
-    /Dashboard: dead \(stale\); restart the dashboard outside report command fields if needed Command: curl "http:\/\/127\.0\.0\.1:61234\/health"/,
+    /Dashboard: dead \(stale\); serve a fresh dashboard before using dashboard evidence Command: node scripts\/autoresearch\.mjs serve --cwd C:\/work\/project/,
   );
-  assert.equal(report.json.dashboard.command, 'curl "http://127.0.0.1:61234/health"');
-  assert.doesNotMatch(report.text, /node scripts\/autoresearch\.mjs serve/);
+  assert.equal(
+    report.json.dashboard.command,
+    "node scripts/autoresearch.mjs serve --cwd C:/work/project",
+  );
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
+});
+
+test("terminal report recommends serve for dead stale dashboard", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    commands: {
+      liveDashboard: "node scripts/autoresearch.mjs serve --cwd C:/repo",
+      state: "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+    },
+    dashboardHealth: {
+      liveness: "dead",
+      stale: true,
+      healthUrl: "http://127.0.0.1:51280/health",
+    },
+  });
+
+  assert.equal(report.json.dashboard.status, "dead");
+  assert.match(report.json.dashboard.command, /serve --cwd C:\/repo/);
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
+});
+
+test("terminal report constructs serve fallback for dead stale dashboard without commands", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    dashboardHealth: {
+      liveness: "dead",
+      stale: true,
+      healthUrl: "http://127.0.0.1:51280/health",
+    },
+  });
+
+  assert.equal(report.json.dashboard.status, "dead");
+  assert.match(report.json.dashboard.command, /serve --cwd C:\/repo/);
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
 });
 
 test("terminal report names historical best when active segment has no metric", () => {
