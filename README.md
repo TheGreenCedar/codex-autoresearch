@@ -163,7 +163,7 @@ The dashboard answers three questions:
 
 Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, packet diagnostics, finalization readiness, ledger entries, ASI, and handoff packets.
 
-Readout only. CLI does the work.
+Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
 
 ## Quality-gap loops
 

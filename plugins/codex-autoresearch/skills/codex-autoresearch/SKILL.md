@@ -102,7 +102,7 @@ Use the served dashboard when a live readout is useful:
 - Use `scripts/autoresearch.mjs serve --cwd <project>`.
 - Share the served `http://127.0.0.1:<port>/` URL by default.
 - Static exports are read-only snapshots; serve a fresh dashboard when packet freshness matters.
-- Readout only. CLI does the work.
+- Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
 - Preserve the chart-first dashboard direction: the metric trend/readiness chart remains the first major evidence readout, with decision envelope, Codex brief, current decision, ledger/ASI, finalization, quality-gap, runtime drift, and process hygiene around or below that flow.
 
 ## Deep Research Loops
