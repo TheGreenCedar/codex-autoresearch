@@ -316,9 +316,14 @@ export function currentState(workDir: string): SessionState {
     bestDirection: "lower",
   };
   let segment = 0;
+  let activeConfigEntry: LooseObject | null = null;
+  let previousConfigEntry: LooseObject | null = null;
+  let metricSemanticsWarning: LooseObject | null = null;
   const results: RunRecord[] = [];
   for (const entry of entries) {
     if (entry.type === "config") {
+      const previousConfig = config;
+      const previousEntry = activeConfigEntry;
       if (results.length > 0) segment += 1;
       config = {
         name: entry.name || config.name,
@@ -327,6 +332,28 @@ export function currentState(workDir: string): SessionState {
         metricUnit: entry.metricUnit ?? config.metricUnit,
         bestDirection: entry.bestDirection === "higher" ? "higher" : "lower",
       };
+      previousConfigEntry = previousEntry;
+      activeConfigEntry = { ...entry, segment };
+      metricSemanticsWarning =
+        metricSemanticsChange(previousConfig, config) && previousEntry
+          ? {
+              code: "metric_semantics_changed",
+              severity: "warning",
+              message:
+                "Metric semantics changed; active segment and historical best may not be directly comparable.",
+              previous: {
+                metricName: previousConfig.metricName,
+                metricUnit: previousConfig.metricUnit,
+                bestDirection: previousConfig.bestDirection,
+              },
+              current: {
+                metricName: config.metricName,
+                metricUnit: config.metricUnit,
+                bestDirection: config.bestDirection,
+              },
+              segment,
+            }
+          : null;
       continue;
     }
     if (entry.run != null) {
@@ -356,6 +383,9 @@ export function currentState(workDir: string): SessionState {
   );
   return {
     config,
+    activeConfigEntry,
+    previousConfigEntry,
+    metricSemanticsWarning,
     segment,
     results,
     current,
@@ -369,6 +399,14 @@ export function currentState(workDir: string): SessionState {
     productClaimCoverage,
     sessionDecisionCapsule,
   };
+}
+
+function metricSemanticsChange(previous: StateConfig, current: StateConfig): boolean {
+  return (
+    previous.metricName !== current.metricName ||
+    previous.metricUnit !== current.metricUnit ||
+    previous.bestDirection !== current.bestDirection
+  );
 }
 
 function bestRunSummary(run: RunRecord | null | undefined): LooseObject | null {

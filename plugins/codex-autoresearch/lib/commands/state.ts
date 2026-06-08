@@ -60,6 +60,7 @@ export interface CompactStateBuilderInput {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  metricSemanticsWarning?: unknown;
 }
 
 export interface CompactStateResponse {
@@ -122,6 +123,7 @@ export interface CompactStateResponse {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  metricSemanticsWarning?: unknown;
 }
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {
@@ -187,6 +189,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
   copyIfProvided(response, "commandExecutionBoundary", input.commandExecutionBoundary);
+  copyIfProvided(response, "metricSemanticsWarning", input.metricSemanticsWarning);
 
   return response;
 }

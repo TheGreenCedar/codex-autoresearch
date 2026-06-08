@@ -17,6 +17,12 @@ export interface PacketDiagnostics {
   taskArtifacts?: unknown;
 }
 
+export interface BenchmarkContractDiagnostics {
+  activeContract: LooseObject | null;
+  activeSource: "segment" | "run" | "none";
+  historicalContracts: LooseObject[];
+}
+
 export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagnostics {
   const packetEvidence = objectValue(input.packetEvidence) || {};
   const run = objectValue(input.run) || {};
@@ -76,6 +82,43 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
         : `Inspect packet diagnostic stage ${primaryStage} before another packet.`,
     command: stringValue(input.command),
     taskArtifacts: packetEvidence.taskArtifacts || null,
+  };
+}
+
+export function benchmarkContractDiagnostics(input: LooseObject = {}): BenchmarkContractDiagnostics {
+  const state = objectValue(input.state) || {};
+  const activeConfigEntry = objectValue(state.activeConfigEntry);
+  const activeSegment = numberValue(state.segment) ?? 0;
+  const results = Array.isArray(state.results) ? state.results : [];
+  const acceptedSegmentContract =
+    activeConfigEntry?.benchmarkContractAccepted === true &&
+    activeConfigEntry?.benchmarkContractScope === "segment"
+      ? objectValue(activeConfigEntry.benchmarkContract)
+      : null;
+  const runContracts = results
+    .map(objectValue)
+    .filter((run): run is LooseObject => Boolean(run?.benchmarkContract))
+    .map((run) => ({
+      segment: numberValue(run.segment),
+      contract: objectValue(run.benchmarkContract),
+    }))
+    .filter((item): item is { segment: number | null; contract: LooseObject } =>
+      Boolean(item.contract?.surfaceHash),
+    );
+  if (acceptedSegmentContract?.surfaceHash) {
+    return {
+      activeContract: acceptedSegmentContract,
+      activeSource: "segment",
+      historicalContracts: runContracts.map((item) => item.contract),
+    };
+  }
+  const latestCurrent = [...runContracts].reverse().find((item) => item.segment === activeSegment);
+  return {
+    activeContract: latestCurrent?.contract || null,
+    activeSource: latestCurrent ? "run" : "none",
+    historicalContracts: runContracts
+      .filter((item) => item.contract !== latestCurrent?.contract)
+      .map((item) => item.contract),
   };
 }
 
