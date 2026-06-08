@@ -538,7 +538,10 @@ test("terminal report renders compact metric freshness lane and ASI contract fie
   assert.equal(report.json.lanes.planned, 2);
   assert.equal(report.json.lanes.stale, 1);
   assert.equal(report.json.asi.risk, "missing-rollback-reason");
-  assert.match(report.text, /Metric: quality, best accepted 3.5, development best 4.2/);
+  assert.match(
+    report.text,
+    /Metric: quality, active segment best 3.5, development best 4.2, historical best unknown/,
+  );
   assert.match(report.text, /Freshness: stale - Last packet belongs/);
   assert.match(report.text, /Lanes: planned 2, stale 1/);
   assert.match(report.text, /ASI: risk missing-rollback-reason/);
@@ -548,4 +551,27 @@ test("terminal report renders compact metric freshness lane and ASI contract fie
   );
   assert.equal(report.json.dashboard.command, 'curl "http://127.0.0.1:61234/health"');
   assert.doesNotMatch(report.text, /node scripts\/autoresearch\.mjs serve/);
+});
+
+test("terminal report names historical best when active segment has no metric", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    config: { metricName: "simplification_candidates" },
+    best: null,
+    development: { best: null },
+    historicalBest: {
+      run: 20,
+      metric: 14,
+      status: "keep",
+      segment: 0,
+      description: "Unify CLI test process helpers",
+    },
+    decisionEnvelope: {
+      activeSegment: { segment: 1, runs: 0, baseline: null, best: null, developmentBest: null },
+      historicalBest: { run: 20, metric: 14, status: "keep", segment: 0 },
+    },
+  });
+
+  assert.match(report.text, /active segment best unknown/i);
+  assert.match(report.text, /historical best #20 = 14/i);
 });

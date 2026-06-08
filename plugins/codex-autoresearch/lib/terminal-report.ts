@@ -42,6 +42,10 @@ export interface TerminalReportSummary {
     name: string;
     best: number | null;
     developmentBest: number | null;
+    historicalBest: {
+      run: number | null;
+      metric: number | null;
+    };
   };
   freshness: {
     fresh: boolean | null;
@@ -168,7 +172,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     `Runtime: installed ${runtimeSummary.installedRuntime}, build ${runtimeSummary.builtRuntime}${
       runtimeSummary.detail ? ` - ${runtimeSummary.detail}` : ""
     }`,
-    `Metric: ${metric.name}, best accepted ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}`,
+    `Metric: ${metric.name}, active segment best ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}, historical best ${formatHistoricalBest(metric)}`,
     `Freshness: ${freshnessLabel(freshness.fresh)}${
       freshness.reason ? ` - ${freshness.reason}` : ""
     }`,
@@ -288,6 +292,8 @@ function selectNextCommand({
 
 function metricSummary(state: JsonRecord, envelope: JsonRecord | null) {
   const activeSegment = recordOrNull(envelope?.activeSegment) || recordOrNull(state.activeSegment);
+  const historicalBest =
+    recordOrNull(envelope?.historicalBest) || recordOrNull(state.historicalBest);
   const config = recordOrNull(state.config);
   const stateMetric = recordOrNull(state.metric);
   const stateMetricName =
@@ -302,6 +308,10 @@ function metricSummary(state: JsonRecord, envelope: JsonRecord | null) {
     best: numberOrNull(activeSegment?.best) ?? numberOrNull(state.best),
     developmentBest:
       numberOrNull(activeSegment?.developmentBest) ?? numberOrNull(development?.best),
+    historicalBest: {
+      run: numberOrNull(historicalBest?.run),
+      metric: numberOrNull(historicalBest?.metric),
+    },
   };
 }
 
@@ -472,6 +482,13 @@ function numberOrNull(value: unknown): number | null {
 
 function formatMetricValue(value: number | null): string {
   return value == null ? "unknown" : String(value);
+}
+
+function formatHistoricalBest(metric: TerminalReportSummary["metric"]): string {
+  if (metric.historicalBest.metric == null) return "unknown";
+  return metric.historicalBest.run == null
+    ? String(metric.historicalBest.metric)
+    : `#${metric.historicalBest.run} = ${metric.historicalBest.metric}`;
 }
 
 function freshnessLabel(value: boolean | null): string {

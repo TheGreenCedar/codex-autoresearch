@@ -1239,6 +1239,54 @@ test("state reports corrupt JSONL with the ledger path", async () => {
   });
 });
 
+test("new config segment preserves previous durable goal when omitted", async () => {
+  await withTempDir("segment-preserves-goal", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "simplify plugin code",
+          goal: "Reduce simplification candidates without weakening checks.",
+          metricName: "simplification_candidates",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 24,
+          status: "keep",
+          description: "Baseline simplification scan",
+        }),
+        JSON.stringify({
+          type: "config",
+          name: "simplify plugin code",
+          metricName: "simplification_candidates",
+          bestDirection: "lower",
+          segmentReason: "Reset after benchmark-surface drift.",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(
+      payload.config.goal,
+      "Reduce simplification candidates without weakening checks.",
+    );
+    assert.deepEqual(payload.historicalBest, {
+      run: 1,
+      metric: 24,
+      status: "keep",
+      segment: 0,
+      description: "Baseline simplification scan",
+      promotionGrade: null,
+    });
+    assert.equal(payload.decisionEnvelope.goalAdvice.present, true);
+  });
+});
+
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
     await runCli([

@@ -14,6 +14,7 @@ export interface CompactStateBuilderInput {
   measured?: number;
   baseline?: unknown;
   best?: unknown;
+  historicalBest?: unknown;
   developmentBest?: unknown;
   promotionBest?: unknown;
   goalFrame?: unknown;
@@ -74,6 +75,7 @@ export interface CompactStateResponse {
   measured: number;
   baseline: unknown;
   best: unknown;
+  historicalBest: unknown;
   developmentBest: unknown;
   promotionBest: unknown;
   goalFrame: unknown;
@@ -135,6 +137,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     measured: input.measured ?? 0,
     baseline: input.baseline ?? null,
     best: input.best ?? null,
+    historicalBest: input.historicalBest ?? null,
     developmentBest: input.developmentBest ?? null,
     promotionBest: input.promotionBest ?? null,
     goalFrame: input.goalFrame ?? null,

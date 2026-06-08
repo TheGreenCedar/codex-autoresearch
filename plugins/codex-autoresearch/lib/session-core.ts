@@ -318,7 +318,7 @@ export function currentState(workDir: string): SessionState {
       if (results.length > 0) segment += 1;
       config = {
         name: entry.name || config.name,
-        goal: entry.goal ?? config.goal ?? "",
+        goal: entry.goal !== undefined ? String(entry.goal || "").trim() : config.goal,
         metricName: entry.metricName || config.metricName,
         metricUnit: entry.metricUnit ?? config.metricUnit,
         bestDirection: entry.bestDirection === "higher" ? "higher" : "lower",
@@ -334,6 +334,10 @@ export function currentState(workDir: string): SessionState {
   const current = results.filter((run) => run.segment === segment);
   const baseline = finiteMetric(current.find(isBaselineEligibleMetricRun)?.metric);
   const best = bestKeptMetric(current, config.bestDirection);
+  const historicalBest = bestMetricRun(
+    results.filter((run) => isAcceptedCurrentRun(run)),
+    config.bestDirection,
+  );
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, entries);
@@ -347,6 +351,7 @@ export function currentState(workDir: string): SessionState {
     current,
     baseline,
     best,
+    historicalBest: bestRunSummary(historicalBest),
     confidence,
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
