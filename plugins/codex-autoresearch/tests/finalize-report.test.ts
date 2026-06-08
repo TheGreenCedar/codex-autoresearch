@@ -252,6 +252,10 @@ testWithTempRoot(
     const result = await run(process.execPath, [finalizer, groupsPath], repo);
     assert.match(result.stdout, /Review summary: .+autoresearch-finalize.+\.md/);
     assert.match(result.stdout, /Created review branches:/);
+    assert.match(result.stdout, /Cleanup after verified merge/);
+    assert.doesNotMatch(result.stdout, /git branch -D/);
+    assert.doesNotMatch(result.stdout, /Remove-Item/);
+    assert.doesNotMatch(result.stdout, /rm -rf/);
 
     const summaryLine = result.stdout
       .split(/\r?\n/)
