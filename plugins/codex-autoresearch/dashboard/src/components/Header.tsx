@@ -21,7 +21,7 @@ interface HeaderProps {
   liveStatus: { title?: string; detail?: string };
   liveEnabled: boolean;
   setLiveEnabled: Dispatch<SetStateAction<boolean>>;
-  refreshLiveData: () => void;
+  refreshLiveData: () => Promise<void> | void;
   readout: DashboardReadout;
   theme: "light" | "dark";
   setTheme: (theme: "light" | "dark") => void;
@@ -89,9 +89,9 @@ export function Header({
               type="button"
               className="tool-button"
               hidden={!mode.liveRefresh}
-              onClick={refreshLiveData}
+              onClick={() => refreshLiveData()}
             >
-              Refresh live data
+              Refresh now
             </button>
             <button
               id="live-toggle"
@@ -99,8 +99,9 @@ export function Header({
               className="tool-button subtle"
               hidden={!mode.liveRefresh}
               onClick={() => setLiveEnabled((value) => !value)}
+              aria-pressed={liveEnabled}
             >
-              {liveEnabled ? "Auto-refresh on" : "Auto-refresh off"}
+              {liveEnabled ? "Pause auto-refresh" : "Resume auto-refresh"}
             </button>
             <button
               id="copy-dashboard-url"
@@ -129,18 +130,12 @@ export function Header({
             <span>Generated</span>
             <strong>{generated}</strong>
           </div>
-          <em
-            id="copy-dashboard-url-status"
-            className="copy-status"
-            aria-live="polite"
-            hidden={!copiedUrl}
-          >
+          <em id="copy-dashboard-url-status" className="copy-status" hidden={!copiedUrl}>
             Dashboard URL copied.
           </em>
           <em
             id="copy-dashboard-url-error"
             className="copy-status"
-            aria-live="assertive"
             hidden={copyUrlStatus !== "error"}
           >
             Dashboard URL copy failed.
@@ -246,7 +241,7 @@ function SegmentNavigator({
           );
         })}
       </select>
-      <p id="segment-summary" className="segment-note" aria-live="polite">
+      <p id="segment-summary" className="segment-note">
         {active
           ? `Showing segment ${active.segment + 1} of ${normalized.segments.length}: ${activeTitle}. ${segmentRunText(active)}, ${segmentKeptText(active)}.`
           : `Showing segment ${activeSegment + 1} of ${normalized.segments.length}.`}

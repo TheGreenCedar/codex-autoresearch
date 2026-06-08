@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
@@ -228,6 +229,53 @@ test("recommend-next authority uses full envelope when dashboard-only blockers e
     blockers: [],
     warnings: [{ kind: "finalization" }],
   });
+});
+
+test("compact recommend-next preserves finalization readiness as canonical authority", () => {
+  const response = buildCompactRecommendNextResponse({
+    workDir: "/tmp/project",
+    compactState: {
+      ok: true,
+      workDir: "/tmp/project",
+      nextAction: "Use finalize-current-tree.",
+      commands: {
+        finalizePreview: "node scripts/autoresearch.mjs finalize-preview --cwd /tmp/project",
+        next: "node scripts/autoresearch.mjs next --cwd /tmp/project --compact",
+        state: "node scripts/autoresearch.mjs state --cwd /tmp/project --compact",
+      },
+      canonicalNextAction: {
+        kind: "current-tree-finalization",
+        reason: "Use finalize-current-tree.",
+        command: "",
+      },
+      decisionEnvelope: {
+        finalizationReadiness: {
+          available: true,
+          ready: false,
+          actionCode: "current-tree-finalization",
+          warnings: ["Current branch tree is not covered."],
+        },
+        canonicalNextAction: {
+          kind: "current-tree-finalization",
+          reason: "Use finalize-current-tree.",
+          command: "",
+        },
+        loopContract: {
+          ok: false,
+          canRunNextPacket: false,
+          blockers: [{ kind: "current-tree-finalization" }],
+        },
+      },
+    },
+  });
+
+  assert.equal((response.decisionEnvelope as any).finalizationReadiness.available, true);
+  assert.equal((response.action as any).kind, "current-tree-finalization");
+  assert.equal(
+    response.commands.primary,
+    "node scripts/autoresearch.mjs finalize-preview --cwd /tmp/project",
+  );
+  assert.doesNotMatch(String(response.commands.primary), /\bnext\b/);
 });
 
 test("recommend-next authority preserves compact state when checked runtime is clean", () => {

@@ -10,7 +10,7 @@ export interface TerminalReportDashboard {
 }
 
 export interface TerminalReportSummary {
-  status: "blocked" | "ready" | "unknown";
+  status: "blocked" | "ready" | "ready-with-warnings" | "unknown";
   blocker: string;
   nextAction: string;
   nextCommand: string;
@@ -142,7 +142,20 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     confidence: stringValue(portfolio?.confidence) || "low",
     recommendation: stringValue(portfolio?.nextActionHint) || stringValue(portfolio?.reason),
   };
-  const status = blocker ? "blocked" : nextCommand ? "ready" : "unknown";
+  const warning = hasReadyWarning({
+    dashboard,
+    gateQuality,
+    loopContract,
+    preflight,
+    runtime,
+  });
+  const status = blocker
+    ? "blocked"
+    : nextCommand
+      ? warning
+        ? "ready-with-warnings"
+        : "ready"
+      : "unknown";
   const workDir = stringValue(state.workDir);
 
   const lines = [
@@ -352,6 +365,42 @@ function dashboardSummary(state: JsonRecord): TerminalReportDashboard {
     command: healthProbeCommand,
     healthUrl,
   };
+}
+
+function hasReadyWarning({
+  dashboard,
+  gateQuality,
+  loopContract,
+  preflight,
+  runtime,
+}: {
+  dashboard: TerminalReportDashboard;
+  gateQuality: JsonRecord | null;
+  loopContract: JsonRecord | null;
+  preflight: JsonRecord | null;
+  runtime: JsonRecord | null;
+}): boolean {
+  if (objectMessageList(loopContract?.warnings).length > 0) return true;
+  if (stringList(gateQuality?.warnings).length > 0) return true;
+  if (stringList(preflight?.warnings).length > 0) return true;
+  if (runtimeWarning(runtime)) return true;
+  return dashboard.status === "dead" || /\(stale\)/i.test(dashboard.detail);
+}
+
+function runtimeWarning(runtime: JsonRecord | null): boolean {
+  if (!runtime) return false;
+  if (
+    runtime.drifted === true ||
+    runtime.mismatched === true ||
+    runtime.stale === true ||
+    runtime.needsInspection === true
+  ) {
+    return true;
+  }
+  const installed = stringValue(runtime.installedRuntime);
+  const built = stringValue(runtime.builtRuntime);
+  const comparableVersion = (value: string) => /^v?\d+(?:\.\d+)+/.test(value);
+  return Boolean(comparableVersion(installed) && comparableVersion(built) && installed !== built);
 }
 
 function commandLookup(commands: unknown, key: string): string {

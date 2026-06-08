@@ -140,7 +140,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       </main>
 
       {toast && (
-        <div className="toast-container" aria-live="polite">
+        <div className="toast-container">
           <div className={`toast ${toast.type}`} key={toast.id}>
             <div className="toast-content">
               <div className="toast-title">{toast.title}</div>

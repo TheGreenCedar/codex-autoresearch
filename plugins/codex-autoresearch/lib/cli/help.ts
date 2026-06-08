@@ -5,6 +5,10 @@ export interface HelpOptions {
 const HAPPY_PATH = "setup -> doctor -> next -> log -> state -> finalize-preview";
 
 const DEFAULT_USAGE_LINES = [
+  "  Read-only planning:",
+  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>]",
+  "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
+  "  Writes session files:",
   "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--benchmark-command <cmd>] [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
   "  node scripts/autoresearch.mjs doctor --cwd <project> [--check-benchmark] [--explain]",
   "  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--timeout-seconds <n>]",
@@ -32,11 +36,11 @@ const SETUP_GUIDANCE_FLAGS = [
 ].join(" ");
 
 const FULL_USAGE_LINES = [
+  `  node scripts/autoresearch.mjs setup-plan --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
+  "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
   "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
   "  node scripts/autoresearch.mjs setup --cwd <project> --interactive",
-  `  node scripts/autoresearch.mjs setup-plan --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
   `  node scripts/autoresearch.mjs guide --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
-  "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
   "  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]",
   "  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]",
   "  node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]",

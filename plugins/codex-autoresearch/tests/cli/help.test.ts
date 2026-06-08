@@ -7,8 +7,13 @@ test("default help leads with the short happy path", () => {
   const help = renderCliHelp();
 
   assert.match(help, /setup -> doctor -> next -> log -> state -> finalize-preview/);
+  assert.match(help, /Read-only planning:/);
+  assert.match(help, /setup-plan --cwd <project>/);
+  assert.match(help, /prompt-plan --cwd <project>/);
   assert.match(help, /node scripts\/autoresearch\.mjs setup --cwd <project>/);
   assert.match(help, /node scripts\/autoresearch\.mjs finalize-preview --cwd <project>/);
+  assert.ok(help.indexOf("setup-plan --cwd <project>") < help.indexOf("setup --cwd <project>"));
+  assert.ok(help.indexOf("prompt-plan --cwd <project>") < help.indexOf("setup --cwd <project>"));
   assert.match(help, /Run `--help --all` for advanced diagnostics and maintainer commands\./);
   assert.doesNotMatch(help, /codex-goal-brief/);
   assert.doesNotMatch(help, /clear --cwd/);

@@ -292,7 +292,8 @@ function ChartDot({
         type="button"
         className="chart-point-button"
         aria-haspopup="dialog"
-        aria-label={chartPointAriaLabel(payload.runNumber)}
+        aria-label={chartPointAriaLabel(payload)}
+        data-chart-run={payload.runNumber}
         onClick={(event) => onSelect?.(payload, event.currentTarget)}
       >
         {payload.latest && (

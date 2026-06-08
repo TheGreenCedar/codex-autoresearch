@@ -17,9 +17,6 @@ export function DecisionRail({
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
-  const commandCopy = useCopyText();
-  const command = typeof action.command === "string" ? action.command : "";
-  const showCommandCopy = mode.liveRefresh && mode.liveActions && command;
   const railItems = readout.recentRuns.length
     ? readout.recentRuns.map((run) => ({
         id: `#${run.run}`,
@@ -42,10 +39,8 @@ export function DecisionRail({
       tabIndex={-1}
     >
       <div className="decision-copy">
-        <p className="eyebrow">{action.priority || "Next move"}</p>
-        <h2 id="next-action-title">
-          {readout.nextAction ? "Next action" : action.title || "Choose next hypothesis"}
-        </h2>
+        <p className="eyebrow">Safe next step</p>
+        <h2 id="next-action-title">Do this first</h2>
         <div className="decision-envelope-card" id="decision-envelope-summary">
           <span>Decision basis</span>
           <strong>{String(envelope.title || action.title || "Next action")}</strong>
@@ -70,31 +65,6 @@ export function DecisionRail({
             action.detail ||
             "No next step recorded yet. Run a packet to generate one."}
         </p>
-        {showCommandCopy ? (
-          <div className="next-command-copy" id="decision-next-command">
-            <div>
-              <span>
-                {(action as Record<string, unknown>).primaryCommand
-                  ? (((action as Record<string, unknown>).primaryCommand as Record<string, unknown>)
-                      .label as string)
-                  : "Next command"}
-              </span>
-              <code translate="no">{command}</code>
-            </div>
-            <button
-              type="button"
-              className="tool-button subtle"
-              onClick={() => commandCopy.copy(command)}
-            >
-              {commandCopy.copied ? "Copied" : "Copy"}
-            </button>
-            {commandCopy.copied ? (
-              <span className="copy-status" aria-live="polite">
-                Command copied to clipboard.
-              </span>
-            ) : null}
-          </div>
-        ) : null}
         <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
           {chips.map((chip) => (
             <span
@@ -127,7 +97,11 @@ export function DecisionRail({
         />
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
-          <span>{mode.liveRefresh ? "Live data available" : "Read-only snapshot"}</span>
+          <span>
+            {mode.liveRefresh
+              ? "Read-only live readout. CLI owns mutations."
+              : "Read-only snapshot. CLI owns mutations."}
+          </span>
         </div>
       </div>
       <div className="decision-list" aria-label="Recent decision history">

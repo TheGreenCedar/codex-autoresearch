@@ -322,7 +322,7 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
     setupPlan: sanitizeDashboardGuidance(context.setupPlan),
     guidedSetup: sanitizeDashboardGuidance(context.guidedSetup),
     qualityGap: context.qualityGap || null,
-    finalizePreview: context.finalizePreview || null,
+    finalizePreview: sanitizeDashboardFinalizationPreview(context.finalizePreview),
     recipes: Array.isArray(context.recipes) ? context.recipes : [],
     experimentMemory: context.experimentMemory || null,
     drift: context.drift || null,
@@ -332,6 +332,18 @@ function normalizeDashboardContext(context: DashboardContext): NormalizedDashboa
 
 function sanitizeDashboardGuidance<T>(value: T): T | null {
   return stripDashboardGuidanceCommandFields(value);
+}
+
+function sanitizeDashboardFinalizationPreview<T>(value: T): T | null {
+  return stripDashboardGuidanceCommandFields(value, {
+    extraFieldNames: [
+      "applyCommand",
+      "finalizeCommand",
+      "finalizerCommand",
+      "planCommand",
+      "planOutput",
+    ],
+  });
 }
 
 function sanitizeDashboardCommandList(commands: unknown) {

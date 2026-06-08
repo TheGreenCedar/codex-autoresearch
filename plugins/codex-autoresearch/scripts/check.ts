@@ -17,13 +17,13 @@ import {
   runCommand as runCheckCommand,
   type CommandResult,
   type CommandSpec,
+  type ResolvedSpawnCommand,
 } from "./check-runner.js";
 
 const ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const PACKAGE_ROOT_RELATIVE = normalizePathForGit(path.relative(REPO_ROOT, ROOT));
 const node = process.execPath;
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
 
 const syntaxChecks: CommandSpec[] = [
@@ -31,14 +31,6 @@ const syntaxChecks: CommandSpec[] = [
   ["syntax:finalize", node, ["--check", "scripts/finalize-autoresearch.mjs"]],
   ["syntax:benchmark", node, ["--check", "scripts/perfection-benchmark.mjs"]],
   ["syntax:check", node, ["--check", "scripts/check.mjs"]],
-];
-
-const productChecks: CommandSpec[] = [
-  ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
-  ["command-surface-map", node, ["dist/scripts/command-surface-map.mjs"]],
-  ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
-  ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
-  ["tests", npm, ["run", "test:compiled"]],
 ];
 
 const dashboardBuildChecks: CommandSpec[] = [
@@ -92,6 +84,13 @@ type PhaseSelection =
   | { kind: "error"; message: string }
   | { kind: "phase"; phase: string };
 
+export interface NpmCommandResolveOptions {
+  access?: (candidate: string) => Promise<void>;
+  env?: NodeJS.ProcessEnv;
+  nodeExecPath?: string;
+  platform?: NodeJS.Platform;
+}
+
 export interface CheckMainOptions {
   sourceHygieneSourceFiles?: Iterable<SourceFileSnapshot>;
   sourceHygieneTrackedPaths?: Iterable<string>;
@@ -128,7 +127,7 @@ export async function runCheckMain(
     (await runDemoTrustCheck()) &&
     (await runSourceCheckoutLauncherCheck()) &&
     (await runDogfoodHealthCheck()) &&
-    (await runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 })) &&
+    (await runProductPhase()) &&
     (await runPackageArtifactCheck());
 
   return ok ? 0 : 1;
@@ -236,14 +235,24 @@ async function runPackageArtifactCheck() {
   console.log("\n== package ==");
 
   const packDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-autoresearch-pack-"));
-  const npmExecPath = await resolveNpmExecPath();
-  const npmCommand = npmExecPath ? node : npm;
-  const npmArgs = npmExecPath
-    ? [npmExecPath, "pack", "--ignore-scripts", "--json", "--pack-destination", packDir]
-    : ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir];
+  let npmPack: ResolvedSpawnCommand;
+  try {
+    npmPack = await resolveNpmCommand([
+      "pack",
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      packDir,
+    ]);
+  } catch (error) {
+    console.log("fail package-artifact");
+    console.log(indent(errorMessage(error)));
+    await fsp.rm(packDir, { recursive: true, force: true }).catch(() => {});
+    return false;
+  }
 
   try {
-    const result = await runCommand(["package-artifact", npmCommand, npmArgs]);
+    const result = await runCommand(["package-artifact", npmPack.command, npmPack.args]);
     if (result.code !== 0) {
       console.log("fail package-artifact");
       const output = `${result.stdout}${result.stderr}`.trim();
@@ -667,23 +676,123 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
   return problems;
 }
 
-async function resolveNpmExecPath() {
-  if (process.env.npm_execpath) return process.env.npm_execpath;
-  if (process.platform !== "win32") return "";
-
-  const candidate = path.join(
-    path.dirname(process.execPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
+async function runProductPhase(): Promise<boolean> {
+  let productChecks: CommandSpec[];
   try {
-    await fsp.access(candidate);
-    return candidate;
-  } catch {
-    return "";
+    productChecks = await productCheckCommands();
+  } catch (error) {
+    console.log("\n== product ==");
+    console.log("fail npm-resolution");
+    console.log(indent(errorMessage(error)));
+    return false;
   }
+  return runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 });
+}
+
+async function productCheckCommands(): Promise<CommandSpec[]> {
+  const npmTest = await resolveNpmCommand(["run", "test:compiled"]);
+  return [
+    ["quality-gap", node, ["scripts/perfection-benchmark.mjs", "--fail-on-gap"]],
+    ["command-surface-map", node, ["dist/scripts/command-surface-map.mjs"]],
+    ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
+    ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
+    ["tests", npmTest.command, npmTest.args],
+  ];
+}
+
+export async function resolveNpmCommand(
+  args: string[],
+  options: NpmCommandResolveOptions = {},
+): Promise<ResolvedSpawnCommand> {
+  const nodeCommand = options.nodeExecPath || node;
+  const platform = options.platform || process.platform;
+  const npmExecPath = await resolveNpmExecPath({ ...options, nodeExecPath: nodeCommand, platform });
+  if (npmExecPath) return { command: nodeCommand, args: [npmExecPath, ...args] };
+  if (platform === "win32") {
+    throw new Error(
+      [
+        "Could not locate npm-cli.js for shell-free npm execution on Windows.",
+        "The check runner will not fall back to npm.cmd, npm.ps1, or bare npm because those require a shell wrapper.",
+        "Run through npm so npm_execpath is set, or install npm next to Node.js/user npm so node can execute npm-cli.js directly.",
+      ].join(" "),
+    );
+  }
+  return { command: "npm", args };
+}
+
+async function resolveNpmExecPath(options: NpmCommandResolveOptions = {}) {
+  const access = options.access || ((candidate: string) => fsp.access(candidate));
+  for (const candidate of npmExecPathCandidates(options)) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {}
+  }
+  return "";
+}
+
+function npmExecPathCandidates({
+  env = process.env,
+  nodeExecPath = process.execPath,
+  platform = process.platform,
+}: NpmCommandResolveOptions = {}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const candidates = [
+    env.npm_execpath,
+    pathApi.join(pathApi.dirname(nodeExecPath), "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+
+  if (platform === "win32") {
+    candidates.push(
+      env.APPDATA
+        ? pathApi.join(env.APPDATA, "npm", "node_modules", "npm", "bin", "npm-cli.js")
+        : "",
+      env.LOCALAPPDATA
+        ? pathApi.join(
+            env.LOCALAPPDATA,
+            "Programs",
+            "nodejs",
+            "node_modules",
+            "npm",
+            "bin",
+            "npm-cli.js",
+          )
+        : "",
+      env.ProgramFiles
+        ? pathApi.join(env.ProgramFiles, "nodejs", "node_modules", "npm", "bin", "npm-cli.js")
+        : "",
+      env["ProgramFiles(x86)"]
+        ? pathApi.join(
+            env["ProgramFiles(x86)"],
+            "nodejs",
+            "node_modules",
+            "npm",
+            "bin",
+            "npm-cli.js",
+          )
+        : "",
+    );
+  }
+
+  for (const pathDir of splitPathEnv(env, platform)) {
+    candidates.push(pathApi.join(pathDir, "node_modules", "npm", "bin", "npm-cli.js"));
+  }
+
+  return uniqueStrings(candidates.filter(isJavaScriptFilePath));
+}
+
+function splitPathEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  const value = env.Path || env.PATH || "";
+  const delimiter = platform === "win32" ? path.win32.delimiter : path.posix.delimiter;
+  return value.split(delimiter).filter(Boolean);
+}
+
+function isJavaScriptFilePath(value: unknown): value is string {
+  return typeof value === "string" && /\.(?:m?js)$/i.test(value);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined, packDir: string) {
@@ -1002,6 +1111,10 @@ function indent(text: string): string {
     .split(/\r?\n/)
     .map((line) => `  ${line}`)
     .join("\n");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function shellQuote(value: string) {

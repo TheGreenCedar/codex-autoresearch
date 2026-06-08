@@ -20,6 +20,7 @@ export const DASHBOARD_COMMAND_KEY_ALIASES: Readonly<Record<string, string>> = O
 
 export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "argv",
+  "applyCommand",
   "baselineCommand",
   "benchmarkInspect",
   "benchmarkLint",
@@ -54,6 +55,8 @@ export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "output",
   "outputTail",
   "partialResults",
+  "planCommand",
+  "planOutput",
   "primaryCommand",
   "promoteGateDryRun",
   "recommendNext",
@@ -62,6 +65,8 @@ export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "staticExport",
   "suggestedCommand",
   "suggestedCommands",
+  "finalizeCommand",
+  "finalizerCommand",
 ]);
 
 export const DASHBOARD_PATH_FIELD_NAMES: ReadonlySet<string> = new Set([
