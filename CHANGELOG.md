@@ -6,6 +6,8 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.1.8
+
 ### Changed
 
 - Kept the dashboard chart-first while moving trust blockers, proof gaps, and process warnings into a below-chart disclosure; improved chart point accessible labels, focus recovery, mission state, refresh announcements, and generated dashboard/brand assets.
@@ -25,6 +27,10 @@ This project uses a root-only changelog because the root README is the public do
 - Stripped finalization command-shaped fields such as suggested commands, argv/display payloads, and plan-output paths from dashboard view models.
 - Added pending log-mutation receipts so interrupted keep/discard automation blocks later state, doctor, and log attempts until the ledger is reconciled.
 - Added a terminal `ready-with-warnings` status so advisory warnings no longer collapse into plain ready.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.8`.
 
 ## 2.1.7
 
