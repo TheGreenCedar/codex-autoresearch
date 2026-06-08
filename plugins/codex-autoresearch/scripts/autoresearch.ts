@@ -27,7 +27,6 @@ import {
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
-import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import {
   defaultCommandShell,
@@ -123,6 +122,7 @@ import {
   buildDecisionEnvelope,
   finiteMetric,
   currentState,
+  loadSessionState,
   listOption,
   readJsonl,
   safeSlug,
@@ -257,14 +257,6 @@ const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands
   validateMetricName,
 });
 
-const sessionForensics = createSessionForensicsCommand({
-  boolOption,
-  pluginRoot: PLUGIN_ROOT,
-  positiveIntegerOption,
-  resolveWorkDir,
-  shellQuote,
-});
-
 const partialResultsCommand = createPartialResultsCommand({
   appendJsonl,
   assertFreshLastRunPacket,
@@ -279,6 +271,24 @@ const partialResultsCommand = createPartialResultsCommand({
   researchSlugFromArgs,
   resolveWorkDir,
 });
+
+let sessionForensicsCommand: ((args: LooseObject) => Promise<LooseObject>) | null = null;
+
+async function sessionForensics(args: LooseObject): Promise<LooseObject> {
+  if (!sessionForensicsCommand) {
+    const { createSessionForensicsCommand } = await import(
+      "../lib/commands/session-forensics.js"
+    );
+    sessionForensicsCommand = createSessionForensicsCommand({
+      boolOption,
+      pluginRoot: PLUGIN_ROOT,
+      positiveIntegerOption,
+      resolveWorkDir,
+      shellQuote,
+    });
+  }
+  return await sessionForensicsCommand(args);
+}
 
 const laneRunner = createLaneRunnerCommand({
   appendJsonl,
@@ -1894,8 +1904,9 @@ function safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }: Lo
 
 async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   const setup = await setupPlan(args);
-  const state: LooseObject = await publicState({ cwd: workDir });
+  const state: LooseObject = await publicState({ cwd: workDir, readCache });
   const doctor = await doctorSession({
     ...args,
     cwd: workDir,
@@ -2062,9 +2073,10 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 
 async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   const [state, guide, doctor, next] = await Promise.all([
-    publicState({ cwd: workDir, compact: true }),
-    guidedSetup({ cwd: workDir }).catch((error: any) => ({
+    publicState({ cwd: workDir, compact: true, readCache }),
+    guidedSetup({ cwd: workDir, readCache }).catch((error: any) => ({
       ok: false,
       stage: "blocked",
       warnings: [error.message],
@@ -2084,7 +2096,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
         nextAction: "Fix doctor before running packets.",
       }),
     ),
-    recommendNext({ cwd: workDir, compact: true }).catch(
+    recommendNext({ cwd: workDir, compact: true, readCache }).catch(
       (error: any): LooseObject => ({
         ok: false,
         action: null as LooseObject | null,
@@ -2167,13 +2179,18 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
     const compact = await publicState({
       cwd: workDir,
       compact: true,
       codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
+      readCache,
     });
-    const response = buildCompactRecommendNextResponse({ workDir, compactState: compact });
+    const response = buildCompactRecommendNextResponse({
+      workDir,
+      compactState: compactStateForRecommendHandoff(compact),
+    });
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
       const action = (response.action || {}) as LooseObject;
       const canonicalNextAction = (compact.canonicalNextAction || {}) as LooseObject;
@@ -2198,7 +2215,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     sourceCwd: workDir,
     pluginVersion: PLUGIN_VERSION,
   });
-  const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
+  const compact: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
   const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
   const canonicalNextAction = authority.canonicalNextAction || null;
   const action = canonicalNextAction
@@ -2277,6 +2294,113 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     sessionDecisionCapsule:
       decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
   });
+}
+
+function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
+  const envelope = compactRecord(compact.decisionEnvelope) || compactRecord(compact.resumeAudit);
+  const canonicalNextAction =
+    compactRecord(compact.canonicalNextAction) || compactRecord(envelope?.canonicalNextAction);
+  const sessionDecisionCapsule = compactSessionCapsuleForHandoff(
+    envelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule,
+  );
+  const minimalEnvelope = envelope
+    ? {
+        activeSegment: envelope.activeSegment || null,
+        canonicalNextAction: envelope.canonicalNextAction || canonicalNextAction || null,
+        finalizationReadiness: envelope.finalizationReadiness || null,
+        latestPacketFreshness: envelope.latestPacketFreshness || null,
+        loopContract: envelope.loopContract || compact.loopContract || null,
+        sessionDecisionCapsule: compactSessionCapsuleIdentity(sessionDecisionCapsule),
+        watchdog: envelope.watchdog || compact.watchdogSummary || null,
+      }
+    : null;
+  return {
+    ok: compact.ok,
+    workDir: compact.workDir,
+    name: compact.name,
+    goal: compact.goal,
+    metric: compact.metric,
+    direction: compact.direction,
+    segment: compact.segment,
+    runs: compact.runs,
+    kept: compact.kept,
+    discarded: compact.discarded,
+    measured: compact.measured,
+    baseline: compact.baseline,
+    best: compact.best,
+    historicalBest: compact.historicalBest,
+    developmentBest: compact.developmentBest,
+    promotionBest: compact.promotionBest,
+    goalFrame: compact.goalFrame,
+    operatorHandoff: compact.operatorHandoff,
+    canonicalNextAction,
+    nextAction: compact.nextAction,
+    blockers: compact.blockers,
+    commands: compactRecommendCommands(compactRecord(compact.commands), canonicalNextAction),
+    decisionEnvelope: minimalEnvelope,
+    sessionDecisionCapsule,
+    portfolioRecommendation: compact.portfolioRecommendation,
+    workflowFriction: compact.workflowFriction,
+  };
+}
+
+function compactRecommendCommands(
+  commands: LooseObject | null,
+  canonicalNextAction: LooseObject | null,
+): LooseObject {
+  if (!commands) return {};
+  const compactCommands: LooseObject = {};
+  if (canonicalNextAction?.command) compactCommands.primary = canonicalNextAction.command;
+  return compactCommands;
+}
+
+function compactRecord(value: unknown): LooseObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as LooseObject)
+    : null;
+}
+
+function compactSessionCapsuleForHandoff(value: unknown): LooseObject | null {
+  const capsule = compactRecord(value);
+  if (!capsule) return null;
+  const enforcement = compactRecord(capsule.enforcement);
+  return {
+    kind: capsule.kind || null,
+    status: capsule.status || null,
+    enforcement: enforcement
+      ? {
+          mode: enforcement.mode || null,
+          canRunNextPacket: enforcement.canRunNextPacket ?? null,
+          allowBoundedNext: enforcement.allowBoundedNext ?? null,
+          blocksFinalization: enforcement.blocksFinalization ?? null,
+          commandHint: enforcement.commandHint || "",
+          triggeredBy: enforcement.triggeredBy || [],
+        }
+      : null,
+    evidence: Array.isArray(capsule.evidence) ? capsule.evidence.slice(0, 3) : [],
+    nextExperiment: capsule.nextExperiment || "",
+    wrongNextActions: Array.isArray(capsule.wrongNextActions)
+      ? capsule.wrongNextActions.slice(0, 3)
+      : [],
+    doNotRepeat: Array.isArray(capsule.doNotRepeat) ? capsule.doNotRepeat.slice(0, 3) : [],
+    commandBudgetWarnings: Array.isArray(capsule.commandBudgetWarnings)
+      ? capsule.commandBudgetWarnings.slice(0, 3)
+      : [],
+  };
+}
+
+function compactSessionCapsuleIdentity(capsule: LooseObject | null): LooseObject | null {
+  if (!capsule) return null;
+  return {
+    kind: capsule.kind || null,
+    status: capsule.status || null,
+    enforcement: capsule.enforcement
+      ? {
+          canRunNextPacket: (capsule.enforcement as LooseObject).canRunNextPacket ?? null,
+          blocksFinalization: (capsule.enforcement as LooseObject).blocksFinalization ?? null,
+        }
+      : null,
+  };
 }
 
 function recommendNextChecklistSource(
@@ -6330,7 +6454,12 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const report = boolOption(args.report, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
   if (compact || report) {
-    const compactState = await publicCompactState({ workDir, config, codexGoalObjective });
+    const compactState = await publicCompactState({
+      workDir,
+      config,
+      codexGoalObjective,
+      readCache: args.readCache,
+    });
     if (!report) return compactState;
     const response: LooseObject = {
       ok: compactState.ok !== false,
@@ -6341,7 +6470,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     return response;
   }
 
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, args.readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
@@ -6533,12 +6662,14 @@ async function publicCompactState({
   workDir,
   config,
   codexGoalObjective,
+  readCache,
 }: {
   workDir: string;
   config: LooseObject;
   codexGoalObjective?: unknown;
+  readCache?: unknown;
 }): Promise<LooseObject> {
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, readCache as any);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
@@ -406,6 +407,43 @@ test("compact state exposes authoritative goal frame and operator handoff", asyn
     assert.equal(payload.operatorHandoff.next, payload.nextAction);
   });
 });
+
+test(
+  "compact read commands stay within a warm local startup budget",
+  { skip: process.env.CI_PERF_UNSTABLE === "1" },
+  async () => {
+    await withTempDir("compact-read-budget", async (dir) => {
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "compact read budget",
+        "--metric-name",
+        "seconds",
+        "--goal",
+        "Keep compact read commands fast.",
+      ]);
+
+      const commands = [
+        ["state", "--cwd", dir, "--compact"],
+        ["recommend-next", "--cwd", dir, "--compact"],
+        ["guide", "--cwd", dir, "--compact"],
+      ];
+      const budgetMs = 1500;
+      for (const command of commands) {
+        const started = performance.now();
+        const result = await runSpawnedCli(command);
+        const elapsedMs = performance.now() - started;
+        assert.equal(result.code, 0, result.stderr);
+        assert.ok(
+          elapsedMs < budgetMs,
+          `${command[0]} --compact took ${Math.round(elapsedMs)} ms, budget ${budgetMs} ms`,
+        );
+      }
+    });
+  },
+);
 
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {

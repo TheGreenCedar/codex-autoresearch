@@ -63,6 +63,14 @@ type SessionState = LooseObject & {
   sessionDecisionCapsule: SessionDecisionCapsule | null;
 };
 
+export interface SessionReadCache {
+  stateByCwd: Map<string, unknown>;
+}
+
+export function createSessionReadCache(): SessionReadCache {
+  return { stateByCwd: new Map() };
+}
+
 export function listOption(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (value == null || value === "") return [];
@@ -369,6 +377,19 @@ export function currentState(workDir: string): SessionState {
     productClaimCoverage,
     sessionDecisionCapsule,
   };
+}
+
+export function loadSessionState(
+  workDir: string,
+  readCache?: SessionReadCache | null,
+): SessionState {
+  if (!readCache) return currentState(workDir);
+  const cacheKey = path.resolve(workDir);
+  const cached = readCache.stateByCwd.get(cacheKey);
+  if (cached) return cached as SessionState;
+  const state = currentState(workDir);
+  readCache.stateByCwd.set(cacheKey, state);
+  return state;
 }
 
 function bestRunSummary(run: RunRecord | null | undefined): LooseObject | null {

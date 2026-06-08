@@ -1,4 +1,5 @@
 import { normalizeCliCommandArguments } from "./tool-schemas.js";
+import { createSessionReadCache } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
 type CliHandler = (args: LooseObject) => Promise<LooseObject>;
@@ -71,6 +72,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.onboardingPacket({
         cwd: args.cwd,
         compact: args.compact,
+        readCache: args.readCache,
       }),
     }),
     "recommend-next": async (args) => ({
@@ -79,6 +81,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         compact: args.compact,
         operatorChecklist: args.operatorChecklist,
         codexGoalObjective: args.codexGoalObjective,
+        readCache: args.readCache,
       }),
     }),
     "codex-goal-brief": async (args) => ({
@@ -91,6 +94,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         codexGoalTimeUsedSeconds: args.codexGoalTimeUsedSeconds,
         completionEvidence: args.completionEvidence,
         completionConfirmed: args.completionConfirmed,
+        readCache: args.readCache,
       }),
     }),
     "session-forensics": async (args) => ({
@@ -315,6 +319,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         compact: args.compact,
         report: args.report,
         codexGoalObjective: args.codexGoalObjective,
+        readCache: args.readCache,
       }),
     }),
     doctor: async (args) => ({
@@ -428,6 +433,7 @@ function setupArgs(args: LooseObject): LooseObject {
     packetBudget: args.packetBudget,
     wallClockBudgetSeconds: args.wallClockBudgetSeconds,
     budgetNote: args.budgetNote,
+    readCache: args.readCache,
   };
 }
 
@@ -435,7 +441,11 @@ function normalizeCliHandlers(handlers: Record<string, CliHandler>): Record<stri
   return Object.fromEntries(
     Object.entries(handlers).map(([command, handler]) => [
       command,
-      (args: LooseObject) => handler(normalizeCliCommandArguments(command, args) as LooseObject),
+      (args: LooseObject) =>
+        handler({
+          ...(normalizeCliCommandArguments(command, args) as LooseObject),
+          readCache: createSessionReadCache(),
+        }),
     ]),
   );
 }
