@@ -6,6 +6,8 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.1.8
+
 ### Changed
 
 - Kept the dashboard chart-first while moving trust blockers, proof gaps, and process warnings into a below-chart disclosure; improved chart point accessible labels, focus recovery, mission state, refresh announcements, and generated dashboard/brand assets.
@@ -17,12 +19,18 @@ This project uses a root-only changelog because the root README is the public do
 - Made compact state, `recommend-next --compact`, `doctor --check-benchmark --explain`, terminal reports, and dashboard readouts share finalization readiness and canonical next-action authority.
 - Updated default help and start docs to show read-only `setup-plan`/`prompt-plan` before mutating `setup`.
 - Reframed the dashboard decision rail as a read-only "Do this first" surface and kept the ledger navigation target visible even before runs are logged.
+- Tightened the resume/finalize journey so plateau pivots no longer suggest another packet, stale dashboards point to fresh `serve`, first baselines log as `measure`, and finalizer output avoids cleanup commands before verified merge.
+- Clarified the qualitative checklist-measured journey with front-door `research-setup -> quality-gap -> gap-candidates` guidance and aligned README, docs, skill, and plugin metadata around `measure`.
 
 ### Fixed
 
 - Stripped finalization command-shaped fields such as suggested commands, argv/display payloads, and plan-output paths from dashboard view models.
 - Added pending log-mutation receipts so interrupted keep/discard automation blocks later state, doctor, and log attempts until the ledger is reconciled.
 - Added a terminal `ready-with-warnings` status so advisory warnings no longer collapse into plain ready.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.1.8`.
 
 ## 2.1.7
 

@@ -158,6 +158,37 @@ test("terminal report uses canonical gate-quality action ahead of packet fallbac
   assert.doesNotMatch(report.json.nextCommand, /partial-results/);
 });
 
+test("terminal report plateau pivot uses a non-packet recovery command", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    commands: {
+      next: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+      laneRunner:
+        "node scripts/autoresearch.mjs lane-runner --cwd C:/repo --lane-id constraint-removal --dry-run",
+      newSegmentDryRun: "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
+      state: "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+    },
+    decisionEnvelope: {
+      canonicalNextAction: {
+        kind: "plateau-pivot",
+        reason:
+          "Change a precondition, input corpus, benchmark contract, or implementation lane before retrying this family.",
+        command: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
+      },
+      loopContract: {
+        ok: true,
+        canRunNextPacket: true,
+        blockers: [],
+        warnings: [],
+      },
+    },
+  });
+
+  assert.match(report.json.nextAction, /Change a precondition/);
+  assert.doesNotMatch(report.json.nextCommand, /\bnext\b/);
+  assert.match(report.json.nextCommand, /lane-runner|new-segment/);
+});
+
 test("terminal report prefers loop-contract blockers over advisory state blockers", () => {
   const report = buildTerminalReport({
     ok: false,
@@ -507,14 +538,77 @@ test("terminal report renders compact metric freshness lane and ASI contract fie
   assert.equal(report.json.lanes.planned, 2);
   assert.equal(report.json.lanes.stale, 1);
   assert.equal(report.json.asi.risk, "missing-rollback-reason");
-  assert.match(report.text, /Metric: quality, best accepted 3.5, development best 4.2/);
+  assert.match(
+    report.text,
+    /Metric: quality, active segment best 3.5, development best 4.2, historical best unknown/,
+  );
   assert.match(report.text, /Freshness: stale - Last packet belongs/);
   assert.match(report.text, /Lanes: planned 2, stale 1/);
   assert.match(report.text, /ASI: risk missing-rollback-reason/);
   assert.match(
     report.text,
-    /Dashboard: dead \(stale\); restart the dashboard outside report command fields if needed Command: curl "http:\/\/127\.0\.0\.1:61234\/health"/,
+    /Dashboard: dead \(stale\); serve a fresh dashboard before using dashboard evidence Command: node scripts\/autoresearch\.mjs serve --cwd C:\/work\/project/,
   );
-  assert.equal(report.json.dashboard.command, 'curl "http://127.0.0.1:61234/health"');
-  assert.doesNotMatch(report.text, /node scripts\/autoresearch\.mjs serve/);
+  assert.equal(
+    report.json.dashboard.command,
+    "node scripts/autoresearch.mjs serve --cwd C:/work/project",
+  );
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
+});
+
+test("terminal report recommends serve for dead stale dashboard", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    commands: {
+      liveDashboard: "node scripts/autoresearch.mjs serve --cwd C:/repo",
+      state: "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+    },
+    dashboardHealth: {
+      liveness: "dead",
+      stale: true,
+      healthUrl: "http://127.0.0.1:51280/health",
+    },
+  });
+
+  assert.equal(report.json.dashboard.status, "dead");
+  assert.match(report.json.dashboard.command, /serve --cwd C:\/repo/);
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
+});
+
+test("terminal report constructs serve fallback for dead stale dashboard without commands", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    dashboardHealth: {
+      liveness: "dead",
+      stale: true,
+      healthUrl: "http://127.0.0.1:51280/health",
+    },
+  });
+
+  assert.equal(report.json.dashboard.status, "dead");
+  assert.match(report.json.dashboard.command, /serve --cwd C:\/repo/);
+  assert.doesNotMatch(report.json.dashboard.command, /curl/);
+});
+
+test("terminal report names historical best when active segment has no metric", () => {
+  const report = buildTerminalReport({
+    workDir: "C:/repo",
+    config: { metricName: "simplification_candidates" },
+    best: null,
+    development: { best: null },
+    historicalBest: {
+      run: 20,
+      metric: 14,
+      status: "keep",
+      segment: 0,
+      description: "Unify CLI test process helpers",
+    },
+    decisionEnvelope: {
+      activeSegment: { segment: 1, runs: 0, baseline: null, best: null, developmentBest: null },
+      historicalBest: { run: 20, metric: 14, status: "keep", segment: 0 },
+    },
+  });
+
+  assert.match(report.text, /active segment best unknown/i);
+  assert.match(report.text, /historical best #20 = 14/i);
 });

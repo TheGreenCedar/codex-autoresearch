@@ -711,6 +711,10 @@ async function setupPlan(args: any) {
         : "This explicit benchmark command will be wrapped and timed by the generated script."
       : "No explicit benchmark command was provided; generated placeholder wrappers must be replaced before use.",
   };
+  const catalogTrustArgs = [
+    ...(args.catalog ? ["--catalog", args.catalog] : []),
+    ...(args.catalog && trustCatalogOption(args) ? ["--trust-catalog"] : []),
+  ];
   const commandArgs = [
     "node",
     path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
@@ -790,8 +794,7 @@ async function setupPlan(args: any) {
       : []),
     ...(commitPaths.length > 0 ? ["--commit-paths", commitPaths.join(",")] : []),
     ...(recommended ? ["--recipe", recommended.id] : []),
-    ...(args.catalog ? ["--catalog", args.catalog] : []),
-    ...(args.catalog && trustCatalogOption(args) ? ["--trust-catalog"] : []),
+    ...catalogTrustArgs,
   ];
   const command = commandLine(commandArgs, shellKind);
   const doctorCommand = commandLine(
@@ -802,6 +805,7 @@ async function setupPlan(args: any) {
       "--cwd",
       workDir,
       "--check-benchmark",
+      ...catalogTrustArgs,
     ],
     shellKind,
   );
@@ -849,9 +853,9 @@ async function setupPlan(args: any) {
       workDir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Describe the kept change",
+      "Baseline measurement",
     ],
     shellKind,
   );
@@ -918,11 +922,15 @@ async function setupPlan(args: any) {
     baselineCommand,
     logCommand,
   });
+  const configured = Boolean(config && Object.keys(config).length > 0);
+  const hasMissingEssentials = missing.length > 0;
+  const configuredNextCommand = doctorCommand || guideCommand;
+  const safeNextCommand = configured && !hasMissingEssentials ? configuredNextCommand : command;
   return {
     ok: true,
     workDir,
     sessionCwd,
-    configured: Boolean(config && Object.keys(config).length > 0),
+    configured,
     currentMetric: state.config.metricName,
     recommendedRecipe: recommended,
     missing,
@@ -936,21 +944,32 @@ async function setupPlan(args: any) {
     scaffoldHealth,
     researchIntegrity,
     integrityPreflight,
-    nextCommand: command,
+    nextCommand: safeNextCommand,
     guideCommand,
     baselineCommand,
     missingEssentials: missing,
-    nextStep: sharedNextStep({
-      stage: "setup-repair",
-      title: "Create session setup",
-      reason: missing.length
-        ? `Setup still needs: ${missing.join(", ")}.`
-        : "Create or refresh the Autoresearch session files before the first packet.",
-      command,
-      toolName: "setup_session",
-      safety: "state_mutation",
-      missingEssentials: missing,
-    }),
+    nextStep:
+      configured && !hasMissingEssentials
+        ? sharedNextStep({
+            stage: "configured-session",
+            title: "Verify configured session",
+            reason: "Session setup is present; verify benchmark and state before packet work.",
+            command: configuredNextCommand,
+            toolName: "doctor",
+            safety: "read_or_check",
+            missingEssentials: [],
+          })
+        : sharedNextStep({
+            stage: "setup-repair",
+            title: "Create session setup",
+            reason: missing.length
+              ? `Setup still needs: ${missing.join(", ")}.`
+              : "Create or refresh the Autoresearch session files before the first packet.",
+            command,
+            toolName: "setup_session",
+            safety: "state_mutation",
+            missingEssentials: missing,
+          }),
     firstRunChecklist: checklist,
     guidedFlow: checklist,
     notes: [
@@ -4148,7 +4167,7 @@ async function setupCommandResponseFields({
   const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status measure --description ${shellQuote("Baseline measurement")}`;
   const config = readConfig(sessionCwd);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const checksCommand =
@@ -5203,9 +5222,11 @@ async function runExperiment(args: LooseObject) {
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
   const allowedStatuses = passed ? ["keep", "discard", "measure"] : [failedStatus];
   const suggestedStatus = passed
-    ? isBaseline || improvesPrimary
-      ? "keep"
-      : "discard"
+    ? isBaseline
+      ? "measure"
+      : improvesPrimary
+        ? "keep"
+        : "discard"
     : failedStatus;
   const checksWereVerified = checksPassed === true;
   const safeSuggestedStatus = passed
@@ -5215,8 +5236,10 @@ async function runExperiment(args: LooseObject) {
     : failedStatus;
   const statusGuidance = passed
     ? safeSuggestedStatus === "keep"
-      ? "Safe to consider keep because this is a baseline or a checked improvement; still review ASI before logging."
-      : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
+      ? "Safe to consider keep because this is a checked improvement; still review ASI before logging."
+      : safeSuggestedStatus === "measure"
+        ? "Log this as measure because it is a baseline or diagnostic packet without a prior improvement comparison; use keep only when real improvement evidence exists."
+        : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
   return {
@@ -6369,6 +6392,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     checksFailed: statusCounts.checks_failed,
     baseline: state.baseline,
     best: state.best,
+    historicalBest: state.historicalBest,
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
@@ -6549,6 +6573,7 @@ async function publicCompactState({
     checksFailed: statusCounts.checks_failed,
     baseline: state.baseline,
     best: state.best,
+    historicalBest: state.historicalBest,
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
@@ -6645,6 +6670,7 @@ function compactPublicState(state: LooseObject) {
     measured: state.measured,
     baseline: state.baseline,
     best: state.best,
+    historicalBest: state.historicalBest ?? null,
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
     goalFrame,
@@ -7712,6 +7738,7 @@ function continuationCommands(workDir: string) {
     next: `node ${script} next --cwd ${cwd} --compact`,
     nextFull: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
+    measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
     laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,

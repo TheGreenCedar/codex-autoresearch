@@ -101,6 +101,16 @@ test("gate quality recognizes correctness gates from common verification verbs",
   }
 });
 
+test("npm run check is classified as correctness gate", () => {
+  const summary = evaluateGateQuality({
+    benchmarkCommand: "node ./bench.mjs",
+    checksCommand: "npm run check",
+  });
+
+  assert.equal(summary.posture, "correctness");
+  assert.match(summary.evidence.join("\n"), /check/i);
+});
+
 test("gate quality recognizes holdout metadata without promotion metadata", () => {
   const summary = evaluateGateQuality({
     benchmarkCommand: "node bench.js",

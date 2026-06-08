@@ -130,13 +130,19 @@ export function Header({
             <span>Generated</span>
             <strong>{generated}</strong>
           </div>
-          <em id="copy-dashboard-url-status" className="copy-status" hidden={!copiedUrl}>
-            Dashboard URL copied.
+          <em
+            id="copy-dashboard-url-status"
+            className="copy-status"
+            hidden={!copiedUrl}
+            aria-live="polite"
+          >
+            Copied. Read-only dashboard URL; no session state changed.
           </em>
           <em
             id="copy-dashboard-url-error"
             className="copy-status"
             hidden={copyUrlStatus !== "error"}
+            role="alert"
           >
             Dashboard URL copy failed.
           </em>

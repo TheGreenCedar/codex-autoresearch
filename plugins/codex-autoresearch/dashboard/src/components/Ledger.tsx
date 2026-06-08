@@ -51,8 +51,7 @@ export function Ledger({ session, readout }: LedgerProps) {
         </div>
       ) : (
         <div className="empty ledger-empty" role="status">
-          No decisions are in the ledger yet. Capture a baseline in the CLI, then refresh this
-          readout.
+          No ledger yet. First safe move: capture a baseline measurement.
         </div>
       )}
     </section>

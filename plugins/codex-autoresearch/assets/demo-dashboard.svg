@@ -10,8 +10,8 @@
 
   <rect x="112" y="140" width="760" height="286" rx="8" fill="#f8fafb" stroke="#0f8f88" stroke-width="3"/>
   <rect x="112" y="140" width="7" height="286" rx="4" fill="#0f8f88"/>
-  <text x="140" y="180" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">Run chart</text>
-  <text x="140" y="210" fill="#0f8f88" font-family="ui-sans-serif, system-ui, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">METRIC FORMULA</text>
+  <text x="140" y="180" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800">Packet trend</text>
+  <text x="140" y="210" fill="#0f8f88" font-family="ui-sans-serif, system-ui, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">EVIDENCE TRAIL</text>
   <text x="265" y="210" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">seconds = wall-clock time; lower is better</text>
   <line x1="156" y1="354" x2="820" y2="354" stroke="#bfe8e5" stroke-dasharray="8 10"/>
   <line x1="156" y1="302" x2="820" y2="302" stroke="#bfe8e5" stroke-dasharray="8 10"/>
@@ -53,7 +53,7 @@
   <text x="486" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">11 active / 0 done</text>
   <text x="486" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Strategy readiness</text>
   <line x1="650" y1="456" x2="650" y2="506" stroke="#c98a12" stroke-width="3"/>
-  <text x="662" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">WATCHDOG</text>
+  <text x="662" y="466" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="900">QUIET WINDOW</text>
   <text x="662" y="486" fill="#15201c" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="850">Stale</text>
   <text x="662" y="502" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Inspect or rescope</text>
 
@@ -67,5 +67,5 @@
   <text x="728" y="592" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="900">implementation</text>
   <rect x="896" y="570" width="170" height="34" rx="17" fill="#ffffff" stroke="#d7ded9"/>
   <text x="930" y="592" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="900">provisional</text>
-  <text x="144" y="624" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Chart first. Readiness visible. Actions stay in CLI.</text>
+  <text x="144" y="624" fill="#65706b" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Packet trend first. Readiness visible. Actions stay in CLI.</text>
 </svg>

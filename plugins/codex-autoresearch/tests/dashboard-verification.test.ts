@@ -1216,13 +1216,34 @@ test("dashboard holds crash runs at the nearest successful metric level", async 
   const note = getById("chart-note").textContent;
   const summary = getById("trend-chart-summary").textContent;
 
-  assert.match(note, /Trend ready: 3 finite metric runs/);
-  assert.match(note, /1 crash held/);
+  assert.match(note, /3 finite measurements; crashes held out of best evidence\./);
+  assert.match(note, /crashes held out of best evidence/);
   assert.match(summary, /4 plotted runs out of 4 logged runs/);
   assert.match(summary, /1 crash run is plotted at the nearest successful metric level/);
   assert.match(chart, /#4/);
   assert.match(chart, /#2/);
   assert.doesNotMatch(chart, /Infinity|NaN/);
+});
+
+test("dashboard chart note does not mention crashes when all plotted runs are finite", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "finite packet trend",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 100, status: "keep", description: "Baseline", confidence: 1 },
+    { type: "run", run: 2, metric: 95, status: "keep", description: "Improved", confidence: 1 },
+    { type: "run", run: 3, metric: 97, status: "discard", description: "Slower", confidence: 1 },
+  ];
+
+  const { getById } = await runDashboard(entries, emptyCommandMeta());
+  const note = getById("chart-note").textContent || "";
+
+  assert.equal(note, "3 finite measurements.");
+  assert.doesNotMatch(note, /crash/i);
 });
 
 test("dashboard does not label raw score metrics as baseline time", async () => {
@@ -1417,7 +1438,7 @@ test("dashboard does not let held crash metrics become best evidence", async () 
 
   assert.equal(getById("best-value").textContent, "95s");
   assert.equal(getById("improvement-value").textContent, "+5.0%");
-  assert.match(note, /Trend ready: 2 finite metric runs/);
+  assert.match(note, /2 finite measurements; crashes held out of best evidence\./);
   assert.doesNotMatch(note, /Best 0s/);
   assert.match(summary, /Best #3 at 95s/);
 });
@@ -2900,6 +2921,48 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
   }
 });
 
+test("mobile audit dashboard exposes next action before chart content", async () => {
+  const viewModel = {
+    nextBestAction: {
+      title: "Preview finalization",
+      detail: "Do not run another packet",
+      packetBrake: true,
+    },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "mobile next", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "static-export",
+      viewModel,
+    },
+    { url: "file:///autoresearch-dashboard.html?view=audit" },
+  );
+  const mobileNext = getById("mobile-next-action");
+  const trend = getById("trend-panel");
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const mobileBlock = extractCssBlock(css, "@media (max-width: 720px)");
+
+  assert.equal(mobileNext.querySelector("button"), null);
+  assert.match(mobileNext.textContent, /Next/);
+  assert.match(mobileNext.textContent, /Preview finalization/);
+  assert.match(mobileNext.textContent, /Do not run another packet/);
+  assert.ok(
+    mobileNext.compareDocumentPosition(trend) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "mobile next action should appear before chart content in audit DOM order",
+  );
+  assert.match(css, /\.mobile-next-action\s*\{[\s\S]*?display:\s*none/);
+  assert.match(mobileBlock, /\.mobile-next-action\s*\{[\s\S]*?display:\s*grid/);
+  dom.window.close();
+});
+
 test("dashboard renders strategy lanes and evidence status classes", async () => {
   const viewModel = {
     evidenceChips: [
@@ -3121,14 +3184,14 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the run chart before the next action.",
+    "Operate view should show the Packet trend before the next action.",
   );
   assert.equal(
     Boolean(
       trendPanel.compareDocumentPosition(scoreStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the run chart before the score strip.",
+    "Operate view should show the Packet trend before the score strip.",
   );
   for (const href of hrefs) {
     const target = dom.window.document.querySelector(href);
@@ -3139,6 +3202,58 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       `${href} should be programmatically focusable`,
     );
   }
+  dom.window.close();
+});
+
+test("static audit dashboard renders decision rail before session context", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "static audit order",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { dom } = await runDashboard(entries, emptyCommandMeta(), {
+    query: "?view=audit",
+  });
+  const trend = dom.window.document.querySelector("#trend-panel");
+  const decision = dom.window.document.querySelector("#decision-rail");
+  const brief = dom.window.document.querySelector("#codex-brief");
+
+  assert.ok(trend, "trend panel should exist");
+  assert.ok(decision, "decision rail should exist");
+  assert.ok(brief, "codex brief should exist");
+  assert.ok(
+    decision.compareDocumentPosition(brief) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "decision rail should appear before Codex brief in static audit view",
+  );
+  dom.window.close();
+});
+
+test("run toast announces status changes", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "toast a11y",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+  });
+  const toastContainer = dom.window.document.querySelector(".toast-container");
+  assert.ok(toastContainer, "toast container should render after latest run");
+  assert.equal(toastContainer.getAttribute("aria-live"), "polite");
+  assert.equal(toastContainer.getAttribute("role"), "status");
   dom.window.close();
 });
 
@@ -3164,7 +3279,10 @@ test("dashboard keeps navigation targets visible when the ledger is empty", asyn
   assert.equal(ledger.hasAttribute("hidden"), false);
   assert.equal(ledger.getAttribute("tabindex"), "-1");
   assert.match(ledger.textContent || "", /No runs logged yet/);
-  assert.match(ledger.textContent || "", /No decisions are in the ledger yet/);
+  assert.equal(
+    dom.window.document.querySelector(".ledger-empty")?.textContent?.trim(),
+    "No ledger yet. First safe move: capture a baseline measurement.",
+  );
   assert.equal(dom.window.document.getElementById("ledger-scroll"), null);
 
   const links = [
@@ -3177,6 +3295,33 @@ test("dashboard keeps navigation targets visible when the ledger is empty", asyn
     assert.equal(target.hasAttribute("hidden"), false, `${href} should be visible`);
     assert.equal(target.closest("[hidden]"), null, `${href} should not be inside hidden content`);
   }
+  dom.window.close();
+});
+
+test("dashboard uses calm read-only and empty-ledger copy", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "empty session",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+  ];
+  const { dom } = await runDashboard(entries, emptyCommandMeta(), {
+    query: "?view=operate",
+  });
+  const skipLabels = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
+    item.textContent?.trim(),
+  );
+  const ledgerEmpty = dom.window.document.querySelector(".ledger-empty");
+  assert.match(dom.window.document.body.textContent || "", /Readout only\. CLI does the work\./);
+  assert.equal(
+    ledgerEmpty?.textContent?.trim(),
+    "No ledger yet. First safe move: capture a baseline measurement.",
+  );
+  assert.equal(skipLabels[0], "Packet trend");
+  assert.equal(skipLabels.includes("Run chart"), false);
   dom.window.close();
 });
 

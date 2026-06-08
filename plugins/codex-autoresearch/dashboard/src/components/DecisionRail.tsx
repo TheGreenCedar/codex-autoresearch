@@ -27,8 +27,8 @@ export function DecisionRail({
     : [
         {
           id: "Start",
-          title: "No decisions yet",
-          detail: "Capture a baseline packet.",
+          title: "No ledger yet",
+          detail: "First safe move: capture a baseline measurement.",
           tone: "neutral",
         },
       ];
@@ -97,10 +97,14 @@ export function DecisionRail({
         />
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
-          <span>
-            {mode.liveRefresh
-              ? "Read-only live readout. CLI owns mutations."
-              : "Read-only snapshot. CLI owns mutations."}
+          <span
+            aria-label={
+              mode.liveRefresh
+                ? "Readout only. CLI does the work. Live refresh can update this readout."
+                : "Readout only. CLI does the work. Static snapshots do not mutate session state."
+            }
+          >
+            Readout only. CLI does the work.
           </span>
         </div>
       </div>
@@ -109,6 +113,7 @@ export function DecisionRail({
           <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
             <span>{item.id}</span>
             <strong>{item.title}</strong>
+            {item.id === "Start" ? <span aria-hidden="true">. </span> : null}
             <em>{item.detail}</em>
           </div>
         ))}
