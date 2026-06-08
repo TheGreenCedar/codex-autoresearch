@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  type DashboardHealthSummary,
+  verifyDashboardHealthSummary,
+} from "./dashboard-health.js";
 
 type Liveness = "alive" | "dead" | "unknown";
 type CwdRelation = "same-cwd" | "different-cwd" | "unknown";
@@ -36,6 +40,27 @@ export interface DashboardServeRegistryHealthInput {
   startedAt?: string;
   previous: DashboardServeRegistrySummary;
   timeoutMs?: number;
+}
+
+export interface DashboardServeRegistryLookup {
+  available: boolean;
+  reusable: boolean;
+  registryPath: string;
+  dashboardUrl: string;
+  healthUrl: string;
+  recoveryCommand: string;
+  pid: number | null;
+  port: number | null;
+  cwd: string;
+  version: string;
+  startedAt: string;
+  checkedAt: string;
+  liveness: Liveness;
+  stale: boolean | null;
+  message: string;
+  record: DashboardServeRegistryRecord | null;
+  previous: DashboardServeRegistrySummary;
+  health: DashboardHealthSummary | null;
 }
 
 export function registryPathForWorkDir(workDir: string): string {
@@ -149,6 +174,80 @@ export function buildServeRegistryHealthInput(
   };
 }
 
+export async function findReusableServeRegistry(
+  workDir: string,
+  options: { expectedVersion?: string; timeoutMs?: number } = {},
+): Promise<DashboardServeRegistryLookup> {
+  const requestedCwd = path.resolve(workDir);
+  const record = await readServeRegistry(requestedCwd);
+  const previous = summarizeServeRegistry(record, { currentCwd: requestedCwd });
+  const registryPath = registryPathForWorkDir(requestedCwd);
+  const recoveryCommand = serveRecoveryCommand(requestedCwd);
+  if (!record) {
+    return {
+      available: false,
+      reusable: false,
+      registryPath,
+      dashboardUrl: "",
+      healthUrl: "",
+      recoveryCommand,
+      pid: null,
+      port: null,
+      cwd: requestedCwd,
+      version: cleanString(options.expectedVersion),
+      startedAt: "",
+      checkedAt: new Date().toISOString(),
+      liveness: "unknown",
+      stale: null,
+      message: previous.message,
+      record: null,
+      previous,
+      health: null,
+    };
+  }
+
+  const health = await verifyDashboardHealthSummary(
+    buildServeRegistryHealthInput(requestedCwd, record, {
+      expectedVersion: options.expectedVersion,
+      timeoutMs: options.timeoutMs,
+    }),
+  );
+  const reusable = health.liveness === "alive" && health.stale === false;
+  const healthUrl = health.healthUrl || record.healthUrl;
+  const dashboardUrl = health.url || (record.port ? `http://127.0.0.1:${record.port}/` : "");
+  const liveness = health.liveness === "alive" ? "alive" : health.liveness || previous.liveness;
+  const stale =
+    reusable === true
+      ? false
+      : health.stale === true
+        ? true
+        : previous.stale === true
+          ? true
+          : health.stale;
+  return {
+    available: true,
+    reusable,
+    registryPath,
+    dashboardUrl,
+    healthUrl,
+    recoveryCommand,
+    pid: health.pid ?? record.pid,
+    port: health.port ?? record.port,
+    cwd: requestedCwd,
+    version: cleanString(options.expectedVersion) || record.version,
+    startedAt: record.startedAt,
+    checkedAt: new Date().toISOString(),
+    liveness,
+    stale,
+    message: reusable
+      ? "Dashboard registry points at a healthy same-cwd server for this plugin version."
+      : `Dashboard registry is stale or dead. Run ${recoveryCommand}.`,
+    record,
+    previous,
+    health,
+  };
+}
+
 function findGitDir(startDir: string): string | null {
   let cursor = startDir;
   while (true) {
@@ -259,4 +358,12 @@ function cleanString(value: unknown): string {
 
 function samePath(a: string, b: string): boolean {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+function serveRecoveryCommand(cwd: string): string {
+  return cwd ? `node scripts/autoresearch.mjs serve --cwd ${quoteCommandArg(cwd)}` : "";
+}
+
+function quoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : JSON.stringify(value);
 }

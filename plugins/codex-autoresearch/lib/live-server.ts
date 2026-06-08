@@ -66,9 +66,11 @@ export async function serveAutoresearch(args: LooseObject) {
           dashboard: {
             cwd: workDir,
             liveness: "alive",
+            mode: "live-server",
             pid: process.pid,
             port: serverPort || null,
             startedAt,
+            lastReadAt: new Date().toISOString(),
             version,
           },
         });

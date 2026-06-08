@@ -2,6 +2,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import {
   buildServeRegistryHealthInput,
+  findReusableServeRegistry,
   readServeRegistry,
   summarizeServeRegistry,
   writeServeRegistry,
@@ -127,8 +128,23 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const debugLedger = deps.boolOption(args.debugLedger ?? args.debug_ledger, false);
     let liveUrl = "";
     let dashboardServerRegistry: LooseObject | null = null;
+    if (!args.port && debugLedger !== true) {
+      const reusableRegistry = await findReusableServeRegistry(workDir, {
+        expectedVersion: deps.pluginVersion,
+        timeoutMs: 500,
+      });
+      dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
+      if (reusableRegistry.reusable) {
+        return reusedServeDashboardResult({
+          workDir,
+          lookup: reusableRegistry,
+          startedAt,
+        });
+      }
+    }
     const runtimeDrift = await deps
       .buildDriftReport({
         pluginRoot: deps.pluginRoot,
@@ -138,7 +154,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
       port: args.port,
-      debugLedger: deps.boolOption(args.debugLedger ?? args.debug_ledger, false),
+      debugLedger,
       pluginVersion: deps.pluginVersion,
       startedAt: startedAtIso,
       scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
@@ -221,6 +237,10 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       workDir: serveResult.workDir,
       port: serveResult.port,
       url: serveResult.url,
+      dashboardUrl: serveResult.url,
+      mode: "live",
+      registryReused: false,
+      detached: false,
       pid: process.pid,
       cwd: workDir,
       version: deps.pluginVersion,
@@ -266,6 +286,68 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   }
 
   return { exportDashboard, serveDashboard };
+}
+
+function reusedServeDashboardResult({
+  workDir,
+  lookup,
+  startedAt,
+}: {
+  workDir: string;
+  lookup: LooseObject;
+  startedAt: number;
+}): LooseObject {
+  const url = String(lookup.dashboardUrl || lookup.health?.url || "");
+  const healthUrl = String(lookup.healthUrl || lookup.health?.healthUrl || "");
+  return {
+    ok: true,
+    workDir,
+    port: lookup.port ?? null,
+    url,
+    dashboardUrl: url,
+    mode: "live",
+    registryReused: true,
+    detached: true,
+    pid: lookup.pid ?? null,
+    cwd: lookup.cwd || workDir,
+    version: lookup.version || "",
+    startedAt: lookup.startedAt || "",
+    verified: lookup.liveness === "alive" && lookup.stale === false,
+    healthUrl,
+    registryPath: lookup.registryPath || "",
+    recoveryCommand: lookup.recoveryCommand || "",
+    dashboardHealth: lookup.health || null,
+    checkedAt: lookup.checkedAt || new Date().toISOString(),
+    registry: {
+      path: lookup.registryPath || "",
+      status: lookup,
+      previous: lookup.previous || null,
+    },
+    debugLedger: {
+      enabled: false,
+      endpoint: url ? new URL("autoresearch.jsonl", url).toString() : "",
+      guidance:
+        "Raw ledger endpoint status is unchanged on the reused dashboard; restart with --debug-ledger only for local debugging.",
+    },
+    decisionEnvelopeSummary: null,
+    deferredViewModel: {
+      availableAt: url ? new URL("view-model.json", url).toString() : "",
+      reason:
+        "A healthy existing live dashboard was reused; heavier decision diagnostics remain available from /view-model.json.",
+    },
+    modeGuidance: {
+      deliveryMode: "live-server",
+      difference:
+        "This dashboard link was already live for the same cwd and plugin version; exported HTML is only a read-only fallback snapshot.",
+    },
+    progress: {
+      stage: "serve",
+      label: "Reuse live dashboard",
+      startedAt,
+      status: "completed",
+      outputTail: url,
+    },
+  };
 }
 
 function emitProgress(args: LooseObject, stage: string, message: string): void {

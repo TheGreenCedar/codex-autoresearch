@@ -22,10 +22,13 @@ export interface DashboardHealthSummary {
   registryPath: string;
   cwd: string;
   version: string;
+  mode: string;
+  lastReadAt: string;
   startedAt: string;
   previous: unknown;
   stale: boolean | null;
   liveness: DashboardHealthLiveness;
+  recoveryCommand: string;
 }
 
 export function buildDashboardHealthSummary(input: DashboardHealthInput): DashboardHealthSummary {
@@ -39,10 +42,13 @@ export function buildDashboardHealthSummary(input: DashboardHealthInput): Dashbo
     registryPath: cleanString(input.registryPath),
     cwd: cleanString(input.cwd),
     version: cleanString(input.version),
+    mode: "",
+    lastReadAt: "",
     startedAt: cleanString(input.startedAt),
     previous,
     stale: previousStale(previous),
     liveness: previousLiveness(previous),
+    recoveryCommand: dashboardHealthRecoveryCommand(cleanString(input.cwd)),
   };
 }
 
@@ -61,10 +67,11 @@ export async function verifyDashboardHealthSummary(
     const response = await fetch(summary.healthUrl, { signal: controller.signal });
     if (!response.ok) return { ...summary, liveness: "dead", stale: true };
     const payload = await response.json().catch((): null => null);
+    const details = dashboardHealthDetails(payload);
     if (dashboardIsAlive(payload, summary)) {
-      return { ...summary, liveness: "alive", stale: false };
+      return { ...summary, ...details, liveness: "alive", stale: false };
     }
-    return { ...summary, liveness: "unknown", stale: true };
+    return { ...summary, ...details, liveness: "unknown", stale: true };
   } catch {
     return { ...summary, liveness: "dead", stale: true };
   } finally {
@@ -112,6 +119,17 @@ function dashboardIsAlive(payload: unknown, summary: DashboardHealthSummary): bo
   return recordValue(payload, "ok") === true && dashboardMatchesSummary(dashboard, summary);
 }
 
+function dashboardHealthDetails(payload: unknown): { mode: string; lastReadAt: string } {
+  const dashboard = recordValue(payload, "dashboard");
+  const mode =
+    cleanString(recordValue(dashboard, "mode")) ||
+    cleanString(recordValue(payload, "mode"));
+  const lastReadAt =
+    cleanString(recordValue(dashboard, "lastReadAt")) ||
+    cleanString(recordValue(payload, "lastReadAt"));
+  return { mode, lastReadAt };
+}
+
 function dashboardMatchesSummary(dashboard: unknown, summary: DashboardHealthSummary): boolean {
   const port = recordValue(dashboard, "port");
   const cwd = cleanString(recordValue(dashboard, "cwd"));
@@ -120,6 +138,14 @@ function dashboardMatchesSummary(dashboard: unknown, summary: DashboardHealthSum
   if (summary.cwd && (!cwd || !samePathText(cwd, summary.cwd))) return false;
   if (summary.version && (!version || version !== summary.version)) return false;
   return true;
+}
+
+function dashboardHealthRecoveryCommand(cwd: string): string {
+  return cwd ? `node scripts/autoresearch.mjs serve --cwd ${quoteCommandArg(cwd)}` : "";
+}
+
+function quoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : JSON.stringify(value);
 }
 
 function cleanString(value: unknown): string {
