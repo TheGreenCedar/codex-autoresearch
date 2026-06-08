@@ -25,7 +25,8 @@ export interface GateQualitySummary {
   nextActionHint: string;
 }
 
-const CHECKS_VERB_PATTERN = /(?:^|[\s:._-])(test|typecheck|type-check|lint|build)(?:$|[\s:._-])/i;
+const CHECKS_VERB_PATTERN =
+  /(?:^|[\s:._-])(test|check|typecheck|type-check|lint|build)(?:$|[\s:._-])/i;
 
 export function evaluateGateQuality(input: GateQualityInput): GateQualitySummary {
   const malformedFields = malformedCommandFields(input);
@@ -106,7 +107,7 @@ export function evaluateGateQuality(input: GateQualityInput): GateQualitySummary
       blockers: [],
       warnings: [],
       evidence: [
-        "Checks command contains an obvious test, typecheck, lint, or build verification verb.",
+        "Checks command contains an obvious test, check, typecheck, lint, or build verification verb.",
       ],
       nextActionHint:
         "Run the checks gate and use pass/fail evidence alongside the benchmark metric.",

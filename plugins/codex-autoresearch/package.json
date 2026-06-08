@@ -29,6 +29,7 @@
     "build:node": "tsdown --config tsdown.config.ts",
     "build:dashboard": "vite build --config vite.dashboard.config.ts",
     "build": "run-s build:node build:dashboard",
+    "command-surface-map": "npm run build:node && node dist/scripts/command-surface-map.mjs",
     "dev:dashboard": "vite --config vite.dashboard.config.ts --host 127.0.0.1",
     "typecheck:node": "tsgo --project tsconfig.node.json --noEmit",
     "typecheck:dashboard": "tsgo --project tsconfig.dashboard.json --noEmit",
@@ -48,6 +49,7 @@
     "test:finalize": "run-s build:node test:compiled:finalize",
     "test:core": "run-s build:node test:compiled:core",
     "check:product": "npm run build:node && node scripts/check.mjs",
+    "check:source-hygiene": "node scripts/check.mjs --phase source-hygiene",
     "check": "run-p typecheck lint format:check && npm run check:product"
   },
   "devDependencies": {
