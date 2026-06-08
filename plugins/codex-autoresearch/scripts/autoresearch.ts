@@ -925,8 +925,7 @@ async function setupPlan(args: any) {
   const configured = Boolean(config && Object.keys(config).length > 0);
   const hasMissingEssentials = missing.length > 0;
   const configuredNextCommand = doctorCommand || guideCommand;
-  const safeNextCommand =
-    configured && !hasMissingEssentials ? configuredNextCommand : command;
+  const safeNextCommand = configured && !hasMissingEssentials ? configuredNextCommand : command;
   return {
     ok: true,
     workDir,

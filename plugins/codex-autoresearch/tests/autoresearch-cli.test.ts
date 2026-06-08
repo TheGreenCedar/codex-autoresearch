@@ -1271,10 +1271,7 @@ test("new config segment preserves previous durable goal when omitted", async ()
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
-    assert.equal(
-      payload.config.goal,
-      "Reduce simplification candidates without weakening checks.",
-    );
+    assert.equal(payload.config.goal, "Reduce simplification candidates without weakening checks.");
     assert.deepEqual(payload.historicalBest, {
       run: 1,
       metric: 24,
@@ -4673,7 +4670,10 @@ test("state report marks registry-only dashboard health dead until HTTP responds
     const payload = JSON.parse(report.stdout);
     assert.equal(payload.report.json.dashboard.status, "dead");
     assert.match(payload.report.text, /Dashboard: dead/);
-    assert.match(payload.report.json.dashboard.command ?? "", /scripts[\\/]autoresearch\.mjs serve/);
+    assert.match(
+      payload.report.json.dashboard.command ?? "",
+      /scripts[\\/]autoresearch\.mjs serve/,
+    );
     assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
@@ -4710,7 +4710,10 @@ test("state report does not call a fake same-process registry a live dashboard",
     const payload = JSON.parse(report.stdout);
     assert.notEqual(payload.report.json.dashboard.status, "alive");
     assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
-    assert.match(payload.report.json.dashboard.command ?? "", /scripts[\\/]autoresearch\.mjs serve/);
+    assert.match(
+      payload.report.json.dashboard.command ?? "",
+      /scripts[\\/]autoresearch\.mjs serve/,
+    );
     assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
   });
 });
@@ -5826,10 +5829,7 @@ test("setup-plan preserves explicit command, state inputs, and baseline measure 
       ["setup", "benchmark-lint", "doctor", "checkpoint", "baseline", "log"],
     );
     const logStep = payload.firstRunChecklist.find((step) => step.step === "log");
-    assert.match(
-      logStep.command,
-      /--status measure --description ['"]Baseline measurement['"]/,
-    );
+    assert.match(logStep.command, /--status measure --description ['"]Baseline measurement['"]/);
 
     await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
     const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
