@@ -9,6 +9,8 @@ type LooseObject = Record<string, unknown>;
 interface LiveViewModelCache {
   expiresAt: number;
   fingerprint: string;
+  fingerprintExpiresAt: number;
+  fingerprintStamp: string;
   payload: LooseObject;
 }
 
@@ -152,7 +154,11 @@ async function readCachedLiveViewModel({
   ttlMs: number;
   cached: LiveViewModelCache | null;
 }): Promise<{ body: LooseObject; cached: LiveViewModelCache }> {
-  const fingerprint = await liveSessionFingerprint(workDir);
+  const fingerprint = await liveSessionFingerprint(workDir, {
+    cached,
+    nowMs,
+    ttlMs,
+  });
   if (cached && cached.fingerprint === fingerprint && cached.expiresAt > nowMs) {
     return { body: cached.payload, cached };
   }
@@ -163,12 +169,29 @@ async function readCachedLiveViewModel({
     cached: {
       expiresAt: nowMs + ttlMs,
       fingerprint,
+      fingerprintExpiresAt: nowMs + ttlMs,
+      fingerprintStamp: await liveSessionStamp(workDir),
       payload: body,
     },
   };
 }
 
-async function liveSessionFingerprint(workDir: string): Promise<string> {
+async function liveSessionFingerprint(
+  workDir: string,
+  options: {
+    cached: LiveViewModelCache | null;
+    nowMs: number;
+    ttlMs: number;
+  },
+): Promise<string> {
+  const stamp = await liveSessionStamp(workDir);
+  if (
+    options.cached &&
+    options.cached.fingerprintStamp === stamp &&
+    options.cached.fingerprintExpiresAt > options.nowMs
+  ) {
+    return options.cached.fingerprint;
+  }
   const parts = await Promise.all([
     fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
     fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
@@ -176,6 +199,18 @@ async function liveSessionFingerprint(workDir: string): Promise<string> {
     fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
     fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
     fingerprintTree(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
+  ]);
+  return parts.join("|");
+}
+
+async function liveSessionStamp(workDir: string): Promise<string> {
+  const parts = await Promise.all([
+    fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
+    fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
+    fingerprintPath(path.join(workDir, "autoresearch.last-run.json"), "autoresearch.last-run.json"),
+    fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
+    fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
+    fingerprintPath(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
   ]);
   return parts.join("|");
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -37,3 +38,38 @@ test("perfection benchmark reports zero quality gaps for the local plugin", asyn
   assert.ok(checks, result.stdout);
   assert.equal(passed, checks);
 });
+
+test("compact read command paths use loadSessionState cache-aware loading", async () => {
+  const source = await readFile(path.join(pluginRoot, "scripts", "autoresearch.ts"), "utf8");
+  const cliHandlers = await readFile(path.join(pluginRoot, "lib", "cli-handlers.ts"), "utf8");
+  for (const functionName of ["guidedSetup", "onboardingPacket", "recommendNext", "publicState"]) {
+    const body = extractFunctionBody(source, functionName);
+    const directStateLoads = (body.match(/\bcurrentState\(/g) || []).length;
+    const cachedStateLoads = (body.match(/\bloadSessionState\(/g) || []).length;
+    assert.equal(directStateLoads, 0, `${functionName} should use loadSessionState cache helper`);
+    assert.ok(
+      cachedStateLoads <= 1,
+      `${functionName} should call loadSessionState at most once per command path`,
+    );
+  }
+  assert.match(cliHandlers, /createSessionReadCache/);
+  assert.match(`${source}\n${cliHandlers}`, /\breadCache\b/);
+});
+
+function extractFunctionBody(source, functionName) {
+  const signature = new RegExp(`async function ${functionName}\\b`);
+  const match = signature.exec(source);
+  assert.ok(match, `Missing function ${functionName}`);
+  const openBrace = source.indexOf("{", match.index);
+  assert.notEqual(openBrace, -1, `Missing body for ${functionName}`);
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(openBrace + 1, index);
+    }
+  }
+  assert.fail(`Unclosed body for ${functionName}`);
+}
