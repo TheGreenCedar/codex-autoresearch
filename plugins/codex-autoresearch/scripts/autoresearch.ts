@@ -849,9 +849,9 @@ async function setupPlan(args: any) {
       workDir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Describe the kept change",
+      "Baseline measurement",
     ],
     shellKind,
   );
@@ -918,11 +918,16 @@ async function setupPlan(args: any) {
     baselineCommand,
     logCommand,
   });
+  const configured = Boolean(config && Object.keys(config).length > 0);
+  const hasMissingEssentials = missing.length > 0;
+  const configuredNextCommand = doctorCommand || guideCommand;
+  const safeNextCommand =
+    configured && !hasMissingEssentials ? configuredNextCommand : command;
   return {
     ok: true,
     workDir,
     sessionCwd,
-    configured: Boolean(config && Object.keys(config).length > 0),
+    configured,
     currentMetric: state.config.metricName,
     recommendedRecipe: recommended,
     missing,
@@ -936,21 +941,32 @@ async function setupPlan(args: any) {
     scaffoldHealth,
     researchIntegrity,
     integrityPreflight,
-    nextCommand: command,
+    nextCommand: safeNextCommand,
     guideCommand,
     baselineCommand,
     missingEssentials: missing,
-    nextStep: sharedNextStep({
-      stage: "setup-repair",
-      title: "Create session setup",
-      reason: missing.length
-        ? `Setup still needs: ${missing.join(", ")}.`
-        : "Create or refresh the Autoresearch session files before the first packet.",
-      command,
-      toolName: "setup_session",
-      safety: "state_mutation",
-      missingEssentials: missing,
-    }),
+    nextStep:
+      configured && !hasMissingEssentials
+        ? sharedNextStep({
+            stage: "configured-session",
+            title: "Verify configured session",
+            reason: "Session setup is present; verify benchmark and state before packet work.",
+            command: configuredNextCommand,
+            toolName: "doctor",
+            safety: "read_or_check",
+            missingEssentials: [],
+          })
+        : sharedNextStep({
+            stage: "setup-repair",
+            title: "Create session setup",
+            reason: missing.length
+              ? `Setup still needs: ${missing.join(", ")}.`
+              : "Create or refresh the Autoresearch session files before the first packet.",
+            command,
+            toolName: "setup_session",
+            safety: "state_mutation",
+            missingEssentials: missing,
+          }),
     firstRunChecklist: checklist,
     guidedFlow: checklist,
     notes: [
@@ -4148,7 +4164,7 @@ async function setupCommandResponseFields({
   const benchmarkLintCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(metricName)} --command ${shellQuote(benchmarkCommand)}`;
   const doctorCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} doctor --cwd ${shellQuote(workDir)} --check-benchmark`;
   const baselineCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)}`;
-  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status keep --description ${shellQuote("Describe the kept change")}`;
+  const logCommand = `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} log --cwd ${shellQuote(workDir)} --from-last --status measure --description ${shellQuote("Baseline measurement")}`;
   const config = readConfig(sessionCwd);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const checksCommand =
@@ -7715,6 +7731,7 @@ function continuationCommands(workDir: string) {
     next: `node ${script} next --cwd ${cwd} --compact`,
     nextFull: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
+    measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
     laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,

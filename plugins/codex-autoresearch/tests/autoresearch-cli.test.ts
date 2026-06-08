@@ -5783,7 +5783,7 @@ test("clear dry-run previews deletion targets without removing files", async () 
   });
 });
 
-test("setup-plan preserves explicit command and state inputs", async () => {
+test("setup-plan preserves explicit command, state inputs, and baseline measure guidance", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
     const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
@@ -5824,6 +5824,11 @@ test("setup-plan preserves explicit command and state inputs", async () => {
       payload.firstRunChecklist.map((step) => step.step),
       ["setup", "benchmark-lint", "doctor", "checkpoint", "baseline", "log"],
     );
+    const logStep = payload.firstRunChecklist.find((step) => step.step === "log");
+    assert.match(
+      logStep.command,
+      /--status measure --description ['"]Baseline measurement['"]/,
+    );
 
     await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
     const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
@@ -5833,6 +5838,53 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.equal(guidePayload.nextStep.nextAction.title, "Run baseline packet");
     assert.equal(guidePayload.nextStep.nextAction.safety, "process_start");
     assert.match(guidePayload.nextStep.nextAction.command, / next /);
+  });
+});
+
+test("setup-plan on configured session recommends doctor instead of setup repair", async () => {
+  await withTempDir("setup-plan-configured-session", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      `${JSON.stringify({
+        type: "config",
+        name: "demo",
+        metricName: "seconds",
+        bestDirection: "lower",
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 5 }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "Write-Output 'METRIC seconds=1'\n",
+      "utf8",
+    );
+
+    const result = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "demo",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.configured, true);
+    assert.deepEqual(payload.missingEssentials, []);
+    assert.match(payload.nextCommand, /doctor|state/);
+    assert.doesNotMatch(payload.nextCommand, /\ssetup\s/);
+    assert.equal(payload.nextStep.stage, "configured-session");
+    assert.match(payload.nextStep.nextAction.command, /doctor|state/);
+    assert.doesNotMatch(payload.nextStep.nextAction.command, /\ssetup\s/);
   });
 });
 
