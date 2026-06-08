@@ -101,13 +101,14 @@ Use the served dashboard when a live readout is useful:
 
 - Use `scripts/autoresearch.mjs serve --cwd <project>`.
 - Share the served `http://127.0.0.1:<port>/` URL by default.
-- Static exports are read-only; use the served dashboard when packet freshness matters.
-- Treat the dashboard as a visual aid, not a control surface. Use the CLI for setup, packet runs, logging, gap review, export, `finalize-preview`, and finalization.
+- Static exports are read-only snapshots; serve a fresh dashboard when packet freshness matters.
+- Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
 - Preserve the chart-first dashboard direction: the metric trend/readiness chart remains the first major evidence readout, with decision envelope, Codex brief, current decision, ledger/ASI, finalization, quality-gap, runtime drift, and process hygiene around or below that flow.
 
 ## Deep Research Loops
 
 Use a deep-research loop for broad, qualitative, product-study, UX, architecture, or documentation prompts.
+Use this for qualitative but checklist-measured work: study, accept gaps, measure `quality_gap`, close credible candidates, then start a fresh round when the question is still alive.
 
 1. Create the scratchpad with `research-setup --cwd <project> --slug <slug> --goal "<goal>"`.
 2. Keep sources dated and claim-specific in `autoresearch.research/<slug>/sources.md`.

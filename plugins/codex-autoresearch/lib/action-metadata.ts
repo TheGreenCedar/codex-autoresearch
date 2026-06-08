@@ -164,10 +164,16 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
   }),
   "plateau-pivot": actionMetadata({
     label: "Pivot plateau",
-    commandLabel: "Next",
-    safeAction: "next",
-    packetBrake: false,
-    fallbackKeys: ["next", "nextRun"],
+    commandLabel: "Scout",
+    safeAction: "lane-runner",
+    packetBrake: true,
+    fallbackKeys: [
+      "laneRunner",
+      "newSegmentDryRun",
+      "promoteGateDryRun",
+      "benchmarkInspect",
+      "state",
+    ],
   }),
   "quality-gap": actionMetadata({
     label: "Close quality gaps",
@@ -183,7 +189,6 @@ const operationalFallbackKinds = new Set([
   "log-decision",
   "next-packet",
   "plateau",
-  "plateau-pivot",
   "stale-packet",
 ]);
 

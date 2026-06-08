@@ -1239,6 +1239,51 @@ test("state reports corrupt JSONL with the ledger path", async () => {
   });
 });
 
+test("new config segment preserves previous durable goal when omitted", async () => {
+  await withTempDir("segment-preserves-goal", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "simplify plugin code",
+          goal: "Reduce simplification candidates without weakening checks.",
+          metricName: "simplification_candidates",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 24,
+          status: "keep",
+          description: "Baseline simplification scan",
+        }),
+        JSON.stringify({
+          type: "config",
+          name: "simplify plugin code",
+          metricName: "simplification_candidates",
+          bestDirection: "lower",
+          segmentReason: "Reset after benchmark-surface drift.",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.config.goal, "Reduce simplification candidates without weakening checks.");
+    assert.deepEqual(payload.historicalBest, {
+      run: 1,
+      metric: 24,
+      status: "keep",
+      segment: 0,
+      description: "Baseline simplification scan",
+      promotionGrade: null,
+    });
+    assert.equal(payload.decisionEnvelope.goalAdvice.present, true);
+  });
+});
+
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
     await runCli([
@@ -3356,9 +3401,10 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, 3);
     assert.equal(packet.decision.metrics.cache_hits, 8);
-    assert.equal(packet.decision.safeSuggestedStatus, "keep");
+    assert.equal(packet.decision.rawSuggestedStatus, "measure");
+    assert.equal(packet.decision.safeSuggestedStatus, "measure");
     assert.equal(packet.decision.promotion.label, "exploratory");
-    assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
+    assert.match(packet.decision.statusGuidance, /baseline or diagnostic packet/);
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
     assert.match(packet.packetEvidence.packetId, /^packet-/);
@@ -4204,6 +4250,81 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
   });
 });
 
+test("recommend-next compact refuses stale next command for plateau pivot", async () => {
+  await withTempDir("plateau-pivot-command", async (dir) => {
+    await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "plateau pivot",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=10')"`,
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline",
+      "--asi",
+      JSON.stringify({
+        family: "cache-size",
+        hypothesis: "baseline cache size",
+        evidence: "seconds=10",
+      }),
+    ]);
+    for (const [metric, description] of [
+      ["11", "cache size retry 1"],
+      ["11.0001", "cache size retry 2"],
+    ]) {
+      await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        metric,
+        "--status",
+        "discard",
+        "--description",
+        description,
+        "--asi",
+        JSON.stringify({
+          family: "cache-size",
+          rollback_reason: "slower than baseline",
+        }),
+      ]);
+    }
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--status",
+      "crash",
+      "--description",
+      "cache size retry 3",
+      "--asi",
+      JSON.stringify({
+        family: "cache-size",
+        rollback_reason: "crashed before producing a trusted metric",
+      }),
+    ]);
+
+    const result = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action?.kind, "plateau-pivot");
+    assert.doesNotMatch(payload.commands.primary, /\bnext\b/);
+    assert.match(payload.commands.primary, /lane-runner|new-segment/);
+  });
+});
+
 test("pending log receipts block state, doctor, and new log attempts", async () => {
   await withTempDir("pending-log-receipt", async (dir) => {
     await git(dir, ["init"]);
@@ -4549,8 +4670,11 @@ test("state report marks registry-only dashboard health dead until HTTP responds
     const payload = JSON.parse(report.stdout);
     assert.equal(payload.report.json.dashboard.status, "dead");
     assert.match(payload.report.text, /Dashboard: dead/);
-    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
-    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+    assert.match(
+      payload.report.json.dashboard.command ?? "",
+      /scripts[\\/]autoresearch\.mjs serve/,
+    );
+    assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
@@ -4586,8 +4710,11 @@ test("state report does not call a fake same-process registry a live dashboard",
     const payload = JSON.parse(report.stdout);
     assert.notEqual(payload.report.json.dashboard.status, "alive");
     assert.doesNotMatch(payload.report.text, /Dashboard: alive/);
-    assert.match(payload.report.json.dashboard.command ?? "", /^curl /);
-    assert.doesNotMatch(payload.report.text, /node .*scripts\/autoresearch\.mjs serve/);
+    assert.match(
+      payload.report.json.dashboard.command ?? "",
+      /scripts[\\/]autoresearch\.mjs serve/,
+    );
+    assert.doesNotMatch(payload.report.json.dashboard.command ?? "", /^curl /);
   });
 });
 
@@ -4745,7 +4872,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
   });
 });
 
-test("legacy failed sentinel metrics do not suppress next-run baseline guidance", async () => {
+test("legacy failed sentinel metrics do not suppress next-run baseline measure guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "legacy sentinel", "--metric-name", "seconds"]);
 
@@ -4778,8 +4905,8 @@ test("legacy failed sentinel metrics do not suppress next-run baseline guidance"
     ]);
     assert.equal(next.code, 0, next.stderr);
     const payload = JSON.parse(next.stdout);
-    assert.equal(payload.decision.rawSuggestedStatus, "keep");
-    assert.equal(payload.decision.safeSuggestedStatus, "keep");
+    assert.equal(payload.decision.rawSuggestedStatus, "measure");
+    assert.equal(payload.decision.safeSuggestedStatus, "measure");
   });
 });
 
@@ -5660,7 +5787,7 @@ test("clear dry-run previews deletion targets without removing files", async () 
   });
 });
 
-test("setup-plan preserves explicit command and state inputs", async () => {
+test("setup-plan preserves explicit command, state inputs, and baseline measure guidance", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
     const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
@@ -5701,6 +5828,8 @@ test("setup-plan preserves explicit command and state inputs", async () => {
       payload.firstRunChecklist.map((step) => step.step),
       ["setup", "benchmark-lint", "doctor", "checkpoint", "baseline", "log"],
     );
+    const logStep = payload.firstRunChecklist.find((step) => step.step === "log");
+    assert.match(logStep.command, /--status measure --description ['"]Baseline measurement['"]/);
 
     await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
     const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
@@ -5710,6 +5839,53 @@ test("setup-plan preserves explicit command and state inputs", async () => {
     assert.equal(guidePayload.nextStep.nextAction.title, "Run baseline packet");
     assert.equal(guidePayload.nextStep.nextAction.safety, "process_start");
     assert.match(guidePayload.nextStep.nextAction.command, / next /);
+  });
+});
+
+test("setup-plan on configured session recommends doctor instead of setup repair", async () => {
+  await withTempDir("setup-plan-configured-session", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      `${JSON.stringify({
+        type: "config",
+        name: "demo",
+        metricName: "seconds",
+        bestDirection: "lower",
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ maxIterations: 5 }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "Write-Output 'METRIC seconds=1'\n",
+      "utf8",
+    );
+
+    const result = await runCli([
+      "setup-plan",
+      "--cwd",
+      dir,
+      "--name",
+      "demo",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.configured, true);
+    assert.deepEqual(payload.missingEssentials, []);
+    assert.match(payload.nextCommand, /doctor|state/);
+    assert.doesNotMatch(payload.nextCommand, /\ssetup\s/);
+    assert.equal(payload.nextStep.stage, "configured-session");
+    assert.match(payload.nextStep.nextAction.command, /doctor|state/);
+    assert.doesNotMatch(payload.nextStep.nextAction.command, /\ssetup\s/);
   });
 });
 
@@ -6915,7 +7091,7 @@ test("large metric streams keep a primary metric outside retained output tails",
   });
 });
 
-test("next command runs preflight and benchmark as one decision packet", async () => {
+test("next command suggests measure for a first baseline decision packet", async () => {
   await withTempDir("next-command", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "next command", "--metric-name", "seconds"]);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
@@ -6934,12 +7110,13 @@ test("next command runs preflight and benchmark as one decision packet", async (
     assert.equal(payload.run.progress.stages[0].status, "completed");
     assert.match(payload.run.progress.latestOutputTail, /METRIC seconds=2/);
     assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard", "measure"]);
-    assert.equal(payload.decision.suggestedStatus, "keep");
-    assert.equal(payload.decision.safeSuggestedStatus, "keep");
-    assert.match(payload.decision.statusGuidance, /Safe to consider keep/);
+    assert.equal(payload.decision.rawSuggestedStatus, "measure");
+    assert.equal(payload.decision.suggestedStatus, "measure");
+    assert.equal(payload.decision.safeSuggestedStatus, "measure");
+    assert.match(payload.decision.statusGuidance, /without a prior improvement comparison/);
     assert.ok(Array.isArray(payload.decision.lanePortfolio));
     assert.equal(payload.decision.diversityGuidance, null);
-    assert.match(payload.nextAction, /Log this run/);
+    assert.match(payload.nextAction, /Log this run as measure/);
   });
 });
 

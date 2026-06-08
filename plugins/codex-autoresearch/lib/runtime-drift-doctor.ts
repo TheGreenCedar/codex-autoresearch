@@ -157,7 +157,7 @@ function buildNextActionHint({
   }
   if (installedRuntime === "stale") {
     if (installedRuntimeVersion?.trim() === sourceVersion && runtimeFingerprint === "mismatched") {
-      return `Installed runtime version matches source ${sourceVersion}, but the built entrypoint fingerprint differs. Inspect or refresh the runtime with: ${inspectionCommand}`;
+      return "Installed runtime version matches source but the built entrypoint fingerprint differs. Inspect the installed cache path, refresh the plugin from the Codex plugin UI or configured marketplace, then smoke the installed launcher with --help before trusting runtime behavior.";
     }
     return `Installed runtime is stale for source ${sourceVersion}. Inspect or refresh the runtime with: ${inspectionCommand}`;
   }

@@ -81,6 +81,9 @@ test("matching installed runtime version with different entrypoint fingerprint i
   assert.equal(summary.installedRuntime, "stale");
   assert.equal(summary.runtimeFingerprint, "mismatched");
   assert.match(summary.nextActionHint, /fingerprint differs/i);
+  assert.match(summary.nextActionHint, /refresh the plugin/i);
+  assert.match(summary.nextActionHint, /--help/);
+  assert.doesNotMatch(summary.nextActionHint, DOCTOR_COMMAND);
 });
 
 test("matching installed runtime version without fingerprint evidence is unavailable", () => {

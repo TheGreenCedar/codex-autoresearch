@@ -42,6 +42,10 @@ export interface TerminalReportSummary {
     name: string;
     best: number | null;
     developmentBest: number | null;
+    historicalBest: {
+      run: number | null;
+      metric: number | null;
+    };
   };
   freshness: {
     fresh: boolean | null;
@@ -116,7 +120,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     canonicalNextAction,
     packet,
   });
-  const dashboard = dashboardSummary(state);
+  const dashboard = dashboardSummary(state, commands);
   const commandExecutionBoundary = commandExecutionBoundarySummary(state);
   const gate = {
     posture: stringValue(gateQuality?.posture) || "unknown",
@@ -168,7 +172,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     `Runtime: installed ${runtimeSummary.installedRuntime}, build ${runtimeSummary.builtRuntime}${
       runtimeSummary.detail ? ` - ${runtimeSummary.detail}` : ""
     }`,
-    `Metric: ${metric.name}, best accepted ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}`,
+    `Metric: ${metric.name}, active segment best ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}, historical best ${formatHistoricalBest(metric)}`,
     `Freshness: ${freshnessLabel(freshness.fresh)}${
       freshness.reason ? ` - ${freshness.reason}` : ""
     }`,
@@ -288,6 +292,8 @@ function selectNextCommand({
 
 function metricSummary(state: JsonRecord, envelope: JsonRecord | null) {
   const activeSegment = recordOrNull(envelope?.activeSegment) || recordOrNull(state.activeSegment);
+  const historicalBest =
+    recordOrNull(envelope?.historicalBest) || recordOrNull(state.historicalBest);
   const config = recordOrNull(state.config);
   const stateMetric = recordOrNull(state.metric);
   const stateMetricName =
@@ -302,6 +308,10 @@ function metricSummary(state: JsonRecord, envelope: JsonRecord | null) {
     best: numberOrNull(activeSegment?.best) ?? numberOrNull(state.best),
     developmentBest:
       numberOrNull(activeSegment?.developmentBest) ?? numberOrNull(development?.best),
+    historicalBest: {
+      run: numberOrNull(historicalBest?.run),
+      metric: numberOrNull(historicalBest?.metric),
+    },
   };
 }
 
@@ -342,20 +352,25 @@ function asiSummary(state: JsonRecord) {
   };
 }
 
-function dashboardSummary(state: JsonRecord): TerminalReportDashboard {
+function dashboardSummary(state: JsonRecord, commands: JsonRecord): TerminalReportDashboard {
   const health = recordOrNull(state.dashboardHealth);
   const liveness = stringValue(health?.liveness);
   const healthUrl = stringValue(health?.healthUrl);
   const healthProbeCommand = httpHealthProbeCommand(healthUrl);
+  const workDir = stringValue(state.workDir);
   if (liveness && liveness !== "unknown") {
     const stale = health?.stale === true ? "stale" : health?.stale === false ? "fresh" : "unknown";
     const shouldRestart = liveness === "dead" || health?.stale === true;
+    const serveCommand =
+      commandLookup(commands, "liveDashboard") ||
+      commandLookup(commands, "serve") ||
+      localServeCommand(workDir);
     return {
       status: liveness,
       detail: `${liveness} (${stale})${
-        shouldRestart ? "; restart the dashboard outside report command fields if needed" : ""
+        shouldRestart ? "; serve a fresh dashboard before using dashboard evidence" : ""
       }`,
-      command: healthProbeCommand,
+      command: shouldRestart ? serveCommand : healthProbeCommand,
       healthUrl,
     };
   }
@@ -474,6 +489,13 @@ function formatMetricValue(value: number | null): string {
   return value == null ? "unknown" : String(value);
 }
 
+function formatHistoricalBest(metric: TerminalReportSummary["metric"]): string {
+  if (metric.historicalBest.metric == null) return "unknown";
+  return metric.historicalBest.run == null
+    ? String(metric.historicalBest.metric)
+    : `#${metric.historicalBest.run} = ${metric.historicalBest.metric}`;
+}
+
 function freshnessLabel(value: boolean | null): string {
   if (value === true) return "fresh";
   if (value === false) return "stale";
@@ -494,4 +516,12 @@ function quoteForDisplay(value: string): string {
 
 function httpHealthProbeCommand(healthUrl: string): string {
   return /^https?:\/\//i.test(healthUrl) ? `curl ${quoteForDisplay(healthUrl)}` : "";
+}
+
+function localServeCommand(workDir: string): string {
+  return workDir ? `node scripts/autoresearch.mjs serve --cwd ${quoteCommandArg(workDir)}` : "";
+}
+
+function quoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : quoteForDisplay(value);
 }

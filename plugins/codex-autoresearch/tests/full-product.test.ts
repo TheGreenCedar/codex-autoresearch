@@ -107,6 +107,12 @@ test("displayed command quoting preserves backslashes before quotes", async () =
   assert.ok(result.commandDisplay.includes(expectedDisplay), result.commandDisplay);
 });
 
+test("README positions quality-gap as checklist-measured qualitative loop", async () => {
+  const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
+  assert.match(readme, /qualitative but checklist-measured/i);
+  assert.match(readme, /research-setup -> quality-gap -> gap-candidates/);
+});
+
 test("runner parses metrics, truncates tails, and reports timeouts", async () => {
   const metrics = parseMetricLines(
     ["metric seconds=1.25", "METRIC delta=-2", "METRIC scaled=1.5e+2", "METRIC __proto__=99"].join(
