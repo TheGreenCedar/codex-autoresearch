@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import type { DashboardEntry, DashboardMeta } from "./types";
-import { buildReadout, dashboardMode } from "./model";
+import type { DashboardEntry, DashboardMeta, DashboardViewModel } from "./types";
+import { buildReadout, dashboardMode, recordFrom } from "./model";
 import { DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW } from "./constants";
 import type { DashboardView } from "./constants";
 import { useDashboardSession } from "./hooks/useDashboardSession";
@@ -99,6 +99,8 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           setView={setViewParam}
         />
 
+        {auditView ? <MobileNextAction viewModel={viewModel} /> : null}
+
         <section
           className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
           aria-label="Metric evidence"
@@ -111,7 +113,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
               chartHeight={auditView ? 350 : 420}
               afterChart={<SignalStrip view={view} viewModel={viewModel} />}
             />
-            {auditView && mode.liveRefresh ? decisionRail : null}
+            {auditView ? decisionRail : null}
           </div>
           {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
         </section>
@@ -125,8 +127,6 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
         </section>
 
-        {auditView && !mode.liveRefresh ? decisionRail : null}
-
         <Ledger session={session} readout={readout} />
 
         {auditView ? (
@@ -139,8 +139,13 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
         ) : null}
       </main>
 
-      {toast && (
-        <div className="toast-container">
+      <div
+        className="toast-container"
+        role={toast?.type === "warn" ? "alert" : "status"}
+        aria-live={toast?.type === "warn" ? "assertive" : "polite"}
+        aria-atomic="true"
+      >
+        {toast ? (
           <div className={`toast ${toast.type}`} key={toast.id}>
             <div className="toast-content">
               <div className="toast-title">{toast.title}</div>
@@ -155,8 +160,35 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
               &times;
             </button>
           </div>
-        </div>
-      )}
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function MobileNextAction({ viewModel }: { viewModel: DashboardViewModel }) {
+  const action = recordFrom(viewModel.nextBestAction);
+  const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
+  const title =
+    cleanActionText(action.title) || cleanActionText(envelope.title) || "Choose next action";
+  const packetBrake = action.packetBrake === true;
+  const detail = packetBrake
+    ? "Do not run another packet"
+    : cleanActionText(action.detail) || cleanActionText(envelope.detail) || "Decision envelope";
+
+  return (
+    <section
+      className={`mobile-next-action${packetBrake ? " warn" : ""}`}
+      id="mobile-next-action"
+      aria-label={`Next: ${title}. ${detail}`}
+    >
+      <span className="signal-label">Next</span>
+      <strong title={title}>{title}</strong>
+      <em title={detail}>{detail}</em>
+    </section>
+  );
+}
+
+function cleanActionText(value: unknown) {
+  return String(value ?? "").trim();
 }

@@ -2900,6 +2900,48 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
   }
 });
 
+test("mobile audit dashboard exposes next action before chart content", async () => {
+  const viewModel = {
+    nextBestAction: {
+      title: "Preview finalization",
+      detail: "Do not run another packet",
+      packetBrake: true,
+    },
+  };
+  const entries = [
+    dashboardConfigEntry({ name: "mobile next", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "static-export",
+      viewModel,
+    },
+    { url: "file:///autoresearch-dashboard.html?view=audit" },
+  );
+  const mobileNext = getById("mobile-next-action");
+  const trend = getById("trend-panel");
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const mobileBlock = extractCssBlock(css, "@media (max-width: 720px)");
+
+  assert.equal(mobileNext.querySelector("button"), null);
+  assert.match(mobileNext.textContent, /Next/);
+  assert.match(mobileNext.textContent, /Preview finalization/);
+  assert.match(mobileNext.textContent, /Do not run another packet/);
+  assert.ok(
+    mobileNext.compareDocumentPosition(trend) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "mobile next action should appear before chart content in audit DOM order",
+  );
+  assert.match(css, /\.mobile-next-action\s*\{[\s\S]*?display:\s*none/);
+  assert.match(mobileBlock, /\.mobile-next-action\s*\{[\s\S]*?display:\s*grid/);
+  dom.window.close();
+});
+
 test("dashboard renders strategy lanes and evidence status classes", async () => {
   const viewModel = {
     evidenceChips: [
@@ -3139,6 +3181,58 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
       `${href} should be programmatically focusable`,
     );
   }
+  dom.window.close();
+});
+
+test("static audit dashboard renders decision rail before session context", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "static audit order",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { dom } = await runDashboard(entries, emptyCommandMeta(), {
+    query: "?view=audit",
+  });
+  const trend = dom.window.document.querySelector("#trend-panel");
+  const decision = dom.window.document.querySelector("#decision-rail");
+  const brief = dom.window.document.querySelector("#codex-brief");
+
+  assert.ok(trend, "trend panel should exist");
+  assert.ok(decision, "decision rail should exist");
+  assert.ok(brief, "codex brief should exist");
+  assert.ok(
+    decision.compareDocumentPosition(brief) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "decision rail should appear before Codex brief in static audit view",
+  );
+  dom.window.close();
+});
+
+test("run toast announces status changes", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "toast a11y",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { dom } = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    viewModel: {},
+  });
+  const toastContainer = dom.window.document.querySelector(".toast-container");
+  assert.ok(toastContainer, "toast container should render after latest run");
+  assert.equal(toastContainer.getAttribute("aria-live"), "polite");
+  assert.equal(toastContainer.getAttribute("role"), "status");
   dom.window.close();
 });
 
