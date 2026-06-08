@@ -64,6 +64,61 @@ test("state exposes missing product claim coverage for shippable retrieval work"
   });
 });
 
+test("finalize-preview json exposes missing product-grade claim coverage", async () => {
+  await withTempDir("product-claim-coverage-finalize-preview", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    await git(dir, ["config", "user.email", "codex@example.invalid"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "retrieval.ts"), "export const value = 'base';\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "base"]);
+
+    await git(dir, ["switch", "-c", "codex/retrieval-product-claim"]);
+    await writeFile(
+      path.join(dir, "src", "retrieval.ts"),
+      "export const value = 'bounded foreground embedding';\n",
+    );
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "bound foreground embedding work"]);
+    const kept = (await git(dir, ["rev-parse", "HEAD"])).trim();
+
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "Bound foreground embedding work.",
+          evidence: "foreground embedding work can be bounded",
+          commit: kept,
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "log autoresearch session"]);
+
+    const result = await runCli(["finalize-preview", "--cwd", dir, "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.productGradeReady, false);
+    assert.match(payload.blockers.join("\n"), /retrieval accuracy/i);
+    assert.match(payload.blockers.join("\n"), /lazy/i);
+    assert.match(result.stdout, /Product-grade evidence is missing/);
+    assert.match(result.stdout, /Lazy\/selective behavior/);
+    assert.match(result.stdout, /Experimental review branch only/);
+  });
+});
+
 async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
   await mkdir(capsuleDir, { recursive: true });
