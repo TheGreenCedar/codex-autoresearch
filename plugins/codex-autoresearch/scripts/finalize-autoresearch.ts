@@ -1093,9 +1093,9 @@ async function main() {
   for (const branch of created) console.log(`  ${branch}`);
   console.log("");
   console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
-  console.log("Cleanup after merge only:");
-  console.log(`  PowerShell: git branch -D ${powershellQuote(sourceBranch)}`);
-  console.log("  POSIX: see the generated review summary for quoted cleanup guidance.");
+  console.log("Cleanup after verified merge:");
+  console.log("  Source branch and session-artifact cleanup commands are intentionally omitted here.");
+  console.log("  Use the generated review summary after trunk merge verification succeeds.");
 }
 
 function planFingerprint(plan: FinalizePlan): string {
