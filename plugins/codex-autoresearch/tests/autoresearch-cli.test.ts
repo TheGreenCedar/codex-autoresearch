@@ -30,6 +30,40 @@ const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
 
+test("state exposes missing product claim coverage for shippable retrieval work", async () => {
+  await withTempDir("product-claim-coverage-state", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 20,
+          status: "keep",
+          evidenceStatus: "accepted",
+          description: "Sidecar safety fails closed and foreground embedding work can be bounded.",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const result = await runCli(["state", "--cwd", dir]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const coverage = payload.productClaimCoverage;
+    assert.equal(coverage.productGradeReady, false);
+    assert.deepEqual(
+      coverage.missingRequiredProof.map((proof) => proof.id),
+      ["retrieval_accuracy", "lazy_behavior", "ranking_quality", "docs_tests"],
+    );
+  });
+});
+
 async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
   await mkdir(capsuleDir, { recursive: true });
@@ -2880,6 +2914,25 @@ test("prompt-plan prefers documented repo benchmark hints over generic cargo rec
       payload.intent.inferredFrom.discoveredBenchmark.path,
       "docs/autoresearch-benchmark.md",
     );
+  });
+});
+
+test("prompt-plan flags retrieval speed work as needing a quality constraint", async () => {
+  await withTempDir("prompt-plan-retrieval-quality", async (dir) => {
+    const result = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Speed up large-codebase semantic retrieval with lazy search",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const serialized = JSON.stringify(payload);
+
+    assert.match(serialized, /quality constraint/i);
+    assert.match(serialized, /accuracy|recall|ranking/i);
+    assert.doesNotMatch(serialized, /cargo test.*primary benchmark/i);
   });
 });
 

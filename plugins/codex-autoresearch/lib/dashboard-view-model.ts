@@ -255,6 +255,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     evidenceChips,
     evidenceLedger,
     evidenceReadout,
+    productClaimCoverage: state.productClaimCoverage || null,
     proofGaps,
     finalizationChecklist,
     finalizationPressure,

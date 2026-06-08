@@ -8,6 +8,10 @@ import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import {
+  buildProductClaimCoverage,
+  evidenceTextFromRun,
+} from "./product-claim-coverage.js";
+import {
   readActiveSessionDecisionCapsule,
   type SessionDecisionCapsule,
 } from "./session-decision-capsule.js";
@@ -340,6 +344,12 @@ export function currentState(workDir: string): SessionState {
   );
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
+  const productClaimCoverage = buildProductClaimCoverage({
+    goal: config.goal,
+    acceptedEvidence: current
+      .filter((run) => isAcceptedCurrentRun(run))
+      .flatMap((run) => evidenceTextFromRun(run)),
+  });
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, entries);
   const promotionRuns = evidenceRegistry.currentRuns.filter(
     (run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run),
@@ -356,6 +366,7 @@ export function currentState(workDir: string): SessionState {
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
     evidenceRegistry,
+    productClaimCoverage,
     sessionDecisionCapsule,
   };
 }

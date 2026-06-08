@@ -20,6 +20,7 @@ export interface CompactStateBuilderInput {
   goalFrame?: unknown;
   operatorHandoff?: unknown;
   evidenceRegistry?: unknown;
+  productClaimCoverage?: unknown;
   sessionDecisionCapsule?: unknown;
   evidenceLabels?: unknown[];
   scaffoldHealth?: unknown;
@@ -81,6 +82,7 @@ export interface CompactStateResponse {
   goalFrame: unknown;
   operatorHandoff: unknown;
   evidenceRegistry: unknown;
+  productClaimCoverage: unknown;
   sessionDecisionCapsule: unknown;
   evidenceLabels: unknown[];
   scaffoldHealth: unknown;
@@ -143,6 +145,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     goalFrame: input.goalFrame ?? null,
     operatorHandoff: input.operatorHandoff ?? null,
     evidenceRegistry: input.evidenceRegistry ?? null,
+    productClaimCoverage: input.productClaimCoverage ?? null,
     sessionDecisionCapsule: input.sessionDecisionCapsule ?? null,
     evidenceLabels: Array.isArray(input.evidenceLabels) ? input.evidenceLabels : [],
     scaffoldHealth: input.scaffoldHealth ?? null,

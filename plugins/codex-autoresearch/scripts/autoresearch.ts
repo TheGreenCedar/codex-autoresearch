@@ -701,6 +701,18 @@ async function setupPlan(args: any) {
   );
   const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
   const metricName = validateMetricName(planArgs.metric_name || planArgs.metricName || "seconds");
+  const qualityConstraints = uniqueQualityConstraints([
+    ...qualityConstraintsFromInput(planArgs.quality_constraints ?? planArgs.qualityConstraints),
+    ...qualityConstraintsForText(
+      [
+        planArgs.goal,
+        planArgs.name,
+        benchmarkCommand,
+        checksCommand,
+        listOption(planArgs.constraints).join(" "),
+      ].join(" "),
+    ),
+  ]);
   const benchmarkPrintsMetric = explicitBenchmarkPrintsMetric(planArgs);
   const benchmarkMode = {
     explicitCommand: Boolean(benchmarkCommand),
@@ -749,6 +761,9 @@ async function setupPlan(args: any) {
       : []),
     ...(listOption(planArgs.constraints).length
       ? ["--constraints", listOption(planArgs.constraints).join(",")]
+      : []),
+    ...(qualityConstraints.length
+      ? ["--quality-constraints", JSON.stringify(qualityConstraints)]
       : []),
     ...(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
       ? [
@@ -874,6 +889,7 @@ async function setupPlan(args: any) {
     scaffoldHealth,
     warningDetails: integrityPreflight,
     setupMissing: missing,
+    qualityConstraints,
     benchmarkCommand,
     checksCommand,
   });
@@ -937,6 +953,7 @@ async function setupPlan(args: any) {
     defaultBenchmarkCommandReady: hasDefaultBenchmarkCommand,
     benchmarkMode,
     benchmarkLintCommand,
+    qualityConstraints,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
     runtimeDriftSummary: guidance.runtimeDriftSummary,
@@ -1160,6 +1177,14 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     offLimits: args.offLimits ?? args.off_limits ?? intent.setupDefaults.offLimits,
     off_limits: args.off_limits ?? args.offLimits ?? intent.setupDefaults.offLimits,
     constraints: args.constraints ?? intent.setupDefaults.constraints,
+    qualityConstraints:
+      args.qualityConstraints ??
+      args.quality_constraints ??
+      intent.setupDefaults.qualityConstraints,
+    quality_constraints:
+      args.quality_constraints ??
+      args.qualityConstraints ??
+      intent.setupDefaults.qualityConstraints,
     secondaryMetrics:
       args.secondaryMetrics ?? args.secondary_metrics ?? intent.setupDefaults.secondaryMetrics,
     secondary_metrics:
@@ -1188,6 +1213,7 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     kind: "codex-autoresearch-prompt-plan",
     prompt,
     intent,
+    qualityConstraints: intent.qualityConstraints,
     setup,
     commands: {
       promptPlan: commandLine([
@@ -1246,6 +1272,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
   const suspects = parseSuspects(prompt);
   const referencedFiles = parseReferencedFiles(prompt);
+  const qualityConstraints = qualityConstraintsForText(prompt);
   const explicitScope = explicit.scope.length ? explicit.scope : [];
   const repoRecipe = await recommendRecipe(workDir);
   const loopKind =
@@ -1306,6 +1333,9 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
           `Use referenced experiment notes before inventing new families: ${referencedFiles.join(", ")}.`,
         ]
       : []),
+    ...qualityConstraints.map(
+      (constraint) => `Quality constraint (${constraint.domain}): ${constraint.guidance}`,
+    ),
   ]);
   const filesInScope = uniqueStrings([
     ...explicitScope,
@@ -1325,6 +1355,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   if (!benchmarkCommand && loopKind === "measured-optimization") {
     missing.push("benchmark_command");
   }
+  if (!checksCommand && qualityConstraints.length > 0) missing.push("checks_command");
   if (!checksCommand && (testSpeed || bugs)) missing.push("checks_command");
   if (!filesInScope.length) missing.push("scope");
   const experimentPlan = buildPromptExperimentPlan({
@@ -1372,6 +1403,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     },
     metric: { name: metricName, unit: metricUnit, direction },
     missing,
+    qualityConstraints,
     experimentPlan,
     setupDefaults: {
       recipe,
@@ -1385,6 +1417,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
       filesInScope,
       offLimits,
       constraints,
+      qualityConstraints,
       secondaryMetrics,
       maxIterations,
       commitPaths: filesInScope,
@@ -1653,6 +1686,65 @@ function benchmarkConstraintsFromScript(relativePath: string, metrics: string[])
     );
   }
   return constraints;
+}
+
+function qualitySensitivePerformanceDomain(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const domains: string[] = [];
+  if (/(retrieval|search|semantic|ranking|ranker|recall|mrr|accuracy)/.test(normalized)) {
+    domains.push("retrieval_quality");
+  }
+  if (/(accessibility|wcag|keyboard|screen reader|aria)/.test(normalized)) {
+    domains.push("accessibility_quality");
+  }
+  if (/(safety|security|auth|permission|data integrity|migration)/.test(normalized)) {
+    domains.push("safety_integrity");
+  }
+  return domains;
+}
+
+function qualityConstraintsForText(text: string) {
+  return qualitySensitivePerformanceDomain(text).map((domain) => ({
+    domain,
+    requiredBeforePromotion: true,
+    guidance:
+      domain === "retrieval_quality"
+        ? "Add or identify recall/MRR/hit@k/ranking checks before treating speed wins as product-grade."
+        : "Add or identify a correctness check before promotion.",
+  }));
+}
+
+function qualityConstraintsFromInput(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const record = entry as LooseObject;
+      const domain = String(record.domain || "").trim();
+      if (!domain) return null;
+      const guidance =
+        String(record.guidance || "").trim() || "Add or identify a correctness check before promotion.";
+      return {
+        domain,
+        requiredBeforePromotion: record.requiredBeforePromotion !== false,
+        guidance,
+      };
+    })
+    .filter(Boolean);
+}
+
+function uniqueQualityConstraints(
+  constraints: Array<{ domain: string; requiredBeforePromotion: boolean; guidance: string }>,
+) {
+  const seen = new Set<string>();
+  const unique = [];
+  for (const constraint of constraints) {
+    const key = constraint.domain;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(constraint);
+  }
+  return unique;
 }
 
 function metricLooksHigherIsBetter(metricName: string) {
@@ -6396,6 +6488,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
@@ -6577,6 +6670,7 @@ async function publicCompactState({
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
@@ -6686,6 +6780,7 @@ function compactPublicState(state: LooseObject) {
             : [],
         }
       : null,
+    productClaimCoverage: state.productClaimCoverage || null,
     sessionDecisionCapsule:
       state.sessionDecisionCapsule || compactDecisionEnvelope?.sessionDecisionCapsule || null,
     evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
