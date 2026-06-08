@@ -1,10 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  type DashboardHealthSummary,
-  verifyDashboardHealthSummary,
-} from "./dashboard-health.js";
+import { type DashboardHealthSummary, verifyDashboardHealthSummary } from "./dashboard-health.js";
 
 type Liveness = "alive" | "dead" | "unknown";
 type CwdRelation = "same-cwd" | "different-cwd" | "unknown";

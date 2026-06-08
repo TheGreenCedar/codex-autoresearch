@@ -7,10 +7,7 @@ import { createInterface } from "node:readline";
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
-import {
-  buildProductClaimCoverage,
-  evidenceTextFromRun,
-} from "./product-claim-coverage.js";
+import { buildProductClaimCoverage, evidenceTextFromRun } from "./product-claim-coverage.js";
 import {
   readActiveSessionDecisionCapsule,
   type SessionDecisionCapsule,

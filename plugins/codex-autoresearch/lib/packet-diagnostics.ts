@@ -85,7 +85,9 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
   };
 }
 
-export function benchmarkContractDiagnostics(input: LooseObject = {}): BenchmarkContractDiagnostics {
+export function benchmarkContractDiagnostics(
+  input: LooseObject = {},
+): BenchmarkContractDiagnostics {
   const state = objectValue(input.state) || {};
   const activeConfigEntry = objectValue(state.activeConfigEntry);
   const activeSegment = numberValue(state.segment) ?? 0;

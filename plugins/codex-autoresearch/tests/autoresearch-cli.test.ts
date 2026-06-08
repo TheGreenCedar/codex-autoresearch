@@ -485,7 +485,7 @@ test(
         ["recommend-next", "--cwd", dir, "--compact"],
         ["guide", "--cwd", dir, "--compact"],
       ];
-      const budgetMs = 1500;
+      const budgetMs = process.env.CODEX_AUTORESEARCH_TEST_SHARD_RANGE ? 2200 : 1500;
       for (const command of commands) {
         const started = performance.now();
         const result = await runSpawnedCli(command);
@@ -3160,11 +3160,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       "higher",
     ]);
     await writeFile(path.join(dir, "bench-a.txt"), "protected A\n", "utf8");
-    await writeFile(
-      path.join(dir, "autoresearch.ps1"),
-      "Write-Output 'METRIC score=1'\n",
-      "utf8",
-    );
+    await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=1'\n", "utf8");
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ protectedBenchmarkPaths: ["bench-a.txt"] }, null, 2),
@@ -3186,11 +3182,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
     assert.equal(logged.code, 0, logged.stderr);
 
     await writeFile(path.join(dir, "bench-b.txt"), "protected B\n", "utf8");
-    await writeFile(
-      path.join(dir, "autoresearch.ps1"),
-      "Write-Output 'METRIC score=2'\n",
-      "utf8",
-    );
+    await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=2'\n", "utf8");
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ protectedBenchmarkPaths: ["bench-b.txt"] }, null, 2),

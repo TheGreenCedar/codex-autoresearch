@@ -129,9 +129,7 @@ export function evaluateGateQuality(input: GateQualityInput): GateQualitySummary
       blockers: [],
       warnings: [],
       warningDetails: [],
-      evidence: [
-        "Checks command contains an obvious verification verb or domain quality gate.",
-      ],
+      evidence: ["Checks command contains an obvious verification verb or domain quality gate."],
       nextActionHint:
         "Run the checks gate and use pass/fail evidence alongside the benchmark metric.",
     };

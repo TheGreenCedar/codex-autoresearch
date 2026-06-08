@@ -1165,7 +1165,9 @@ async function main() {
     );
     console.log("Cleanup after accepted review path verification:");
   } else {
-    console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
+    console.log(
+      "Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.",
+    );
     console.log("Cleanup after verified merge:");
   }
   console.log(

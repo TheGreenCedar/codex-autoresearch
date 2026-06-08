@@ -122,8 +122,7 @@ function dashboardIsAlive(payload: unknown, summary: DashboardHealthSummary): bo
 function dashboardHealthDetails(payload: unknown): { mode: string; lastReadAt: string } {
   const dashboard = recordValue(payload, "dashboard");
   const mode =
-    cleanString(recordValue(dashboard, "mode")) ||
-    cleanString(recordValue(payload, "mode"));
+    cleanString(recordValue(dashboard, "mode")) || cleanString(recordValue(payload, "mode"));
   const lastReadAt =
     cleanString(recordValue(dashboard, "lastReadAt")) ||
     cleanString(recordValue(payload, "lastReadAt"));

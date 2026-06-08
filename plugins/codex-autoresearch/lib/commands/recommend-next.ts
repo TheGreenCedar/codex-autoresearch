@@ -245,9 +245,7 @@ function compactRecommendNextHandoff(compactState: unknown): {
     ...stringArray(capsule?.doNotRepeat).map((value) => compactHandoffText(value, "doNotRepeat")),
     ...arrayRecords(compact.workflowFriction).map((signal) =>
       compactHandoffText(
-        stringOrEmpty(signal.reason) ||
-          stringOrEmpty(signal.message) ||
-          stringOrEmpty(signal.kind),
+        stringOrEmpty(signal.reason) || stringOrEmpty(signal.message) || stringOrEmpty(signal.kind),
       ),
     ),
   ]
@@ -285,7 +283,9 @@ function sanitizeCompactHandoffValue(value: unknown, key: string): unknown {
 }
 
 function compactHandoffText(value: unknown, key = ""): string {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text) return "";
   const tokenCount = text.match(/Original token count:\s*(\d+)/i)?.[1];
   if (containsRawToolOutput(text)) {

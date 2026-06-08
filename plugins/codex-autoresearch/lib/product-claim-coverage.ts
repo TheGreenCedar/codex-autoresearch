@@ -57,7 +57,13 @@ const RETRIEVAL_REQUIREMENTS: ProductProofRequirement[] = [
 ];
 
 const PROOF_PATTERNS: Record<string, RegExp[]> = {
-  retrieval_accuracy: [/\baccuracy\b/i, /\brecall\b/i, /\bmrr\b/i, /\bhit@/i, /quality validation/i],
+  retrieval_accuracy: [
+    /\baccuracy\b/i,
+    /\brecall\b/i,
+    /\bmrr\b/i,
+    /\bhit@/i,
+    /quality validation/i,
+  ],
   sidecar_safety: [/sidecar safety/i, /fail(?:s|ed)? closed/i, /sidecar fails closed/i],
   lazy_behavior: [/\blazy\b/i, /query-triggered/i, /\bbackfill\b/i, /\bselective\b/i],
   ranking_quality: [/\branking\b/i, /rank quality/i, /search quality/i],
@@ -134,7 +140,5 @@ function evidenceCoversRequirement(
 }
 
 function recordValue(value: unknown): LooseObject {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as LooseObject)
-    : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as LooseObject) : {};
 }

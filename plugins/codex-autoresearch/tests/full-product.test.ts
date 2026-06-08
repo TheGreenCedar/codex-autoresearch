@@ -670,9 +670,7 @@ test("docs and skill describe the product-grade finalization bar", async () => {
     "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
   ];
   const docs = await Promise.all(
-    relativePaths.map(async (relativePath) =>
-      readFile(path.join(repoRoot, relativePath), "utf8"),
-    ),
+    relativePaths.map(async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8")),
   );
   const combined = docs.join("\n");
 
@@ -686,10 +684,7 @@ test("docs and skill describe the product-grade finalization bar", async () => {
   ]) {
     assert.match(combined, new RegExp(phrase, "i"));
   }
-  assert.match(
-    docs[0],
-    /Do not finalize an experimental primitive as a shippable deliverable/,
-  );
+  assert.match(docs[0], /Do not finalize an experimental primitive as a shippable deliverable/);
 });
 
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {

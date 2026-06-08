@@ -76,7 +76,11 @@ function buildSignals(viewModel: DashboardViewModel): SignalItem[] {
 
 function signalFromModel(value: unknown): SignalItem | null {
   const record = recordFrom(value);
-  const id = clean(record.id) || clean(record.label).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const id =
+    clean(record.id) ||
+    clean(record.label)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
   const label = clean(record.label);
   const detail = clean(record.detail) || clean(record.message);
   if (!id || !label || !detail) return null;

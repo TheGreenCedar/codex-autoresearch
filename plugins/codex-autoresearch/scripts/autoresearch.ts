@@ -276,9 +276,7 @@ let sessionForensicsCommand: ((args: LooseObject) => Promise<LooseObject>) | nul
 
 async function sessionForensics(args: LooseObject): Promise<LooseObject> {
   if (!sessionForensicsCommand) {
-    const { createSessionForensicsCommand } = await import(
-      "../lib/commands/session-forensics.js"
-    );
+    const { createSessionForensicsCommand } = await import("../lib/commands/session-forensics.js");
     sessionForensicsCommand = createSessionForensicsCommand({
       boolOption,
       pluginRoot: PLUGIN_ROOT,
@@ -1713,7 +1711,13 @@ function qualitySensitivePerformanceDomain(text: string): string[] {
   return domains;
 }
 
-function qualityConstraintsForText(text: string) {
+type QualityConstraint = {
+  domain: string;
+  guidance: string;
+  requiredBeforePromotion: boolean;
+};
+
+function qualityConstraintsForText(text: string): QualityConstraint[] {
   return qualitySensitivePerformanceDomain(text).map((domain) => ({
     domain,
     requiredBeforePromotion: true,
@@ -1724,7 +1728,7 @@ function qualityConstraintsForText(text: string) {
   }));
 }
 
-function qualityConstraintsFromInput(value: unknown) {
+function qualityConstraintsFromInput(value: unknown): QualityConstraint[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((entry) => {
@@ -1733,19 +1737,18 @@ function qualityConstraintsFromInput(value: unknown) {
       const domain = String(record.domain || "").trim();
       if (!domain) return null;
       const guidance =
-        String(record.guidance || "").trim() || "Add or identify a correctness check before promotion.";
+        String(record.guidance || "").trim() ||
+        "Add or identify a correctness check before promotion.";
       return {
         domain,
         requiredBeforePromotion: record.requiredBeforePromotion !== false,
         guidance,
       };
     })
-    .filter(Boolean);
+    .filter((entry): entry is QualityConstraint => Boolean(entry));
 }
 
-function uniqueQualityConstraints(
-  constraints: Array<{ domain: string; requiredBeforePromotion: boolean; guidance: string }>,
-) {
+function uniqueQualityConstraints(constraints: QualityConstraint[]) {
   const seen = new Set<string>();
   const unique = [];
   for (const constraint of constraints) {

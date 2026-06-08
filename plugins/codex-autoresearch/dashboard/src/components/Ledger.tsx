@@ -24,10 +24,7 @@ export function Ledger({ session, readout }: LedgerProps) {
         </span>
       </div>
       {session.runs.length ? (
-        <div
-          className="ledger-scroll"
-          id="ledger-scroll"
-        >
+        <div className="ledger-scroll" id="ledger-scroll">
           <table aria-label={`Run ledger, newest first, ${session.runs.length} total runs`}>
             <thead className="ledger-header">
               <tr>
@@ -53,20 +50,12 @@ export function Ledger({ session, readout }: LedgerProps) {
   );
 }
 
-function LedgerRow({
-  run,
-  readout,
-}: {
-  run: SessionRun;
-  readout: DashboardReadout;
-}) {
+function LedgerRow({ run, readout }: { run: SessionRun; readout: DashboardReadout }) {
   const best = readout.bestRun?.run === run.run && run.status === "keep";
   const breakdown = breakdownForRun(run, readout.metricDefinition);
   return (
     <tr className={`ledger-row ${best ? "best-row" : ""}`}>
-      <td className="ledger-cell run-index">
-        #{run.run}
-      </td>
+      <td className="ledger-cell run-index">#{run.run}</td>
       <td className="ledger-cell">
         <StatusPill status={run.status} />
         {best ? <span className="best-label">Best kept</span> : null}

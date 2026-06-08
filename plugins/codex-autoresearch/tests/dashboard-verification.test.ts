@@ -485,13 +485,7 @@ test("dashboard source keeps chart tab stops to selected and evidence-critical p
 
 test("dashboard ledger source uses native table semantics", () => {
   const ledgerSource = readFileSync(
-    path.join(
-      resolvePackageRoot(import.meta.url),
-      "dashboard",
-      "src",
-      "components",
-      "Ledger.tsx",
-    ),
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "components", "Ledger.tsx"),
     "utf8",
   );
 

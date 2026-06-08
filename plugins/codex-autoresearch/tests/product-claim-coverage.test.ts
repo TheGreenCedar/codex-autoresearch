@@ -5,12 +5,8 @@ import { buildProductClaimCoverage } from "../lib/product-claim-coverage.js";
 
 test("shippable retrieval goal requires accuracy, lazy behavior, sidecar safety, and docs proof", () => {
   const coverage = buildProductClaimCoverage({
-    goal:
-      "Deliver a shippable large-codebase semantic performance improvement with lazy retrieval and accuracy validation.",
-    acceptedEvidence: [
-      "foreground embedding work can be bounded",
-      "sidecar safety fails closed",
-    ],
+    goal: "Deliver a shippable large-codebase semantic performance improvement with lazy retrieval and accuracy validation.",
+    acceptedEvidence: ["foreground embedding work can be bounded", "sidecar safety fails closed"],
   });
 
   assert.equal(coverage.productGradeReady, false);
