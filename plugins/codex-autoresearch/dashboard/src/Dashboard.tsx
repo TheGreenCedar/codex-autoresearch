@@ -72,7 +72,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       }`}
     >
       <nav className="skip-links" aria-label="Skip links">
-        <a href="#trend-panel">Run chart</a>
+        <a href="#trend-panel">Packet trend</a>
         <a href="#decision-rail">Next action</a>
         <a href="#codex-brief">Codex brief</a>
         {auditView ? <a href="#strategy-memory">Strategy lanes</a> : null}

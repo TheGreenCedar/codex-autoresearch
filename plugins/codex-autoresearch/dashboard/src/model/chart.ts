@@ -165,7 +165,10 @@ function chartSummaryParts({
 function chartNote({ chartRuns, crashRuns }: { chartRuns: SessionRun[]; crashRuns: SessionRun[] }) {
   const finiteMetricRuns = chartRuns.filter((run) => run.status !== "crash").length;
   if (finiteMetricRuns === 1) return "No trend yet: 1 finite metric run.";
-  return `Trend ready: ${finiteMetricRuns} finite metric runs${crashRuns.length ? `; ${crashRuns.length} crash held at nearest metric` : ""}.`;
+  if (crashRuns.length) {
+    return `${finiteMetricRuns} finite measurements; crashes held out of best evidence.`;
+  }
+  return `${finiteMetricRuns} finite measurements.`;
 }
 
 function emptyChart(readout: DashboardReadout): ChartModel {

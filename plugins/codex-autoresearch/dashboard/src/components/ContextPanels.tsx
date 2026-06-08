@@ -38,7 +38,7 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
     >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Research truth</p>
+          <p className="eyebrow">Research round</p>
           <h2 id="research-truth-title">{label}</h2>
         </div>
         <span className="panel-note">{truth.source || gap.slug || "dashboard state"}</span>
@@ -55,7 +55,7 @@ export function ResearchTruthMeter({ viewModel }: { viewModel: DashboardViewMode
         <span style={{ width: `${percent ?? 0}%` }} />
       </div>
       <p className="truth-detail" id="research-truth-detail">
-        {detail}
+        {detail} <span className="canonical-term">Canonical: research truth</span>
       </p>
     </section>
   );
@@ -170,10 +170,12 @@ export function QualityGapPanel({ viewModel }: { viewModel: DashboardViewModel }
       : `${gap.slug || "research"} has ${gap.open ?? 0} open accepted gap${Number(gap.open) === 1 ? "" : "s"}.`
     : "Run a project study or gap-candidates pass to create a measurable quality checklist.";
   return (
-    <section className="panel gap-panel" aria-label="Quality gap">
-      <p className="eyebrow">Quality gap</p>
+    <section className="panel gap-panel" aria-label="Open gaps">
+      <p className="eyebrow">Open gaps</p>
       <h2 id="quality-gap-title">{title}</h2>
-      <p id="quality-gap-detail">{detail}</p>
+      <p id="quality-gap-detail">
+        {detail} <span className="canonical-term">Canonical: quality gap</span>
+      </p>
     </section>
   );
 }
@@ -264,10 +266,11 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
     >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Process hygiene</p>
+          <p className="eyebrow">Runtime footing</p>
           <h2 id="process-hygiene-title">
             {status === "needs-attention" ? "Runtime needs attention" : "Runtime provenance"}
           </h2>
+          <span className="canonical-term">Canonical: process hygiene</span>
         </div>
         <span className="panel-note">{String(hygiene.mode || "unknown")}</span>
       </div>
@@ -283,9 +286,12 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
           <p>{String(hygiene.staleServerDetection || "unavailable")}</p>
         </div>
         <div className="memory-lane">
-          <strong>Watchdog</strong>
+          <strong>Quiet window</strong>
           <span>{String(watchdog.status || "unknown")}</span>
-          <p>{String(watchdog.recommendation || "No watchdog summary embedded.")}</p>
+          <p>
+            {String(watchdog.recommendation || "No watchdog summary embedded.")}{" "}
+            <span className="canonical-term">Canonical: watchdog</span>
+          </p>
         </div>
         {warnings.length ? (
           <div className="memory-lane">
