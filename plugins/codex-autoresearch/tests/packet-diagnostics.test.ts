@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
+import {
+  benchmarkContractDiagnostics,
+  classifyPacketDiagnostics,
+} from "../lib/packet-diagnostics.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 
 test("classifies retrieval evidence that was not cited", () => {
@@ -97,6 +100,36 @@ test("carries optional task artifact diagnostics without changing metric classif
 
   assert.equal(result.primaryStage, "none");
   assert.equal(result.taskArtifacts, taskArtifacts);
+});
+
+test("treats accepted new-segment benchmark contract as active authority", () => {
+  const result = benchmarkContractDiagnostics({
+    state: {
+      segment: 1,
+      current: [],
+      results: [
+        {
+          run: 1,
+          segment: 0,
+          benchmarkContract: { surfaceHash: "old-contract", command: "node old.js" },
+        },
+      ],
+      activeConfigEntry: {
+        type: "config",
+        segment: 1,
+        benchmarkContractAccepted: true,
+        benchmarkContractScope: "segment",
+        benchmarkContract: { surfaceHash: "new-contract", command: "node new.js" },
+      },
+    },
+  });
+
+  assert.equal(result.activeContract?.surfaceHash, "new-contract");
+  assert.equal(result.activeSource, "segment");
+  assert.deepEqual(
+    result.historicalContracts.map((contract) => contract.surfaceHash),
+    ["old-contract"],
+  );
 });
 
 test("session forensics detects product_bar_rejection and oversized_tool_output friction", async (t) => {

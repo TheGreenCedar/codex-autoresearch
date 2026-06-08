@@ -594,6 +594,11 @@ export const toolSchemas = applyToolContracts([
       properties: {
         working_dir: { type: "string" },
         reason: { type: "string" },
+        metric_name: { type: "string" },
+        metric_unit: { type: "string" },
+        direction: { type: "string", enum: ["lower", "higher"] },
+        benchmark_command: { type: "string" },
+        checks_command: { type: "string" },
         dry_run: { type: "boolean" },
         confirm: { type: "boolean" },
       },

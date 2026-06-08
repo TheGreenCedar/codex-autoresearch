@@ -3934,6 +3934,17 @@ function latestBenchmarkContractEntry(
 function latestBenchmarkContractEntryFromState(
   state: LooseObject | null | undefined,
 ): LooseObject | null {
+  const activeConfigEntry =
+    state?.activeConfigEntry && typeof state.activeConfigEntry === "object"
+      ? (state.activeConfigEntry as LooseObject)
+      : null;
+  if (
+    activeConfigEntry?.benchmarkContractAccepted === true &&
+    activeConfigEntry?.benchmarkContractScope === "segment" &&
+    activeConfigEntry?.benchmarkContract?.surfaceHash
+  ) {
+    return activeConfigEntry;
+  }
   const current = Array.isArray(state?.current) ? state.current : [];
   return (
     [...current].reverse().find((run: LooseObject) => run?.benchmarkContract?.surfaceHash) || null
@@ -6515,6 +6526,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     laneLifecycle,
     packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     watchdogSummary,
@@ -8094,6 +8106,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
       }
     : null;
+  const activeBenchmarkContractEntry = latestBenchmarkContractEntry(workDir, state);
+  const activeBenchmarkContract = activeBenchmarkContractEntry?.benchmarkContract || null;
+  const benchmarkContractChanged = warningDetails.some(
+    (detail: any) => detail?.code === "benchmark_contract_changed",
+  );
 
   const result: LooseObject = {
     ok: issues.length === 0,
@@ -8103,6 +8120,13 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     git: {
       inside: inGit,
       clean: state.decisionEnvelope?.dirtySourceDrift?.dirty === true ? false : true,
+    },
+    benchmarkContract: {
+      ok: benchmarkContractChanged === false,
+      activeSource:
+        activeBenchmarkContractEntry?.benchmarkContractScope === "segment" ? "segment" : "run",
+      activeContract: activeBenchmarkContract,
+      historical: activeBenchmarkContractEntry?.benchmarkContractScope === "segment",
     },
     benchmark,
     drift,
@@ -8299,15 +8323,45 @@ async function newSegment(args: any) {
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   const confirmed = boolOption(args.confirm ?? args.yes, false);
   const reason = String(args.reason || "Start a fresh segment while preserving history.").trim();
-  const entry = {
+  const nextMetricName = String(
+    args.metric_name || args.metricName || state.config.metricName || "metric",
+  );
+  const nextMetricUnit =
+    args.metric_unit !== undefined || args.metricUnit !== undefined
+      ? String(args.metric_unit ?? args.metricUnit ?? "")
+      : (state.config.metricUnit ?? "");
+  const requestedDirection = args.direction || args.best_direction || args.bestDirection;
+  const nextDirection =
+    requestedDirection === "higher"
+      ? "higher"
+      : state.config.bestDirection === "higher"
+        ? "higher"
+        : "lower";
+  const entry: LooseObject = {
     type: "config",
     name: state.config.name || "Autoresearch",
-    metricName: state.config.metricName || "metric",
-    metricUnit: state.config.metricUnit ?? "",
-    bestDirection: state.config.bestDirection === "higher" ? "higher" : "lower",
+    metricName: nextMetricName,
+    metricUnit: nextMetricUnit,
+    bestDirection: nextDirection,
     segmentReason: reason,
     timestamp: new Date().toISOString(),
   };
+  const benchmarkCommand = String(args.benchmark_command || args.benchmarkCommand || "").trim();
+  const checksCommand = String(args.checks_command || args.checksCommand || "").trim();
+  if (benchmarkCommand || checksCommand) {
+    entry.benchmarkContractAccepted = true;
+    entry.benchmarkContractScope = "segment";
+    entry.benchmarkContract = await benchmarkContractSnapshot(workDir, {
+      command: benchmarkCommand,
+      checksCommand,
+    });
+  }
+  const metricSemanticsWarning = segmentMetricSemanticsWarning(state.config, {
+    metricName: nextMetricName,
+    metricUnit: nextMetricUnit,
+    bestDirection: nextDirection,
+  });
+  if (metricSemanticsWarning) entry.metricSemanticsWarning = metricSemanticsWarning;
   if (!dryRun && !confirmed) {
     throw new Error(
       "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
@@ -8321,9 +8375,35 @@ async function newSegment(args: any) {
     previousSegment: state.segment,
     nextSegment: state.segment + 1,
     entry,
+    metricSemanticsWarning,
+    benchmarkContract: entry.benchmarkContract || null,
     nextAction: dryRun
       ? "Review the segment entry, then rerun with --yes to append it."
       : "Run and log a fresh baseline or next packet for the new segment.",
+  };
+}
+
+function segmentMetricSemanticsWarning(previous: LooseObject, current: LooseObject) {
+  const changed =
+    String(previous.metricName || "") !== String(current.metricName || "") ||
+    String(previous.metricUnit ?? "") !== String(current.metricUnit ?? "") ||
+    String(previous.bestDirection || "lower") !== String(current.bestDirection || "lower");
+  if (!changed) return null;
+  return {
+    code: "metric_semantics_changed",
+    severity: "warning",
+    message:
+      "Metric semantics changed; active segment and historical best may not be directly comparable.",
+    previous: {
+      metricName: previous.metricName || "metric",
+      metricUnit: previous.metricUnit ?? "",
+      bestDirection: previous.bestDirection === "higher" ? "higher" : "lower",
+    },
+    current: {
+      metricName: current.metricName || "metric",
+      metricUnit: current.metricUnit ?? "",
+      bestDirection: current.bestDirection === "higher" ? "higher" : "lower",
+    },
   };
 }
 

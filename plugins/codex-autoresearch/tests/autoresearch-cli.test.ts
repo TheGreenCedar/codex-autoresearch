@@ -3051,6 +3051,136 @@ test("benchmark contract changes block the next packet until a new segment", asy
   });
 });
 
+test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
+  await withTempDir("segment-contract-rebaseline", async (dir) => {
+    const benchmarkCommand =
+      "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "contract rebaseline",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(path.join(dir, "bench-a.txt"), "protected A\n", "utf8");
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "Write-Output 'METRIC score=1'\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ protectedBenchmarkPaths: ["bench-a.txt"] }, null, 2),
+      "utf8",
+    );
+
+    const packet = await runCli(["next", "--cwd", dir]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline contract",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    await writeFile(path.join(dir, "bench-b.txt"), "protected B\n", "utf8");
+    await writeFile(
+      path.join(dir, "autoresearch.ps1"),
+      "Write-Output 'METRIC score=2'\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ protectedBenchmarkPaths: ["bench-b.txt"] }, null, 2),
+      "utf8",
+    );
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "new benchmark surface",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+    assert.equal(payload.benchmarkContract.ok, true);
+    assert.equal(
+      payload.warningDetails.some((warning: any) => warning?.code === "benchmark_contract_changed"),
+      false,
+    );
+    assert.doesNotMatch(payload.issues.join("\n"), /benchmark.*drift/i);
+  });
+});
+
+test("new segment warns when metric semantics change across segments", async () => {
+  await withTempDir("segment-metric-semantics", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "metric semantics",
+      "--metric-name",
+      "seconds",
+      "--metric-unit",
+      "s",
+      "--direction",
+      "lower",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "keep",
+      "--description",
+      "Seconds baseline",
+    ]);
+
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "embedded_docs",
+      "--metric-unit",
+      "docs",
+      "--direction",
+      "higher",
+      "--reason",
+      "new semantic metric",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    assert.match(JSON.stringify(JSON.parse(segment.stdout)), /not comparable|metric semantics/i);
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.match(JSON.stringify(JSON.parse(state.stdout)), /not comparable|metric semantics/i);
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--compact"]);
+    assert.equal(report.code, 0, report.stderr);
+    assert.match(JSON.stringify(JSON.parse(report.stdout)), /not comparable|metric semantics/i);
+  });
+});
+
 test("new segment does not treat its own ledger append as dirty source drift", async () => {
   await withTempDir("segment-self-dirty", async (dir) => {
     await git(dir, ["init"]);
