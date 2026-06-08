@@ -138,6 +138,10 @@ export function buildCompactRecommendNextResponse({
       };
   const decisionEnvelope = compact.decisionEnvelope ?? compact.resumeAudit ?? null;
   if (handoff.bounded) {
+    const boundedCompactState = buildBoundedCompactState(compact);
+    const boundedEnvelope = boundedDecisionEnvelope(
+      recordOrNull(compact.decisionEnvelope) || recordOrNull(compact.resumeAudit),
+    );
     return buildRecommendNextResponse({
       ok: compact.ok === false ? false : true,
       workDir,
@@ -149,8 +153,9 @@ export function buildCompactRecommendNextResponse({
       blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
       commands: primaryCommand ? { primary: primaryCommand } : {},
       nextStep: null,
+      compactState: boundedCompactState,
       resumeAudit: null,
-      decisionEnvelope: null,
+      decisionEnvelope: boundedEnvelope,
       sessionDecisionCapsule: compact.sessionDecisionCapsule,
       evidenceNotes: handoff.evidenceNotes,
       frictionSignals: handoff.frictionSignals,
@@ -230,10 +235,14 @@ function compactRecommendNextHandoff(compactState: unknown): {
 } {
   const compact = recordOrNull(compactState) || {};
   const capsule = recordOrNull(compact.sessionDecisionCapsule);
-  const evidenceNotes = stringArray(capsule?.evidence).map(compactHandoffText).slice(0, 3);
+  const evidenceNotes = stringArray(capsule?.evidence)
+    .map((value) => compactHandoffText(value, "evidence"))
+    .slice(0, 3);
   const frictionSignals = [
-    ...stringArray(capsule?.commandBudgetWarnings).map(compactHandoffText),
-    ...stringArray(capsule?.doNotRepeat).map(compactHandoffText),
+    ...stringArray(capsule?.commandBudgetWarnings).map((value) =>
+      compactHandoffText(value, "commandBudgetWarnings"),
+    ),
+    ...stringArray(capsule?.doNotRepeat).map((value) => compactHandoffText(value, "doNotRepeat")),
     ...arrayRecords(compact.workflowFriction).map((signal) =>
       compactHandoffText(
         stringOrEmpty(signal.reason) ||
@@ -261,7 +270,7 @@ function needsCompactHandoff(value: unknown): boolean {
 }
 
 function sanitizeCompactHandoffValue(value: unknown, key: string): unknown {
-  if (typeof value === "string") return compactHandoffText(value);
+  if (typeof value === "string") return compactHandoffText(value, key);
   if (Array.isArray(value)) {
     const sanitized = value.map((item) => sanitizeCompactHandoffValue(item, key));
     return isBoundedArrayKey(key) ? sanitized.slice(0, 3) : sanitized;
@@ -275,7 +284,7 @@ function sanitizeCompactHandoffValue(value: unknown, key: string): unknown {
   return out;
 }
 
-function compactHandoffText(value: unknown): string {
+function compactHandoffText(value: unknown, key = ""): string {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   const tokenCount = text.match(/Original token count:\s*(\d+)/i)?.[1];
@@ -284,7 +293,8 @@ function compactHandoffText(value: unknown): string {
       ? `Large tool output omitted from compact handoff (${tokenCount} reported tokens).`
       : "Large tool output omitted from compact handoff.";
   }
-  return text.length > 360 ? `${text.slice(0, 340).trim()}...` : text;
+  const maxLength = isCommandLikeText(key, text) ? 2_000 : 360;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 20).trim()}...` : text;
 }
 
 function containsRawToolOutput(text: string): boolean {
@@ -295,6 +305,36 @@ function containsRawToolOutput(text: string): boolean {
 
 function isBoundedArrayKey(key: string): boolean {
   return /evidence|warning|doNotRepeat|wrongNextActions|workflowFriction|blockers/i.test(key);
+}
+
+function isCommandLikeText(key: string, text: string): boolean {
+  return (
+    /command|primary|replaceLast/i.test(key) ||
+    /\b(?:node|npm|git|bash|powershell)\b/i.test(text) ||
+    /scripts[\\/]+autoresearch\.mjs/i.test(text)
+  );
+}
+
+function buildBoundedCompactState(compact: JsonObject): JsonObject {
+  const decisionEnvelope = boundedDecisionEnvelope(
+    recordOrNull(compact.decisionEnvelope) || recordOrNull(compact.resumeAudit),
+  );
+  return {
+    goalFrame: compact.goalFrame ?? null,
+    decisionEnvelope: {
+      finalizationReadiness: decisionEnvelope?.finalizationReadiness ?? null,
+    },
+  };
+}
+
+function boundedDecisionEnvelope(envelope: JsonObject | null): JsonObject | null {
+  if (!envelope) return null;
+  return {
+    activeSegment: envelope.activeSegment ?? null,
+    latestPacketFreshness: envelope.latestPacketFreshness ?? null,
+    finalizationReadiness: envelope.finalizationReadiness ?? null,
+    canonicalNextAction: envelope.canonicalNextAction ?? null,
+  };
 }
 
 function stringArray(value: unknown): string[] {
