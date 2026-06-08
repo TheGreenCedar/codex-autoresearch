@@ -1006,6 +1006,39 @@ test("state and recommend-next surface active decision capsules as loop brakes",
   });
 });
 
+test("recommend-next compact bounds noisy session evidence", async () => {
+  await withTempDir("recommend-next-noisy-session", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "noisy compact", "--metric-name", "seconds"]);
+    const rawBody = [
+      "RAW_TOOL_OUTPUT_BODY_SENTINEL",
+      "Chunk ID: noisy",
+      "Original token count: 65601",
+      "Output:",
+      "x".repeat(9000),
+    ].join("\n");
+    await writeDecisionCapsule(dir, "noisy-session", {
+      evidence: [
+        "User rejected the product bar after accuracy was not tested.",
+        "Assistant admitted the loop-complete signal was treated as enough.",
+        "Tool output exceeded the compact handoff budget.",
+        rawBody,
+      ],
+      commandBudgetWarnings: [rawBody],
+    });
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    assert.equal(recommend.stdout.length < 7000, true, String(recommend.stdout.length));
+    assert.doesNotMatch(recommend.stdout, /RAW_TOOL_OUTPUT_BODY_SENTINEL/);
+    const payload = JSON.parse(recommend.stdout);
+    assert.equal(payload.evidenceNotes.length <= 3, true);
+    assert.equal(
+      payload.evidenceNotes[0],
+      "User rejected the product bar after accuracy was not tested.",
+    );
+  });
+});
+
 test("next refuses hard decision capsules before running a packet", async () => {
   await withTempDir("next-hard-decision-capsule", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "hard capsule", "--metric-name", "seconds"]);

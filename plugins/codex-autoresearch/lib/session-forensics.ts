@@ -212,6 +212,27 @@ function observeMessage(
       ),
     );
   }
+  if (
+    payload.role === "user" &&
+    /did not test accuracy|shippable product|broken experiment|not what I wanted/i.test(text)
+  ) {
+    state.productSignals.push(
+      signal("product_bar_rejection", "blocker", summarize(text), "message"),
+    );
+  }
+  if (
+    payload.role === "assistant" &&
+    /treated autoresearch loop completion|wrong product judgment/i.test(text)
+  ) {
+    state.productSignals.push(
+      signal(
+        "false_done_admission",
+        "warning",
+        "Assistant admitted the Autoresearch loop signal was mistaken for product proof.",
+        "message",
+      ),
+    );
+  }
   addSnippet(state, "message", text, snippetOptions);
 }
 
@@ -250,6 +271,25 @@ function observeFunctionOutput(
   }
   if (/polling/i.test(output)) {
     state.workflowWaste.push(signal("progress_polling", "warning", summarize(output), callId));
+  }
+  if (/stdin is closed/i.test(output)) {
+    state.workflowWaste.push(
+      signal(
+        "closed_stdin_poll",
+        "warning",
+        "A completed foreground session was polled after stdin closed.",
+        callId,
+      ),
+    );
+  }
+  if (tokenCount >= 20_000) {
+    state.workflowWaste.push({
+      kind: "oversized_tool_output",
+      severity: "warning",
+      message: `One tool output reported ${tokenCount} tokens.`,
+      source: callId,
+      size: { tokens: tokenCount, lines: lineCount || undefined },
+    });
   }
   if (tokenCount >= state.thresholds.outputCommandTokenBudget) {
     state.workflowWaste.push({

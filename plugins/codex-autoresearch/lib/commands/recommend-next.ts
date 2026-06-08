@@ -23,6 +23,8 @@ export interface RecommendNextResponseInput {
   packetDiagnostics?: unknown;
   portfolioRecommendation?: unknown;
   sessionDecisionCapsule?: unknown;
+  evidenceNotes?: unknown[];
+  frictionSignals?: unknown[];
 }
 
 export interface CompactRecommendNextResponseInput {
@@ -63,6 +65,8 @@ export interface RecommendNextResponse {
   packetDiagnostics?: unknown;
   portfolioRecommendation?: unknown;
   sessionDecisionCapsule?: unknown;
+  evidenceNotes?: unknown[];
+  frictionSignals?: unknown[];
 }
 
 const DEFAULT_WHY_SAFE =
@@ -103,6 +107,8 @@ export function buildRecommendNextResponse(
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
   copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
   copyIfProvided(response, "sessionDecisionCapsule", input.sessionDecisionCapsule);
+  copyIfProvided(response, "evidenceNotes", input.evidenceNotes);
+  copyIfProvided(response, "frictionSignals", input.frictionSignals);
 
   return response;
 }
@@ -111,7 +117,8 @@ export function buildCompactRecommendNextResponse({
   workDir,
   compactState,
 }: CompactRecommendNextResponseInput): RecommendNextResponse {
-  const compact = recordOrNull(compactState) || {};
+  const handoff = compactRecommendNextHandoff(compactState);
+  const compact = recordOrNull(handoff.compactState) || {};
   const canonicalNextAction = recordOrNull(compact.canonicalNextAction);
   const commands = recordOrNull(compact.commands) || {};
   const primaryCommand =
@@ -130,6 +137,25 @@ export function buildCompactRecommendNextResponse({
         command: primaryCommand,
       };
   const decisionEnvelope = compact.decisionEnvelope ?? compact.resumeAudit ?? null;
+  if (handoff.bounded) {
+    return buildRecommendNextResponse({
+      ok: compact.ok === false ? false : true,
+      workDir,
+      action,
+      nextAction,
+      whySafe: COMPACT_WHY_SAFE,
+      avoids: COMPACT_AVOIDS,
+      proof: COMPACT_PROOF,
+      blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
+      commands: primaryCommand ? { primary: primaryCommand } : {},
+      nextStep: null,
+      resumeAudit: null,
+      decisionEnvelope: null,
+      sessionDecisionCapsule: compact.sessionDecisionCapsule,
+      evidenceNotes: handoff.evidenceNotes,
+      frictionSignals: handoff.frictionSignals,
+    });
+  }
 
   return buildRecommendNextResponse({
     ok: compact.ok === false ? false : true,
@@ -142,7 +168,7 @@ export function buildCompactRecommendNextResponse({
     blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
     commands: { ...commands, primary: primaryCommand },
     nextStep: null,
-    compactState,
+    compactState: handoff.compactState,
     resumeAudit: compact.resumeAudit ?? decisionEnvelope,
     decisionEnvelope,
     runtimeProvenance: compact.runtimeProvenance,
@@ -151,6 +177,8 @@ export function buildCompactRecommendNextResponse({
     packetDiagnostics: compact.packetDiagnostics,
     portfolioRecommendation: compact.portfolioRecommendation,
     sessionDecisionCapsule: compact.sessionDecisionCapsule,
+    evidenceNotes: handoff.evidenceNotes,
+    frictionSignals: handoff.frictionSignals,
   });
 }
 
@@ -192,6 +220,99 @@ function recordOrNull(value: unknown): JsonObject | null {
 
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function compactRecommendNextHandoff(compactState: unknown): {
+  compactState: unknown;
+  evidenceNotes: string[];
+  frictionSignals: string[];
+  bounded: boolean;
+} {
+  const compact = recordOrNull(compactState) || {};
+  const capsule = recordOrNull(compact.sessionDecisionCapsule);
+  const evidenceNotes = stringArray(capsule?.evidence).map(compactHandoffText).slice(0, 3);
+  const frictionSignals = [
+    ...stringArray(capsule?.commandBudgetWarnings).map(compactHandoffText),
+    ...stringArray(capsule?.doNotRepeat).map(compactHandoffText),
+    ...arrayRecords(compact.workflowFriction).map((signal) =>
+      compactHandoffText(
+        stringOrEmpty(signal.reason) ||
+          stringOrEmpty(signal.message) ||
+          stringOrEmpty(signal.kind),
+      ),
+    ),
+  ]
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!needsCompactHandoff(compactState)) {
+    return { compactState, evidenceNotes, frictionSignals, bounded: false };
+  }
+  return {
+    compactState: sanitizeCompactHandoffValue(compactState, ""),
+    evidenceNotes,
+    frictionSignals,
+    bounded: true,
+  };
+}
+
+function needsCompactHandoff(value: unknown): boolean {
+  const json = safeStringify(value);
+  return json.length > 6_000 || containsRawToolOutput(json);
+}
+
+function sanitizeCompactHandoffValue(value: unknown, key: string): unknown {
+  if (typeof value === "string") return compactHandoffText(value);
+  if (Array.isArray(value)) {
+    const sanitized = value.map((item) => sanitizeCompactHandoffValue(item, key));
+    return isBoundedArrayKey(key) ? sanitized.slice(0, 3) : sanitized;
+  }
+  const record = recordOrNull(value);
+  if (!record) return value;
+  const out: JsonObject = {};
+  for (const [childKey, childValue] of Object.entries(record)) {
+    out[childKey] = sanitizeCompactHandoffValue(childValue, childKey);
+  }
+  return out;
+}
+
+function compactHandoffText(value: unknown): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const tokenCount = text.match(/Original token count:\s*(\d+)/i)?.[1];
+  if (containsRawToolOutput(text)) {
+    return tokenCount
+      ? `Large tool output omitted from compact handoff (${tokenCount} reported tokens).`
+      : "Large tool output omitted from compact handoff.";
+  }
+  return text.length > 360 ? `${text.slice(0, 340).trim()}...` : text;
+}
+
+function containsRawToolOutput(text: string): boolean {
+  return /RAW_TOOL_OUTPUT_BODY_SENTINEL|Original token count:\s*\d+|Chunk ID:|Total output lines:/i.test(
+    text,
+  );
+}
+
+function isBoundedArrayKey(key: string): boolean {
+  return /evidence|warning|doNotRepeat|wrongNextActions|workflowFriction|blockers/i.test(key);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function arrayRecords(value: unknown): JsonObject[] {
+  return Array.isArray(value)
+    ? value.map(recordOrNull).filter((item): item is JsonObject => Boolean(item))
+    : [];
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value ?? "");
+  }
 }
 
 function hasRuntimeProvenanceBlocker(

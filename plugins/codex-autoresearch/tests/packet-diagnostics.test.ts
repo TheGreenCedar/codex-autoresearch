@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
+import { parseSessionForensics } from "../lib/session-forensics.js";
 
 test("classifies retrieval evidence that was not cited", () => {
   const result = classifyPacketDiagnostics({
@@ -93,4 +97,70 @@ test("carries optional task artifact diagnostics without changing metric classif
 
   assert.equal(result.primaryStage, "none");
   assert.equal(result.taskArtifacts, taskArtifacts);
+});
+
+test("session forensics detects product_bar_rejection and oversized_tool_output friction", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "autoresearch-forensics-"));
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const sessionPath = path.join(dir, "rollout.jsonl");
+  const entries = [
+    {
+      timestamp: "2026-06-08T12:00:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Clearly, you did not test accuracy" }],
+      },
+    },
+    {
+      timestamp: "2026-06-08T12:00:01.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "I treated autoresearch loop completion as enough.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-08T12:00:02.000Z",
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        call_id: "call_oversized",
+        output: [
+          "Chunk ID: abc",
+          "Process exited with code 0",
+          "Original token count: 65601",
+          "Output:",
+          "stdin is closed",
+        ].join("\n"),
+      },
+    },
+  ];
+  await writeFile(sessionPath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf8");
+
+  const result = await parseSessionForensics({ sessionJsonl: sessionPath });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const signalKinds = new Set(
+    [...result.productSignals, ...result.workflowWaste].map((signal) => signal.kind),
+  );
+
+  assert.deepEqual(
+    [
+      "product_bar_rejection",
+      "false_done_admission",
+      "oversized_tool_output",
+      "closed_stdin_poll",
+    ].map((kind) => signalKinds.has(kind)),
+    [true, true, true, true],
+  );
 });
