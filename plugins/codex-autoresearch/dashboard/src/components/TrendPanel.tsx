@@ -73,16 +73,16 @@ export function TrendPanel({
     <section
       className="panel trend-panel"
       id="trend-panel"
-      aria-label="Metric trajectory"
+      aria-label="Evidence trail"
       tabIndex={-1}
     >
       <div className="panel-head">
         <div>
           <p className="eyebrow">
             <Activity aria-hidden="true" size={14} />
-            Metric trajectory
+            Evidence trail
           </p>
-          <h2>Run chart</h2>
+          <h2>Packet trend</h2>
         </div>
         <ChartControls
           axisMode={axisMode}

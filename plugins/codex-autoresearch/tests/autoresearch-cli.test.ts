@@ -3311,9 +3311,9 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
     assert.doesNotMatch(dashboard, /clipboard\?\.writeText/);
     assert.doesNotMatch(dashboard, /autoresearch\.mjs/);
     assert.match(doc.body.textContent, /Finalize/);
-    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="codex-brief"'));
+    assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="decision-rail"'));
+    assert.ok(rendered.indexOf('id="decision-rail"') < rendered.indexOf('id="codex-brief"'));
     assert.ok(rendered.indexOf('id="codex-brief"') < rendered.indexOf('id="strategy-memory"'));
-    assert.ok(rendered.indexOf('id="strategy-memory"') < rendered.indexOf('id="decision-rail"'));
     assert.ok(rendered.indexOf('id="decision-rail"') < rendered.indexOf('id="ledger"'));
     assert.ok(rendered.indexOf('id="trend-panel"') < rendered.indexOf('id="ledger"'));
     assert.ok(rendered.indexOf('id="ledger"') < rendered.indexOf('id="research-truth-meter"'));

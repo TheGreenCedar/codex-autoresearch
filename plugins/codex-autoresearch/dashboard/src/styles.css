@@ -622,6 +622,10 @@ p {
   padding: 8px;
 }
 
+.mobile-next-action {
+  display: none;
+}
+
 .trust-detail-strip {
   grid-column: 1 / -1;
   border-top: 1px solid var(--soft-line);
@@ -2687,6 +2691,52 @@ p {
     overflow: hidden;
   }
 
+  .mobile-next-action {
+    display: grid;
+    gap: 3px;
+    margin: 8px 0 10px;
+    border: 1px solid var(--soft-line);
+    border-left: 3px solid var(--line);
+    border-radius: 8px;
+    background: rgba(248, 250, 251, 0.86);
+    padding: 10px 12px;
+  }
+
+  .mobile-next-action.warn {
+    border-left-color: var(--amber);
+  }
+
+  .mobile-next-action strong,
+  .mobile-next-action em {
+    min-width: 0;
+    display: -webkit-box;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+  }
+
+  .mobile-next-action strong {
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.15;
+    -webkit-line-clamp: 2;
+  }
+
+  .mobile-next-action em {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 750;
+    line-height: 1.25;
+    -webkit-line-clamp: 2;
+  }
+
+  .chart-tooltip {
+    width: min(280px, calc(100vw - 48px));
+    max-height: 220px;
+    overflow: auto;
+  }
+
   .toolbar-controls,
   .score-strip,
   .signal-strip {
@@ -2811,6 +2861,7 @@ p {
 
 .dark-theme .decision-envelope-card,
 .dark-theme .mission-command,
+.dark-theme .mobile-next-action,
 .dark-theme .signal-strip,
 .dark-theme .strategy-lane-card,
 .dark-theme .evidence-chip {

@@ -728,7 +728,7 @@ const checks = [
     id: "dashboard-practical-chart",
     file: "assets/template.html, dashboard/src/main.tsx",
     description:
-      "The dashboard uses a library-backed practical run chart with status legend, baseline, best, latest, run ticks, tooltip, and accessible summary.",
+      "The dashboard uses a library-backed practical Packet trend chart with status legend, baseline, best, latest, run ticks, tooltip, and accessible summary.",
     run: async () => {
       const template = await readDashboardSurface();
       return includesAll(template, [
@@ -748,7 +748,7 @@ const checks = [
         "trend-chart-summary",
       ])
         ? pass()
-        : fail("Dashboard chart is missing practical run-chart affordances.");
+        : fail("Dashboard chart is missing practical Packet trend affordances.");
     },
   },
   {
@@ -780,7 +780,8 @@ const checks = [
       const template = await readDashboardSurface();
       const viewModel = await readText("lib/dashboard-view-model.ts");
       return includesAll(`${template}\n${viewModel}`, [
-        "Metric trajectory",
+        "Evidence trail",
+        "Packet trend",
         "Run log",
         "ledger-scroll",
         "Codex brief",

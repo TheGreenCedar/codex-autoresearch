@@ -127,9 +127,11 @@ function watchdogSignal(viewModel: DashboardViewModel): SignalItem {
   const status = clean(watchdog.status) || (stale ? "stale" : "tracking");
   return {
     id: "watchdog",
-    label: "Watchdog",
+    label: "Quiet window",
     value: titleCase(status),
-    detail: stale ? "Inspect, finalize, or rescope" : "No quiet-window pressure",
+    detail: stale
+      ? "Canonical: watchdog. Inspect, finalize, or rescope"
+      : "Canonical: watchdog. No quiet-window pressure",
     tone: stale ? "warn" : status === "idle" ? "neutral" : "good",
     live: true,
   };

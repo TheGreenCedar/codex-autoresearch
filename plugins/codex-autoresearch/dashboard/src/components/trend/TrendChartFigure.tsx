@@ -279,7 +279,7 @@ function ChartDot({
   const x = Number(cx);
   const y = Number(cy);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !payload) return null;
-  const targetSize = payload.latest ? 30 : 24;
+  const targetSize = payload.latest ? 44 : 40;
   return (
     <foreignObject
       className="chart-point-wrap"
