@@ -1094,7 +1094,9 @@ async function main() {
   console.log("");
   console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
   console.log("Cleanup after verified merge:");
-  console.log("  Source branch and session-artifact cleanup commands are intentionally omitted here.");
+  console.log(
+    "  Source branch and session-artifact cleanup commands are intentionally omitted here.",
+  );
   console.log("  Use the generated review summary after trunk merge verification succeeds.");
 }
 
@@ -1152,10 +1154,6 @@ function buildPlanWarnings({
     );
   }
   return warnings;
-}
-
-function powershellQuote(value: unknown): string {
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function posixQuote(value: unknown): string {
