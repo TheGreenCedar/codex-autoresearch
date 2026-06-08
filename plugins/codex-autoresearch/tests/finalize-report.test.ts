@@ -189,6 +189,78 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "product-grade finalization preview blocks under-proven retrieval claims",
+  "autoresearch-product-grade-preview-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "retrieval.ts"), "export const value = 'base';\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/retrieval-product-claim"], repo);
+    await writeFile(
+      path.join(repo, "src", "retrieval.ts"),
+      "export const value = 'bounded foreground embedding';\n",
+    );
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "bound foreground embedding work"], repo);
+    const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "Bound foreground embedding work.",
+          evidence: "foreground embedding work can be bounded",
+          commit: kept,
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log autoresearch session"], repo);
+
+    const preview = await finalizePreview({ cwd: repo, trunk: "main" });
+    assert.equal(preview.productGradeReady, false);
+    assert.match(preview.blockers.join("\n"), /retrieval accuracy/i);
+    assert.match(preview.blockers.join("\n"), /lazy/i);
+    assert.doesNotMatch(preview.summary, /ready to merge|shippable/i);
+
+    const planPath = path.join(root, "groups.json");
+    const planResult = await run(
+      process.execPath,
+      [finalizer, "plan", "--cwd", repo, "--output", planPath, "--goal", "retrieval-claim"],
+      repo,
+    );
+    assert.match(
+      planResult.stdout,
+      /Experimental review branch only: product-grade proof is missing\./,
+    );
+    const plan = JSON.parse(await fsp.readFile(planPath, "utf8"));
+    assert.equal(plan.product_grade_ready, false);
+    assert.equal(
+      plan.product_grade_summary,
+      "Experimental review branch only: product-grade proof is missing.",
+    );
+  },
+);
+
+testWithTempRoot(
   "finalizer writes an ignored review summary and preserves verification",
   "autoresearch-finalize-",
   async (root) => {

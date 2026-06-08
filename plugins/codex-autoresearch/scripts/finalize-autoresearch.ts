@@ -4,11 +4,13 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
+import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import {
   assertGeneratedPlanMetadata,
   finalizationPlanFingerprint,
   readAutoresearchLedger,
 } from "../lib/finalization-plan.js";
+import { buildProductClaimCoverage, evidenceTextFromRun } from "../lib/product-claim-coverage.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -68,6 +70,10 @@ type FinalizePlan = LooseObject & {
   goal: string;
   groups: PlanGroup[];
   plan_fingerprint?: string;
+  product_claim_coverage?: LooseObject;
+  product_grade_issue?: string | null;
+  product_grade_ready?: boolean;
+  product_grade_summary?: string;
   source_branch?: string;
   trunk: string;
 };
@@ -586,6 +592,13 @@ function renderSuggestedPrBlocks(
   results: BranchResult[],
 ): string[] {
   const lines = ["", "## Suggested PRs", ""];
+  if (productGradeFinalizationIssue(config.product_claim_coverage)) {
+    lines.push(
+      "Experimental review branch only: product-grade proof is missing.",
+      "Do not describe this handoff as shippable or merge-ready until the missing proof is recorded.",
+      "",
+    );
+  }
   for (let i = 0; i < groups.length; i += 1) {
     const group = groups[i]!;
     const result = results[i];
@@ -638,36 +651,24 @@ function renderVerificationText(status: string, error: unknown): string[] {
   ];
 }
 
-function renderRunwayText(groups: CollectedGroup[], results: BranchResult[]): string[] {
-  const fileSet = new Set<string>();
-  for (const group of groups) {
-    for (const file of group.files || []) fileSet.add(file);
-  }
-  return [
-    "",
-    "## Finalization Runway",
-    "",
-    "1. Preview groups and risks.",
-    "2. Approve the review branch plan.",
-    "3. Create review branches.",
-    "4. Verify union and session-artifact checks.",
-    "5. Merge the review branches into trunk.",
-    "6. Cleanup source branches and autoresearch artifacts only after merge succeeds.",
-    "",
-    `Final file set: ${[...fileSet].sort().join(", ") || "(none)"}`,
-    `Review branches created: ${
-      results
-        .filter((result) => result && !result.skipped)
-        .map((result) => result.branch)
-        .join(", ") || "(none)"
-    }`,
-  ];
-}
-
-function renderCleanupNotes(sourceBranch: string): string[] {
+function renderCleanupNotes(config: FinalizePlan, sourceBranch: string): string[] {
   const cleanupTargets = [sourceBranch, ...CLEANUP_SESSION_PATHS].sort((a, b) =>
     a.localeCompare(b),
   );
+  const productGradeIssue = productGradeFinalizationIssue(config.product_claim_coverage);
+  if (productGradeIssue) {
+    return [
+      "",
+      "## Cleanup After Review",
+      "",
+      "Cleanup commands are intentionally omitted from this generated summary.",
+      "Do not delete source branches or autoresearch artifacts until the experimental review path and missing proof decision have been verified.",
+      "",
+      `Cleanup targets after accepted review verification: ${cleanupTargets.join(", ")}`,
+      "",
+      `This file is generated under Git metadata (\`${REPORT_DIRNAME}\`) so it does not dirty the worktree. Remove it when no longer needed.`,
+    ];
+  }
   return [
     "",
     "## Cleanup After Merge",
@@ -681,6 +682,47 @@ function renderCleanupNotes(sourceBranch: string): string[] {
   ];
 }
 
+function renderRunwayTextForConfig(
+  config: FinalizePlan,
+  groups: CollectedGroup[],
+  results: BranchResult[],
+): string[] {
+  const fileSet = new Set<string>();
+  for (const group of groups) {
+    for (const file of group.files || []) fileSet.add(file);
+  }
+  const productGradeIssue = productGradeFinalizationIssue(config.product_claim_coverage);
+  return [
+    "",
+    "## Finalization Runway",
+    "",
+    ...(productGradeIssue
+      ? [
+          "1. Preview groups and risks.",
+          "2. Create experimental review branches only.",
+          "3. Verify union and session-artifact checks.",
+          "4. Add the missing product-grade proof before any merge claim.",
+          "5. Cleanup source branches and autoresearch artifacts only after the accepted review path is verified.",
+        ]
+      : [
+          "1. Preview groups and risks.",
+          "2. Approve the review branch plan.",
+          "3. Create review branches.",
+          "4. Verify union and session-artifact checks.",
+          "5. Merge the review branches into trunk.",
+          "6. Cleanup source branches and autoresearch artifacts only after merge succeeds.",
+        ]),
+    "",
+    `Final file set: ${[...fileSet].sort().join(", ") || "(none)"}`,
+    `Review branches created: ${
+      results
+        .filter((result) => result && !result.skipped)
+        .map((result) => result.branch)
+        .join(", ") || "(none)"
+    }`,
+  ];
+}
+
 async function writeReviewSummary(file: string, context: ReviewSummaryContext): Promise<void> {
   const { config, groups, results, sourceBranch, status, error } = context;
   const generatedAt = new Date().toISOString();
@@ -689,8 +731,8 @@ async function writeReviewSummary(file: string, context: ReviewSummaryContext): 
     ...renderBranchRows(groups, results),
     ...renderSuggestedPrBlocks(config, groups, results),
     ...renderVerificationText(status, error),
-    ...renderRunwayText(groups, results),
-    ...renderCleanupNotes(sourceBranch),
+    ...renderRunwayTextForConfig(config, groups, results),
+    ...renderCleanupNotes(config, sourceBranch),
   ];
 
   await fsp.writeFile(file, `${lines.join("\n")}\n`, "utf8");
@@ -813,6 +855,11 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
   const keptRuns = entries.filter(isAcceptedCurrentRun);
+  const productClaimCoverage = buildProductClaimCoverage({
+    goal: latestSessionGoal(entries),
+    acceptedEvidence: keptRuns.flatMap((run) => evidenceTextFromRun(run)),
+  });
+  const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
   const selectedCommits = new Set<string>();
@@ -855,6 +902,12 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
     overlap_count: overlapAnalysis.files.length,
     collapse_overlap_recommended: overlapAnalysis.files.length > 0,
     warnings: buildPlanWarnings({ excludedCommits, overlapAnalysis }),
+    product_claim_coverage: productClaimCoverage,
+    product_grade_ready: productClaimCoverage.productGradeReady,
+    product_grade_issue: productGradeIssue,
+    product_grade_summary: productGradeIssue
+      ? "Experimental review branch only: product-grade proof is missing."
+      : "Product-grade proof is complete for the recorded claim coverage.",
     groups,
   };
   return {
@@ -936,7 +989,20 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   if (plan.collapse_overlap_recommended && !args.collapseOverlap) {
     console.log("Hint: rerun with --collapse-overlap to consolidate overlapping kept commits.");
   }
+  if (productGradeFinalizationIssue(plan.product_claim_coverage)) {
+    console.log("Experimental review branch only: product-grade proof is missing.");
+  }
   return plan;
+}
+
+function latestSessionGoal(entries: RunEntry[]): string {
+  let goal = "";
+  for (const entry of entries) {
+    if (entry?.type === "config" && Object.hasOwn(entry, "goal")) {
+      goal = String(entry.goal || "").trim();
+    }
+  }
+  return goal;
 }
 
 async function main() {
@@ -1092,8 +1158,16 @@ async function main() {
   console.log("Created review branches:");
   for (const branch of created) console.log(`  ${branch}`);
   console.log("");
-  console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
-  console.log("Cleanup after verified merge:");
+  if (productGradeFinalizationIssue(config.product_claim_coverage)) {
+    console.log("Experimental review branch only: product-grade proof is missing.");
+    console.log(
+      "Runway: preview -> create experimental review branch -> verify -> add proof before merge claim.",
+    );
+    console.log("Cleanup after accepted review path verification:");
+  } else {
+    console.log("Runway: preview -> approve -> create review branch -> verify -> merge -> cleanup.");
+    console.log("Cleanup after verified merge:");
+  }
   console.log(
     "  Source branch and session-artifact cleanup commands are intentionally omitted here.",
   );
