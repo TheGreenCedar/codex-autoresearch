@@ -17,6 +17,8 @@ This project uses a root-only changelog because the root README is the public do
 - Made compact state, `recommend-next --compact`, `doctor --check-benchmark --explain`, terminal reports, and dashboard readouts share finalization readiness and canonical next-action authority.
 - Updated default help and start docs to show read-only `setup-plan`/`prompt-plan` before mutating `setup`.
 - Reframed the dashboard decision rail as a read-only "Do this first" surface and kept the ledger navigation target visible even before runs are logged.
+- Tightened the resume/finalize journey so plateau pivots no longer suggest another packet, stale dashboards point to fresh `serve`, first baselines log as `measure`, and finalizer output avoids cleanup commands before verified merge.
+- Clarified the qualitative checklist-measured journey with front-door `research-setup -> quality-gap -> gap-candidates` guidance and aligned README, docs, skill, and plugin metadata around `measure`.
 
 ### Fixed
 

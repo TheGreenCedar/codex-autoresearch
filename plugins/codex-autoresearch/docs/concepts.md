@@ -102,10 +102,13 @@ The durable state files written into the target project:
 |---|---|
 | `autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions |
 | `autoresearch.jsonl` | Append-only ledger: config, packets, metrics, status, commits, ASI |
+| `autoresearch.config.json` | Runtime settings such as budgets, commit paths, and protected benchmark paths. |
 | `autoresearch.sh` / `.ps1` | Repeatable benchmark entrypoint |
 | `autoresearch.checks.sh` / `.ps1` | Optional correctness gate |
 | `autoresearch.ideas.md` | Deferred hypotheses, rejected lanes, next-action notes |
 | `autoresearch.last-run.json` | Fallback last-packet record |
+| `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad for evidence-backed qualitative work. |
+| `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation after interrupted keep/discard automation. |
 
 See [Start](start.md#session-files).
 

@@ -5219,9 +5219,11 @@ async function runExperiment(args: LooseObject) {
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
   const allowedStatuses = passed ? ["keep", "discard", "measure"] : [failedStatus];
   const suggestedStatus = passed
-    ? isBaseline || improvesPrimary
-      ? "keep"
-      : "discard"
+    ? isBaseline
+      ? "measure"
+      : improvesPrimary
+        ? "keep"
+        : "discard"
     : failedStatus;
   const checksWereVerified = checksPassed === true;
   const safeSuggestedStatus = passed
@@ -5231,8 +5233,10 @@ async function runExperiment(args: LooseObject) {
     : failedStatus;
   const statusGuidance = passed
     ? safeSuggestedStatus === "keep"
-      ? "Safe to consider keep because this is a baseline or a checked improvement; still review ASI before logging."
-      : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
+      ? "Safe to consider keep because this is a checked improvement; still review ASI before logging."
+      : safeSuggestedStatus === "measure"
+        ? "Log this as measure because it is a baseline or diagnostic packet without a prior improvement comparison; use keep only when real improvement evidence exists."
+        : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
   return {

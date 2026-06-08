@@ -37,7 +37,7 @@ Broad prompt:
 Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, missing essentials, and a read-only setup command.
+Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is read-only. It can return a proposed setup command, but it does not create session files until `setup` is run.
 
 Specific prompt:
 
@@ -115,14 +115,16 @@ Use `state --report` when you want a compact terminal readout. It returns `repor
 | --- | --- |
 | `autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions. |
 | `autoresearch.jsonl` | Append-only config, packet, metric, status, commit, and ASI history. |
+| `autoresearch.config.json` | Runtime settings such as budgets, commit paths, and protected benchmark paths. |
 | `autoresearch.sh` or `autoresearch.ps1` | Repeatable benchmark entrypoint. |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks. |
 | `autoresearch.ideas.md` | Deferred hypotheses, avoided lanes, and next-action notes. |
 | `autoresearch.last-run.json` | Fallback last-packet record. |
+| `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad for evidence-backed qualitative work. |
 | `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation; reconcile it with `autoresearch.jsonl` before continuing. |
+| `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation after interrupted keep/discard automation. |
 
-In Git repositories, the pending log-mutation receipt lives under Git's private
-`autoresearch/pending-log-transaction.json` path instead of the worktree.
+In Git repositories, the pending log-mutation receipt lives under Git's private `.git/autoresearch/` path instead of the worktree.
 
 ## First Packet
 

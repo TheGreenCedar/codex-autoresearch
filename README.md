@@ -135,6 +135,12 @@ Use Codex Autoresearch when:
 * the editable scope is small enough to review
 * kept work should become reviewable commits or branches
 
+Use Autoresearch for qualitative work when it can be turned into a qualitative but checklist-measured loop: study the surface, accept evidence-backed gaps, close them, and verify `quality_gap`.
+
+```text
+research-setup -> quality-gap -> gap-candidates
+```
+
 Use a regular Codex task when:
 
 * the work needs one careful edit
@@ -149,21 +155,15 @@ Protected benchmark folders are recursively inspected and hashed. Keep them smal
 
 Ask Codex to serve the dashboard when you want a live visual readout, packet freshness matters, or a stale/static export is confusing the decision.
 
-The dashboard shows:
+The dashboard answers three questions:
 
-* baseline, latest, best, confidence, and weighted metric formulas
-* a chart-first readiness strip for next action, evidence, lanes, watchdog, and finalization pressure
-* audit view for traceability and operate view for chart-first monitoring
-* Codex brief and strategy lanes
-* next safe action, evidence label, proof gaps, and why the action is safe
-* packet economics, workflow friction, partial-result candidates, and stale-progress warnings
-* protected benchmark path and secondary metric constraint signals
-* operator checklist, loop contract, ledger entries, ASI, and handoff context
-* best kept change and recent failures
-* fanout plans, lane status, scaffold health, research integrity, runtime provenance, packet diagnostics, and finalization readiness
-* copyable status reports and agent handoff packets
+1. Is this live or a static snapshot?
+2. What is the next safe action?
+3. What blocks trust?
 
-Use the dashboard to inspect state. Talk to Codex for everything else.
+Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, packet diagnostics, finalization readiness, ledger entries, ASI, and handoff packets.
+
+Readout only. CLI does the work.
 
 ## Quality-gap loops
 

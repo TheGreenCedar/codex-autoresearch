@@ -3404,9 +3404,10 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, 3);
     assert.equal(packet.decision.metrics.cache_hits, 8);
-    assert.equal(packet.decision.safeSuggestedStatus, "keep");
+    assert.equal(packet.decision.rawSuggestedStatus, "measure");
+    assert.equal(packet.decision.safeSuggestedStatus, "measure");
     assert.equal(packet.decision.promotion.label, "exploratory");
-    assert.match(packet.decision.statusGuidance, /Safe to consider keep/);
+    assert.match(packet.decision.statusGuidance, /baseline or diagnostic packet/);
     assert.equal(packet.decision.diversityGuidance, null);
     assert.equal(packet.decision.asiTemplate.lane, "");
     assert.match(packet.packetEvidence.packetId, /^packet-/);
@@ -4868,7 +4869,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
   });
 });
 
-test("legacy failed sentinel metrics do not suppress next-run baseline guidance", async () => {
+test("legacy failed sentinel metrics do not suppress next-run baseline measure guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "legacy sentinel", "--metric-name", "seconds"]);
 
@@ -4901,8 +4902,8 @@ test("legacy failed sentinel metrics do not suppress next-run baseline guidance"
     ]);
     assert.equal(next.code, 0, next.stderr);
     const payload = JSON.parse(next.stdout);
-    assert.equal(payload.decision.rawSuggestedStatus, "keep");
-    assert.equal(payload.decision.safeSuggestedStatus, "keep");
+    assert.equal(payload.decision.rawSuggestedStatus, "measure");
+    assert.equal(payload.decision.safeSuggestedStatus, "measure");
   });
 });
 
@@ -7090,7 +7091,7 @@ test("large metric streams keep a primary metric outside retained output tails",
   });
 });
 
-test("next command runs preflight and benchmark as one decision packet", async () => {
+test("next command suggests measure for a first baseline decision packet", async () => {
   await withTempDir("next-command", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "next command", "--metric-name", "seconds"]);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
@@ -7109,12 +7110,13 @@ test("next command runs preflight and benchmark as one decision packet", async (
     assert.equal(payload.run.progress.stages[0].status, "completed");
     assert.match(payload.run.progress.latestOutputTail, /METRIC seconds=2/);
     assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard", "measure"]);
-    assert.equal(payload.decision.suggestedStatus, "keep");
-    assert.equal(payload.decision.safeSuggestedStatus, "keep");
-    assert.match(payload.decision.statusGuidance, /Safe to consider keep/);
+    assert.equal(payload.decision.rawSuggestedStatus, "measure");
+    assert.equal(payload.decision.suggestedStatus, "measure");
+    assert.equal(payload.decision.safeSuggestedStatus, "measure");
+    assert.match(payload.decision.statusGuidance, /without a prior improvement comparison/);
     assert.ok(Array.isArray(payload.decision.lanePortfolio));
     assert.equal(payload.decision.diversityGuidance, null);
-    assert.match(payload.nextAction, /Log this run/);
+    assert.match(payload.nextAction, /Log this run as measure/);
   });
 });
 
