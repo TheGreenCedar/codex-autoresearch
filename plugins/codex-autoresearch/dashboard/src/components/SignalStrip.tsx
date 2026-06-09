@@ -203,7 +203,6 @@ function buildTrustItems(viewModel: DashboardViewModel) {
   const trustState = recordFrom(viewModel.trustState || viewModel.trust);
   const processHygiene = recordFrom(viewModel.processHygiene);
   const finalizePreview = recordFrom(viewModel.finalizePreview);
-  const finalizationChecklist = recordFrom(viewModel.finalizationChecklist);
   const researchTruth = recordFrom(viewModel.researchTruth || viewModel.truthMeter);
   const items = [
     ...labeledList("Trust blocker", viewModel.trustBlockers, "danger"),
@@ -212,7 +211,6 @@ function buildTrustItems(viewModel: DashboardViewModel) {
     ...labeledList("Process warning", processHygiene.warnings, "warn"),
     ...labeledList("Runtime warning", viewModel.trustWarnings, "warn"),
     ...labeledList("Session warning", viewModel.warnings, "warn"),
-    ...labeledList("Finalization warning", finalizationChecklist.warnings, "warn"),
     ...labeledList("Finalization warning", finalizePreview.warnings, "warn"),
     ...labeledList("Research proof gap", researchTruth.suspiciousReasons, "warn"),
     ...labeledList("Research proof gap", researchTruth.suspicious_reasons, "warn"),

@@ -10,7 +10,7 @@ import {
   finalizationPlanFingerprint,
   readAutoresearchLedger,
 } from "../lib/finalization-plan.js";
-import { buildProductClaimCoverage, evidenceTextFromRun } from "../lib/product-claim-coverage.js";
+import { buildFinalizationProductClaimCoverageFromLedger } from "../lib/product-claim-coverage.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -855,10 +855,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
   const keptRuns = entries.filter(isAcceptedCurrentRun);
-  const productClaimCoverage = buildProductClaimCoverage({
-    goal: latestSessionGoal(entries),
-    acceptedEvidence: keptRuns.flatMap((run) => evidenceTextFromRun(run)),
-  });
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(entries);
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
@@ -995,16 +992,6 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   return plan;
 }
 
-function latestSessionGoal(entries: RunEntry[]): string {
-  let goal = "";
-  for (const entry of entries) {
-    if (entry?.type === "config" && Object.hasOwn(entry, "goal")) {
-      goal = String(entry.goal || "").trim();
-    }
-  }
-  return goal;
-}
-
 async function main() {
   const cli = parseCliArgs(process.argv.slice(2));
   const command = cli._[0];
@@ -1025,7 +1012,7 @@ async function main() {
     return;
   }
   const configPath = resolveCliPath(file, cwd);
-  const config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
+  let config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
     const parsed = JSON.parse(await fsp.readFile(configPath, "utf8"));
     if (!parsed.base || !parsed.final_tree || !parsed.goal || !Array.isArray(parsed.groups)) {
       throw new Error("groups.json is missing base, final_tree, goal, or groups.");
@@ -1035,6 +1022,7 @@ async function main() {
     parsed.final_tree = await fullHash(parsed.final_tree, cwd);
     return parsed as FinalizePlan;
   });
+  config = await hydratePlanProductClaimCoverage(config, cwd);
 
   const sourceBranch = await withPhase(
     "preflight",
@@ -1178,6 +1166,58 @@ async function main() {
 
 function planFingerprint(plan: FinalizePlan): string {
   return finalizationPlanFingerprint(plan);
+}
+
+async function hydratePlanProductClaimCoverage(
+  config: FinalizePlan,
+  cwd: string,
+): Promise<FinalizePlan> {
+  const entries = await readAutoresearchJsonl(cwd);
+  const derived = buildFinalizationProductClaimCoverageFromLedger(entries);
+  const productGradeIssue = productGradeFinalizationIssue(derived);
+  if (!config.product_claim_coverage) {
+    return {
+      ...config,
+      product_claim_coverage: derived,
+      product_grade_ready: derived.productGradeReady,
+      product_grade_issue: productGradeIssue,
+      product_grade_summary: productGradeIssue
+        ? "Experimental review branch only: product-grade proof is missing."
+        : "Product-grade proof is complete for the recorded claim coverage.",
+    };
+  }
+  await assertPlanProductClaimCoverage(config, cwd);
+  return config;
+}
+
+async function assertPlanProductClaimCoverage(config: FinalizePlan, cwd: string): Promise<void> {
+  const entries = await readAutoresearchJsonl(cwd);
+  const derived = buildFinalizationProductClaimCoverageFromLedger(entries);
+  const planned = config.product_claim_coverage;
+  if (!planned) return;
+  if (Boolean(planned.productGradeReady) !== derived.productGradeReady) {
+    throw new Error(
+      "Stale finalization plan: product claim coverage does not match the session ledger. Rerun finalizer plan.",
+    );
+  }
+  const plannedMissing = new Set(
+    (Array.isArray(planned.missingRequiredProof) ? planned.missingRequiredProof : [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean),
+  );
+  const derivedMissing = new Set(derived.missingRequiredProof.map((item) => item.id));
+  if (plannedMissing.size !== derivedMissing.size) {
+    throw new Error(
+      "Stale finalization plan: product claim coverage does not match the session ledger. Rerun finalizer plan.",
+    );
+  }
+  for (const id of plannedMissing) {
+    if (!derivedMissing.has(id)) {
+      throw new Error(
+        "Stale finalization plan: product claim coverage does not match the session ledger. Rerun finalizer plan.",
+      );
+    }
+  }
 }
 
 function analyzeGroupOverlap(groups: PlanGroup[]): OverlapAnalysis {

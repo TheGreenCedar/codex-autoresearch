@@ -214,7 +214,11 @@ function observeMessage(
   }
   if (
     payload.role === "user" &&
-    /did not test accuracy|shippable product|broken experiment|not what I wanted/i.test(text)
+    (/did not test accuracy|broken experiment|not what I wanted/i.test(text) ||
+      (/\bshippable product\b/i.test(text) &&
+        /\b(not|n't|no|never|isn't|aren't|wasn't|reject|wrong|broken|unproven|missing proof)\b/i.test(
+          text,
+        )))
   ) {
     state.productSignals.push(
       signal("product_bar_rejection", "blocker", summarize(text), "message"),
@@ -292,13 +296,18 @@ function observeFunctionOutput(
     });
   }
   if (tokenCount >= state.thresholds.outputCommandTokenBudget) {
-    state.workflowWaste.push({
-      kind: "output_budget_exceeded",
-      severity: "warning",
-      message: `One command output reported ${tokenCount} tokens.`,
-      source: callId,
-      size: { tokens: tokenCount, lines: lineCount || undefined },
-    });
+    const duplicateOversized =
+      tokenCount >= 20_000 &&
+      state.workflowWaste.some((item) => item.kind === "oversized_tool_output");
+    if (!duplicateOversized) {
+      state.workflowWaste.push({
+        kind: "output_budget_exceeded",
+        severity: "warning",
+        message: `One command output reported ${tokenCount} tokens.`,
+        source: callId,
+        size: { tokens: tokenCount, lines: lineCount || undefined },
+      });
+    }
   }
   if (lineCount >= state.thresholds.outputCommandLineBudget) {
     state.workflowWaste.push({

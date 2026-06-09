@@ -6,10 +6,31 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.2.0
+
 ### Changed
 
-- Added product-grade claim coverage to Autoresearch guidance so shippable/final requests separate experimental primitive evidence from proof of accuracy, lazy behavior, ranking quality, and docs/tests coverage.
+- Added product-grade claim coverage across state, dashboard, and finalization so shippable/final requests separate experimental evidence from proof of accuracy, lazy behavior, ranking quality, and docs/tests coverage.
+- Finalization plans and current-tree plans now carry fingerprinted claim coverage; tampered or missing product-grade proof downgrades review-branch wording instead of implying merge-ready delivery.
+- `finalizationReadiness` now exposes `productGradeReady` and `productGradeIssue` alongside mechanical preview readiness.
+- Performance setup can persist quality constraints into the session config and surface them through gate-quality promotion checks.
+- `new-segment` accepts benchmark commands through validated tool calls (`allow_unsafe_command`) and honors explicit `--direction lower`.
+- Dashboard `serve` reuses healthy same-cwd registry entries, records debug-ledger mode, and reports accurate reuse metadata.
+- Dashboard proof coverage, chart roving tabindex, and live handoff receipts surface claim gaps and recovery state earlier.
+- `recommend-next --compact` bounded handoffs preserve operator handoff, loop contract essentials, runnable commands, and an output-side size budget.
+- Session forensics detects false-done/product-bar rejections with polarity checks and dedupes oversized-output noise.
 - Documented the finalization preview ship bar, dashboard live handoff expectations, new-segment benchmark repair, oversized-output recovery, and speed-without-correctness troubleshooting across the main docs and Codex-facing skill.
+- Lightened common read commands with per-invocation session read caching and a compact `guide` fast path.
+
+### Fixed
+
+- Negation-blind claim coverage no longer treats "accuracy was NOT tested" as proof of accuracy.
+- Plain performance goals no longer inherit retrieval-specific sidecar requirements unless the goal names retrieval/search semantics.
+- Reused dashboard responses no longer claim `debugLedger.enabled: false` when the live server was started with `--debug-ledger`.
+
+### Release
+
+- Bumped public package, lockfile, plugin manifest, and runtime drift surfaces to `2.2.0`.
 
 ## 2.1.8
 

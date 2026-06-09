@@ -53,6 +53,10 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
           overwrite: args.overwrite,
           createChecks: args.createChecks,
           skipInit: args.skipInit,
+          qualityConstraints: args.qualityConstraints,
+          quality_constraints: args.qualityConstraints ?? args.quality_constraints,
+          allowUnsafeCommand: args.allowUnsafeCommand,
+          allow_unsafe_command: args.allowUnsafeCommand ?? args.allow_unsafe_command,
         }),
       };
     },
@@ -448,6 +452,10 @@ function setupArgs(args: LooseObject): LooseObject {
     budgetNote: args.budgetNote,
     compact: args.compact,
     readCache: args.readCache,
+    qualityConstraints: args.qualityConstraints ?? args.quality_constraints,
+    quality_constraints: args.quality_constraints ?? args.qualityConstraints,
+    allowUnsafeCommand: args.allowUnsafeCommand ?? args.allow_unsafe_command,
+    allow_unsafe_command: args.allow_unsafe_command ?? args.allowUnsafeCommand,
   };
 }
 

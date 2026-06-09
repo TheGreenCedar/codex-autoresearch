@@ -329,6 +329,10 @@ export function currentState(workDir: string): SessionState {
     if (entry.type === "config") {
       const previousConfig = config;
       const previousEntry = activeConfigEntry;
+      const priorSegment = segment;
+      const priorSegmentHadRuns = results.some(
+        (run) => (run.segment ?? priorSegment) === priorSegment,
+      );
       if (results.length > 0) segment += 1;
       config = {
         name: entry.name || config.name,
@@ -340,7 +344,7 @@ export function currentState(workDir: string): SessionState {
       previousConfigEntry = previousEntry;
       activeConfigEntry = { ...entry, segment };
       metricSemanticsWarning =
-        metricSemanticsChange(previousConfig, config) && previousEntry
+        metricSemanticsChange(previousConfig, config) && previousEntry && priorSegmentHadRuns
           ? {
               code: "metric_semantics_changed",
               severity: "warning",
@@ -585,11 +589,24 @@ export function buildDecisionEnvelope({
       ? {
           available: finalization.available !== false,
           ready: finalization.ready === null ? null : finalization.ready === true,
+          productGradeReady:
+            finalization.productGradeReady === undefined
+              ? finalization.product_grade_ready !== false
+              : finalization.productGradeReady !== false,
+          productGradeIssue:
+            finalization.productGradeIssue || finalization.product_grade_issue || null,
           actionCode: finalization.actionCode || "",
           nextAction: finalization.nextAction || "",
           warnings: finalization.warnings || [],
         }
-      : { available: false, ready: null, nextAction: "", warnings: [] },
+      : {
+          available: false,
+          ready: null,
+          productGradeReady: true,
+          productGradeIssue: null,
+          nextAction: "",
+          warnings: [],
+        },
     experimentEconomics,
     salvageCandidates: Array.isArray(salvageCandidates) ? salvageCandidates : [],
     workflowFriction: Array.isArray(workflowFriction) ? workflowFriction : [],

@@ -6,11 +6,7 @@ import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
-import {
-  buildProductClaimCoverage,
-  evidenceTextFromRun,
-  type ProductClaimCoverage,
-} from "./product-claim-coverage.js";
+import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim-coverage.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
@@ -84,7 +80,7 @@ export async function finalizePreview(args: LooseObject) {
   const ledgerEntries = await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
-  const productClaimCoverage = buildFinalizationProductClaimCoverage(ledgerEntries);
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, ledgerEntries);
   const { groups, missingCommitCount, warnings } = await buildKeptRunGroups(workDir, keptRuns);
@@ -145,6 +141,7 @@ export async function finalizePreview(args: LooseObject) {
       "Resolve the active decision capsule before finalization."
     : finalizePreviewNextAction({
         ready,
+        productGradeIssue,
         semanticSafety,
         excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
         finalTreeCoverage: finalTreePlan.finalTreeCoverage,
@@ -211,24 +208,6 @@ export async function finalizePreview(args: LooseObject) {
     startedAt,
     ready ? "completed" : "blocked",
   );
-}
-
-function buildFinalizationProductClaimCoverage(entries: LooseObject[]): ProductClaimCoverage {
-  const goal = latestSessionGoal(entries);
-  const acceptedEvidence = entries
-    .filter(isAcceptedCurrentRun)
-    .flatMap((run) => evidenceTextFromRun(run as LooseObject));
-  return buildProductClaimCoverage({ goal, acceptedEvidence });
-}
-
-function latestSessionGoal(entries: LooseObject[]): string {
-  let goal = "";
-  for (const entry of entries) {
-    if (entry?.type === "config" && Object.hasOwn(entry, "goal")) {
-      goal = String(entry.goal || "").trim();
-    }
-  }
-  return goal;
 }
 
 async function buildKeptRunGroups(workDir: string, keptRuns: KeptRun[]) {
@@ -404,6 +383,7 @@ function isFinalizePreviewReady({
 
 function finalizePreviewNextAction({
   ready,
+  productGradeIssue = null,
   semanticSafety,
   excludedPlannedFileConflicts,
   finalTreeCoverage,
@@ -412,7 +392,11 @@ function finalizePreviewNextAction({
   keptRuns,
   missingCommitCount,
 }: LooseObject): string {
-  if (ready) return "Review the preview, then run the suggested finalizer plan command.";
+  if (ready) {
+    return productGradeIssue
+      ? "Review the preview as an experimental review branch only; product-grade proof is missing, then run the suggested finalizer plan command."
+      : "Review the preview, then run the suggested finalizer plan command.";
+  }
   if (!semanticSafety.ok) {
     return "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence.";
   }
@@ -500,6 +484,9 @@ export async function finalizeCurrentTree(args: LooseObject) {
 
   const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
   const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
+  const ledgerEntries = await readLedgerEntries(workDir);
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
+  const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const currentTreeFingerprint = currentTreeFingerprintFor({
     base,
     finalTree,
@@ -532,6 +519,12 @@ export async function finalizeCurrentTree(args: LooseObject) {
       excluded_session_artifacts: fileSelection.excludedSessionArtifacts,
       current_tree_fingerprint: currentTreeFingerprint,
     },
+    product_claim_coverage: productClaimCoverage,
+    product_grade_ready: productClaimCoverage.productGradeReady,
+    product_grade_issue: productGradeIssue,
+    product_grade_summary: productGradeIssue
+      ? "Experimental review branch only: product-grade proof is missing."
+      : "Product-grade proof is complete for the recorded claim coverage.",
     groups: [
       {
         title: `Current final tree for ${branch || "autoresearch"}`,

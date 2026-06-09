@@ -86,7 +86,10 @@ import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
-import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
+import {
+  classifyPacketDiagnostics,
+  benchmarkContractDiagnostics,
+} from "../lib/packet-diagnostics.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -1366,6 +1369,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   if (!checksCommand && qualityConstraints.length > 0) missing.push("checks_command");
   if (!checksCommand && (testSpeed || bugs)) missing.push("checks_command");
   if (!filesInScope.length) missing.push("scope");
+  const setupMissing = uniqueStrings(missing);
   const experimentPlan = buildPromptExperimentPlan({
     prompt,
     speed,
@@ -1378,8 +1382,8 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     discoveredBenchmark: useDiscoveredBenchmark,
   });
   const nextAction =
-    missing.length > 0
-      ? `Confirm ${missing.join(", ")} or accept the suggested recipe before setup.`
+    setupMissing.length > 0
+      ? `Confirm ${setupMissing.join(", ")} or accept the suggested recipe before setup.`
       : "Run setup, doctor, then one packet. Serve the live dashboard only if the operator asks or freshness needs a browser readout.";
   return {
     loopKind,
@@ -1410,7 +1414,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
         : null,
     },
     metric: { name: metricName, unit: metricUnit, direction },
-    missing,
+    missing: setupMissing,
     qualityConstraints,
     experimentPlan,
     setupDefaults: {
@@ -1729,8 +1733,18 @@ function qualityConstraintsForText(text: string): QualityConstraint[] {
 }
 
 function qualityConstraintsFromInput(value: unknown): QualityConstraint[] {
-  if (!Array.isArray(value)) return [];
-  return value
+  let parsed = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
     .map((entry) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
       const record = entry as LooseObject;
@@ -2276,6 +2290,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
           ? {
               available: true,
               ready: viewModel.finalizePreview.ready === true,
+              productGradeReady: viewModel.finalizePreview.productGradeReady !== false,
+              productGradeIssue: viewModel.finalizePreview.productGradeIssue || null,
               nextAction: viewModel.finalizePreview.nextAction || "",
               warnings: viewModel.finalizePreview.warnings || [],
             }
@@ -2388,7 +2404,8 @@ function compactRecommendCommands(
 ): LooseObject {
   if (!commands) return {};
   const compactCommands: LooseObject = {};
-  if (canonicalNextAction?.command) compactCommands.primary = canonicalNextAction.command;
+  const primary = canonicalNextAction?.command || commands.state;
+  if (primary) compactCommands.primary = primary;
   return compactCommands;
 }
 
@@ -2482,7 +2499,7 @@ function canonicalActionForRecommendNext(
 
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = await publicState({ cwd: workDir, compact: false });
+  const state = await publicState({ cwd: workDir, compact: false, readCache: args.readCache });
   const compact = compactPublicState(state);
   const commands = continuationCommands(workDir);
   const importedGoal = importedCodexGoal(args);
@@ -4126,11 +4143,17 @@ async function benchmarkContractDrift(workDir: string, state: any) {
       : {}),
   });
   if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
+  const driftReference =
+    latest.run != null
+      ? `logged run #${latest.run}`
+      : latest.segment != null
+        ? `segment ${latest.segment} contract`
+        : "the active benchmark contract";
   return {
     code: "benchmark_contract_changed",
     severity: "error",
-    run: latest.run,
-    message: `Benchmark/check/config contract changed since logged run #${latest.run}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
+    run: latest.run ?? null,
+    message: `Benchmark/check/config contract changed since ${driftReference}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
     action: "Run new-segment --dry-run, then --yes after reviewing the changed benchmark contract.",
     previousHash: latest.benchmarkContract.surfaceHash,
     currentHash: current.surfaceHash,
@@ -4580,6 +4603,10 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
       rawSecondaryMetricConstraints,
       secondaryMetricConstraints,
     );
+  const qualityConstraints = uniqueQualityConstraints(
+    qualityConstraintsFromInput(args.quality_constraints ?? args.qualityConstraints),
+  );
+  if (qualityConstraints.length > 0) updates.qualityConstraints = qualityConstraints;
   if (!clearWallClockBudget && hasWallClockBudgetSeconds && wallClockBudgetSeconds != null) {
     updates.budgetStartedAt = new Date().toISOString();
   } else if (
@@ -4916,6 +4943,10 @@ async function decisionGuidance({
   benchmarkCommand = "",
   checksCommand = "",
 }: LooseObject) {
+  const stateConfig = state?.config || config || {};
+  const qualityConstraints = Array.isArray(stateConfig.qualityConstraints)
+    ? stateConfig.qualityConstraints
+    : null;
   return buildDecisionGuidanceContext({
     workDir,
     pluginRoot: PLUGIN_ROOT,
@@ -4925,6 +4956,7 @@ async function decisionGuidance({
     scaffoldHealth,
     warningDetails,
     setupMissing,
+    qualityConstraints,
     runtimeDriftSummary,
     benchmarkCommand,
     checksCommand,
@@ -6881,6 +6913,7 @@ async function publicCompactState({
     watchdogSummary,
     laneLifecycle,
     packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     experimentEconomics,
@@ -7101,6 +7134,7 @@ function compactPublicState(state: LooseObject) {
     loopContract: compactDecisionEnvelope?.loopContract,
     laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
   });
 }
 
@@ -7177,6 +7211,8 @@ function compactFinalizationReadiness(readiness: LooseObject | null | undefined)
   return {
     available: readiness?.available !== false,
     ready: readiness?.ready === null ? null : readiness?.ready === true,
+    productGradeReady: readiness?.productGradeReady !== false,
+    productGradeIssue: readiness?.productGradeIssue || null,
     nextAction: readiness?.nextAction || readiness?.recommendation || "",
     warnings: Array.isArray(readiness?.warnings) ? readiness.warnings.slice(0, 3) : [],
   };
@@ -8276,7 +8312,9 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
       }
     : null;
   const activeBenchmarkContractEntry = latestBenchmarkContractEntry(workDir, state);
-  const activeBenchmarkContract = activeBenchmarkContractEntry?.benchmarkContract || null;
+  const contractDiagnostics = benchmarkContractDiagnostics({
+    state: loadSessionState(workDir, args.readCache),
+  });
   const benchmarkContractChanged = warningDetails.some(
     (detail: any) => detail?.code === "benchmark_contract_changed",
   );
@@ -8292,10 +8330,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     },
     benchmarkContract: {
       ok: benchmarkContractChanged === false,
-      activeSource:
-        activeBenchmarkContractEntry?.benchmarkContractScope === "segment" ? "segment" : "run",
-      activeContract: activeBenchmarkContract,
-      historical: activeBenchmarkContractEntry?.benchmarkContractScope === "segment",
+      activeSource: contractDiagnostics.activeSource,
+      activeContract: contractDiagnostics.activeContract,
+      historicalContracts: contractDiagnostics.historicalContracts,
+      historical: contractDiagnostics.historicalContracts.length > 0,
+      segmentEntry: activeBenchmarkContractEntry?.benchmarkContractScope === "segment",
     },
     benchmark,
     drift,
@@ -8503,9 +8542,11 @@ async function newSegment(args: any) {
   const nextDirection =
     requestedDirection === "higher"
       ? "higher"
-      : state.config.bestDirection === "higher"
-        ? "higher"
-        : "lower";
+      : requestedDirection === "lower"
+        ? "lower"
+        : state.config.bestDirection === "higher"
+          ? "higher"
+          : "lower";
   const entry: LooseObject = {
     type: "config",
     name: state.config.name || "Autoresearch",

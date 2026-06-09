@@ -80,6 +80,7 @@ const COMPACT_AVOIDS =
   "Avoids loading dashboard-only fields while handing off the compact loop contract.";
 const COMPACT_PROOF =
   "The primary command comes from compact canonical next action, falling back to compact state.";
+const COMPACT_HANDOFF_BUDGET = 7_000;
 
 export function buildRecommendNextResponse(
   input: RecommendNextResponseInput,
@@ -142,24 +143,28 @@ export function buildCompactRecommendNextResponse({
     const boundedEnvelope = boundedDecisionEnvelope(
       recordOrNull(compact.decisionEnvelope) || recordOrNull(compact.resumeAudit),
     );
-    return buildRecommendNextResponse({
-      ok: compact.ok === false ? false : true,
-      workDir,
-      action,
-      nextAction,
-      whySafe: COMPACT_WHY_SAFE,
-      avoids: COMPACT_AVOIDS,
-      proof: COMPACT_PROOF,
-      blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
-      commands: primaryCommand ? { primary: primaryCommand } : {},
-      nextStep: null,
-      compactState: boundedCompactState,
-      resumeAudit: null,
-      decisionEnvelope: boundedEnvelope,
-      sessionDecisionCapsule: compact.sessionDecisionCapsule,
-      evidenceNotes: handoff.evidenceNotes,
-      frictionSignals: handoff.frictionSignals,
-    });
+    const slimLoopContract = boundedLoopContract(recordOrNull(compact.loopContract));
+    return enforceCompactHandoffBudget(
+      buildRecommendNextResponse({
+        ok: compact.ok === false ? false : true,
+        workDir,
+        action,
+        nextAction,
+        whySafe: COMPACT_WHY_SAFE,
+        avoids: COMPACT_AVOIDS,
+        proof: COMPACT_PROOF,
+        blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
+        commands: primaryCommand ? { primary: primaryCommand } : {},
+        nextStep: null,
+        compactState: boundedCompactState,
+        resumeAudit: null,
+        decisionEnvelope: boundedEnvelope,
+        loopContract: slimLoopContract,
+        sessionDecisionCapsule: compact.sessionDecisionCapsule,
+        evidenceNotes: handoff.evidenceNotes,
+        frictionSignals: handoff.frictionSignals,
+      }),
+    );
   }
 
   return buildRecommendNextResponse({
@@ -234,15 +239,18 @@ function compactRecommendNextHandoff(compactState: unknown): {
   bounded: boolean;
 } {
   const compact = recordOrNull(compactState) || {};
+  if (!needsCompactHandoff(compactState)) {
+    return { compactState, evidenceNotes: [], frictionSignals: [], bounded: false };
+  }
   const capsule = recordOrNull(compact.sessionDecisionCapsule);
   const evidenceNotes = stringArray(capsule?.evidence)
     .map((value) => compactHandoffText(value, "evidence"))
+    .filter(Boolean)
     .slice(0, 3);
   const frictionSignals = [
     ...stringArray(capsule?.commandBudgetWarnings).map((value) =>
       compactHandoffText(value, "commandBudgetWarnings"),
     ),
-    ...stringArray(capsule?.doNotRepeat).map((value) => compactHandoffText(value, "doNotRepeat")),
     ...arrayRecords(compact.workflowFriction).map((signal) =>
       compactHandoffText(
         stringOrEmpty(signal.reason) || stringOrEmpty(signal.message) || stringOrEmpty(signal.kind),
@@ -251,9 +259,6 @@ function compactRecommendNextHandoff(compactState: unknown): {
   ]
     .filter(Boolean)
     .slice(0, 3);
-  if (!needsCompactHandoff(compactState)) {
-    return { compactState, evidenceNotes, frictionSignals, bounded: false };
-  }
   return {
     compactState: sanitizeCompactHandoffValue(compactState, ""),
     evidenceNotes,
@@ -283,17 +288,17 @@ function sanitizeCompactHandoffValue(value: unknown, key: string): unknown {
 }
 
 function compactHandoffText(value: unknown, key = ""): string {
-  const text = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return "";
-  const tokenCount = text.match(/Original token count:\s*(\d+)/i)?.[1];
-  if (containsRawToolOutput(text)) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const tokenCount = raw.match(/Original token count:\s*(\d+)/i)?.[1];
+  if (containsRawToolOutput(raw)) {
     return tokenCount
       ? `Large tool output omitted from compact handoff (${tokenCount} reported tokens).`
       : "Large tool output omitted from compact handoff.";
   }
-  const maxLength = isCommandLikeText(key, text) ? 2_000 : 360;
+  if (isCommandLikeKey(key)) return raw;
+  const text = raw.replace(/\s+/g, " ").trim();
+  const maxLength = 360;
   return text.length > maxLength ? `${text.slice(0, maxLength - 20).trim()}...` : text;
 }
 
@@ -307,12 +312,8 @@ function isBoundedArrayKey(key: string): boolean {
   return /evidence|warning|doNotRepeat|wrongNextActions|workflowFriction|blockers/i.test(key);
 }
 
-function isCommandLikeText(key: string, text: string): boolean {
-  return (
-    /command|primary|replaceLast/i.test(key) ||
-    /\b(?:node|npm|git|bash|powershell)\b/i.test(text) ||
-    /scripts[\\/]+autoresearch\.mjs/i.test(text)
-  );
+function isCommandLikeKey(key: string): boolean {
+  return /command|primary|replaceLast/i.test(key);
 }
 
 function buildBoundedCompactState(compact: JsonObject): JsonObject {
@@ -321,6 +322,8 @@ function buildBoundedCompactState(compact: JsonObject): JsonObject {
   );
   return {
     goalFrame: compact.goalFrame ?? null,
+    operatorHandoff: compact.operatorHandoff ?? null,
+    loopContract: boundedLoopContract(recordOrNull(compact.loopContract)),
     decisionEnvelope: {
       finalizationReadiness: decisionEnvelope?.finalizationReadiness ?? null,
     },
@@ -334,6 +337,55 @@ function boundedDecisionEnvelope(envelope: JsonObject | null): JsonObject | null
     latestPacketFreshness: envelope.latestPacketFreshness ?? null,
     finalizationReadiness: envelope.finalizationReadiness ?? null,
     canonicalNextAction: envelope.canonicalNextAction ?? null,
+  };
+}
+
+function boundedLoopContract(loopContract: JsonObject | null): JsonObject | null {
+  if (!loopContract) return null;
+  return {
+    canRunNextPacket: loopContract.canRunNextPacket ?? null,
+    blockers: Array.isArray(loopContract.blockers) ? loopContract.blockers.slice(0, 3) : [],
+  };
+}
+
+function enforceCompactHandoffBudget(response: RecommendNextResponse): RecommendNextResponse {
+  let current = response;
+  if (safeStringify(current).length <= COMPACT_HANDOFF_BUDGET) return current;
+  current = {
+    ...current,
+    evidenceNotes: [],
+    frictionSignals: [],
+    sessionDecisionCapsule: sanitizeSessionCapsuleForBudget(current.sessionDecisionCapsule),
+  };
+  if (safeStringify(current).length <= COMPACT_HANDOFF_BUDGET) return current;
+  const compactState = recordOrNull(current.compactState);
+  if (compactState) {
+    current = {
+      ...current,
+      compactState: {
+        goalFrame: compactState.goalFrame ?? null,
+        operatorHandoff: compactState.operatorHandoff ?? null,
+        loopContract: compactState.loopContract ?? null,
+        decisionEnvelope: compactState.decisionEnvelope ?? null,
+      },
+    };
+  }
+  return current;
+}
+
+function sanitizeSessionCapsuleForBudget(value: unknown): unknown {
+  const capsule = recordOrNull(value);
+  if (!capsule) return value;
+  return {
+    bottleneck: compactHandoffText(capsule.bottleneck),
+    nextExperiment: compactHandoffText(capsule.nextExperiment),
+    enforcement: capsule.enforcement ?? null,
+    evidence: stringArray(capsule.evidence)
+      .map((item) => compactHandoffText(item, "evidence"))
+      .slice(0, 2),
+    warnings: stringArray(capsule.warnings)
+      .map((item) => compactHandoffText(item, "warnings"))
+      .slice(0, 2),
   };
 }
 

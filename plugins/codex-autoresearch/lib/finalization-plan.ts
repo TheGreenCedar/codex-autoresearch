@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { productClaimCoverageFingerprintMaterial } from "./product-claim-coverage.js";
 
 export type LooseObject = Record<string, any>;
 
@@ -77,6 +78,10 @@ export function finalizationPlanFingerprintMaterial(plan: LooseObject): LooseObj
     excluded_commit_count: plan.excluded_commit_count || 0,
     overlap_files: plan.overlap_files || [],
     current_tree_coverage: normalizeCurrentTreeCoverage(plan.current_tree_coverage),
+    product_claim_coverage: productClaimCoverageFingerprintMaterial(plan.product_claim_coverage),
+    product_grade_ready: Boolean(
+      plan.product_grade_ready ?? plan.product_claim_coverage?.productGradeReady,
+    ),
     groups: (plan.groups || []).map((group: LooseObject) => ({
       title: group.title || "",
       last_commit: group.last_commit || "",

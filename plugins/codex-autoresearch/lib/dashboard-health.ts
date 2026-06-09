@@ -156,5 +156,6 @@ function samePathText(left: string, right: string): boolean {
 }
 
 function normalizePathText(value: string): string {
-  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

@@ -28,7 +28,7 @@ Do not describe a packet or wall-clock budget as API spend tracking. Autoresearc
 
 Read `decisionEnvelope` / `resumeAudit` as the resume contract. It should name one authoritative `nextAction` after checking the active segment, historical best, promotion-grade best, latest packet freshness, benchmark/config drift, dirty source drift, quality round, and finalization readiness.
 
-On resume, treat `goalFrame.authoritativeGoal` and `operatorHandoff.goal` as the research objective. The latest Codex/user prompt is an operator instruction unless `goalFrame.codexObjectiveRole` says it matches the durable research goal. When `goalFrame.warning` is present, say the warning out loud before running packet work. `recommend-next --compact` exposes the same data under `compactState.goalFrame` and `compactState.operatorHandoff`.
+On resume, treat `goalFrame.authoritativeGoal` and `operatorHandoff.goal` as the research objective. The latest Codex/user prompt is an operator instruction unless `goalFrame.codexObjectiveRole` says it matches the durable research goal. When `goalFrame.warning` is present, say the warning out loud before running packet work. `recommend-next --compact` exposes the same data under `compactState.goalFrame`, `compactState.operatorHandoff`, and a slim `compactState.loopContract` when the handoff is budget-bounded. `metricSemanticsWarning` on `state --compact` means active and historical bests may not be directly comparable across segments.
 
 `state --compact`, `recommend-next --compact`, and the dashboard should agree on the same watchdog summary and canonical next-action kind. If they diverge, treat that as a bug rather than a dashboard-only signal.
 

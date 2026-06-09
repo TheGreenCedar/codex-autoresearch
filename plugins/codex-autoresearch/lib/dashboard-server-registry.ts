@@ -13,6 +13,7 @@ export interface DashboardServeRegistryRecord {
   startedAt: string;
   version: string;
   healthUrl: string;
+  debugLedger?: boolean;
   previous?: DashboardServeRegistrySummary | null;
 }
 
@@ -173,7 +174,7 @@ export function buildServeRegistryHealthInput(
 
 export async function findReusableServeRegistry(
   workDir: string,
-  options: { expectedVersion?: string; timeoutMs?: number } = {},
+  options: { expectedVersion?: string; timeoutMs?: number; debugLedger?: boolean } = {},
 ): Promise<DashboardServeRegistryLookup> {
   const requestedCwd = path.resolve(workDir);
   const record = await readServeRegistry(requestedCwd);
@@ -209,7 +210,10 @@ export async function findReusableServeRegistry(
       timeoutMs: options.timeoutMs,
     }),
   );
-  const reusable = health.liveness === "alive" && health.stale === false;
+  const reusable =
+    health.liveness === "alive" &&
+    health.stale === false &&
+    Boolean(record.debugLedger) === Boolean(options.debugLedger);
   const healthUrl = health.healthUrl || record.healthUrl;
   const dashboardUrl = health.url || (record.port ? `http://127.0.0.1:${record.port}/` : "");
   const liveness = health.liveness === "alive" ? "alive" : health.liveness || previous.liveness;
@@ -293,6 +297,7 @@ function normalizeRecord(record: unknown): DashboardServeRegistryRecord {
     startedAt: cleanString(source.startedAt) || new Date(0).toISOString(),
     version: cleanString(source.version),
     healthUrl: cleanString(source.healthUrl),
+    debugLedger: source.debugLedger === true,
   };
 }
 
@@ -354,7 +359,12 @@ function cleanString(value: unknown): string {
 }
 
 function samePath(a: string, b: string): boolean {
-  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  if (process.platform === "win32") {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return left === right;
 }
 
 function serveRecoveryCommand(cwd: string): string {

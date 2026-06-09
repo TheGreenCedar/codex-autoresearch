@@ -135,6 +135,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       const reusableRegistry = await findReusableServeRegistry(workDir, {
         expectedVersion: deps.pluginVersion,
         timeoutMs: 500,
+        debugLedger,
       });
       dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
       if (reusableRegistry.reusable) {
@@ -210,6 +211,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       startedAt: startedAtIso,
       version: deps.pluginVersion,
       healthUrl,
+      debugLedger,
     });
     const registrySummary = summarizeServeRegistry(registryWrite.record, {
       currentPid: process.pid,
@@ -308,7 +310,7 @@ function reusedServeDashboardResult({
     mode: "live",
     registryReused: true,
     detached: true,
-    pid: lookup.pid ?? null,
+    pid: lookup.health?.pid ?? lookup.pid ?? null,
     cwd: lookup.cwd || workDir,
     version: lookup.version || "",
     startedAt: lookup.startedAt || "",
@@ -324,10 +326,13 @@ function reusedServeDashboardResult({
       previous: lookup.previous || null,
     },
     debugLedger: {
-      enabled: false,
+      enabled:
+        lookup.health?.dashboard?.debugLedger === true || lookup.record?.debugLedger === true,
       endpoint: url ? new URL("autoresearch.jsonl", url).toString() : "",
       guidance:
-        "Raw ledger endpoint status is unchanged on the reused dashboard; restart with --debug-ledger only for local debugging.",
+        lookup.record?.debugLedger === true
+          ? "Reused dashboard was started with --debug-ledger; raw ledger endpoint is available for local debugging."
+          : "Raw ledger endpoint remains disabled on the reused dashboard; restart with --debug-ledger only for local debugging.",
     },
     decisionEnvelopeSummary: null,
     deferredViewModel: {

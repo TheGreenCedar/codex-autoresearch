@@ -74,6 +74,7 @@ export async function serveAutoresearch(args: LooseObject) {
             startedAt,
             lastReadAt: new Date().toISOString(),
             version,
+            debugLedger,
           },
         });
         return;
@@ -204,6 +205,8 @@ async function liveSessionFingerprint(
 }
 
 async function liveSessionStamp(workDir: string): Promise<string> {
+  // TTL-bounded dashboard reuse compares this stamp; a stale stamp can serve briefly
+  // until the next health poll notices ledger/config drift.
   const parts = await Promise.all([
     fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
     fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),

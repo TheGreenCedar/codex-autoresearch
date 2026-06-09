@@ -219,7 +219,6 @@ export function buildDashboardViewModel(context: DashboardContext) {
   });
   const signals = buildDashboardSignals({
     productClaimCoverage,
-    finalizationChecklist,
     finalizePreview,
     trustBlockers,
   });
@@ -1362,7 +1361,6 @@ function normalizeProductClaimCoverage(value: unknown) {
 
 function buildDashboardSignals({
   productClaimCoverage = null,
-  finalizationChecklist = [],
   finalizePreview = null,
   trustBlockers = [],
 }: LooseObject) {
@@ -1381,10 +1379,7 @@ function buildDashboardSignals({
       source: "claim coverage",
     });
   }
-  const finalizationWarnings = [
-    ...stringList(finalizePreview?.warnings),
-    ...stringList(finalizationChecklist?.warnings),
-  ];
+  const finalizationWarnings = [...stringList(finalizePreview?.warnings)];
   if (finalizationWarnings.length) {
     signals.push({
       id: "finalization-blocker",
