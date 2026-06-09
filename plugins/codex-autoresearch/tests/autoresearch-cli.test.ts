@@ -3154,8 +3154,7 @@ test("benchmark contract changes block the next packet until a new segment", asy
 
 test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
   await withTempDir("segment-contract-rebaseline", async (dir) => {
-    const benchmarkCommand =
-      "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+    const benchmarkCommand = `${quoteForShell(process.execPath)} benchmark.mjs`;
     await runCli([
       "init",
       "--cwd",
@@ -3168,14 +3167,19 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       "higher",
     ]);
     await writeFile(path.join(dir, "bench-a.txt"), "protected A\n", "utf8");
-    await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=1'\n", "utf8");
+    await writeFile(
+      path.join(dir, "benchmark.mjs"),
+      "import { readFileSync } from 'node:fs';\nconsole.log(`METRIC score=${readFileSync('score.txt', 'utf8').trim()}`);\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "score.txt"), "1\n", "utf8");
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ protectedBenchmarkPaths: ["bench-a.txt"] }, null, 2),
       "utf8",
     );
 
-    const packet = await runCli(["next", "--cwd", dir]);
+    const packet = await runCli(["next", "--cwd", dir, "--command", benchmarkCommand]);
     assert.equal(packet.code, 0, packet.stderr);
     const logged = await runCli([
       "log",
@@ -3190,7 +3194,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
     assert.equal(logged.code, 0, logged.stderr);
 
     await writeFile(path.join(dir, "bench-b.txt"), "protected B\n", "utf8");
-    await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=2'\n", "utf8");
+    await writeFile(path.join(dir, "score.txt"), "2\n", "utf8");
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ protectedBenchmarkPaths: ["bench-b.txt"] }, null, 2),
