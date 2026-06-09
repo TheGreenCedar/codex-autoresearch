@@ -4,7 +4,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
+import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
+import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim-coverage.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
@@ -78,6 +80,8 @@ export async function finalizePreview(args: LooseObject) {
   const ledgerEntries = await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
+  const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, ledgerEntries);
   const { groups, missingCommitCount, warnings } = await buildKeptRunGroups(workDir, keptRuns);
   const capsuleFinalizationBlocked =
@@ -102,6 +106,7 @@ export async function finalizePreview(args: LooseObject) {
   emitProgress(args, "finalize-preview", "building finalization recommendation");
   appendFinalTreeWarnings(warnings, finalTreePlan);
   warnings.push(...semanticSafety.blockers.map((blocker) => blocker.message));
+  if (productGradeIssue) warnings.push(productGradeIssue);
   appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps });
 
   const ready =
@@ -136,6 +141,7 @@ export async function finalizePreview(args: LooseObject) {
       "Resolve the active decision capsule before finalization."
     : finalizePreviewNextAction({
         ready,
+        productGradeIssue,
         semanticSafety,
         excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
         finalTreeCoverage: finalTreePlan.finalTreeCoverage,
@@ -171,9 +177,21 @@ export async function finalizePreview(args: LooseObject) {
       excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
       finalTreeCoverage: finalTreePlan.finalTreeCoverage,
       semanticSafety,
+      productClaimCoverage,
+      productGradeReady: productClaimCoverage.productGradeReady,
+      productGradeIssue,
       sessionDecisionCapsule,
       overlaps,
       warnings,
+      blockers: [
+        ...semanticSafety.blockers.map((blocker) => blocker.message),
+        ...(productGradeIssue ? [productGradeIssue] : []),
+      ],
+      summary: productGradeIssue
+        ? "Experimental review branch only: product-grade proof is missing."
+        : ready
+          ? "Review branch preview is ready."
+          : "Finalization preview is blocked.",
       suggestedCommand: renderShellCommand(planArgv),
       suggestedCommands: {
         finalizerPlan: {
@@ -365,6 +383,7 @@ function isFinalizePreviewReady({
 
 function finalizePreviewNextAction({
   ready,
+  productGradeIssue = null,
   semanticSafety,
   excludedPlannedFileConflicts,
   finalTreeCoverage,
@@ -373,7 +392,11 @@ function finalizePreviewNextAction({
   keptRuns,
   missingCommitCount,
 }: LooseObject): string {
-  if (ready) return "Review the preview, then run the suggested finalizer plan command.";
+  if (ready) {
+    return productGradeIssue
+      ? "Review the preview as an experimental review branch only; product-grade proof is missing, then run the suggested finalizer plan command."
+      : "Review the preview, then run the suggested finalizer plan command.";
+  }
   if (!semanticSafety.ok) {
     return "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence.";
   }
@@ -461,6 +484,9 @@ export async function finalizeCurrentTree(args: LooseObject) {
 
   const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
   const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
+  const ledgerEntries = await readLedgerEntries(workDir);
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
+  const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const currentTreeFingerprint = currentTreeFingerprintFor({
     base,
     finalTree,
@@ -493,6 +519,12 @@ export async function finalizeCurrentTree(args: LooseObject) {
       excluded_session_artifacts: fileSelection.excludedSessionArtifacts,
       current_tree_fingerprint: currentTreeFingerprint,
     },
+    product_claim_coverage: productClaimCoverage,
+    product_grade_ready: productClaimCoverage.productGradeReady,
+    product_grade_issue: productGradeIssue,
+    product_grade_summary: productGradeIssue
+      ? "Experimental review branch only: product-grade proof is missing."
+      : "Product-grade proof is complete for the recorded claim coverage.",
     groups: [
       {
         title: `Current final tree for ${branch || "autoresearch"}`,

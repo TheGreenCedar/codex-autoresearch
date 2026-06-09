@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -112,6 +113,15 @@ export function TrendChartFigure({
 }) {
   const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
     chartState;
+  const [selectedRunNumber, setSelectedRunNumber] = useState<number | null>(() =>
+    initialSelectedRunNumber(chartData),
+  );
+  useEffect(() => {
+    if (chartData.some((item) => item.runNumber === selectedRunNumber)) return;
+    setSelectedRunNumber(initialSelectedRunNumber(chartData));
+  }, [chartData, selectedRunNumber]);
+  const selectedPoint =
+    chartData.find((item) => item.runNumber === selectedRunNumber) || chartData.at(-1) || null;
   return (
     <figure
       id="trend-chart"
@@ -123,6 +133,11 @@ export function TrendChartFigure({
       </figcaption>
       <p id="trend-chart-desc" className="sr-only">
         {chart.summary}
+      </p>
+      <p id="trend-chart-selected" className="sr-only" aria-live="polite">
+        {selectedPoint
+          ? `Selected chart point: ${selectedPoint.runLabel}, ${selectedPoint.statusLabel}, ${selectedPoint.metricDisplay}.`
+          : "No chart point selected."}
       </p>
       <ResponsiveContainer width="100%" height={chartHeight}>
         <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
@@ -213,7 +228,14 @@ export function TrendChartFigure({
             strokeLinecap="round"
             strokeLinejoin="round"
             strokeWidth={5}
-            dot={<ChartDot onSelect={onPointSelect} />}
+            dot={
+              <ChartDot
+                chartData={chartData}
+                onPreview={setSelectedRunNumber}
+                onSelect={onPointSelect}
+                selectedRunNumber={selectedRunNumber}
+              />
+            }
             activeDot={<ChartActiveDot />}
           >
             <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
@@ -266,20 +288,39 @@ function SegmentedControl<T extends string>({
 }
 
 function ChartDot({
+  chartData = [],
   cx,
   cy,
+  onPreview,
   payload,
   onSelect,
+  selectedRunNumber = null,
 }: {
+  chartData?: ChartDatum[];
   cx?: number;
   cy?: number;
+  onPreview?: (runNumber: number) => void;
   payload?: ChartDatum;
   onSelect?: (payload: ChartDatum, opener: ChartPointOpener) => void;
+  selectedRunNumber?: number | null;
 }) {
   const x = Number(cx);
   const y = Number(cy);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !payload) return null;
   const targetSize = payload.latest ? 44 : 40;
+  const tabbable = isTabbableChartPoint(payload, selectedRunNumber);
+  const selectAdjacentPoint = (direction: -1 | 1) => {
+    const currentIndex = chartData.findIndex((item) => item.runNumber === payload.runNumber);
+    const next = chartData[currentIndex + direction];
+    if (!next) return;
+    onPreview?.(next.runNumber);
+    window.setTimeout(() => {
+      const target = document.querySelector<HTMLButtonElement>(
+        `[data-chart-run="${next.runNumber}"]`,
+      );
+      target?.focus();
+    }, 0);
+  };
   return (
     <foreignObject
       className="chart-point-wrap"
@@ -292,9 +333,20 @@ function ChartDot({
         type="button"
         className="chart-point-button"
         aria-haspopup="dialog"
+        aria-describedby="trend-chart-selected"
         aria-label={chartPointAriaLabel(payload)}
         data-chart-run={payload.runNumber}
+        tabIndex={tabbable ? 0 : -1}
         onClick={(event) => onSelect?.(payload, event.currentTarget)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+            event.preventDefault();
+            selectAdjacentPoint(-1);
+          } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+            event.preventDefault();
+            selectAdjacentPoint(1);
+          }
+        }}
       >
         {payload.latest && (
           <span className={`latest-halo-ui ${payload.status}`} aria-hidden="true" />
@@ -305,6 +357,21 @@ function ChartDot({
         />
       </button>
     </foreignObject>
+  );
+}
+
+function initialSelectedRunNumber(chartData: ChartDatum[]) {
+  return chartData.find((item) => item.latest)?.runNumber ?? chartData.at(-1)?.runNumber ?? null;
+}
+
+function isTabbableChartPoint(payload: ChartDatum, selectedRunNumber: number | null) {
+  return (
+    payload.runNumber === selectedRunNumber ||
+    payload.latest ||
+    payload.best ||
+    payload.status === "discard" ||
+    payload.status === "crash" ||
+    payload.status === "checks_failed"
   );
 }
 

@@ -33,6 +33,26 @@ Preview also reports semantic safety:
 - kept commits later reverted on the branch
 - final non-session branch files not covered by the selected review groups
 
+## Product-Grade Finalization Bar
+
+Do not finalize an experimental primitive as a shippable deliverable.
+
+A finalization preview can package evidence for review, but it must not imply product-grade readiness when the product claim is unproven. Treat the preview as a branch/readiness receipt: it can say that a review branch is useful, while still saying the work is experimental.
+
+For shippable, final, product, retrieval, search, ranking, or performance work, compare claim coverage against accepted evidence before using merge-ready language. Retrieval and lazy semantic search claims need proof such as retrieval accuracy, recall/MRR/hit@k or ranking quality, lazy behavior under realistic load, sidecar safety, and docs or tests that capture the behavior. A faster benchmark is not enough by itself.
+
+When claim coverage is missing, describe the branch as an experimental primitive or development review branch. Use wording like:
+
+```text
+Experimental review branch only: product-grade proof is missing.
+```
+
+If the default branch or trunk is ambiguous, pass it explicitly:
+
+```bash
+node scripts/autoresearch.mjs finalize-preview --cwd <project> --trunk origin/main
+```
+
 ## Review What Counts
 
 Only accepted/current `status: "keep"` entries are candidates for review branches.

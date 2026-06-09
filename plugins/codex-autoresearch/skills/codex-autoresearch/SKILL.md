@@ -29,6 +29,7 @@ UX, the user experience:
 
 - Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
+- For shippable, product, or final requests, identify the product claims before setup. If the request names retrieval, search, ranking, lazy behavior, accessibility, safety, or performance, require a quality constraint or checks path before promotion.
 - At session start and resume, stay on the CLI happy path unless setup is ambiguous, the user asks for the dashboard, packet freshness needs a browser readout, or the canonical action is blocked.
 - Report the operator story: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, optional dashboard URL, and verification.
 
@@ -55,9 +56,10 @@ Use docs only as needed; do not load everything by default.
 10. `recommend-next --compact` carries the canonical next action plus governance and portfolio fields, including `decision-capsule` blockers.
 11. Run `serve --cwd <project>`, verify liveness, and directly provide the live dashboard URL only when the user asks, the browser readout matters, or CLI state is not enough.
 12. `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
-13. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and symlink/realpath escapes without invalidating unrelated metric evidence.
-14. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
-15. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
+13. For retrieval/search/ranking/performance work, require quality constraints such as accuracy, recall, MRR, hit@k, ranking quality, lazy behavior, accessibility, security, or data-integrity checks before promotion.
+14. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and symlink/realpath escapes without invalidating unrelated metric evidence.
+15. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
+16. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
 
 Happy-path CLI from `plugins/codex-autoresearch`:
 
@@ -127,13 +129,15 @@ Use finalization when noisy loop history has useful kept commits.
 
 1. Run `finalize-preview --cwd <project>` before branch creation.
 2. Keep only accepted/current `status: "keep"` evidence; rejected, provisional, superseded, and quarantined evidence stays audit-visible but must not drive review branches.
-3. Treat previews and plans as read-only.
-4. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings.
-5. Session artifacts are excluded by default. Use `--include-session-artifacts` only when the reviewer explicitly wants them in the branch.
-6. Ask before creating branches unless the user already approved finalization.
-7. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
-8. Do not suggest branch cleanup until merge verification has succeeded.
-9. Report created review branches, files, metric improvement, verification, and remaining risk.
+3. Compare product claim coverage against accepted evidence. Check for accuracy, lazy behavior, ranking/correctness, sidecar safety, and docs/tests proof when those claims are part of the request.
+4. If coverage is missing, report experimental status and do not create merge-looking PR language. Use "Experimental review branch only: product-grade proof is missing."
+5. Treat previews and plans as read-only.
+6. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings.
+7. Session artifacts are excluded by default. Use `--include-session-artifacts` only when the reviewer explicitly wants them in the branch.
+8. Ask before creating branches unless the user already approved finalization.
+9. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
+10. Do not suggest branch cleanup until merge verification has succeeded.
+11. Report created review branches, files, metric improvement, claim coverage, verification, and remaining risk.
 
 ## Subagent Handoffs
 

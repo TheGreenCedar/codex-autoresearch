@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
+import { buildProductClaimCoverage, evidenceTextFromRun } from "./product-claim-coverage.js";
 import {
   readActiveSessionDecisionCapsule,
   type SessionDecisionCapsule,
@@ -58,6 +59,14 @@ type SessionState = LooseObject & {
   current: RunRecord[];
   sessionDecisionCapsule: SessionDecisionCapsule | null;
 };
+
+export interface SessionReadCache {
+  stateByCwd: Map<string, unknown>;
+}
+
+export function createSessionReadCache(): SessionReadCache {
+  return { stateByCwd: new Map() };
+}
 
 export function listOption(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -312,9 +321,18 @@ export function currentState(workDir: string): SessionState {
     bestDirection: "lower",
   };
   let segment = 0;
+  let activeConfigEntry: LooseObject | null = null;
+  let previousConfigEntry: LooseObject | null = null;
+  let metricSemanticsWarning: LooseObject | null = null;
   const results: RunRecord[] = [];
   for (const entry of entries) {
     if (entry.type === "config") {
+      const previousConfig = config;
+      const previousEntry = activeConfigEntry;
+      const priorSegment = segment;
+      const priorSegmentHadRuns = results.some(
+        (run) => (run.segment ?? priorSegment) === priorSegment,
+      );
       if (results.length > 0) segment += 1;
       config = {
         name: entry.name || config.name,
@@ -323,6 +341,28 @@ export function currentState(workDir: string): SessionState {
         metricUnit: entry.metricUnit ?? config.metricUnit,
         bestDirection: entry.bestDirection === "higher" ? "higher" : "lower",
       };
+      previousConfigEntry = previousEntry;
+      activeConfigEntry = { ...entry, segment };
+      metricSemanticsWarning =
+        metricSemanticsChange(previousConfig, config) && previousEntry && priorSegmentHadRuns
+          ? {
+              code: "metric_semantics_changed",
+              severity: "warning",
+              message:
+                "Metric semantics changed; active segment and historical best may not be directly comparable.",
+              previous: {
+                metricName: previousConfig.metricName,
+                metricUnit: previousConfig.metricUnit,
+                bestDirection: previousConfig.bestDirection,
+              },
+              current: {
+                metricName: config.metricName,
+                metricUnit: config.metricUnit,
+                bestDirection: config.bestDirection,
+              },
+              segment,
+            }
+          : null;
       continue;
     }
     if (entry.run != null) {
@@ -340,12 +380,21 @@ export function currentState(workDir: string): SessionState {
   );
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
+  const productClaimCoverage = buildProductClaimCoverage({
+    goal: config.goal,
+    acceptedEvidence: current
+      .filter((run) => isAcceptedCurrentRun(run))
+      .flatMap((run) => evidenceTextFromRun(run)),
+  });
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, entries);
   const promotionRuns = evidenceRegistry.currentRuns.filter(
     (run) => isAcceptedCurrentRun(run) && isPromotionGradeRun(run),
   );
   return {
     config,
+    activeConfigEntry,
+    previousConfigEntry,
+    metricSemanticsWarning,
     segment,
     results,
     current,
@@ -356,8 +405,30 @@ export function currentState(workDir: string): SessionState {
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
     evidenceRegistry,
+    productClaimCoverage,
     sessionDecisionCapsule,
   };
+}
+
+function metricSemanticsChange(previous: StateConfig, current: StateConfig): boolean {
+  return (
+    previous.metricName !== current.metricName ||
+    previous.metricUnit !== current.metricUnit ||
+    previous.bestDirection !== current.bestDirection
+  );
+}
+
+export function loadSessionState(
+  workDir: string,
+  readCache?: SessionReadCache | null,
+): SessionState {
+  if (!readCache) return currentState(workDir);
+  const cacheKey = path.resolve(workDir);
+  const cached = readCache.stateByCwd.get(cacheKey);
+  if (cached) return cached as SessionState;
+  const state = currentState(workDir);
+  readCache.stateByCwd.set(cacheKey, state);
+  return state;
 }
 
 function bestRunSummary(run: RunRecord | null | undefined): LooseObject | null {
@@ -518,11 +589,24 @@ export function buildDecisionEnvelope({
       ? {
           available: finalization.available !== false,
           ready: finalization.ready === null ? null : finalization.ready === true,
+          productGradeReady:
+            finalization.productGradeReady === undefined
+              ? finalization.product_grade_ready !== false
+              : finalization.productGradeReady !== false,
+          productGradeIssue:
+            finalization.productGradeIssue || finalization.product_grade_issue || null,
           actionCode: finalization.actionCode || "",
           nextAction: finalization.nextAction || "",
           warnings: finalization.warnings || [],
         }
-      : { available: false, ready: null, nextAction: "", warnings: [] },
+      : {
+          available: false,
+          ready: null,
+          productGradeReady: true,
+          productGradeIssue: null,
+          nextAction: "",
+          warnings: [],
+        },
     experimentEconomics,
     salvageCandidates: Array.isArray(salvageCandidates) ? salvageCandidates : [],
     workflowFriction: Array.isArray(workflowFriction) ? workflowFriction : [],

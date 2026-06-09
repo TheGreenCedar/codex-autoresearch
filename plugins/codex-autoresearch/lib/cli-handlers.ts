@@ -1,4 +1,5 @@
 import { normalizeCliCommandArguments } from "./tool-schemas.js";
+import { createSessionReadCache } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
 type CliHandler = (args: LooseObject) => Promise<LooseObject>;
@@ -52,6 +53,10 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
           overwrite: args.overwrite,
           createChecks: args.createChecks,
           skipInit: args.skipInit,
+          qualityConstraints: args.qualityConstraints,
+          quality_constraints: args.qualityConstraints ?? args.quality_constraints,
+          allowUnsafeCommand: args.allowUnsafeCommand,
+          allow_unsafe_command: args.allowUnsafeCommand ?? args.allow_unsafe_command,
         }),
       };
     },
@@ -71,6 +76,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
       result: await deps.onboardingPacket({
         cwd: args.cwd,
         compact: args.compact,
+        readCache: args.readCache,
       }),
     }),
     "recommend-next": async (args) => ({
@@ -79,6 +85,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         compact: args.compact,
         operatorChecklist: args.operatorChecklist,
         codexGoalObjective: args.codexGoalObjective,
+        readCache: args.readCache,
       }),
     }),
     "codex-goal-brief": async (args) => ({
@@ -91,6 +98,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         codexGoalTimeUsedSeconds: args.codexGoalTimeUsedSeconds,
         completionEvidence: args.completionEvidence,
         completionConfirmed: args.completionConfirmed,
+        readCache: args.readCache,
       }),
     }),
     "session-forensics": async (args) => ({
@@ -315,6 +323,7 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         compact: args.compact,
         report: args.report,
         codexGoalObjective: args.codexGoalObjective,
+        readCache: args.readCache,
       }),
     }),
     doctor: async (args) => ({
@@ -358,8 +367,21 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
     "new-segment": async (args) => ({
       result: await deps.newSegment({
         cwd: args.cwd,
+        working_dir: args.working_dir || args.workingDir,
         reason: args.reason,
+        metricName: args.metricName,
+        metric_name: args.metric_name,
+        metricUnit: args.metricUnit,
+        metric_unit: args.metric_unit,
+        direction: args.direction,
+        bestDirection: args.bestDirection,
+        best_direction: args.best_direction,
+        benchmarkCommand: args.benchmarkCommand,
+        benchmark_command: args.benchmark_command,
+        checksCommand: args.checksCommand,
+        checks_command: args.checks_command,
         dryRun: args.dryRun,
+        dry_run: args.dry_run,
         yes: args.yes,
         confirm: args.confirm,
       }),
@@ -428,6 +450,12 @@ function setupArgs(args: LooseObject): LooseObject {
     packetBudget: args.packetBudget,
     wallClockBudgetSeconds: args.wallClockBudgetSeconds,
     budgetNote: args.budgetNote,
+    compact: args.compact,
+    readCache: args.readCache,
+    qualityConstraints: args.qualityConstraints ?? args.quality_constraints,
+    quality_constraints: args.quality_constraints ?? args.qualityConstraints,
+    allowUnsafeCommand: args.allowUnsafeCommand ?? args.allow_unsafe_command,
+    allow_unsafe_command: args.allow_unsafe_command ?? args.allowUnsafeCommand,
   };
 }
 
@@ -435,7 +463,11 @@ function normalizeCliHandlers(handlers: Record<string, CliHandler>): Record<stri
   return Object.fromEntries(
     Object.entries(handlers).map(([command, handler]) => [
       command,
-      (args: LooseObject) => handler(normalizeCliCommandArguments(command, args) as LooseObject),
+      (args: LooseObject) =>
+        handler({
+          ...(normalizeCliCommandArguments(command, args) as LooseObject),
+          readCache: createSessionReadCache(),
+        }),
     ]),
   );
 }

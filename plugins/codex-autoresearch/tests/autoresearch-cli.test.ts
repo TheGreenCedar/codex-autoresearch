@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
@@ -26,9 +27,102 @@ const runCli = createCliRunner(cli, pluginRoot);
 const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
 
+function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return (payload.result as Record<string, unknown>) || payload;
+}
+
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
+
+test("state exposes missing product claim coverage for shippable retrieval work", async () => {
+  await withTempDir("product-claim-coverage-state", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          metric: 20,
+          status: "keep",
+          evidenceStatus: "accepted",
+          description: "Sidecar safety fails closed and foreground embedding work can be bounded.",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const result = await runCli(["state", "--cwd", dir]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const coverage = payload.productClaimCoverage;
+    assert.equal(coverage.productGradeReady, false);
+    assert.deepEqual(
+      coverage.missingRequiredProof.map((proof) => proof.id),
+      ["retrieval_accuracy", "lazy_behavior", "ranking_quality", "docs_tests"],
+    );
+  });
+});
+
+test("finalize-preview json exposes missing product-grade claim coverage", async () => {
+  await withTempDir("product-claim-coverage-finalize-preview", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    await git(dir, ["config", "user.email", "codex@example.invalid"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "retrieval.ts"), "export const value = 'base';\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "base"]);
+
+    await git(dir, ["switch", "-c", "codex/retrieval-product-claim"]);
+    await writeFile(
+      path.join(dir, "src", "retrieval.ts"),
+      "export const value = 'bounded foreground embedding';\n",
+    );
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "bound foreground embedding work"]);
+    const kept = (await git(dir, ["rev-parse", "HEAD"])).trim();
+
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "Bound foreground embedding work.",
+          evidence: "foreground embedding work can be bounded",
+          commit: kept,
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "log autoresearch session"]);
+
+    const result = await runCli(["finalize-preview", "--cwd", dir, "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.productGradeReady, false);
+    assert.match(payload.blockers.join("\n"), /retrieval accuracy/i);
+    assert.match(payload.blockers.join("\n"), /lazy/i);
+    assert.match(result.stdout, /Product-grade evidence is missing/);
+    assert.match(result.stdout, /Lazy\/selective behavior/);
+    assert.match(result.stdout, /Experimental review branch only/);
+  });
+});
 
 async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
@@ -372,6 +466,47 @@ test("compact state exposes authoritative goal frame and operator handoff", asyn
     assert.equal(payload.operatorHandoff.next, payload.nextAction);
   });
 });
+
+test(
+  "compact read commands stay within a warm local startup budget",
+  { skip: process.env.CI_PERF_UNSTABLE === "1" },
+  async () => {
+    await withTempDir("compact-read-budget", async (dir) => {
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "compact read budget",
+        "--metric-name",
+        "seconds",
+        "--goal",
+        "Keep compact read commands fast.",
+      ]);
+
+      const commands = [
+        ["state", "--cwd", dir, "--compact"],
+        ["recommend-next", "--cwd", dir, "--compact"],
+        ["guide", "--cwd", dir, "--compact"],
+      ];
+      const budgetMs = process.env.CODEX_AUTORESEARCH_TEST_SHARD_RANGE ? 2200 : 1500;
+      for (const command of commands) {
+        let bestElapsedMs = Number.POSITIVE_INFINITY;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const started = performance.now();
+          const result = await runSpawnedCli(command);
+          const elapsedMs = performance.now() - started;
+          assert.equal(result.code, 0, result.stderr);
+          bestElapsedMs = Math.min(bestElapsedMs, elapsedMs);
+        }
+        assert.ok(
+          bestElapsedMs < budgetMs,
+          `${command[0]} --compact best-of-3 took ${Math.round(bestElapsedMs)} ms, budget ${budgetMs} ms`,
+        );
+      }
+    });
+  },
+);
 
 test("run reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
@@ -1003,6 +1138,39 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     assert.equal(doctorSchema.outputSchema.properties.decisionEnvelope.type, "object");
     assert.equal(doctorSchema.outputSchema.properties.sessionDecisionCapsule.type, "object");
     assert.match(doctorSchema.outputSchema.properties.state.description, /decisionEnvelope/);
+  });
+});
+
+test("recommend-next compact bounds noisy session evidence", async () => {
+  await withTempDir("recommend-next-noisy-session", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "noisy compact", "--metric-name", "seconds"]);
+    const rawBody = [
+      "RAW_TOOL_OUTPUT_BODY_SENTINEL",
+      "Chunk ID: noisy",
+      "Original token count: 65601",
+      "Output:",
+      "x".repeat(9000),
+    ].join("\n");
+    await writeDecisionCapsule(dir, "noisy-session", {
+      evidence: [
+        "User rejected the product bar after accuracy was not tested.",
+        "Assistant admitted the loop-complete signal was treated as enough.",
+        "Tool output exceeded the compact handoff budget.",
+        rawBody,
+      ],
+      commandBudgetWarnings: [rawBody],
+    });
+
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    assert.equal(recommend.stdout.length < 7000, true, String(recommend.stdout.length));
+    assert.doesNotMatch(recommend.stdout, /RAW_TOOL_OUTPUT_BODY_SENTINEL/);
+    const payload = JSON.parse(recommend.stdout);
+    assert.equal(payload.evidenceNotes.length <= 3, true);
+    assert.equal(
+      payload.evidenceNotes[0],
+      "User rejected the product bar after accuracy was not tested.",
+    );
   });
 });
 
@@ -2883,6 +3051,25 @@ test("prompt-plan prefers documented repo benchmark hints over generic cargo rec
   });
 });
 
+test("prompt-plan flags retrieval speed work as needing a quality constraint", async () => {
+  await withTempDir("prompt-plan-retrieval-quality", async (dir) => {
+    const result = await runCli([
+      "prompt-plan",
+      "--cwd",
+      dir,
+      "--prompt",
+      "Speed up large-codebase semantic retrieval with lazy search",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const serialized = JSON.stringify(payload);
+
+    assert.match(serialized, /quality constraint/i);
+    assert.match(serialized, /accuracy|recall|ranking/i);
+    assert.doesNotMatch(serialized, /cargo test.*primary benchmark/i);
+  });
+});
+
 test("run notes append inside the managed ledger block", async () => {
   await withTempDir("managed-ledger", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "ledger", "--metric-name", "seconds"]);
@@ -2962,6 +3149,180 @@ test("benchmark contract changes block the next packet until a new segment", asy
     assert.equal(payload.ok, false);
     assert.match(payload.doctor.issues.join("\n"), /Benchmark\/check\/config contract changed/);
     assert.match(payload.nextAction, /new segment|old evidence|contract/i);
+  });
+});
+
+test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
+  await withTempDir("segment-contract-rebaseline", async (dir) => {
+    const benchmarkCommand = `${quoteForShell(process.execPath)} benchmark.mjs`;
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "contract rebaseline",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await writeFile(path.join(dir, "bench-a.txt"), "protected A\n", "utf8");
+    await writeFile(
+      path.join(dir, "benchmark.mjs"),
+      "import { readFileSync } from 'node:fs';\nconsole.log(`METRIC score=${readFileSync('score.txt', 'utf8').trim()}`);\n",
+      "utf8",
+    );
+    await writeFile(path.join(dir, "score.txt"), "1\n", "utf8");
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ protectedBenchmarkPaths: ["bench-a.txt"] }, null, 2),
+      "utf8",
+    );
+
+    const packet = await runCli(["next", "--cwd", dir, "--command", benchmarkCommand]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Baseline contract",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    await writeFile(path.join(dir, "bench-b.txt"), "protected B\n", "utf8");
+    await writeFile(path.join(dir, "score.txt"), "2\n", "utf8");
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ protectedBenchmarkPaths: ["bench-b.txt"] }, null, 2),
+      "utf8",
+    );
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "new benchmark surface",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+    assert.equal(payload.benchmarkContract.ok, true);
+    assert.equal(
+      payload.warningDetails.some((warning: any) => warning?.code === "benchmark_contract_changed"),
+      false,
+    );
+    assert.doesNotMatch(payload.issues.join("\n"), /benchmark.*drift/i);
+  });
+});
+
+test("new segment warns when metric semantics change across segments", async () => {
+  await withTempDir("segment-metric-semantics", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "metric semantics",
+      "--metric-name",
+      "seconds",
+      "--metric-unit",
+      "s",
+      "--direction",
+      "lower",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "3",
+      "--status",
+      "keep",
+      "--description",
+      "Seconds baseline",
+    ]);
+
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "embedded_docs",
+      "--metric-unit",
+      "docs",
+      "--direction",
+      "higher",
+      "--reason",
+      "new semantic metric",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    const segmentPayload = cliPayload(JSON.parse(segment.stdout));
+    assert.equal(segmentPayload.metricSemanticsWarning?.code, "metric_semantics_changed");
+
+    const state = await runCli(["state", "--cwd", dir]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = cliPayload(JSON.parse(state.stdout));
+    assert.equal(statePayload.metricSemanticsWarning?.code, "metric_semantics_changed");
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--compact"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = cliPayload(JSON.parse(report.stdout));
+    const reportCompact = (reportPayload.compactState as Record<string, unknown>) || reportPayload;
+    assert.equal(reportCompact.metricSemanticsWarning?.code, "metric_semantics_changed");
+  });
+});
+
+test("new segment honors explicit lower direction after a higher segment", async () => {
+  await withTempDir("segment-direction-lower", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "direction flip",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "10",
+      "--status",
+      "keep",
+      "--description",
+      "Higher baseline",
+    ]);
+
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--metric-name",
+      "latency",
+      "--direction",
+      "lower",
+      "--reason",
+      "switch to latency",
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    const payload = cliPayload(JSON.parse(segment.stdout));
+    assert.equal(payload.entry.bestDirection, "lower");
+    assert.equal(payload.metricSemanticsWarning?.code, "metric_semantics_changed");
   });
 });
 
@@ -4650,6 +5011,39 @@ test("state report does not promote empty promotion evidence", async () => {
     assert.equal(reportPayload.report.json.gate.posture, "unknown");
     assert.doesNotMatch(reportPayload.report.text, /Gate: promotion/);
     assert.notEqual(reportPayload.report.json.portfolio.kind, "holdout");
+  });
+});
+
+test("persisted quality constraints gate state quality posture end-to-end", async () => {
+  await withTempDir("quality-constraints-e2e", async (dir) => {
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const setup = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "quality constrained",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      command,
+      "--quality-constraints",
+      JSON.stringify([{ domain: "retrieval_quality", requiredBeforePromotion: true }]),
+    ]);
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.qualityConstraints?.[0]?.domain, "retrieval_quality");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "missing");
+    assert.match(
+      statePayload.gateQuality.blockers.join("\n"),
+      /quality-sensitive performance loop/i,
+    );
+    assert.match(statePayload.gateQuality.warnings.join("\n"), /retrieval_quality/);
   });
 });
 

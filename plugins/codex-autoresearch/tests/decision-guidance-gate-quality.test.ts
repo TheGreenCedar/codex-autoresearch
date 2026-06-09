@@ -101,6 +101,25 @@ test("gate quality recognizes correctness gates from common verification verbs",
   }
 });
 
+test("gate quality recognizes domain quality checks as correctness gates", () => {
+  for (const checksCommand of [
+    "node scripts/check-recall.mjs",
+    "node scripts/mrr-ranking-gate.mjs",
+    "npm run accessibility",
+    "npm run axe",
+    "npm run wcag",
+    "npm run security",
+  ]) {
+    const summary = evaluateGateQuality({
+      benchmarkCommand: "node bench.js",
+      checksCommand,
+    });
+
+    assert.equal(summary.posture, "correctness", checksCommand);
+    assert.match(summary.evidence.join("\n"), /quality|correctness|security|accessibility/i);
+  }
+});
+
 test("npm run check is classified as correctness gate", () => {
   const summary = evaluateGateQuality({
     benchmarkCommand: "node ./bench.mjs",

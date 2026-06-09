@@ -52,6 +52,7 @@ export function Header({
   const metricLabel = readout.metricDefinition.metricName || session.config.metricName || "metric";
   const dashboardUrl = useMemo(() => dashboardUrlFrom(meta), [meta]);
   const attentionStatus = statusFor(liveStatus, mode);
+  const liveReceipt = liveReceiptFor({ dashboardUrl, liveStatus, mode });
   const copyDashboardUrl = async () => {
     if (!dashboardUrl) return;
     await copyDashboardUrlText(dashboardUrl);
@@ -109,8 +110,9 @@ export function Header({
               className="tool-button subtle"
               hidden={!dashboardUrl}
               onClick={copyDashboardUrl}
+              aria-describedby="copy-dashboard-url-status"
             >
-              {copiedUrl ? "Copied URL" : "Copy URL"}
+              {copiedUrl ? "Copied live URL" : "Copy live URL"}
             </button>
             <button
               id="theme-toggle"
@@ -136,7 +138,7 @@ export function Header({
             hidden={!copiedUrl}
             aria-live="polite"
           >
-            Copied. Read-only dashboard URL; no session state changed.
+            Copied live dashboard URL; no session state changed.
           </em>
           <em
             id="copy-dashboard-url-error"
@@ -148,8 +150,15 @@ export function Header({
           </em>
         </div>
       </div>
-      {attentionStatus || hasMultipleSegments ? (
+      {liveReceipt || attentionStatus || hasMultipleSegments ? (
         <div className="toolbar-controls">
+          {liveReceipt ? (
+            <p className={`toolbar-live-receipt ${liveReceipt.tone}`} id="live-handoff-receipt">
+              <span>{liveReceipt.label}</span>
+              <strong>{liveReceipt.value}</strong>
+              <em>{liveReceipt.detail}</em>
+            </p>
+          ) : null}
           {attentionStatus ? (
             <p className="toolbar-status" id="live-region" aria-live="polite">
               <span id="live-title">{attentionStatus.title}</span>
@@ -293,6 +302,41 @@ function statusFor(liveStatus: { title?: string; detail?: string }, mode: Dashbo
     };
   }
   return null;
+}
+
+function liveReceiptFor({
+  dashboardUrl,
+  liveStatus,
+  mode,
+}: {
+  dashboardUrl: string;
+  liveStatus: { title?: string; detail?: string };
+  mode: DashboardMode;
+}) {
+  if (!dashboardUrl && !mode.liveRefresh) return null;
+  const staleOrDead = /(failed|unavailable|error|stale|dead)/i.test(
+    `${liveStatus.title || ""} ${liveStatus.detail || ""}`,
+  );
+  const port = portFromUrl(dashboardUrl);
+  return {
+    label: mode.liveRefresh ? "Live handoff" : "Dashboard handoff",
+    value: [dashboardUrl || "No live URL", port ? `port ${port}` : ""].filter(Boolean).join(" / "),
+    detail: staleOrDead
+      ? liveStatus.detail || "Live readout is stale or unavailable."
+      : mode.liveRefresh
+        ? "Live readout is refreshable; copy only shares the URL."
+        : "Static readout; copy only shares the URL.",
+    tone: staleOrDead ? "warn" : "good",
+  };
+}
+
+function portFromUrl(value: string) {
+  if (!value) return "";
+  try {
+    return new URL(value).port;
+  } catch {
+    return "";
+  }
 }
 
 function isAttentionStatus(title: unknown) {

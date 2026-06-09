@@ -5,6 +5,7 @@ import test from "node:test";
 
 import { evaluateSecondaryMetricConstraints } from "../lib/benchmark/multi-metric-constraints.js";
 import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
+import { evaluateGateQuality } from "../lib/gate-quality.js";
 import { appendJsonl } from "../lib/session-core.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { createCliRunner, withTempDir } from "./helpers/process.js";
@@ -192,6 +193,27 @@ test("blank secondary metric values are unavailable instead of numeric zero", ()
   assert.equal(evaluation.results[0].actual, null);
   assert.equal(evaluation.results[0].status, "unavailable");
   assert.equal(evaluation.blockPromotion, true);
+});
+
+test("retrieval performance goals warn when no quality gate is configured", () => {
+  const summary = evaluateGateQuality({
+    benchmarkCommand: "node scripts/retrieval-speed-benchmark.mjs",
+    checksCommand: "",
+    qualityConstraints: [
+      {
+        domain: "retrieval_quality",
+        requiredBeforePromotion: true,
+        guidance:
+          "Add or identify recall/MRR/hit@k/ranking checks before treating speed wins as product-grade.",
+      },
+    ],
+  });
+
+  assert.equal(summary.posture, "missing");
+  assert.ok(
+    summary.warningDetails.some((warning) => warning.code === "missing_quality_constraint"),
+  );
+  assert.match(summary.warnings.join("\n"), /recall|ranking|quality/i);
 });
 
 async function initConstraintLoop(dir, name) {

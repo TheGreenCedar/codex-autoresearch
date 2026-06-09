@@ -15,6 +15,7 @@ export interface DecisionGuidanceInput {
   scaffoldHealth?: unknown;
   warningDetails?: unknown[];
   setupMissing?: unknown[];
+  qualityConstraints?: Array<Record<string, unknown>> | null;
   runtimeDriftSummary?: LooseObject | null;
   benchmarkCommand?: unknown;
   checksCommand?: unknown;
@@ -33,6 +34,7 @@ export async function buildDecisionGuidanceContext({
   scaffoldHealth = null,
   warningDetails = [],
   setupMissing = [],
+  qualityConstraints = null,
   runtimeDriftSummary = null,
   benchmarkCommand = "",
   checksCommand = "",
@@ -90,6 +92,7 @@ export async function buildDecisionGuidanceContext({
     checksCommand: resolvedChecksCommand,
     checksPolicy: cleanString(configRecord.checksPolicy) || "always",
     checksRequired: stringList(setupMissing).includes("checks_command"),
+    qualityConstraints,
     promotion: unknownRecordOrNull(stateRecord.promotion),
     holdout: holdoutMetadata(config),
   });

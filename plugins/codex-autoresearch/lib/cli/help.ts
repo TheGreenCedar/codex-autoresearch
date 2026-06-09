@@ -67,7 +67,7 @@ const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>]",
   "  node scripts/autoresearch.mjs benchmark-lint --cwd <project> [--metric-name <name>] [--sample <text>|--command <cmd>]",
   "  node scripts/autoresearch.mjs checks-inspect --cwd <project> --command <cmd> [--timeout-seconds <n>]",
-  "  node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--dry-run|--yes]",
+  "  node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
   "  node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
   "  node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose] [--progress]",
   "  node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]",

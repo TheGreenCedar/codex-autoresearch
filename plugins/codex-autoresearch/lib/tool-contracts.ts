@@ -544,6 +544,7 @@ const CONTRACTS = {
       "config",
       "state",
       "git",
+      "benchmarkContract",
       "benchmark",
       "issues",
       "warnings",

@@ -37,7 +37,7 @@ Broad prompt:
 Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is read-only. It can return a proposed setup command, but it does not create session files until `setup` is run.
+Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is a draft, read-only planning surface. It can return a proposed setup command, but it does not create session files until `setup` is run, and it does not prove the product claim.
 
 Specific prompt:
 
@@ -70,7 +70,7 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
-`setup-plan` and `prompt-plan` are read-only planning surfaces. Use them before `setup` when essentials are ambiguous; skip them when the goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `onboarding-packet`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
+`setup-plan` and `prompt-plan` are read-only planning surfaces. `prompt-plan` is only a draft inference from prose; review the proposed metric, benchmark, correctness checks, quality constraints, and claim coverage before `setup`. Use them before `setup` when essentials are ambiguous; skip them when the goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `onboarding-packet`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
 
 `benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block or warn because the worktree is dirty, the active runtime is stale, promotion metadata is missing, finalization/current-tree coverage is unresolved, or other trust checks fail.
 
@@ -89,6 +89,8 @@ node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths
 ```
 
 The primary metric still drives the loop. Secondary metric constraints only guard tradeoffs; blocking constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
+
+For retrieval, search, ranking, accessibility, safety, data-integrity, or speed work that can break correctness, add a quality constraint or checks command before treating a speed win as product-grade. Lazy behavior and semantic retrieval claims need accuracy or ranking proof, not only a faster primary metric.
 
 Before the first expensive `next`, prove the loop shape cheaply:
 
@@ -156,6 +158,7 @@ Use `measure` for a baseline or diagnostic. Use `keep` only after a changed pack
 - The live dashboard URL is available when a fresh visual readout is needed.
 - The last packet is fresh before logging.
 - ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
+- Product-grade claims have claim coverage for accuracy, lazy behavior, ranking/correctness, and docs or tests; otherwise the output is an experimental primitive.
 
 ---
 

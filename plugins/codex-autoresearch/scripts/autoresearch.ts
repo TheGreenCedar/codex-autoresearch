@@ -27,7 +27,6 @@ import {
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
-import { createSessionForensicsCommand } from "../lib/commands/session-forensics.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import {
   defaultCommandShell,
@@ -87,7 +86,10 @@ import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
-import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
+import {
+  classifyPacketDiagnostics,
+  benchmarkContractDiagnostics,
+} from "../lib/packet-diagnostics.js";
 import {
   gapCandidates as buildGapCandidates,
   researchRoundGuidance,
@@ -123,6 +125,7 @@ import {
   buildDecisionEnvelope,
   finiteMetric,
   currentState,
+  loadSessionState,
   listOption,
   readJsonl,
   safeSlug,
@@ -257,14 +260,6 @@ const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands
   validateMetricName,
 });
 
-const sessionForensics = createSessionForensicsCommand({
-  boolOption,
-  pluginRoot: PLUGIN_ROOT,
-  positiveIntegerOption,
-  resolveWorkDir,
-  shellQuote,
-});
-
 const partialResultsCommand = createPartialResultsCommand({
   appendJsonl,
   assertFreshLastRunPacket,
@@ -279,6 +274,22 @@ const partialResultsCommand = createPartialResultsCommand({
   researchSlugFromArgs,
   resolveWorkDir,
 });
+
+let sessionForensicsCommand: ((args: LooseObject) => Promise<LooseObject>) | null = null;
+
+async function sessionForensics(args: LooseObject): Promise<LooseObject> {
+  if (!sessionForensicsCommand) {
+    const { createSessionForensicsCommand } = await import("../lib/commands/session-forensics.js");
+    sessionForensicsCommand = createSessionForensicsCommand({
+      boolOption,
+      pluginRoot: PLUGIN_ROOT,
+      positiveIntegerOption,
+      resolveWorkDir,
+      shellQuote,
+    });
+  }
+  return await sessionForensicsCommand(args);
+}
 
 const laneRunner = createLaneRunnerCommand({
   appendJsonl,
@@ -701,6 +712,18 @@ async function setupPlan(args: any) {
   );
   const checksCommand = planArgs.checks_command || planArgs.checksCommand || "";
   const metricName = validateMetricName(planArgs.metric_name || planArgs.metricName || "seconds");
+  const qualityConstraints = uniqueQualityConstraints([
+    ...qualityConstraintsFromInput(planArgs.quality_constraints ?? planArgs.qualityConstraints),
+    ...qualityConstraintsForText(
+      [
+        planArgs.goal,
+        planArgs.name,
+        benchmarkCommand,
+        checksCommand,
+        listOption(planArgs.constraints).join(" "),
+      ].join(" "),
+    ),
+  ]);
   const benchmarkPrintsMetric = explicitBenchmarkPrintsMetric(planArgs);
   const benchmarkMode = {
     explicitCommand: Boolean(benchmarkCommand),
@@ -749,6 +772,9 @@ async function setupPlan(args: any) {
       : []),
     ...(listOption(planArgs.constraints).length
       ? ["--constraints", listOption(planArgs.constraints).join(",")]
+      : []),
+    ...(qualityConstraints.length
+      ? ["--quality-constraints", JSON.stringify(qualityConstraints)]
       : []),
     ...(listOption(planArgs.secondary_metrics ?? planArgs.secondaryMetrics).length
       ? [
@@ -874,6 +900,7 @@ async function setupPlan(args: any) {
     scaffoldHealth,
     warningDetails: integrityPreflight,
     setupMissing: missing,
+    qualityConstraints,
     benchmarkCommand,
     checksCommand,
   });
@@ -937,6 +964,7 @@ async function setupPlan(args: any) {
     defaultBenchmarkCommandReady: hasDefaultBenchmarkCommand,
     benchmarkMode,
     benchmarkLintCommand,
+    qualityConstraints,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
     runtimeDriftSummary: guidance.runtimeDriftSummary,
@@ -1160,6 +1188,14 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     offLimits: args.offLimits ?? args.off_limits ?? intent.setupDefaults.offLimits,
     off_limits: args.off_limits ?? args.offLimits ?? intent.setupDefaults.offLimits,
     constraints: args.constraints ?? intent.setupDefaults.constraints,
+    qualityConstraints:
+      args.qualityConstraints ??
+      args.quality_constraints ??
+      intent.setupDefaults.qualityConstraints,
+    quality_constraints:
+      args.quality_constraints ??
+      args.qualityConstraints ??
+      intent.setupDefaults.qualityConstraints,
     secondaryMetrics:
       args.secondaryMetrics ?? args.secondary_metrics ?? intent.setupDefaults.secondaryMetrics,
     secondary_metrics:
@@ -1188,6 +1224,7 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
     kind: "codex-autoresearch-prompt-plan",
     prompt,
     intent,
+    qualityConstraints: intent.qualityConstraints,
     setup,
     commands: {
       promptPlan: commandLine([
@@ -1246,6 +1283,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
   const suspects = parseSuspects(prompt);
   const referencedFiles = parseReferencedFiles(prompt);
+  const qualityConstraints = qualityConstraintsForText(prompt);
   const explicitScope = explicit.scope.length ? explicit.scope : [];
   const repoRecipe = await recommendRecipe(workDir);
   const loopKind =
@@ -1306,6 +1344,9 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
           `Use referenced experiment notes before inventing new families: ${referencedFiles.join(", ")}.`,
         ]
       : []),
+    ...qualityConstraints.map(
+      (constraint) => `Quality constraint (${constraint.domain}): ${constraint.guidance}`,
+    ),
   ]);
   const filesInScope = uniqueStrings([
     ...explicitScope,
@@ -1325,8 +1366,10 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
   if (!benchmarkCommand && loopKind === "measured-optimization") {
     missing.push("benchmark_command");
   }
+  if (!checksCommand && qualityConstraints.length > 0) missing.push("checks_command");
   if (!checksCommand && (testSpeed || bugs)) missing.push("checks_command");
   if (!filesInScope.length) missing.push("scope");
+  const setupMissing = uniqueStrings(missing);
   const experimentPlan = buildPromptExperimentPlan({
     prompt,
     speed,
@@ -1339,8 +1382,8 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
     discoveredBenchmark: useDiscoveredBenchmark,
   });
   const nextAction =
-    missing.length > 0
-      ? `Confirm ${missing.join(", ")} or accept the suggested recipe before setup.`
+    setupMissing.length > 0
+      ? `Confirm ${setupMissing.join(", ")} or accept the suggested recipe before setup.`
       : "Run setup, doctor, then one packet. Serve the live dashboard only if the operator asks or freshness needs a browser readout.";
   return {
     loopKind,
@@ -1371,7 +1414,8 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
         : null,
     },
     metric: { name: metricName, unit: metricUnit, direction },
-    missing,
+    missing: setupMissing,
+    qualityConstraints,
     experimentPlan,
     setupDefaults: {
       recipe,
@@ -1385,6 +1429,7 @@ async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: 
       filesInScope,
       offLimits,
       constraints,
+      qualityConstraints,
       secondaryMetrics,
       maxIterations,
       commitPaths: filesInScope,
@@ -1655,6 +1700,80 @@ function benchmarkConstraintsFromScript(relativePath: string, metrics: string[])
   return constraints;
 }
 
+function qualitySensitivePerformanceDomain(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const domains: string[] = [];
+  if (/(retrieval|search|semantic|ranking|ranker|recall|mrr|accuracy)/.test(normalized)) {
+    domains.push("retrieval_quality");
+  }
+  if (/(accessibility|wcag|keyboard|screen reader|aria)/.test(normalized)) {
+    domains.push("accessibility_quality");
+  }
+  if (/(safety|security|auth|permission|data integrity|migration)/.test(normalized)) {
+    domains.push("safety_integrity");
+  }
+  return domains;
+}
+
+type QualityConstraint = {
+  domain: string;
+  guidance: string;
+  requiredBeforePromotion: boolean;
+};
+
+function qualityConstraintsForText(text: string): QualityConstraint[] {
+  return qualitySensitivePerformanceDomain(text).map((domain) => ({
+    domain,
+    requiredBeforePromotion: true,
+    guidance:
+      domain === "retrieval_quality"
+        ? "Add or identify recall/MRR/hit@k/ranking checks before treating speed wins as product-grade."
+        : "Add or identify a correctness check before promotion.",
+  }));
+}
+
+function qualityConstraintsFromInput(value: unknown): QualityConstraint[] {
+  let parsed = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const record = entry as LooseObject;
+      const domain = String(record.domain || "").trim();
+      if (!domain) return null;
+      const guidance =
+        String(record.guidance || "").trim() ||
+        "Add or identify a correctness check before promotion.";
+      return {
+        domain,
+        requiredBeforePromotion: record.requiredBeforePromotion !== false,
+        guidance,
+      };
+    })
+    .filter((entry): entry is QualityConstraint => Boolean(entry));
+}
+
+function uniqueQualityConstraints(constraints: QualityConstraint[]) {
+  const seen = new Set<string>();
+  const unique = [];
+  for (const constraint of constraints) {
+    const key = constraint.domain;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(constraint);
+  }
+  return unique;
+}
+
 function metricLooksHigherIsBetter(metricName: string) {
   return /score|quality|throughput|docs_per_second|hit|mrr/i.test(metricName);
 }
@@ -1802,8 +1921,12 @@ function safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }: Lo
 
 async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
+  if (boolOption(args.compact, false)) {
+    return compactGuidedSetup({ workDir, config, readCache });
+  }
   const setup = await setupPlan(args);
-  const state: LooseObject = await publicState({ cwd: workDir });
+  const state: LooseObject = await publicState({ cwd: workDir, readCache });
   const doctor = await doctorSession({
     ...args,
     cwd: workDir,
@@ -1968,11 +2091,44 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   };
 }
 
+async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
+  const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
+  const canonicalNextAction = state.canonicalNextAction || null;
+  const stage =
+    canonicalNextAction?.kind ||
+    (state.runs === 0 ? "needs-baseline" : state.limitReached ? "limit-reached" : "ready");
+  const nextAction =
+    canonicalNextAction?.reason || state.nextAction || "Continue from compact state.";
+  return {
+    ok: state.ok !== false,
+    workDir,
+    compact: true,
+    stage,
+    nextAction,
+    nextStep: {
+      stage,
+      nextAction: {
+        kind: canonicalNextAction?.kind || stage,
+        title: actionTitleForKind(canonicalNextAction?.kind, "Next action"),
+        command: canonicalNextAction?.command || state.commands?.state || "",
+        safety: canonicalNextAction?.safety || "read_only",
+      },
+    },
+    state,
+    commands: {
+      state: state.commands?.state || "",
+      primary: canonicalNextAction?.command || state.commands?.state || "",
+    },
+    settings: dashboardSettings(config),
+  };
+}
+
 async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   const [state, guide, doctor, next] = await Promise.all([
-    publicState({ cwd: workDir, compact: true }),
-    guidedSetup({ cwd: workDir }).catch((error: any) => ({
+    publicState({ cwd: workDir, compact: true, readCache }),
+    guidedSetup({ cwd: workDir, readCache }).catch((error: any) => ({
       ok: false,
       stage: "blocked",
       warnings: [error.message],
@@ -1992,7 +2148,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
         nextAction: "Fix doctor before running packets.",
       }),
     ),
-    recommendNext({ cwd: workDir, compact: true }).catch(
+    recommendNext({ cwd: workDir, compact: true, readCache }).catch(
       (error: any): LooseObject => ({
         ok: false,
         action: null as LooseObject | null,
@@ -2075,13 +2231,18 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
     const compact = await publicState({
       cwd: workDir,
       compact: true,
       codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
+      readCache,
     });
-    const response = buildCompactRecommendNextResponse({ workDir, compactState: compact });
+    const response = buildCompactRecommendNextResponse({
+      workDir,
+      compactState: compactStateForRecommendHandoff(compact),
+    });
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
       const action = (response.action || {}) as LooseObject;
       const canonicalNextAction = (compact.canonicalNextAction || {}) as LooseObject;
@@ -2106,7 +2267,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     sourceCwd: workDir,
     pluginVersion: PLUGIN_VERSION,
   });
-  const compact: LooseObject = await publicState({ cwd: workDir, compact: true });
+  const compact: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
   const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
   const canonicalNextAction = authority.canonicalNextAction || null;
   const action = canonicalNextAction
@@ -2129,6 +2290,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
           ? {
               available: true,
               ready: viewModel.finalizePreview.ready === true,
+              productGradeReady: viewModel.finalizePreview.productGradeReady !== false,
+              productGradeIssue: viewModel.finalizePreview.productGradeIssue || null,
               nextAction: viewModel.finalizePreview.nextAction || "",
               warnings: viewModel.finalizePreview.warnings || [],
             }
@@ -2187,6 +2350,114 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
   });
 }
 
+function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
+  const envelope = compactRecord(compact.decisionEnvelope) || compactRecord(compact.resumeAudit);
+  const canonicalNextAction =
+    compactRecord(compact.canonicalNextAction) || compactRecord(envelope?.canonicalNextAction);
+  const sessionDecisionCapsule = compactSessionCapsuleForHandoff(
+    envelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule,
+  );
+  const minimalEnvelope = envelope
+    ? {
+        activeSegment: envelope.activeSegment || null,
+        canonicalNextAction: envelope.canonicalNextAction || canonicalNextAction || null,
+        finalizationReadiness: envelope.finalizationReadiness || null,
+        latestPacketFreshness: envelope.latestPacketFreshness || null,
+        loopContract: envelope.loopContract || compact.loopContract || null,
+        sessionDecisionCapsule: compactSessionCapsuleIdentity(sessionDecisionCapsule),
+        watchdog: envelope.watchdog || compact.watchdogSummary || null,
+      }
+    : null;
+  return {
+    ok: compact.ok,
+    workDir: compact.workDir,
+    name: compact.name,
+    goal: compact.goal,
+    metric: compact.metric,
+    direction: compact.direction,
+    segment: compact.segment,
+    runs: compact.runs,
+    kept: compact.kept,
+    discarded: compact.discarded,
+    measured: compact.measured,
+    baseline: compact.baseline,
+    best: compact.best,
+    historicalBest: compact.historicalBest,
+    developmentBest: compact.developmentBest,
+    promotionBest: compact.promotionBest,
+    goalFrame: compact.goalFrame,
+    operatorHandoff: compact.operatorHandoff,
+    canonicalNextAction,
+    nextAction: compact.nextAction,
+    blockers: compact.blockers,
+    commands: compactRecommendCommands(compactRecord(compact.commands), canonicalNextAction),
+    decisionEnvelope: minimalEnvelope,
+    sessionDecisionCapsule,
+    portfolioRecommendation: compact.portfolioRecommendation,
+    workflowFriction: compact.workflowFriction,
+  };
+}
+
+function compactRecommendCommands(
+  commands: LooseObject | null,
+  canonicalNextAction: LooseObject | null,
+): LooseObject {
+  if (!commands) return {};
+  const compactCommands: LooseObject = {};
+  const primary = canonicalNextAction?.command || commands.state;
+  if (primary) compactCommands.primary = primary;
+  return compactCommands;
+}
+
+function compactRecord(value: unknown): LooseObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as LooseObject)
+    : null;
+}
+
+function compactSessionCapsuleForHandoff(value: unknown): LooseObject | null {
+  const capsule = compactRecord(value);
+  if (!capsule) return null;
+  const enforcement = compactRecord(capsule.enforcement);
+  return {
+    kind: capsule.kind || null,
+    status: capsule.status || null,
+    enforcement: enforcement
+      ? {
+          mode: enforcement.mode || null,
+          canRunNextPacket: enforcement.canRunNextPacket ?? null,
+          allowBoundedNext: enforcement.allowBoundedNext ?? null,
+          blocksFinalization: enforcement.blocksFinalization ?? null,
+          commandHint: enforcement.commandHint || "",
+          triggeredBy: enforcement.triggeredBy || [],
+        }
+      : null,
+    evidence: Array.isArray(capsule.evidence) ? capsule.evidence.slice(0, 3) : [],
+    nextExperiment: capsule.nextExperiment || "",
+    wrongNextActions: Array.isArray(capsule.wrongNextActions)
+      ? capsule.wrongNextActions.slice(0, 3)
+      : [],
+    doNotRepeat: Array.isArray(capsule.doNotRepeat) ? capsule.doNotRepeat.slice(0, 3) : [],
+    commandBudgetWarnings: Array.isArray(capsule.commandBudgetWarnings)
+      ? capsule.commandBudgetWarnings.slice(0, 3)
+      : [],
+  };
+}
+
+function compactSessionCapsuleIdentity(capsule: LooseObject | null): LooseObject | null {
+  if (!capsule) return null;
+  return {
+    kind: capsule.kind || null,
+    status: capsule.status || null,
+    enforcement: capsule.enforcement
+      ? {
+          canRunNextPacket: (capsule.enforcement as LooseObject).canRunNextPacket ?? null,
+          blocksFinalization: (capsule.enforcement as LooseObject).blocksFinalization ?? null,
+        }
+      : null,
+  };
+}
+
 function recommendNextChecklistSource(
   action: LooseObject,
   canonicalNextAction: LooseObject | null,
@@ -2228,7 +2499,7 @@ function canonicalActionForRecommendNext(
 
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = await publicState({ cwd: workDir, compact: false });
+  const state = await publicState({ cwd: workDir, compact: false, readCache: args.readCache });
   const compact = compactPublicState(state);
   const commands = continuationCommands(workDir);
   const importedGoal = importedCodexGoal(args);
@@ -3842,6 +4113,17 @@ function latestBenchmarkContractEntry(
 function latestBenchmarkContractEntryFromState(
   state: LooseObject | null | undefined,
 ): LooseObject | null {
+  const activeConfigEntry =
+    state?.activeConfigEntry && typeof state.activeConfigEntry === "object"
+      ? (state.activeConfigEntry as LooseObject)
+      : null;
+  if (
+    activeConfigEntry?.benchmarkContractAccepted === true &&
+    activeConfigEntry?.benchmarkContractScope === "segment" &&
+    activeConfigEntry?.benchmarkContract?.surfaceHash
+  ) {
+    return activeConfigEntry;
+  }
   const current = Array.isArray(state?.current) ? state.current : [];
   return (
     [...current].reverse().find((run: LooseObject) => run?.benchmarkContract?.surfaceHash) || null
@@ -3861,11 +4143,17 @@ async function benchmarkContractDrift(workDir: string, state: any) {
       : {}),
   });
   if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
+  const driftReference =
+    latest.run != null
+      ? `logged run #${latest.run}`
+      : latest.segment != null
+        ? `segment ${latest.segment} contract`
+        : "the active benchmark contract";
   return {
     code: "benchmark_contract_changed",
     severity: "error",
-    run: latest.run,
-    message: `Benchmark/check/config contract changed since logged run #${latest.run}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
+    run: latest.run ?? null,
+    message: `Benchmark/check/config contract changed since ${driftReference}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
     action: "Run new-segment --dry-run, then --yes after reviewing the changed benchmark contract.",
     previousHash: latest.benchmarkContract.surfaceHash,
     currentHash: current.surfaceHash,
@@ -4315,6 +4603,10 @@ function runtimeConfigUpdatesFromArgs(args: LooseObject) {
       rawSecondaryMetricConstraints,
       secondaryMetricConstraints,
     );
+  const qualityConstraints = uniqueQualityConstraints(
+    qualityConstraintsFromInput(args.quality_constraints ?? args.qualityConstraints),
+  );
+  if (qualityConstraints.length > 0) updates.qualityConstraints = qualityConstraints;
   if (!clearWallClockBudget && hasWallClockBudgetSeconds && wallClockBudgetSeconds != null) {
     updates.budgetStartedAt = new Date().toISOString();
   } else if (
@@ -4647,10 +4939,19 @@ async function decisionGuidance({
   scaffoldHealth = null,
   warningDetails = [],
   setupMissing = [],
+  qualityConstraints: explicitQualityConstraints = null,
   runtimeDriftSummary = null,
   benchmarkCommand = "",
   checksCommand = "",
 }: LooseObject) {
+  const constraintList = (value: unknown) =>
+    Array.isArray(value) && value.length > 0 ? value : null;
+  // Persisted constraints live in the runtime config (autoresearch.config.json),
+  // not the ledger-derived state.config, so the runtime config must win.
+  const qualityConstraints =
+    constraintList(explicitQualityConstraints) ||
+    constraintList(config?.qualityConstraints) ||
+    constraintList(state?.config?.qualityConstraints);
   return buildDecisionGuidanceContext({
     workDir,
     pluginRoot: PLUGIN_ROOT,
@@ -4660,6 +4961,7 @@ async function decisionGuidance({
     scaffoldHealth,
     warningDetails,
     setupMissing,
+    qualityConstraints,
     runtimeDriftSummary,
     benchmarkCommand,
     checksCommand,
@@ -6238,7 +6540,12 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const report = boolOption(args.report, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
   if (compact || report) {
-    const compactState = await publicCompactState({ workDir, config, codexGoalObjective });
+    const compactState = await publicCompactState({
+      workDir,
+      config,
+      codexGoalObjective,
+      readCache: args.readCache,
+    });
     if (!report) return compactState;
     const response: LooseObject = {
       ok: compactState.ok !== false,
@@ -6249,7 +6556,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     return response;
   }
 
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, args.readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
@@ -6396,6 +6703,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
@@ -6422,6 +6730,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     laneLifecycle,
     packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     watchdogSummary,
@@ -6440,12 +6749,14 @@ async function publicCompactState({
   workDir,
   config,
   codexGoalObjective,
+  readCache,
 }: {
   workDir: string;
   config: LooseObject;
   codexGoalObjective?: unknown;
+  readCache?: unknown;
 }): Promise<LooseObject> {
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, readCache as any);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -6577,6 +6888,7 @@ async function publicCompactState({
     development: state.development,
     promotion: state.promotion,
     evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
     confidence: state.confidence,
     scaffoldHealth,
@@ -6606,6 +6918,7 @@ async function publicCompactState({
     watchdogSummary,
     laneLifecycle,
     packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
     experimentEconomics,
@@ -6686,6 +6999,7 @@ function compactPublicState(state: LooseObject) {
             : [],
         }
       : null,
+    productClaimCoverage: state.productClaimCoverage || null,
     sessionDecisionCapsule:
       state.sessionDecisionCapsule || compactDecisionEnvelope?.sessionDecisionCapsule || null,
     evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
@@ -6825,6 +7139,7 @@ function compactPublicState(state: LooseObject) {
     loopContract: compactDecisionEnvelope?.loopContract,
     laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
   });
 }
 
@@ -6901,6 +7216,8 @@ function compactFinalizationReadiness(readiness: LooseObject | null | undefined)
   return {
     available: readiness?.available !== false,
     ready: readiness?.ready === null ? null : readiness?.ready === true,
+    productGradeReady: readiness?.productGradeReady !== false,
+    productGradeIssue: readiness?.productGradeIssue || null,
     nextAction: readiness?.nextAction || readiness?.recommendation || "",
     warnings: Array.isArray(readiness?.warnings) ? readiness.warnings.slice(0, 3) : [],
   };
@@ -7999,6 +8316,13 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
       }
     : null;
+  const activeBenchmarkContractEntry = latestBenchmarkContractEntry(workDir, state);
+  const contractDiagnostics = benchmarkContractDiagnostics({
+    state: loadSessionState(workDir, args.readCache),
+  });
+  const benchmarkContractChanged = warningDetails.some(
+    (detail: any) => detail?.code === "benchmark_contract_changed",
+  );
 
   const result: LooseObject = {
     ok: issues.length === 0,
@@ -8008,6 +8332,14 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     git: {
       inside: inGit,
       clean: state.decisionEnvelope?.dirtySourceDrift?.dirty === true ? false : true,
+    },
+    benchmarkContract: {
+      ok: benchmarkContractChanged === false,
+      activeSource: contractDiagnostics.activeSource,
+      activeContract: contractDiagnostics.activeContract,
+      historicalContracts: contractDiagnostics.historicalContracts,
+      historical: contractDiagnostics.historicalContracts.length > 0,
+      segmentEntry: activeBenchmarkContractEntry?.benchmarkContractScope === "segment",
     },
     benchmark,
     drift,
@@ -8204,15 +8536,47 @@ async function newSegment(args: any) {
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   const confirmed = boolOption(args.confirm ?? args.yes, false);
   const reason = String(args.reason || "Start a fresh segment while preserving history.").trim();
-  const entry = {
+  const nextMetricName = String(
+    args.metric_name || args.metricName || state.config.metricName || "metric",
+  );
+  const nextMetricUnit =
+    args.metric_unit !== undefined || args.metricUnit !== undefined
+      ? String(args.metric_unit ?? args.metricUnit ?? "")
+      : (state.config.metricUnit ?? "");
+  const requestedDirection = args.direction || args.best_direction || args.bestDirection;
+  const nextDirection =
+    requestedDirection === "higher"
+      ? "higher"
+      : requestedDirection === "lower"
+        ? "lower"
+        : state.config.bestDirection === "higher"
+          ? "higher"
+          : "lower";
+  const entry: LooseObject = {
     type: "config",
     name: state.config.name || "Autoresearch",
-    metricName: state.config.metricName || "metric",
-    metricUnit: state.config.metricUnit ?? "",
-    bestDirection: state.config.bestDirection === "higher" ? "higher" : "lower",
+    metricName: nextMetricName,
+    metricUnit: nextMetricUnit,
+    bestDirection: nextDirection,
     segmentReason: reason,
     timestamp: new Date().toISOString(),
   };
+  const benchmarkCommand = String(args.benchmark_command || args.benchmarkCommand || "").trim();
+  const checksCommand = String(args.checks_command || args.checksCommand || "").trim();
+  if (benchmarkCommand || checksCommand) {
+    entry.benchmarkContractAccepted = true;
+    entry.benchmarkContractScope = "segment";
+    entry.benchmarkContract = await benchmarkContractSnapshot(workDir, {
+      command: benchmarkCommand,
+      checksCommand,
+    });
+  }
+  const metricSemanticsWarning = segmentMetricSemanticsWarning(state.config, {
+    metricName: nextMetricName,
+    metricUnit: nextMetricUnit,
+    bestDirection: nextDirection,
+  });
+  if (metricSemanticsWarning) entry.metricSemanticsWarning = metricSemanticsWarning;
   if (!dryRun && !confirmed) {
     throw new Error(
       "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
@@ -8226,9 +8590,35 @@ async function newSegment(args: any) {
     previousSegment: state.segment,
     nextSegment: state.segment + 1,
     entry,
+    metricSemanticsWarning,
+    benchmarkContract: entry.benchmarkContract || null,
     nextAction: dryRun
       ? "Review the segment entry, then rerun with --yes to append it."
       : "Run and log a fresh baseline or next packet for the new segment.",
+  };
+}
+
+function segmentMetricSemanticsWarning(previous: LooseObject, current: LooseObject) {
+  const changed =
+    String(previous.metricName || "") !== String(current.metricName || "") ||
+    String(previous.metricUnit ?? "") !== String(current.metricUnit ?? "") ||
+    String(previous.bestDirection || "lower") !== String(current.bestDirection || "lower");
+  if (!changed) return null;
+  return {
+    code: "metric_semantics_changed",
+    severity: "warning",
+    message:
+      "Metric semantics changed; active segment and historical best may not be directly comparable.",
+    previous: {
+      metricName: previous.metricName || "metric",
+      metricUnit: previous.metricUnit ?? "",
+      bestDirection: previous.bestDirection === "higher" ? "higher" : "lower",
+    },
+    current: {
+      metricName: current.metricName || "metric",
+      metricUnit: current.metricUnit ?? "",
+      bestDirection: current.bestDirection === "higher" ? "higher" : "lower",
+    },
   };
 }
 
