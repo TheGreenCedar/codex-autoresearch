@@ -6,6 +6,16 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.2.1
+
+### Fixed
+
+- Bumped `shell-quote` to `1.8.4` for the dependency security patch.
+
+### Release
+
+- Bumped public package, lockfile, and plugin manifest surfaces to `2.2.1`.
+
 ## 2.2.0
 
 ### Changed
