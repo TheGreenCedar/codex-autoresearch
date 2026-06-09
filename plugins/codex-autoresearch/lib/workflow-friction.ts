@@ -8,7 +8,11 @@ export type WorkflowFrictionKind =
   | "dirty_tree_recovery"
   | "unknown_recipe"
   | "quality_gap_wording"
-  | "metric_saturated_not_promotable";
+  | "metric_saturated_not_promotable"
+  | "product_bar_rejection"
+  | "false_done_admission"
+  | "oversized_tool_output"
+  | "closed_stdin_poll";
 
 export interface WorkflowFrictionSignal {
   kind: WorkflowFrictionKind;
@@ -38,6 +42,7 @@ export function analyzeWorkflowFriction({
   const thresholds = resolveThresholds(thresholdConfig);
   const signals: WorkflowFrictionSignal[] = [];
   signals.push(...outputBudgetSignals({ forensics, lastRun, thresholds }));
+  signals.push(...forensicsFrictionSignals({ forensics }));
   signals.push(...verificationChurnSignals({ state, thresholds }));
   signals.push(...dirtyTreeSignals({ state, warningDetails }));
   const unknown = unknownRecipeSignal({ state, recipes });
@@ -47,6 +52,44 @@ export function analyzeWorkflowFriction({
   const saturation = metricSaturationSignal({ state });
   if (saturation) signals.push(saturation);
   return dedupeSignals(signals);
+}
+
+function forensicsFrictionSignals({
+  forensics,
+}: {
+  forensics: LooseObject | null;
+}): WorkflowFrictionSignal[] {
+  const signals: WorkflowFrictionSignal[] = [];
+  const sourceSignals = [
+    ...arrayValue(forensics?.productSignals),
+    ...arrayValue(forensics?.workflowWaste),
+  ];
+  for (const signal of sourceSignals) {
+    const kind = String(signal?.kind || "");
+    if (
+      ![
+        "product_bar_rejection",
+        "false_done_admission",
+        "oversized_tool_output",
+        "closed_stdin_poll",
+      ].includes(kind)
+    ) {
+      continue;
+    }
+    signals.push(
+      workflowSignal({
+        kind: kind as WorkflowFrictionKind,
+        severity: kind === "product_bar_rejection" ? "blocker" : "warning",
+        reason: signal?.message || forensicsSignalReason(kind),
+        reportedSize: {
+          tokens: finitePositive(signal?.size?.tokens),
+          lines: finitePositive(signal?.size?.lines),
+        },
+        actionReason: forensicsSignalAction(kind),
+      }),
+    );
+  }
+  return signals;
 }
 
 function outputBudgetSignals({
@@ -301,6 +344,42 @@ function commandHead(command: unknown): string {
 function finitePositive(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function arrayValue(value: unknown): LooseObject[] {
+  return Array.isArray(value)
+    ? value.map((item) => (item && typeof item === "object" ? (item as LooseObject) : {}))
+    : [];
+}
+
+function forensicsSignalReason(kind: string): string {
+  switch (kind) {
+    case "product_bar_rejection":
+      return "The session rejected a done claim because product-grade proof was missing.";
+    case "false_done_admission":
+      return "The assistant admitted loop completion was mistaken for product proof.";
+    case "oversized_tool_output":
+      return "A tool output exceeded the compact handoff budget.";
+    case "closed_stdin_poll":
+      return "A completed foreground session was polled after stdin closed.";
+    default:
+      return "Session forensics found workflow friction.";
+  }
+}
+
+function forensicsSignalAction(kind: string): string {
+  switch (kind) {
+    case "product_bar_rejection":
+      return "Add claim coverage before finalization.";
+    case "false_done_admission":
+      return "Downgrade evidence maturity or restart with product-grade acceptance.";
+    case "oversized_tool_output":
+      return "Use bounded mapping commands, file-specific reads, or CodeStory search packets.";
+    case "closed_stdin_poll":
+      return "Stop polling completed foreground sessions and restart only after a changed precondition.";
+    default:
+      return "Use a bounded next action before spending another packet.";
+  }
 }
 
 function resolveThresholds(value: unknown): DecisionThresholdConfig {

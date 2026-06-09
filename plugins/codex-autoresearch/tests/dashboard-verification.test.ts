@@ -423,6 +423,79 @@ test("dashboard view model keeps only copyable readout commands", () => {
   }
 });
 
+test("dashboard signals Product proof when claim coverage blocks release readiness", () => {
+  const model = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "claim coverage",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+      current: [],
+      productClaimCoverage: {
+        productGradeReady: false,
+        maturity: "needs-proof",
+        missingRequiredProof: ["No screenshot handoff proof."],
+        blockers: ["Claim coverage is missing dashboard handoff evidence."],
+      },
+    },
+    settings: {},
+  } as any);
+
+  assert.equal(model.productClaimCoverage.productGradeReady, false);
+  assert.match(JSON.stringify(model.signals), /Product proof missing|claim coverage/i);
+});
+
+test("dashboard source renders proof signals before chart detail when blockers exist", () => {
+  const dashboardSource = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "Dashboard.tsx"),
+    "utf8",
+  );
+
+  assert.match(dashboardSource, /proofSignalsFirst/);
+  assert.ok(
+    dashboardSource.indexOf("<SignalStrip view={view} viewModel={viewModel} priority />") <
+      dashboardSource.indexOf("<TrendPanel"),
+    "priority proof signals should render before the trend panel",
+  );
+});
+
+test("dashboard source keeps chart tab stops to selected and evidence-critical points", () => {
+  const chartSource = readFileSync(
+    path.join(
+      resolvePackageRoot(import.meta.url),
+      "dashboard",
+      "src",
+      "components",
+      "trend",
+      "TrendChartFigure.tsx",
+    ),
+    "utf8",
+  );
+
+  assert.match(chartSource, /tabIndex=\{tabbable \? 0 : -1\}/);
+  assert.match(chartSource, /onKeyDown=\{\(event\) =>/);
+  assert.match(chartSource, /payload\.runNumber === selectedRunNumber/);
+  assert.match(chartSource, /payload\.latest/);
+  assert.match(chartSource, /payload\.best/);
+  assert.match(chartSource, /payload\.status === "discard"/);
+  assert.match(chartSource, /payload\.status === "crash"/);
+  assert.match(chartSource, /payload\.status === "checks_failed"/);
+});
+
+test("dashboard ledger source uses native table semantics", () => {
+  const ledgerSource = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "components", "Ledger.tsx"),
+    "utf8",
+  );
+
+  assert.match(ledgerSource, /<table aria-label=\{/);
+  assert.match(ledgerSource, /<thead className="ledger-header">/);
+  assert.match(ledgerSource, /<tbody id="ledger-body">/);
+  assert.match(ledgerSource, /<tr className=\{`ledger-row/);
+  assert.doesNotMatch(ledgerSource, /role="table"|role="row"|role="cell"/);
+});
+
 test("dashboard segment transition command matches its safe action metadata", () => {
   const viewModel = buildDashboardViewModel({
     state: {
@@ -806,9 +879,10 @@ test("dashboard renders the full run log without blank scroll space", async () =
   assert.equal(getById("ledger").hidden, false);
   assert.match(getById("ledger-note").textContent, /100 runs \/ newest first/);
   assert.equal(renderedRows.length, 100);
-  assert.match(getById("ledger-body").getAttribute("style"), /height: 8200px/);
+  assert.equal(getById("ledger-scroll").querySelector("table")?.tagName, "TABLE");
+  assert.equal(getById("ledger-body").tagName, "TBODY");
   assert.match(ledgerHtml, /#100/);
-  assert.match(ledgerHtml, /#1<\/div>/);
+  assert.match(ledgerHtml, /#1<\/td>/);
 });
 
 test("dashboard renders a generated Codex summary of history and plan", async () => {

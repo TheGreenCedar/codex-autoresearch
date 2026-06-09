@@ -20,6 +20,7 @@ export interface CompactStateBuilderInput {
   goalFrame?: unknown;
   operatorHandoff?: unknown;
   evidenceRegistry?: unknown;
+  productClaimCoverage?: unknown;
   sessionDecisionCapsule?: unknown;
   evidenceLabels?: unknown[];
   scaffoldHealth?: unknown;
@@ -59,6 +60,7 @@ export interface CompactStateBuilderInput {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  metricSemanticsWarning?: unknown;
 }
 
 export interface CompactStateResponse {
@@ -81,6 +83,7 @@ export interface CompactStateResponse {
   goalFrame: unknown;
   operatorHandoff: unknown;
   evidenceRegistry: unknown;
+  productClaimCoverage: unknown;
   sessionDecisionCapsule: unknown;
   evidenceLabels: unknown[];
   scaffoldHealth: unknown;
@@ -120,6 +123,7 @@ export interface CompactStateResponse {
   loopContract?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
+  metricSemanticsWarning?: unknown;
 }
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {
@@ -143,6 +147,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     goalFrame: input.goalFrame ?? null,
     operatorHandoff: input.operatorHandoff ?? null,
     evidenceRegistry: input.evidenceRegistry ?? null,
+    productClaimCoverage: input.productClaimCoverage ?? null,
     sessionDecisionCapsule: input.sessionDecisionCapsule ?? null,
     evidenceLabels: Array.isArray(input.evidenceLabels) ? input.evidenceLabels : [],
     scaffoldHealth: input.scaffoldHealth ?? null,
@@ -184,6 +189,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
   copyIfProvided(response, "commandExecutionBoundary", input.commandExecutionBoundary);
+  copyIfProvided(response, "metricSemanticsWarning", input.metricSemanticsWarning);
 
   return response;
 }

@@ -58,6 +58,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
   const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
   const view = viewParam as DashboardView;
   const auditView = view === "audit";
+  const proofSignalsFirst = hasProofOrFinalizationBlockers(viewModel);
 
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
@@ -106,12 +107,15 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           aria-label="Metric evidence"
         >
           <div className="metric-primary-column">
+            {proofSignalsFirst ? <SignalStrip view={view} viewModel={viewModel} priority /> : null}
             <TrendPanel
               session={session}
               readout={readout}
               detailsDefaultOpen={auditView}
               chartHeight={auditView ? 350 : 420}
-              afterChart={<SignalStrip view={view} viewModel={viewModel} />}
+              afterChart={
+                proofSignalsFirst ? null : <SignalStrip view={view} viewModel={viewModel} />
+              }
             />
             {auditView ? decisionRail : null}
           </div>
@@ -191,4 +195,22 @@ function MobileNextAction({ viewModel }: { viewModel: DashboardViewModel }) {
 
 function cleanActionText(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function hasProofOrFinalizationBlockers(viewModel: DashboardViewModel) {
+  const coverage = recordFrom(viewModel.productClaimCoverage);
+  const finalization = recordFrom(viewModel.finalizePreview);
+  const checklist = recordFrom(viewModel.finalizationChecklist);
+  return (
+    coverage.productGradeReady === false ||
+    toList(coverage.blockers).length > 0 ||
+    toList(coverage.missingRequiredProof).length > 0 ||
+    toList(finalization.warnings).length > 0 ||
+    toList(checklist.warnings).length > 0
+  );
+}
+
+function toList(value: unknown) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
 }

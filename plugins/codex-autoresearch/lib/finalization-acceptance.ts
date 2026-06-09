@@ -1,5 +1,18 @@
 type LooseObject = Record<string, unknown>;
 
+export function productGradeFinalizationIssue(coverage: unknown): string | null {
+  const record = objectValue(coverage);
+  if (!record || record.productGradeReady === true) return null;
+  const missing = Array.isArray(record.missingRequiredProof) ? record.missingRequiredProof : [];
+  if (!missing.length) return null;
+  const labels = missing
+    .map((item) => objectValue(item)?.label || objectValue(item)?.id || item)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (!labels.length) return null;
+  return `Product-grade evidence is missing: ${labels.join(", ")}.`;
+}
+
 export function acceptedCurrentTreeFinalizationIssue(payload: LooseObject): string | null {
   const issues = Array.isArray(payload?.issues) ? payload.issues : [];
   if (issues.length !== 1) {

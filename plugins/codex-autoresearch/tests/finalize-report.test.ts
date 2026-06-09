@@ -144,6 +144,28 @@ testWithTempRoot(
       }),
       finalizationPlanFingerprint(plan),
     );
+    assert.notEqual(
+      finalizationPlanFingerprint({
+        ...plan,
+        product_claim_coverage: {
+          productGradeReady: true,
+          maturity: "product_grade",
+          missingRequiredProof: [],
+          requirements: [],
+        },
+      }),
+      finalizationPlanFingerprint({
+        ...plan,
+        product_claim_coverage: {
+          productGradeReady: false,
+          maturity: "experimental",
+          missingRequiredProof: [
+            { id: "retrieval_accuracy", label: "Retrieval accuracy validation" },
+          ],
+          requirements: [{ id: "retrieval_accuracy", label: "Retrieval accuracy validation" }],
+        },
+      }),
+    );
 
     await writeFile(path.join(root, "autoresearch.jsonl"), "{ not json\n");
     await assert.rejects(
@@ -185,6 +207,78 @@ testWithTempRoot(
     );
     assert.notEqual(result.code, 0);
     assert.match(`${result.stdout}\n${result.stderr}`, /Corrupt autoresearch\.jsonl at line 1/);
+  },
+);
+
+testWithTempRoot(
+  "product-grade finalization preview blocks under-proven retrieval claims",
+  "autoresearch-product-grade-preview-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "retrieval.ts"), "export const value = 'base';\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/retrieval-product-claim"], repo);
+    await writeFile(
+      path.join(repo, "src", "retrieval.ts"),
+      "export const value = 'bounded foreground embedding';\n",
+    );
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "bound foreground embedding work"], repo);
+    const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "Bound foreground embedding work.",
+          evidence: "foreground embedding work can be bounded",
+          commit: kept,
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log autoresearch session"], repo);
+
+    const preview = await finalizePreview({ cwd: repo, trunk: "main" });
+    assert.equal(preview.productGradeReady, false);
+    assert.match(preview.blockers.join("\n"), /retrieval accuracy/i);
+    assert.match(preview.blockers.join("\n"), /lazy/i);
+    assert.doesNotMatch(preview.summary, /ready to merge|shippable/i);
+
+    const planPath = path.join(root, "groups.json");
+    const planResult = await run(
+      process.execPath,
+      [finalizer, "plan", "--cwd", repo, "--output", planPath, "--goal", "retrieval-claim"],
+      repo,
+    );
+    assert.match(
+      planResult.stdout,
+      /Experimental review branch only: product-grade proof is missing\./,
+    );
+    const plan = JSON.parse(await fsp.readFile(planPath, "utf8"));
+    assert.equal(plan.product_grade_ready, false);
+    assert.equal(
+      plan.product_grade_summary,
+      "Experimental review branch only: product-grade proof is missing.",
+    );
   },
 );
 
@@ -808,6 +902,123 @@ testWithTempRoot(
 
     const finalizeResult = await run(process.execPath, [finalizer, payload.planOutput], repo);
     assert.match(finalizeResult.stdout, /Created review branches:/);
+  },
+);
+
+testWithTempRoot(
+  "current-tree finalization plan carries product claim coverage and experimental wording",
+  "autoresearch-finalize-current-tree-claim-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "retrieval.ts"), "export const value = 'base';\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/retrieval-current-tree"], repo);
+    await writeFile(
+      path.join(repo, "src", "retrieval.ts"),
+      "export const value = 'bounded foreground embedding';\n",
+    );
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "bound foreground embedding work"], repo);
+
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "semantic retrieval",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "Bound foreground embedding work.",
+          evidence: "foreground embedding work can be bounded",
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log autoresearch session"], repo);
+
+    const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ready, true);
+    const plan = JSON.parse(await fsp.readFile(payload.planOutput, "utf8"));
+    assert.equal(plan.product_grade_ready, false);
+    assert.match(plan.product_grade_summary, /Experimental review branch only/i);
+    assert.ok(Array.isArray(plan.product_claim_coverage?.missingRequiredProof));
+    assert.ok(plan.product_claim_coverage.missingRequiredProof.length > 0);
+
+    const finalizeResult = await run(process.execPath, [finalizer, payload.planOutput], repo);
+    assert.match(
+      finalizeResult.stdout,
+      /Experimental review branch only: product-grade proof is missing\./,
+    );
+    assert.doesNotMatch(finalizeResult.stdout, /Cleanup After Merge/);
+    assert.match(finalizeResult.stdout, /Cleanup after accepted review/i);
+  },
+);
+
+testWithTempRoot(
+  "finalizer rejects current-tree plans when product claim coverage is tampered",
+  "autoresearch-finalize-current-tree-claim-tamper-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/autoresearch-current-tree-tamper"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "speed only",
+          evidence: "faster",
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "final tree update"], repo);
+
+    const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
+    const payload = JSON.parse(result.stdout);
+    const plan = JSON.parse(await fsp.readFile(payload.planOutput, "utf8"));
+    plan.product_claim_coverage.productGradeReady = true;
+    plan.product_grade_ready = true;
+    plan.product_claim_coverage.missingRequiredProof = [];
+    await fsp.writeFile(payload.planOutput, JSON.stringify(plan, null, 2) + "\n", "utf8");
+
+    const stale = await run(process.execPath, [finalizer, payload.planOutput], repo, true);
+    assert.notEqual(stale.code, 0);
+    assert.match(
+      stale.stderr,
+      /plan fingerprint does not match contents|product claim coverage does not match/i,
+    );
   },
 );
 

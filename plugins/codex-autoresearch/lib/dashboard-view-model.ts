@@ -119,6 +119,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     qualityGap,
     experimentMemory,
   });
+  const productClaimCoverage = normalizeProductClaimCoverage(state.productClaimCoverage);
   const nextAction =
     [...current]
       .reverse()
@@ -212,8 +213,14 @@ export function buildDashboardViewModel(context: DashboardContext) {
     setupPlan,
     guidedSetup,
     researchIntegrity,
+    productClaimCoverage,
     trustWarnings: trustContext.decisionWarnings,
     action: actionRail[0],
+  });
+  const signals = buildDashboardSignals({
+    productClaimCoverage,
+    finalizePreview,
+    trustBlockers,
   });
   const aiSummary = buildAiSummary({
     state,
@@ -255,6 +262,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
     evidenceChips,
     evidenceLedger,
     evidenceReadout,
+    productClaimCoverage,
+    signals,
     proofGaps,
     finalizationChecklist,
     finalizationPressure,
@@ -1327,14 +1336,99 @@ function buildEvidenceLedger(current: RunLike[] = []) {
   };
 }
 
+function normalizeProductClaimCoverage(value: unknown) {
+  const coverage = recordOrNull(value);
+  if (!coverage) return null;
+  const missingRequiredProof = unique([
+    ...stringList(coverage.missingRequiredProof),
+    ...stringList(coverage.missingProof),
+    ...stringList(coverage.requiredProofMissing),
+  ]);
+  const blockers = unique([
+    ...stringList(coverage.blockers),
+    ...stringList(coverage.blockingReasons),
+    ...stringList(coverage.claimCoverageBlockers),
+  ]);
+  return {
+    productGradeReady: coverage.productGradeReady === true,
+    maturity:
+      cleanText(coverage.maturity) ||
+      (coverage.productGradeReady === true ? "product-grade" : "needs-proof"),
+    missingRequiredProof,
+    blockers,
+  };
+}
+
+function buildDashboardSignals({
+  productClaimCoverage = null,
+  finalizePreview = null,
+  trustBlockers = [],
+}: LooseObject) {
+  const signals = [];
+  const productBlockers = [
+    ...stringList(productClaimCoverage?.blockers),
+    ...stringList(productClaimCoverage?.missingRequiredProof),
+  ];
+  if (productClaimCoverage && productClaimCoverage.productGradeReady === false) {
+    signals.push({
+      id: "product-proof",
+      label: "Product proof missing",
+      value: "Claim coverage blocked",
+      detail: productBlockers[0] || "Product claim coverage is not release-ready.",
+      tone: "warn",
+      source: "claim coverage",
+    });
+  }
+  const finalizationWarnings = [...stringList(finalizePreview?.warnings)];
+  if (finalizationWarnings.length) {
+    signals.push({
+      id: "finalization-blocker",
+      label: "Finalization blocker",
+      value: "Preview gated",
+      detail: finalizationWarnings[0],
+      tone: "warn",
+      source: "finalization",
+    });
+  }
+  const trustMessages = stringList(trustBlockers)
+    .map((item: unknown) => warningMessage(item))
+    .filter(Boolean);
+  if (trustMessages.length) {
+    signals.push({
+      id: "handoff-blocker",
+      label: "Handoff blocker",
+      value: "Review required",
+      detail: trustMessages[0],
+      tone: "warn",
+      source: "trust",
+    });
+  }
+  return signals;
+}
+
 function buildProofGaps({
   setupPlan = null,
   guidedSetup = null,
   researchIntegrity = null,
+  productClaimCoverage = null,
   trustWarnings = [],
   action = null,
 }: LooseObject) {
   const gaps = [];
+  for (const blocker of productClaimCoverage?.blockers || []) {
+    gaps.push({
+      label: "Product proof",
+      detail: String(blocker),
+      nextAction: "Add or cite the missing claim coverage proof before handoff.",
+    });
+  }
+  for (const missing of productClaimCoverage?.missingRequiredProof || []) {
+    gaps.push({
+      label: "Claim coverage",
+      detail: String(missing),
+      nextAction: "Attach durable product proof or mark the claim out of scope.",
+    });
+  }
   for (const missing of setupPlan?.missing || setupPlan?.missingEssentials || []) {
     gaps.push({
       label: "Missing setup",
@@ -1923,7 +2017,7 @@ export function buildActionRail({
       utilityCopy: "Run a fresh packet before logging so old metrics cannot be reused.",
       safeAction: stalePacketCommand ? "" : "setup-plan",
       command: stalePacketCommand || guidedSetup.commands?.setup || commandMap.get("setup plan"),
-      commandLabel: stalePacketCommand ? "Next" : "Setup",
+      commandLabel: stalePacketCommand ? "Replace stale packet" : "Setup",
       tone: "warn",
       source: "packet",
     });
@@ -1998,7 +2092,7 @@ export function buildActionRail({
       utilityCopy: "Turn kept evidence into a reviewable packet.",
       safeAction: "finalize-preview",
       command: commandMap.get("finalize preview"),
-      commandLabel: "Preview",
+      commandLabel: "Preview finalization",
       tone: "good",
       source: "finalize",
     });
@@ -2366,7 +2460,7 @@ function missionStep({
   detail,
   safeAction = "",
   command = "",
-  commandLabel = "Copy",
+  commandLabel = "Copy read-only command",
   mutates = false,
 }: {
   id: string;
@@ -2399,7 +2493,7 @@ function actionItem({
   utilityCopy,
   safeAction = "",
   command = "",
-  commandLabel = "Copy",
+  commandLabel = "Copy read-only command",
   tone = "neutral",
   source = "",
   explanation = null,
