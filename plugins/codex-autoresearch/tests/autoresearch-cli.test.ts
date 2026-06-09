@@ -5010,6 +5010,39 @@ test("state report does not promote empty promotion evidence", async () => {
   });
 });
 
+test("persisted quality constraints gate state quality posture end-to-end", async () => {
+  await withTempDir("quality-constraints-e2e", async (dir) => {
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const setup = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "quality constrained",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      command,
+      "--quality-constraints",
+      JSON.stringify([{ domain: "retrieval_quality", requiredBeforePromotion: true }]),
+    ]);
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.qualityConstraints?.[0]?.domain, "retrieval_quality");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "missing");
+    assert.match(
+      statePayload.gateQuality.blockers.join("\n"),
+      /quality-sensitive performance loop/i,
+    );
+    assert.match(statePayload.gateQuality.warnings.join("\n"), /retrieval_quality/);
+  });
+});
+
 test("state report marks registry-only dashboard health dead until HTTP responds", async () => {
   await withTempDir("state-report-dashboard-health", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "dashboard health", "--metric-name", "seconds"]);

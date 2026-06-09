@@ -33,7 +33,7 @@ const RETRIEVAL_DOMAIN_PATTERN = /\b(retrieval|search|semantic|ranking|ranker|la
 const SIDECAR_DOMAIN_PATTERN = /\bsidecar\b/i;
 
 const NEGATION_CUE =
-  /\b(not|n't|no|never|without|untested|unknown|missing|pending|skipped|todo|did not|wasn't|isn't|aren't|cannot|can't)\b/i;
+  /\b(not|no|never|without|untested|unknown|missing|pending|skipped|todo|did not|cannot)\b|\w+n't\b/i;
 
 const RETRIEVAL_REQUIREMENTS: ProductProofRequirement[] = [
   {

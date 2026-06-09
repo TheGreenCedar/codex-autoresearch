@@ -4939,14 +4939,19 @@ async function decisionGuidance({
   scaffoldHealth = null,
   warningDetails = [],
   setupMissing = [],
+  qualityConstraints: explicitQualityConstraints = null,
   runtimeDriftSummary = null,
   benchmarkCommand = "",
   checksCommand = "",
 }: LooseObject) {
-  const stateConfig = state?.config || config || {};
-  const qualityConstraints = Array.isArray(stateConfig.qualityConstraints)
-    ? stateConfig.qualityConstraints
-    : null;
+  const constraintList = (value: unknown) =>
+    Array.isArray(value) && value.length > 0 ? value : null;
+  // Persisted constraints live in the runtime config (autoresearch.config.json),
+  // not the ledger-derived state.config, so the runtime config must win.
+  const qualityConstraints =
+    constraintList(explicitQualityConstraints) ||
+    constraintList(config?.qualityConstraints) ||
+    constraintList(state?.config?.qualityConstraints);
   return buildDecisionGuidanceContext({
     workDir,
     pluginRoot: PLUGIN_ROOT,

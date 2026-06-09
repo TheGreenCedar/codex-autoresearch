@@ -239,9 +239,6 @@ function compactRecommendNextHandoff(compactState: unknown): {
   bounded: boolean;
 } {
   const compact = recordOrNull(compactState) || {};
-  if (!needsCompactHandoff(compactState)) {
-    return { compactState, evidenceNotes: [], frictionSignals: [], bounded: false };
-  }
   const capsule = recordOrNull(compact.sessionDecisionCapsule);
   const evidenceNotes = stringArray(capsule?.evidence)
     .map((value) => compactHandoffText(value, "evidence"))
@@ -259,6 +256,9 @@ function compactRecommendNextHandoff(compactState: unknown): {
   ]
     .filter(Boolean)
     .slice(0, 3);
+  if (!needsCompactHandoff(compactState)) {
+    return { compactState, evidenceNotes, frictionSignals, bounded: false };
+  }
   return {
     compactState: sanitizeCompactHandoffValue(compactState, ""),
     evidenceNotes,
@@ -370,7 +370,18 @@ function enforceCompactHandoffBudget(response: RecommendNextResponse): Recommend
       },
     };
   }
-  return current;
+  if (safeStringify(current).length <= COMPACT_HANDOFF_BUDGET) return current;
+  // Last resort: drop everything except the minimal resume contract so the
+  // budget is enforced, not best-effort.
+  const minimalState = recordOrNull(current.compactState);
+  return {
+    ...current,
+    sessionDecisionCapsule: null,
+    compactState: {
+      goalFrame: minimalState?.goalFrame ?? null,
+      operatorHandoff: minimalState?.operatorHandoff ?? null,
+    },
+  };
 }
 
 function sanitizeSessionCapsuleForBudget(value: unknown): unknown {

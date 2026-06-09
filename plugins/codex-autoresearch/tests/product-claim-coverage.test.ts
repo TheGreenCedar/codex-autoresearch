@@ -53,6 +53,22 @@ test("negated evidence does not satisfy product-grade proof requirements", () =>
   assert.ok(coverage.missingRequiredProof.length > 0);
 });
 
+test("contracted negations like didn't do not satisfy proof requirements", () => {
+  const coverage = buildProductClaimCoverage({
+    goal: "Deliver a shippable lazy semantic retrieval improvement.",
+    acceptedEvidence: [
+      "we didn't test accuracy",
+      "lazy backfill doesn't work yet",
+      "ranking quality hasn't been validated",
+      "tests and docs haven't been written",
+    ],
+  });
+
+  assert.equal(coverage.productGradeReady, false);
+  assert.equal(coverage.claimDetected, true);
+  assert.ok(coverage.missingRequiredProof.length > 0);
+});
+
 test("non product goal stays informational without blockers", () => {
   const coverage = buildProductClaimCoverage({
     goal: "Run a baseline measurement.",
