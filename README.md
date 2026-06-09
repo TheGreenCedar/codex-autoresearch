@@ -78,8 +78,6 @@ Some workspace plugin settings are managed from the Codex Apps/Plugins UI rather
 
 Start a new Codex thread after installation or refresh.
 
-This is not an npm install path for operators. The plugin package is private; `npm install` under `plugins/codex-autoresearch` is for local development and verification only.
-
 ## How it works
 
 A normal session follows this shape:
