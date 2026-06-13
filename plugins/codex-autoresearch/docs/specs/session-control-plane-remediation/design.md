@@ -1,5 +1,7 @@
 # Design Document
 
+> Status: historical implementation spec. The first implementation landed in commit `fa80d8d`; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
+
 ## Overview
 
 This design keeps the existing Autoresearch architecture intact and adds the missing contracts around it. The package remains CLI/skill-only; the dashboard remains read-only; the remediation works by strengthening session state, decision envelopes, forensics capsules, approval records, process governance, lane reconciliation, finalization status, and regression gates.
@@ -475,6 +477,6 @@ state/recommend-next/session-forensics/finalize-preview
 
 The dashboard receives the same `OperatorReadout` as terminal reports and must not create alternate mutation routes. If a dashboard row needs an action, it displays the read-only safe action label and the CLI command text only when that command is non-mutating or already part of the existing readout convention.
 
-## Phase Gate
+## Historical Note
 
-Detailed design complete. All components from the blueprint have been specified. Proceed to generate implementation tasks.
+This design captured the initial implementation shape. Current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.

@@ -1,5 +1,7 @@
 # Validation Report
 
+> Status: historical implementation spec. The first implementation landed in commit `fa80d8d`; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
+
 ## 1. Requirements to Tasks Traceability Matrix
 
 | Requirement | Acceptance Criterion | Implementing Task(s) | Status |
@@ -51,8 +53,8 @@
 
 ## 3. Final Validation
 
-All 30 acceptance criteria are fully traced to implementation tasks. The plan is validated and ready for execution.
+All 30 acceptance criteria were traced to implementation tasks for the historical implementation plan.
 
-## 4. Stop Boundary
+## 4. Follow-up Validation
 
-Execution is intentionally not started. The next action after this specification is an explicit user approval to implement the plan.
+The initial implementation has landed. Validation for the follow-up review-resolution commit must include targeted tests for finalization branch reuse, durable approval replay, resource preflight warnings, lane-orchestration authority, and the full package gate.

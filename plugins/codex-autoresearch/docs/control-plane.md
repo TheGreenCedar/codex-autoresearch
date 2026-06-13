@@ -35,16 +35,20 @@ Human approvals are durable ledger entries, not vibes. Approval records include:
 
 Resolution is exact by gate and scope. An expired approval or approval for a different lane does not satisfy the current gate. Big-idea lanes can record a bounded recommendation, but implementation or measured packet work needs scoped approval first.
 
+Big-idea approval gates are durable: an unapproved recorded lane result blocks implementation and measured packets until a matching `approval` ledger record exists.
+
 ## Resource Governor
 
 Before packet or lane work, check resource budgets. The governor should stop or warn on:
 
 - too many active processes
 - wall-clock budget exhaustion
-- repeated command heads
+- repeated benchmark commands as resource warnings, not packet blockers
 - oversized command output
 - excessive shell polling
 - stale process-manager or reboot residue
+
+Hard resource blockers are active-process over-budget, wall-clock over-budget, and typed stale process residue.
 
 When output is already large, prefer bounded file reads, compact forensics, evidence indexes, or `partial-results` instead of repeating raw command output.
 
@@ -78,7 +82,7 @@ Finalization is not a single state. Keep these stages separate:
 - merge verification
 - cleanup
 
-An existing review branch should be classified as equivalent, stale, divergent, checked-out, or unsafe before reuse. A local branch with no push or PR evidence is local-only, not final.
+An existing review branch should be classified as equivalent, stale, divergent, checked-out, unverified, or unsafe before reuse. `equivalent` is reserved for review branches whose content has been verified against the finalization plan. Existing branches without content verification are reported as unverified/unsafe and should be recreated or verified before PR/merge claims. A local branch with no push or PR evidence is local-only, not final.
 
 ---
 
