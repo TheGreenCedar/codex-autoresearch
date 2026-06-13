@@ -24,7 +24,7 @@ export interface ResourceResidueFact {
   reason: string;
   status: "stale-process-residue";
   timestamp: string;
-  type: string;
+  type: ResourceResidueType;
 }
 
 const DEFAULT_BUDGETS: ResourceBudgets = {
@@ -36,7 +36,7 @@ const DEFAULT_BUDGETS: ResourceBudgets = {
   pollBudget: 80,
 };
 
-const SAFE_LEDGER_TYPES = new Set([
+const SAFE_LEDGER_TYPES = [
   "approval",
   "autoresearch.log.pending",
   "compacted",
@@ -49,7 +49,11 @@ const SAFE_LEDGER_TYPES = new Set([
   "run",
   "session_meta",
   "turn_context",
-]);
+] as const;
+type SafeLedgerEntryType = (typeof SAFE_LEDGER_TYPES)[number];
+type ResourceResidueType = SafeLedgerEntryType | "ledger-entry";
+const SAFE_LEDGER_TYPE_SET: ReadonlySet<string> = new Set(SAFE_LEDGER_TYPES);
+const ISO_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 
 export function buildResourcePreflight({
   activeProcesses = 0,
@@ -206,14 +210,14 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function safeLedgerType(value: unknown): string {
+function safeLedgerType(value: unknown): ResourceResidueType {
   const type = stringValue(value);
-  return SAFE_LEDGER_TYPES.has(type) ? type : "ledger-entry";
+  return SAFE_LEDGER_TYPE_SET.has(type) ? (type as SafeLedgerEntryType) : "ledger-entry";
 }
 
 function safeLedgerTimestamp(value: unknown): string {
   const timestamp = stringValue(value);
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(timestamp) ? timestamp : "";
+  return ISO_UTC_TIMESTAMP_PATTERN.test(timestamp) ? timestamp : "";
 }
 
 function uniqueResidue(items: ResourceResidueFact[]): ResourceResidueFact[] {

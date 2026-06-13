@@ -35,6 +35,8 @@ const LOOP_PRIORITY = {
   nextPacket: 10,
 } as const;
 
+const FINALIZATION_RUNWAY_WARNING_STATUSES = new Set(["local-only", "equivalent", "pr-open"]);
+
 function loopAction(
   kind: string,
   priority: number,
@@ -418,36 +420,11 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
   if (currentTreeFinalization) {
     blockers.push(currentTreeFinalization);
   }
-  const finalizationRunway = objectValue(envelope.finalizationRunway);
-  const runwayBlockers = stringList(finalizationRunway?.blockers, []);
-  const runwayStatus = stringValue(finalizationRunway?.status);
-  const runwayUnverified = runwayStatus === "unverified";
-  if (runwayBlockers.length > 0 || finalizationRunway?.stage === "unsafe" || runwayUnverified) {
-    blockers.push(
-      loopAction(
-        "finalization-runway",
-        LOOP_PRIORITY.currentTreeFinalization,
-        runwayBlockers[0] ||
-          finalizationRunway?.nextAction ||
-          (runwayUnverified
-            ? "Verify or recreate unverified finalization branch content before merge or cleanup claims."
-            : "") ||
-          "Resolve finalization branch runway before merge or cleanup claims.",
-        finalizationRunway?.command,
-        ["finalizationRunway"],
-      ),
-    );
-  } else if (["local-only", "equivalent", "pr-open"].includes(runwayStatus)) {
-    warnings.push(
-      loopAction(
-        "finalization-runway",
-        LOOP_PRIORITY.finalizationReadiness,
-        finalizationRunway?.nextAction ||
-          "Publish or verify the review branch before calling finalization complete.",
-        finalizationRunway?.command,
-        ["finalizationRunway"],
-      ),
-    );
+  const runwayAction = finalizationRunwayAction(objectValue(envelope.finalizationRunway));
+  if (runwayAction.blocker) {
+    blockers.push(runwayAction.blocker);
+  } else if (runwayAction.warning) {
+    warnings.push(runwayAction.warning);
   }
   const portfolioRecommendation = objectValue(envelope.portfolioRecommendation);
   if (blockers.length === 0 && portfolioRecommendation?.kind === "trust-blocker") {
@@ -524,6 +501,67 @@ function currentTreeFinalizationAction(
       "Use current-tree finalization because commit-level kept evidence does not describe the current branch tree cleanly.",
     finalizationReadiness.command,
     ["finalizationReadiness", "currentTree"],
+  );
+}
+
+function finalizationRunwayAction(finalizationRunway: LooseObject | null): {
+  blocker: LoopAction | null;
+  warning: LoopAction | null;
+} {
+  if (!finalizationRunway) return { blocker: null, warning: null };
+  const runwayBlockers = stringList(finalizationRunway.blockers, []);
+  const runwayStatus = stringValue(finalizationRunway.status);
+  if (finalizationRunwayBlocksProgress(finalizationRunway, runwayStatus, runwayBlockers)) {
+    return {
+      blocker: loopAction(
+        "finalization-runway",
+        LOOP_PRIORITY.currentTreeFinalization,
+        finalizationRunwayBlockerReason(finalizationRunway, runwayStatus, runwayBlockers),
+        finalizationRunway.command,
+        ["finalizationRunway"],
+      ),
+      warning: null,
+    };
+  }
+  if (!FINALIZATION_RUNWAY_WARNING_STATUSES.has(runwayStatus)) {
+    return { blocker: null, warning: null };
+  }
+  return {
+    blocker: null,
+    warning: loopAction(
+      "finalization-runway",
+      LOOP_PRIORITY.finalizationReadiness,
+      finalizationRunway.nextAction ||
+        "Publish or verify the review branch before calling finalization complete.",
+      finalizationRunway.command,
+      ["finalizationRunway"],
+    ),
+  };
+}
+
+function finalizationRunwayBlocksProgress(
+  finalizationRunway: LooseObject,
+  runwayStatus: string,
+  runwayBlockers: string[],
+): boolean {
+  return (
+    runwayBlockers.length > 0 ||
+    finalizationRunway.stage === "unsafe" ||
+    runwayStatus === "unverified"
+  );
+}
+
+function finalizationRunwayBlockerReason(
+  finalizationRunway: LooseObject,
+  runwayStatus: string,
+  runwayBlockers: string[],
+): string {
+  return (
+    runwayBlockers[0] ||
+    stringValue(finalizationRunway.nextAction) ||
+    (runwayStatus === "unverified"
+      ? "Verify or recreate unverified finalization branch content before merge or cleanup claims."
+      : "Resolve finalization branch runway before merge or cleanup claims.")
   );
 }
 

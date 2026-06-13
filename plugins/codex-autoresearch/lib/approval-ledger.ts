@@ -84,16 +84,15 @@ export function approvalRequirementsFromLaneResults(entries: unknown[]): Approva
     const gate = isUnknownRecord(result.approvalGate) ? result.approvalGate : {};
     if (gate.required !== true) continue;
     const lane = isUnknownRecord(entry.lane) ? entry.lane : {};
-    const gateName = stringValue(gate.gate);
-    const scope = stringValue(gate.scope || lane.id || lane.title);
-    if (!gateName || !scope) continue;
-    requirements.push({
-      gate: gateName,
-      scope,
+    const requirement = normalizeApprovalRequirement({
+      gate: gate.gate,
+      scope: gate.scope || lane.id || lane.title,
       action:
         stringValue(gate.action) ||
         "Approve big-idea lane before implementation or measured packets.",
     });
+    if (!requirement) continue;
+    requirements.push(requirement);
   }
   return requirements;
 }
@@ -104,17 +103,12 @@ export function dedupeApprovalRequirements(
   const seen = new Set<string>();
   const out: ApprovalRequirement[] = [];
   for (const requirement of requirements) {
-    const gate = stringValue(requirement.gate);
-    const scope = stringValue(requirement.scope);
-    if (!gate || !scope) continue;
-    const key = `${gate}\0${scope}`;
+    const normalized = normalizeApprovalRequirement(requirement);
+    if (!normalized) continue;
+    const key = `${normalized.gate}\0${normalized.scope}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({
-      gate,
-      scope,
-      ...(stringValue(requirement.action) ? { action: stringValue(requirement.action) } : {}),
-    });
+    out.push(normalized);
   }
   return out;
 }
@@ -163,12 +157,8 @@ export function buildApprovalLedgerStatus({
 } = {}): ApprovalLedgerStatus {
   const records = approvalRecordsFromLedger(entries);
   const requirements = required
-    .map((requirement) => ({
-      gate: stringValue(requirement.gate),
-      scope: stringValue(requirement.scope),
-      ...(stringValue(requirement.action) ? { action: stringValue(requirement.action) } : {}),
-    }))
-    .filter((requirement) => requirement.gate && requirement.scope);
+    .map(normalizeApprovalRequirement)
+    .filter((requirement): requirement is ApprovalRequirement => requirement != null);
   const resolutions = requirements.map((requirement) =>
     resolveApproval(records, requirement, { now }),
   );
@@ -214,6 +204,20 @@ function stringList(value: unknown): string[] {
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function normalizeApprovalRequirement(
+  requirement: { action?: unknown; gate?: unknown; scope?: unknown } | null | undefined,
+): ApprovalRequirement | null {
+  const gate = stringValue(requirement?.gate);
+  const scope = stringValue(requirement?.scope);
+  if (!gate || !scope) return null;
+  const action = stringValue(requirement?.action);
+  return {
+    gate,
+    scope,
+    ...(action ? { action } : {}),
+  };
 }
 
 export function approvalRequirementFromLane(lane: unknown): ApprovalRequirement | null {
