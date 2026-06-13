@@ -4,7 +4,7 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 2.3.0
 
 ### Changed
 
@@ -18,7 +18,7 @@ This project uses a root-only changelog because the root README is the public do
   now require content-equivalence before reuse, big-idea approvals remain
   durable after lane results are recorded, repeated command heads, including
   benchmark commands, are warnings instead of hard resource blockers, and the
-  control-plane spec pack is labeled as historical implementation artifacts.
+  temporary control-plane spec pack has been removed from the release diff.
 - Clarified Autoresearch trust guidance for benchmark-shaped wins: row-specific
   detectors, exact probes, static benchmark citations, or manifest-tuned fixes
   are diagnostic/provisional until holdout, repeat, breadth, or promotion-gate
@@ -33,6 +33,10 @@ This project uses a root-only changelog because the root README is the public do
   `scripts/autoresearch.mjs` paths.
 - Tightened the Codex-facing skill so loop-contract blockers outrank source
   cleanliness when deciding whether to spend another packet.
+
+### Release
+
+- Bumped public package, lockfile, and plugin manifest surfaces to `2.3.0`.
 
 ## 2.2.1
 
