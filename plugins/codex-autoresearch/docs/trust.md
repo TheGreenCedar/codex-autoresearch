@@ -88,6 +88,55 @@ Common labels:
 
 If ASI says to stop, broaden validation, rerun on holdout, or invalidate a family, honor that over remaining iteration budget.
 
+## Benchmark Overfit And Steering
+
+Autoresearch can make a benchmark look cleaner while the actual product gets
+less honest. This is the trap: the numbers improve, the report gets prettier,
+and the real claim quietly shrinks to "we learned the test."
+
+Treat a result as benchmark-shaped when the implementation or harness adds any
+of these to make a known row pass:
+
+- task-family detectors for one named library, framework, fixture, repo, or
+  manifest task
+- protected probes built from expected files, expected symbols, expected claims,
+  or exact answer anchors
+- static citations for exact benchmark paths that normal retrieval did not find
+- benchmark manifest edits that change what "correct" means
+- scorer changes that make the current failing family cheaper to pass without a
+  separate holdout or repeat
+
+Those changes can still be useful. They are diagnostics and harness learning,
+not product proof. Log them as `measure` with provisional or diagnostic wording,
+or start a new segment when the benchmark contract changed. Do not promote them
+as a product, language, retrieval, ranking, or performance win until a fresh
+holdout, repeat, breadth run, or explicit promotion gate covers the broader
+claim.
+
+`session-forensics` treats explicit overfit, row-specific steering, protected
+probe, static-citation, and benchmark-specific feedback as a decision-capsule
+blocker. Resolve that blocker by separating harness-quality changes from
+row-specific repairs, downgrading the affected evidence, and planning holdout or
+breadth validation before promotion.
+
+Planning that validation is not product proof. Finalization remains blocked
+until the holdout, repeat, breadth run, or promotion gate is actually logged and
+passes for the claim being promoted.
+
+The command response is compact by default so importing a large session does not
+repeat the same output-budget failure. Use `--json-full` or `--verbose` only
+when direct JSON consumers need `commandClasses` or ungrouped command, product,
+or workflow signal arrays; the capsule artifacts still carry the durable
+evidence. Copyable next commands should use the active plugin launcher with the
+target repo passed through `--cwd`, not a target-repo-local
+`scripts/autoresearch.mjs` path.
+
+Generic harness improvements are different. Cost accounting, packet-first
+gates, baseline reuse, provenance capture, command classification, source-read
+accounting, and manifest-quality scoring can support a harness-quality claim.
+Keep that claim separate from "the product won this language/task." One is
+plumbing. The other needs proof outside the row it just learned.
+
 ## Claim Coverage
 
 Accepted evidence is not automatically shippable evidence. Claim coverage describes whether the current accepted evidence proves the claim the operator is about to make.

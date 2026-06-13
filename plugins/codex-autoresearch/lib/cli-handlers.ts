@@ -112,6 +112,10 @@ export function createCliCommandHandlers(deps: LooseObject): Record<string, CliH
         allowOutsideWorkdir: args.allowOutsideWorkdir,
         maxSnippets: args.maxSnippets,
         maxSnippetChars: args.maxSnippetChars,
+        jsonFull: args.jsonFull,
+        json_full: args.jsonFull ?? args.json_full,
+        full: args.full,
+        verbose: args.verbose,
       }),
     }),
     recipes: async (args) => ({

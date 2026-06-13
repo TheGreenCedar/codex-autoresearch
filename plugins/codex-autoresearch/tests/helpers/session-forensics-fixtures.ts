@@ -24,6 +24,30 @@ export function benchmarkContractFixtureEntries(): RolloutEntry[] {
   ];
 }
 
+export function benchmarkOverfitFixtureEntries(): RolloutEntry[] {
+  return [
+    { timestamp: "2026-06-11T20:24:14.000Z", type: "session_meta", payload: { id: "019eb85a" } },
+    {
+      timestamp: "2026-06-12T22:40:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "The harness work is mostly generalizable; the CodeStory wins are substantially overfit.",
+              "The targeted row wins are benchmark-specific retrieval steering through task-family detectors, protected probes, and static citations.",
+              "Treat them as diagnostic row repair until a blind holdout proves broader value.",
+            ].join(" "),
+          },
+        ],
+      },
+    },
+  ];
+}
+
 export function searchLatencyFixtureEntries(): RolloutEntry[] {
   return [
     { timestamp: "2026-05-31T20:00:00.000Z", type: "session_meta", payload: { id: "019e5d3a" } },

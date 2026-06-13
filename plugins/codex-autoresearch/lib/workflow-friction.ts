@@ -11,6 +11,7 @@ export type WorkflowFrictionKind =
   | "metric_saturated_not_promotable"
   | "product_bar_rejection"
   | "false_done_admission"
+  | "benchmark_overfit_steering"
   | "oversized_tool_output"
   | "closed_stdin_poll";
 
@@ -70,6 +71,7 @@ function forensicsFrictionSignals({
       ![
         "product_bar_rejection",
         "false_done_admission",
+        "benchmark_overfit_steering",
         "oversized_tool_output",
         "closed_stdin_poll",
       ].includes(kind)
@@ -79,7 +81,10 @@ function forensicsFrictionSignals({
     signals.push(
       workflowSignal({
         kind: kind as WorkflowFrictionKind,
-        severity: kind === "product_bar_rejection" ? "blocker" : "warning",
+        severity:
+          kind === "product_bar_rejection" || kind === "benchmark_overfit_steering"
+            ? "blocker"
+            : "warning",
         reason: signal?.message || forensicsSignalReason(kind),
         reportedSize: {
           tokens: finitePositive(signal?.size?.tokens),
@@ -358,6 +363,8 @@ function forensicsSignalReason(kind: string): string {
       return "The session rejected a done claim because product-grade proof was missing.";
     case "false_done_admission":
       return "The assistant admitted loop completion was mistaken for product proof.";
+    case "benchmark_overfit_steering":
+      return "The session flagged benchmark-specific steering or overfit row wins.";
     case "oversized_tool_output":
       return "A tool output exceeded the compact handoff budget.";
     case "closed_stdin_poll":
@@ -373,6 +380,8 @@ function forensicsSignalAction(kind: string): string {
       return "Add claim coverage before finalization.";
     case "false_done_admission":
       return "Downgrade evidence maturity or restart with product-grade acceptance.";
+    case "benchmark_overfit_steering":
+      return "Separate row-specific repairs from product proof and pass a blind holdout or breadth gate.";
     case "oversized_tool_output":
       return "Use bounded mapping commands, file-specific reads, or CodeStory search packets.";
     case "closed_stdin_poll":

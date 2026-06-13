@@ -13,6 +13,7 @@ import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
+import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
@@ -850,6 +851,83 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
           },
         }),
         JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.500Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "API_KEY=abcdefghijklmnop node scripts/private-check.mjs",
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.600Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "API_KEY=abc$def%ghi node scripts/private-check.mjs",
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.700Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: 'CLIENT_SECRET="abc def ghijkl" node scripts/private-check.mjs',
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.800Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "TOKEN=abc:def:ghijkl node scripts/private-check.mjs",
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.850Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "node scripts/private-check.mjs --api-key flagsecretvalue123",
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.900Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: 'node scripts/private-check.mjs --client-secret "flag secret value 456"',
+            }),
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-25T00:00:01.950Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "node scripts/private-check.mjs --api-key=flag:secret:value789",
+            }),
+          },
+        }),
+        JSON.stringify({
           timestamp: "2026-05-25T00:00:02.000Z",
           type: "response_item",
           payload: {
@@ -893,10 +971,31 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.equal(dryPayload.dryRun, true);
     assert.equal(dryPayload.wrote, false);
     assert.equal(dryPayload.sourcePath, "rollout.jsonl");
+    assert.equal(dryPayload.compact, true);
+    assert.equal(typeof dryPayload.commandClassCount, "number");
+    assert.equal(Object.hasOwn(dryPayload, "commandClasses"), false);
+    for (const rawSecret of [
+      "abcdefghijklmnop",
+      "abc$def%ghi",
+      "abc def ghijkl",
+      "abc:def:ghijkl",
+      "flagsecretvalue123",
+      "flag secret value 456",
+      "flag:secret:value789",
+    ]) {
+      assert.equal(JSON.stringify(dryPayload).includes(rawSecret), false);
+      assert.equal(JSON.stringify(dryPayload.topCommandHeads).includes(rawSecret), false);
+    }
     assert.equal((dryPayload.canonicalNextAction.command || "").includes(sessionPath), false);
-    assert.match(
+    assert.equal(dryPayload.canonicalNextAction.kind, "decision-capsule");
+    assert.match(dryPayload.canonicalNextAction.command || "", /session-forensics/);
+    assert.match(dryPayload.canonicalNextAction.command || "", /--apply/);
+    assert.match(dryPayload.canonicalNextAction.command || "", /--session-jsonl rollout\.jsonl/);
+    assert.match(dryPayload.canonicalNextAction.command || "", /--research-slug session-019e/);
+    assert.doesNotMatch(dryPayload.canonicalNextAction.command || "", /recommend-next/);
+    assert.doesNotMatch(
       dryPayload.canonicalNextAction.command || "",
-      /session-forensics|benchmark-lint|recommend-next|next/i,
+      /node scripts[\\/]autoresearch\.mjs/i,
     );
     assert.equal(dryPayload.plannedFiles.length, 5);
     assert.equal(dryPayload.decisionCapsule.kind, "session-decision-capsule");
@@ -929,6 +1028,11 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     const evidence = JSON.parse(
       await readFile(path.join(researchRoot, "evidence-index.json"), "utf8"),
     );
+    assert.doesNotMatch(
+      capsule.enforcement.commandHint || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
+    assert.match(capsule.enforcement.commandHint || "", /autoresearch\.mjs/);
     assert.match(digest, /Session Forensics Import/);
     assert.match(digest, /Decision Capsule/);
     assert.equal(capsule.kind, "session-decision-capsule");
@@ -936,6 +1040,56 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
     assert.match(gaps, /\[evidence:ev-/);
     assert.equal(evidence.schemaVersion, 1);
     assert.equal(JSON.stringify(evidence).includes("abcdefghijklmnop"), false);
+
+    const full = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "session-019e",
+      "--dry-run",
+      "--json-full",
+    ]);
+    assert.equal(full.code, 0, full.stderr);
+    const fullPayload = JSON.parse(full.stdout);
+    assert.equal(fullPayload.compact, false);
+    assert.equal(fullPayload.commandClasses["git status --short"], 1);
+    assert.equal(
+      fullPayload.commandClasses["API_KEY=<redacted> node scripts/private-check.mjs"],
+      2,
+    );
+    assert.equal(
+      fullPayload.commandClasses["CLIENT_SECRET=<redacted> node scripts/private-check.mjs"],
+      1,
+    );
+    assert.equal(fullPayload.commandClasses["TOKEN=<redacted> node scripts/private-check.mjs"], 1);
+    assert.equal(
+      fullPayload.commandClasses["node scripts/private-check.mjs --api-key <redacted>"],
+      1,
+    );
+    assert.equal(
+      fullPayload.commandClasses["node scripts/private-check.mjs --client-secret <redacted>"],
+      1,
+    );
+    assert.equal(
+      fullPayload.commandClasses["node scripts/private-check.mjs --api-key=<redacted>"],
+      1,
+    );
+    assert.equal(JSON.stringify(fullPayload.commandClasses).includes("abcdefghijklmnop"), false);
+    assert.equal(JSON.stringify(fullPayload).includes("abcdefghijklmnop"), false);
+    for (const rawSecret of [
+      "abc$def%ghi",
+      "abc def ghijkl",
+      "abc:def:ghijkl",
+      "flagsecretvalue123",
+      "flag secret value 456",
+      "flag:secret:value789",
+    ]) {
+      assert.equal(JSON.stringify(fullPayload).includes(rawSecret), false);
+    }
+    assert.equal(Array.isArray(fullPayload.productSignals), true);
 
     const reapplied = await runCli([
       "session-forensics",
@@ -963,6 +1117,127 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
       assert.equal(claimIds.has(evidenceId), true, evidenceId);
     }
     assert.equal((evidenceAfter.claims || []).length >= (evidence.claims || []).length, true);
+  });
+});
+
+test("session-forensics routes context distillation to apply despite stale safe hints", () => {
+  const script = path.join(pluginRoot, "scripts", "autoresearch.mjs");
+  const commands = {
+    state: `node ${script} state --cwd C:\\repo --compact`,
+    recommendNext: `node ${script} recommend-next --cwd C:\\repo --compact`,
+    benchmarkLint: `node ${script} benchmark-lint --cwd C:\\repo`,
+    applyForensics: `node ${script} session-forensics --cwd C:\\repo --session-jsonl rollout.jsonl --research-slug session-019e --apply`,
+  };
+
+  for (const commandHint of [
+    "node scripts/autoresearch.mjs recommend-next --cwd <project> --compact",
+    "node scripts/autoresearch.mjs state --cwd <project> --compact",
+  ]) {
+    const command = commandForDecisionCapsule(
+      {
+        enforcement: {
+          commandHint,
+          triggeredBy: ["sessionDecisionCapsule", "contextDistillation"],
+        },
+      },
+      commands,
+    );
+
+    assert.match(command, /session-forensics/);
+    assert.match(command, /--apply/);
+    assert.match(command, /--session-jsonl rollout\.jsonl/);
+    assert.match(command, /--research-slug session-019e/);
+    assert.doesNotMatch(command, /recommend-next/);
+    assert.doesNotMatch(command, /\bstate\b/);
+  }
+});
+
+test("session-forensics preserves advisory capsule command hints", async () => {
+  await withTempDir("session-forensics-advisory-hint", async (dir) => {
+    const sessionPath = path.join(dir, "advisory-rollout.jsonl");
+    const rows = [
+      JSON.stringify({
+        timestamp: "2026-06-12T10:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "019eadvisory" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-12T10:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Reviewed the imported session signals and found no blocker.",
+            },
+          ],
+        },
+      }),
+    ];
+    await writeFile(sessionPath, rows.join("\n"));
+
+    const dryRun = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "advisory",
+      "--dry-run",
+    ]);
+    assert.equal(dryRun.code, 0, dryRun.stderr);
+    const dryPayload = JSON.parse(dryRun.stdout);
+    assert.equal(dryPayload.decisionCapsule.enforcement.mode, "advisory");
+    assert.equal(dryPayload.canonicalNextAction.kind, "next-packet");
+    assert.equal(dryPayload.canonicalNextAction.command || "", "");
+    assert.match(dryPayload.decisionCapsule.enforcement.commandHint || "", /autoresearch\.mjs/);
+    assert.match(dryPayload.decisionCapsule.enforcement.commandHint || "", /recommend-next/);
+    assert.match(dryPayload.decisionCapsule.enforcement.commandHint || "", /--compact/);
+    assert.doesNotMatch(
+      dryPayload.decisionCapsule.enforcement.commandHint || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
+
+    const applied = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "advisory",
+      "--apply",
+    ]);
+    assert.equal(applied.code, 0, applied.stderr);
+    const applyPayload = JSON.parse(applied.stdout);
+    assert.equal(applyPayload.decisionCapsule.enforcement.mode, "advisory");
+    assert.equal(applyPayload.canonicalNextAction.kind, "next-packet");
+    assert.equal(applyPayload.canonicalNextAction.command || "", "");
+    assert.match(applyPayload.decisionCapsule.enforcement.commandHint || "", /autoresearch\.mjs/);
+    assert.match(applyPayload.decisionCapsule.enforcement.commandHint || "", /recommend-next/);
+    assert.match(applyPayload.decisionCapsule.enforcement.commandHint || "", /--compact/);
+    assert.doesNotMatch(
+      applyPayload.decisionCapsule.enforcement.commandHint || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
+
+    const capsule = JSON.parse(
+      await readFile(
+        path.join(dir, "autoresearch.research", "advisory", "decision-capsule.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(capsule.enforcement.mode, "advisory");
+    assert.match(capsule.enforcement.commandHint || "", /autoresearch\.mjs/);
+    assert.match(capsule.enforcement.commandHint || "", /recommend-next/);
+    assert.match(capsule.enforcement.commandHint || "", /--compact/);
+    assert.doesNotMatch(
+      capsule.enforcement.commandHint || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
   });
 });
 
@@ -1082,9 +1357,92 @@ test("session-forensics requires an explicit gate for outside-workdir JSONL", as
     assert.equal(payload.ok, true);
     assert.equal(payload.sourcePath, "<outside-workdir>/outside-rollout.jsonl");
     assert.equal(payload.canonicalNextAction.kind, "decision-capsule");
-    assert.equal((payload.canonicalNextAction.command || "").includes(sessionPath), false);
+    assert.match(payload.canonicalNextAction.command || "", /session-forensics/);
+    assert.match(payload.canonicalNextAction.command || "", /--apply/);
+    assert.match(payload.canonicalNextAction.command || "", /--allow-outside-workdir/);
+    assert.doesNotMatch(payload.canonicalNextAction.command || "", /<outside-workdir>/);
+    assert.equal((payload.canonicalNextAction.command || "").includes(sessionPath), true);
+    assert.doesNotMatch(
+      payload.canonicalNextAction.command || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
     assert.match(payload.canonicalNextAction.reason || "", /context capsule/i);
     assert.deepEqual(payload.snippets, []);
+  });
+});
+
+test("session-forensics keeps secondary overfit blockers visible in compact output", async () => {
+  await withTempDir("session-forensics-real-shape", async (dir) => {
+    const sessionPath = path.join(dir, "real-shape-rollout.jsonl");
+    const rows = [
+      JSON.stringify({
+        timestamp: "2026-06-11T20:24:14.000Z",
+        type: "session_meta",
+        payload: { id: "019eb85a" },
+      }),
+      ...Array.from({ length: 6 }, (_item, index) =>
+        JSON.stringify({
+          timestamp: `2026-06-12T20:00:0${index}.000Z`,
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "benchmark-lint timed out and parses zero primary METRIC lines; the benchmark contract is broken.",
+              },
+            ],
+          },
+        }),
+      ),
+      JSON.stringify({
+        timestamp: "2026-06-12T22:40:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "The targeted row wins are substantially overfit benchmark-specific retrieval steering through task-family detectors, protected probes, and static citations.",
+            },
+          ],
+        },
+      }),
+    ];
+    await writeFile(sessionPath, rows.join("\n"));
+
+    const result = await runCli([
+      "session-forensics",
+      "--cwd",
+      dir,
+      "--session-jsonl",
+      sessionPath,
+      "--research-slug",
+      "real-shape",
+      "--dry-run",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const productKinds = new Map(payload.productSignals.map((signal) => [signal.kind, signal]));
+
+    assert.equal(payload.compact, true);
+    assert.equal(payload.canonicalNextAction.kind, "decision-capsule");
+    assert.match(payload.canonicalNextAction.command || "", /benchmark-lint/);
+    assert.doesNotMatch(
+      payload.canonicalNextAction.command || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
+    assert.doesNotMatch(
+      payload.decisionCapsule.enforcement.commandHint || "",
+      /node scripts[\\/]autoresearch\.mjs/i,
+    );
+    assert.match(payload.decisionCapsule.enforcement.commandHint || "", /autoresearch\.mjs/);
+    assert.equal(productKinds.has("benchmark_contract_broken"), true);
+    assert.equal(productKinds.has("benchmark_overfit_steering"), true);
+    assert.match(payload.decisionCapsule.evidence.join("\n"), /overfit row wins/i);
+    assert.equal(Object.hasOwn(payload, "commandClasses"), false);
   });
 });
 
@@ -1103,12 +1461,22 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     );
     assert.equal(statePayload.canonicalNextAction.kind, "decision-capsule");
     assert.equal(statePayload.loopContract.canRunNextPacket, false);
+    const stateActionCommand = statePayload.canonicalNextAction.command || "";
+    assert.match(stateActionCommand, /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/);
+    assert.doesNotMatch(stateActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
     assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    const recommendActionCommand =
+      recommendPayload.decisionEnvelope.canonicalNextAction.command || "";
+    assert.match(
+      recommendActionCommand,
+      /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
+    );
+    assert.doesNotMatch(recommendActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
     assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
@@ -7187,12 +7555,24 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     sessionJsonl: "rollout.jsonl",
     researchSlug: "study",
     apply: true,
+    allowSnippets: true,
+    allowOutsideWorkdir: true,
+    maxSnippets: 3,
+    maxSnippetChars: 120,
+    jsonFull: true,
+    verbose: true,
   });
   assert.deepEqual(normalizeRuntimeToolArguments("session_forensics", forensicsArgs), {
     cwd: "C:/repo",
     sessionJsonl: "rollout.jsonl",
     researchSlug: "study",
     apply: true,
+    allowSnippets: true,
+    allowOutsideWorkdir: true,
+    maxSnippets: 3,
+    maxSnippetChars: 120,
+    jsonFull: true,
+    verbose: true,
   });
 
   const partialResultsArgs = validateToolArguments("partial_results", {

@@ -6,6 +6,23 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+### Changed
+
+- Clarified Autoresearch trust guidance for benchmark-shaped wins: row-specific
+  detectors, exact probes, static benchmark citations, or manifest-tuned fixes
+  are diagnostic/provisional until holdout, repeat, breadth, or promotion-gate
+  evidence proves the broader claim.
+- Added session-forensics detection for benchmark overfit/steering so imported
+  sessions can hard-block generic packets and finalization until row-specific
+  evidence is downgraded and holdout or breadth validation has passed.
+- Made `session-forensics` compact by default, preserving full signal and
+  command-class output behind `--json-full`/`--verbose` for direct JSON
+  consumers that need `commandClasses` or ungrouped arrays, and render imported
+  capsule commands with the plugin launcher instead of target-repo-relative
+  `scripts/autoresearch.mjs` paths.
+- Tightened the Codex-facing skill so loop-contract blockers outrank source
+  cleanliness when deciding whether to spend another packet.
+
 ## 2.2.1
 
 ### Fixed

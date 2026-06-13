@@ -58,8 +58,11 @@ Use docs only as needed; do not load everything by default.
 12. `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
 13. For retrieval/search/ranking/performance work, require quality constraints such as accuracy, recall, MRR, hit@k, ranking quality, lazy behavior, accessibility, security, or data-integrity checks before promotion.
 14. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and symlink/realpath escapes without invalidating unrelated metric evidence.
-15. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
-16. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
+15. Treat benchmark-shaped fixes as diagnostic until proven otherwise. If a change adds task-family detectors, manifest-specific probes, exact-library static citations, expected-file/symbol tuning, or any other steering keyed to the benchmark row, log it as `measure` with provisional/diagnostic wording unless a fresh holdout, repeat, breadth, or promotion gate proves the broader claim.
+16. If `session-forensics` imports benchmark-overfit or row-specific steering feedback, treat the resulting decision capsule as a trust blocker: separate generic harness claims from diagnostic row repairs before another generic packet or finalization.
+17. Keep `session-forensics` compact unless a direct JSON consumer needs `commandClasses` or ungrouped signal arrays; use `--json-full`/`--verbose` deliberately. Response and artifact command hints must use the active plugin launcher with the target repo in `--cwd`, not a target-repo-local `scripts/autoresearch.mjs` path.
+18. Treat runtime freshness as unavailable unless the installed runtime version and built-entrypoint fingerprint can be inspected and matched.
+19. Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
 
 Happy-path CLI from `plugins/codex-autoresearch`:
 
@@ -82,6 +85,8 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - Use `measure` and `--status measure` for non-promotional evidence such as baselines, no-change probes, environment checks, and diagnostic measurements.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - Read parsed metrics and promotion readiness separately. New keeps default to exploratory unless repeat, holdout, breadth, or explicit promotion metadata make the evidence promotable.
+- The loop contract is the authority for whether to spend another packet. `sourceCleanliness.blocks.nextPacket=false` only says source dirtiness is not the blocker; it does not override a safety blocker, benchmark-trust blocker, finalization blocker, exhausted segment, or promotion-readiness action.
+- When the metric improves because the benchmark was steered toward known answers, say so. Generic harness work can be kept under a harness-quality claim; row-specific detector or citation work is diagnostic row repair until a separate generalization gate earns stronger wording.
 - If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
 - If `continuation.forbidFinalAnswer` is true, continue the loop with progress updates instead of returning a final answer.
 - Respect packet and wall-clock budgets. Re-run `config --wall-clock-budget-seconds <n>` to reset the wall-clock window; pass an empty budget option only when intentionally clearing it.

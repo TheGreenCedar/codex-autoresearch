@@ -246,7 +246,7 @@ function observeFunctionCall(state: ReturnType<typeof createAccumulator>, payloa
   if (name === "write_stdin") increment(state.toolCounts, "shell_poll");
   if (name !== "exec_command") return;
   const args = parseMaybeJson(payload.arguments);
-  const command = String(args?.cmd || "");
+  const command = redactEvidenceText(String(args?.cmd || ""));
   const head = commandHead(command);
   if (head) increment(state.commandClasses, head);
 }
