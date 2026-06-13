@@ -117,6 +117,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "state",
     fallbackKeys: ["state", "laneRunner"],
   }),
+  "lane-orchestration": actionMetadata({
+    label: "Resolve lane orchestration",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext", "doctor"],
+  }),
   "stale-packet": actionMetadata({
     label: "Replace stale packet",
     commandLabel: "Setup",

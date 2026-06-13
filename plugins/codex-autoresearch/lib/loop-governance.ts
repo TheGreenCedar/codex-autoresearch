@@ -23,6 +23,7 @@ const LOOP_PRIORITY = {
   essentialSafety: 1,
   goalContract: 1.25,
   approvalGate: 1.5,
+  laneOrchestration: 1.75,
   laneCleanup: 2,
   pendingPacket: 2.5,
   validationGate: 3,
@@ -142,6 +143,22 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
         contextDistillation.reason || "Refresh a context capsule before more packets.",
         contextDistillation.command,
         contextDistillation.triggeredBy || ["contextDistillation"],
+      ),
+    );
+  }
+
+  const laneOrchestration = objectValue(envelope.laneOrchestration);
+  const laneOrchestrationBlockers = stringList(laneOrchestration?.blockers, []);
+  if (laneOrchestration?.status === "blocked" || laneOrchestrationBlockers.length > 0) {
+    blockers.push(
+      loopAction(
+        "lane-orchestration",
+        LOOP_PRIORITY.laneOrchestration,
+        laneOrchestrationBlockers[0] ||
+          laneOrchestration?.nextAction ||
+          "Resolve recovery lane orchestration before another packet.",
+        laneOrchestration?.command,
+        ["laneOrchestration"],
       ),
     );
   }

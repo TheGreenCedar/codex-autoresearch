@@ -281,6 +281,19 @@ test("lane orchestration splits broad failures into accountable lanes", () => {
   assert.match(blocked.blockers[0], /worktree|write scope/);
 });
 
+test("blocked lane orchestration becomes the canonical next action", () => {
+  const laneOrchestration = planFailureRecoveryLanes({
+    signals: [{ kind: "local-only finalization" }],
+  });
+
+  const loop = buildLoopContractStatus({ laneOrchestration });
+
+  assert.equal(laneOrchestration.status, "blocked");
+  assert.equal(loop.canRunNextPacket, false);
+  assert.equal(loop.strongestAction?.kind, "lane-orchestration");
+  assert.match(loop.strongestAction?.reason || "", /worktree|write scope/);
+});
+
 test("finalization runway distinguishes local-only, divergent, checked-out, and merged states", () => {
   assert.equal(
     classifyFinalizationRunwayFromFacts({
