@@ -213,9 +213,7 @@ function safeLedgerType(value: unknown): string {
 
 function safeLedgerTimestamp(value: unknown): string {
   const timestamp = stringValue(value);
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(timestamp)
-    ? timestamp
-    : "";
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(timestamp) ? timestamp : "";
 }
 
 function uniqueResidue(items: ResourceResidueFact[]): ResourceResidueFact[] {
