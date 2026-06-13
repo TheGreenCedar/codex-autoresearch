@@ -747,6 +747,22 @@ test("current-tree finalization acceptance requires only one issue and a finaliz
   );
 });
 
+test("unverified finalization runway blocks the next packet even without top-level blockers", () => {
+  const status = buildLoopContractStatus({
+    finalizationRunway: {
+      status: "unverified",
+      blockers: [],
+      warnings: [],
+      nextAction:
+        "Verify branch content against the finalization plan or recreate the review branch.",
+    },
+  });
+
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.strongestAction?.kind, "finalization-runway");
+  assert.match(status.strongestAction?.reason || "", /verify|recreate|content|unverified/i);
+});
+
 test("loop contract summarizes blockers and warnings", () => {
   const status = buildLoopContractStatus({
     contextDistillation: { required: true, reason: "Session is too large." },

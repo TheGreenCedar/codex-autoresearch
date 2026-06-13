@@ -420,21 +420,24 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
   }
   const finalizationRunway = objectValue(envelope.finalizationRunway);
   const runwayBlockers = stringList(finalizationRunway?.blockers, []);
-  if (runwayBlockers.length > 0 || finalizationRunway?.stage === "unsafe") {
+  const runwayStatus = stringValue(finalizationRunway?.status);
+  const runwayUnverified = runwayStatus === "unverified";
+  if (runwayBlockers.length > 0 || finalizationRunway?.stage === "unsafe" || runwayUnverified) {
     blockers.push(
       loopAction(
         "finalization-runway",
         LOOP_PRIORITY.currentTreeFinalization,
         runwayBlockers[0] ||
           finalizationRunway?.nextAction ||
+          (runwayUnverified
+            ? "Verify or recreate unverified finalization branch content before merge or cleanup claims."
+            : "") ||
           "Resolve finalization branch runway before merge or cleanup claims.",
         finalizationRunway?.command,
         ["finalizationRunway"],
       ),
     );
-  } else if (
-    ["local-only", "equivalent", "pr-open"].includes(stringValue(finalizationRunway?.status))
-  ) {
+  } else if (["local-only", "equivalent", "pr-open"].includes(runwayStatus)) {
     warnings.push(
       loopAction(
         "finalization-runway",
