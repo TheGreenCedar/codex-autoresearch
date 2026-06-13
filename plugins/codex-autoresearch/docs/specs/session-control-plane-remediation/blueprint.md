@@ -1,8 +1,10 @@
 # Architectural Blueprint
 
+> Status: historical implementation spec. The first implementation landed in commit `fa80d8d`; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
+
 ## 1. Core Objective
 
-Create a session-control-plane remediation for Codex Autoresearch so long-running Codex sessions cannot drift from the active user goal, overclaim benchmark evidence, stall on already-granted approvals, exhaust local resources without a stop signal, confuse local finalization with PR-visible completion, or bury the operator under unbounded output. Success means `state`, `recommend-next`, `session-forensics`, `lane-runner`, finalization preview, terminal reports, and the read-only dashboard all agree on one canonical next action and one auditable evidence maturity state before implementation begins.
+Create a session-control-plane remediation for Codex Autoresearch so long-running Codex sessions cannot drift from the active user goal, overclaim benchmark evidence, stall on already-granted approvals, exhaust local resources without a stop signal, confuse local finalization with PR-visible completion, or bury the operator under unbounded output. Success meant `state`, `recommend-next`, `session-forensics`, `lane-runner`, finalization preview, terminal reports, and the read-only dashboard all agreeing on one canonical next action and one auditable evidence maturity state in the implementation plan.
 
 ## 2. System Scope and Boundaries
 
@@ -24,7 +26,7 @@ Create a session-control-plane remediation for Codex Autoresearch so long-runnin
 - Adding a default MCP server declaration or new plugin distribution channel.
 - Automating credentials, GitHub authentication, or user account setup.
 - Replacing Autoresearch's existing measured loop command family.
-- Treating this specification as implementation approval; execution starts only after a separate explicit instruction.
+- Treating this historical specification as the current behavior contract; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
 
 ## 3. Core System Components
 
@@ -79,11 +81,11 @@ graph TD
 - **Authentication**: No new authentication; GitHub status uses the existing local `gh` authentication state when available and reports unavailable state without pretending success.
 - **Data Format**: JSON-compatible TypeScript objects persisted through `autoresearch.jsonl`, capsule JSON files, and compact CLI/dashboard payloads.
 
-## 6. Quality Gate Results
+## 6. Historical Quality Gate Results
 
 - Component responsibilities are clear and non-overlapping.
 - The data flow shows the journey from raw session evidence and live loop state to operator readouts and regression gates.
 - Integration points specify protocols and data formats.
 - In-scope and out-of-scope boundaries are explicit.
 
-Architectural blueprint complete with clear component mapping, data flow visualization, and integration points. The component names defined here will be used consistently across all documents. Proceed to generate requirements.
+The architectural blueprint recorded clear component mapping, data flow visualization, and integration points for the implementation that followed. This file is archived evidence, not an active instruction to generate new requirements.

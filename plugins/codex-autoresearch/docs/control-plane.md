@@ -43,7 +43,7 @@ Before packet or lane work, check resource budgets. The governor should stop or 
 
 - too many active processes
 - wall-clock budget exhaustion
-- repeated benchmark commands as resource warnings, not packet blockers
+- repeated command heads, including benchmark commands, as resource warnings, not packet blockers
 - oversized command output
 - excessive shell polling
 - stale process-manager or reboot residue

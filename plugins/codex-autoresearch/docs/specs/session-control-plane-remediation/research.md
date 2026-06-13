@@ -1,5 +1,7 @@
 # Verifiable Research and Technology Proposal
 
+> Status: historical implementation spec. The first implementation landed in commit `fa80d8d`; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
+
 ## 1. Core Problem Analysis
 This specification addresses the Autoresearch failure mode exposed by session `019eb85a-e76a-7793-ab2a-26e9ff093659`: the loop produced useful evidence, but it did not govern the live Codex goal, approval state, resource pressure, benchmark maturity, lane orchestration, finalization runway, or operator readout as one coherent control plane.
 
@@ -20,6 +22,6 @@ This specification addresses the Autoresearch failure mode exposed by session `0
 - [4] https://cli.github.com/manual/gh_pr - GitHub CLI pull request command family.
 - [5] https://cli.github.com/manual/gh_pr_status - GitHub CLI pull request status behavior.
 
-## 4. Phase Gate
+## 4. Historical Phase Note
 
-Research complete. The technology proposal above is based on 5 verifiable, browsed sources. Every recommendation rationale is cited and traceable to evidence. Proceed to define the architectural blueprint.
+Research was completed with 5 verifiable, browsed sources, and the recommendations in this document informed the now-implemented control-plane blueprint. This is archived evidence, not an active instruction to continue the phase-gated spec workflow.

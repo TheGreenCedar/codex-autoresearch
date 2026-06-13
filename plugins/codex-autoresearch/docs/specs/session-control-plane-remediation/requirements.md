@@ -1,5 +1,7 @@
 # Requirements Document
 
+> Status: historical implementation spec. The first implementation landed in commit `fa80d8d`; current behavior is defined by source code and `plugins/codex-autoresearch/docs/control-plane.md`.
+
 ## Introduction
 
 This document defines the functional and non-functional requirements for the Codex Autoresearch session-control-plane remediation. The requirements are derived from session `019eb85a-e76a-7793-ab2a-26e9ff093659`, current Autoresearch architecture, and the failure report that identified drift between useful evidence generation and real control-plane ownership.
@@ -119,6 +121,6 @@ This document defines the functional and non-functional requirements for the Cod
 2. WHEN Codex operator behavior changes, THE **RegressionGateSuite** SHALL update `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
 3. WHEN user-facing behavior changes, THE **RegressionGateSuite** SHALL update `CHANGELOG.md` with migration notes and verification scope.
 
-## Phase Gate
+## Historical Phase Note
 
-Requirements documented with 10 requirements and 30 acceptance criteria, each assigned to a specific component. Proceed to detailed design.
+These 10 requirements and 30 acceptance criteria were assigned to specific components for the implementation pass. This file is archived evidence, not an active instruction to proceed to detailed design.

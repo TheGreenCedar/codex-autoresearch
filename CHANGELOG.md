@@ -14,11 +14,11 @@ This project uses a root-only changelog because the root README is the public do
   approval stalls, stale process residue, unsupported broad claims, local-only
   review branches, and unsafe branch reuse become explicit blockers or
   warnings.
-- Tightened the session-control-plane follow-up: finalization review branches
+- Tightened Autoresearch control-plane behavior: finalization review branches
   now require content-equivalence before reuse, big-idea approvals remain
-  durable after lane results are recorded, repeated benchmark commands are
-  warnings instead of hard resource blockers, and historical control-plane
-  specs are labeled as implementation artifacts.
+  durable after lane results are recorded, repeated command heads, including
+  benchmark commands, are warnings instead of hard resource blockers, and the
+  control-plane spec pack is labeled as historical implementation artifacts.
 - Clarified Autoresearch trust guidance for benchmark-shaped wins: row-specific
   detectors, exact probes, static benchmark citations, or manifest-tuned fixes
   are diagnostic/provisional until holdout, repeat, breadth, or promotion-gate
