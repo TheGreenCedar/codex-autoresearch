@@ -239,7 +239,7 @@ async function buildFinalizationRunwaySummary({
       classifyFinalizationRunwayFromFacts({
         branch,
         branchExists: exists,
-        equivalent: exists,
+        equivalent: false,
         localOnly: exists && !upstream.ok,
       }),
     );
@@ -247,16 +247,18 @@ async function buildFinalizationRunwaySummary({
   const blockers = branches.flatMap((branch) => branch.blockers || []);
   const warnings = branches.flatMap((branch) => branch.warnings || []);
   const localOnly = branches.find((branch) => branch.status === "local-only");
+  const unverified = branches.find((branch) => branch.status === "unverified");
   const unsafe = branches.find((branch) => (branch.blockers || []).length > 0);
   const missing = branches.find((branch) => branch.status === "missing");
   return {
-    status: unsafe?.status || localOnly?.status || missing?.status || "ready",
+    status: unsafe?.status || localOnly?.status || unverified?.status || missing?.status || "ready",
     branches,
     blockers,
     warnings,
     nextAction:
       unsafe?.nextAction ||
       localOnly?.nextAction ||
+      unverified?.nextAction ||
       missing?.nextAction ||
       "Preview is ready; create review branches, then push or open PRs before merge claims.",
   };

@@ -308,6 +308,36 @@ test("finalization runway distinguishes local-only, divergent, checked-out, and 
     classifyFinalizationRunwayFromFacts({
       branch: "autoresearch-review/goal/01-change",
       branchExists: true,
+      equivalent: false,
+      localOnly: true,
+    }).status,
+    "unverified",
+  );
+  assert.equal(
+    classifyFinalizationRunwayFromFacts({
+      branch: "autoresearch-review/goal/01-change",
+      branchExists: true,
+      equivalent: false,
+      prUrl: "https://github.example/pr/1",
+      ciStatus: "success",
+    }).status,
+    "unverified",
+  );
+  assert.equal(
+    classifyFinalizationRunwayFromFacts({
+      branch: "autoresearch-review/goal/01-change",
+      branchExists: true,
+      equivalent: false,
+      prUrl: "https://github.example/pr/1",
+      ciStatus: "success",
+      merged: true,
+    }).status,
+    "unverified",
+  );
+  assert.equal(
+    classifyFinalizationRunwayFromFacts({
+      branch: "autoresearch-review/goal/01-change",
+      branchExists: true,
       divergent: true,
     }).status,
     "divergent",
@@ -319,6 +349,16 @@ test("finalization runway distinguishes local-only, divergent, checked-out, and 
       checkedOut: true,
     }).status,
     "checked-out",
+  );
+  assert.equal(
+    classifyFinalizationRunwayFromFacts({
+      branch: "autoresearch-review/goal/01-change",
+      branchExists: true,
+      equivalent: true,
+      prUrl: "https://github.example/pr/1",
+      ciStatus: "success",
+    }).status,
+    "pr-open",
   );
   assert.equal(
     classifyFinalizationRunwayFromFacts({

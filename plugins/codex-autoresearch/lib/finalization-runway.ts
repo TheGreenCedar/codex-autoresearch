@@ -27,6 +27,7 @@ export interface FinalizationRunwayStatus {
     | "merged"
     | "pr-open"
     | "stale"
+    | "unverified"
     | "unsafe";
   warnings: string[];
 }
@@ -87,34 +88,34 @@ export function classifyFinalizationRunwayFromFacts(
       "Push the review branch or open a PR before calling finalization published.",
     );
   }
-  if (prUrl) {
-    const ci = stringValue(facts.ciStatus).toLowerCase();
-    if (ci && !["success", "passed", "green"].includes(ci)) {
-      warnings.push(`PR exists but CI is not green yet: ${ci}.`);
-      return status("pr-open", "ci", branch, prUrl, blockers, warnings);
-    }
-    if (facts.merged === true) {
+  if (facts.equivalent === true) {
+    if (prUrl) {
+      const ci = stringValue(facts.ciStatus).toLowerCase();
+      if (ci && !["success", "passed", "green"].includes(ci)) {
+        warnings.push(`PR exists but CI is not green yet: ${ci}.`);
+        return status("pr-open", "ci", branch, prUrl, blockers, warnings);
+      }
+      if (facts.merged === true) {
+        return status(
+          "merged",
+          "cleanup",
+          branch,
+          prUrl,
+          blockers,
+          warnings,
+          "Verify trunk contains the review branch, then clean up source/session artifacts.",
+        );
+      }
       return status(
-        "merged",
-        "cleanup",
+        "pr-open",
+        "merge",
         branch,
         prUrl,
         blockers,
         warnings,
-        "Verify trunk contains the review branch, then clean up source/session artifacts.",
+        "Review PR, wait for CI, merge, verify trunk, then clean up.",
       );
     }
-    return status(
-      "pr-open",
-      "merge",
-      branch,
-      prUrl,
-      blockers,
-      warnings,
-      "Review PR, wait for CI, merge, verify trunk, then clean up.",
-    );
-  }
-  if (facts.equivalent === true) {
     warnings.push(`Equivalent finalization branch exists without PR evidence: ${branch}.`);
     return status(
       "equivalent",
@@ -126,7 +127,16 @@ export function classifyFinalizationRunwayFromFacts(
       "Open a PR or record PR evidence before merge or cleanup claims.",
     );
   }
-  return status("unsafe", "unsafe", branch, prUrl, ["Existing branch state is unknown."], warnings);
+  warnings.push(`Existing finalization branch has not been content-verified: ${branch}.`);
+  return status(
+    "unverified",
+    "unsafe",
+    branch,
+    prUrl,
+    blockers,
+    warnings,
+    "Verify branch content against the finalization plan or recreate the review branch.",
+  );
 }
 
 function status(

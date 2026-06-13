@@ -806,12 +806,27 @@ async function reuseExistingBranchForGroup(
   const branchFiles = await changedFiles(config.base, branch, cwd);
   const sameFiles = sameStringSet(branchFiles, group.files);
   const upstream = await git(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], cwd, true);
+  if (current === branch) {
+    const runway = classifyFinalizationRunwayFromFacts({
+      branch,
+      branchExists: true,
+      checkedOut: true,
+      divergent: !sameFiles,
+      equivalent: false,
+      localOnly: upstream.code !== 0,
+    });
+    if (runway.blockers.length > 0) {
+      throw new Error(`${runway.status}: ${runway.nextAction}`);
+    }
+  }
+  const contentEquivalent = sameFiles
+    ? await existingBranchMatchesPlannedGroup(config, group, branch, cwd)
+    : false;
   const runway = classifyFinalizationRunwayFromFacts({
     branch,
     branchExists: true,
-    checkedOut: current === branch,
-    divergent: !sameFiles,
-    equivalent: sameFiles,
+    divergent: !sameFiles || !contentEquivalent,
+    equivalent: contentEquivalent,
     localOnly: upstream.code !== 0,
   });
   if (runway.blockers.length > 0) {
@@ -834,6 +849,36 @@ function sameStringSet(left: string[], right: string[]): boolean {
     if (!rightSet.has(value)) return false;
   }
   return true;
+}
+
+async function existingBranchMatchesPlannedGroup(
+  config: FinalizePlan,
+  group: CollectedGroup,
+  branch: string,
+  cwd: string,
+): Promise<boolean> {
+  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/verify-${safeSlug(
+    group.slug || group.title || "group",
+  )}`;
+  if (await branchExists(verifyBranch, cwd)) {
+    await git(["branch", "-D", verifyBranch], cwd, true);
+  }
+  try {
+    await git(["switch", "--detach", config.base], cwd);
+    await git(["switch", "-c", verifyBranch], cwd);
+    await applyGroupSources(group, cwd);
+    await git(["add", "-A"], cwd);
+    await git(["commit", "--allow-empty", "-m", "verify: planned autoresearch group"], cwd);
+    const diff = await git(
+      ["diff", "--quiet", verifyBranch, branch, "--", ...group.files],
+      cwd,
+      true,
+    );
+    return diff.code === 0;
+  } finally {
+    await git(["switch", "--detach", config.base], cwd, true);
+    await git(["branch", "-D", verifyBranch], cwd, true);
+  }
 }
 
 async function verifyUnion(
