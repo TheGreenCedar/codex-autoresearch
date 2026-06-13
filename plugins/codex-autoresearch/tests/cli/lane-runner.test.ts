@@ -115,6 +115,21 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(laneEntries[0].lane.mode, "big_idea");
     assert.equal(laneEntries[0].result.approvalGate.required, true);
 
+    const stateAfterUnapproved = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(stateAfterUnapproved.code, 0, stateAfterUnapproved.stderr);
+    const unapprovedStatePayload = JSON.parse(stateAfterUnapproved.stdout);
+    assert.equal(unapprovedStatePayload.approvalLedger.status, "blocked");
+    assert.equal(unapprovedStatePayload.canonicalNextAction.kind, "approval-gate");
+    assert.match(unapprovedStatePayload.approvalLedger.blockers.join(" "), /architecture-scout/);
+
+    const recommendAfterUnapproved = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommendAfterUnapproved.code, 0, recommendAfterUnapproved.stderr);
+    const unapprovedRecommendPayload = JSON.parse(recommendAfterUnapproved.stdout);
+    assert.equal(
+      unapprovedRecommendPayload.decisionEnvelope.canonicalNextAction.kind,
+      "approval-gate",
+    );
+
     const approved = await runCli([
       "lane-runner",
       "--cwd",
@@ -140,5 +155,40 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
       approvedPayload.coordinatorRecommendation.nextAction,
       "Run one isolated implementation lane.",
     );
+
+    const approvalLedger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    const approvalEntries = approvalLedger
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.type === "approval");
+    assert.equal(approvalEntries.length, 1);
+    assert.equal(approvalEntries[0].gate, "big_idea_architecture");
+    assert.equal(approvalEntries[0].scope, "architecture-scout");
+
+    const replayedApproval = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "architecture-scout",
+      "--mode",
+      "big_idea",
+      "--summary",
+      "Replay approval without passing approved flag.",
+      "--recommendation",
+      "Approval is already durable.",
+      "--yes",
+    ]);
+    assert.equal(replayedApproval.code, 0, replayedApproval.stderr);
+    const replayedPayload = JSON.parse(replayedApproval.stdout);
+    assert.equal(replayedPayload.result.approvalRequired, false);
+    assert.equal(replayedPayload.result.approvalGate.matchedApproval.scope, "architecture-scout");
+
+    const stateAfterApproval = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(stateAfterApproval.code, 0, stateAfterApproval.stderr);
+    const approvedStatePayload = JSON.parse(stateAfterApproval.stdout);
+    assert.equal(approvedStatePayload.approvalLedger.status, "approved");
+    assert.notEqual(approvedStatePayload.canonicalNextAction.kind, "approval-gate");
   });
 });

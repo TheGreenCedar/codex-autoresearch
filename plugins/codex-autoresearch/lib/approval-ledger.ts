@@ -76,6 +76,49 @@ export function approvalRecordsFromLedger(entries: unknown[]): ApprovalRecord[] 
   return records.sort((left, right) => compareTime(right.timestamp, left.timestamp));
 }
 
+export function approvalRequirementsFromLaneResults(entries: unknown[]): ApprovalRequirement[] {
+  const requirements: ApprovalRequirement[] = [];
+  for (const entry of entries) {
+    if (!isUnknownRecord(entry) || entry.type !== "lane_result") continue;
+    const result = isUnknownRecord(entry.result) ? entry.result : {};
+    const gate = isUnknownRecord(result.approvalGate) ? result.approvalGate : {};
+    if (gate.required !== true) continue;
+    const lane = isUnknownRecord(entry.lane) ? entry.lane : {};
+    const gateName = stringValue(gate.gate);
+    const scope = stringValue(gate.scope || lane.id || lane.title);
+    if (!gateName || !scope) continue;
+    requirements.push({
+      gate: gateName,
+      scope,
+      action:
+        stringValue(gate.action) ||
+        "Approve big-idea lane before implementation or measured packets.",
+    });
+  }
+  return requirements;
+}
+
+export function dedupeApprovalRequirements(
+  requirements: ApprovalRequirement[],
+): ApprovalRequirement[] {
+  const seen = new Set<string>();
+  const out: ApprovalRequirement[] = [];
+  for (const requirement of requirements) {
+    const gate = stringValue(requirement.gate);
+    const scope = stringValue(requirement.scope);
+    if (!gate || !scope) continue;
+    const key = `${gate}\0${scope}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      gate,
+      scope,
+      ...(stringValue(requirement.action) ? { action: stringValue(requirement.action) } : {}),
+    });
+  }
+  return out;
+}
+
 export function resolveApproval(
   records: ApprovalRecord[],
   requirement: ApprovalRequirement,

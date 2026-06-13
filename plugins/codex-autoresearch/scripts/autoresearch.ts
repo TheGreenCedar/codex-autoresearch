@@ -48,7 +48,12 @@ import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
-import { buildApprovalLedgerStatus, approvalRequirementFromLane } from "../lib/approval-ledger.js";
+import {
+  approvalRequirementsFromLaneResults,
+  approvalRequirementFromLane,
+  buildApprovalLedgerStatus,
+  dedupeApprovalRequirements,
+} from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity, runsFromState } from "../lib/evidence-maturity.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
 import { buildResourcePreflight, resourceBudgetFromConfig } from "../lib/process-governor.js";
@@ -7034,9 +7039,14 @@ function buildControlPlaneContracts({
       finalization?.finalizationClaim,
     recoveryCommand: commands.codexGoalBrief || commands.state,
   });
-  const approvalRequirements = (Array.isArray(parallelLanes) ? parallelLanes : [])
-    .map(approvalRequirementFromLane)
-    .filter((requirement): requirement is NonNullable<typeof requirement> => Boolean(requirement));
+  const approvalRequirements = dedupeApprovalRequirements([
+    ...(Array.isArray(parallelLanes) ? parallelLanes : [])
+      .map(approvalRequirementFromLane)
+      .filter((requirement): requirement is NonNullable<typeof requirement> =>
+        Boolean(requirement),
+      ),
+    ...approvalRequirementsFromLaneResults(records),
+  ]);
   const approvalLedger = buildApprovalLedgerStatus({
     entries: records,
     required: approvalRequirements,
