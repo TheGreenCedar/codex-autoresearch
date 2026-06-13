@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Autoresearch"
   short_description: "Run measured Codex optimization loops"
-  default_prompt: "Use Codex Autoresearch on this project. Set up or resume the loop, run measured packets, log decisions with ASI, serve the live dashboard when useful, and finalize kept work when ready."
+  default_prompt: "/goal @Codex Autoresearch improve this project. Set up or resume the loop, run measured packets, log decisions with ASI, serve the live dashboard when useful, and finalize kept work when ready."

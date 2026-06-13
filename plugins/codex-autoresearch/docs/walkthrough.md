@@ -7,7 +7,7 @@ This walkthrough shows a complete Codex Autoresearch loop shape. The commands ar
 You give Codex a broad request:
 
 ```text
-Use Codex Autoresearch to study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist.
+/goal @Codex Autoresearch study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist.
 ```
 
 Codex uses `prompt-plan` to convert this into a structured approach. Example output:

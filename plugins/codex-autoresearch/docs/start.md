@@ -34,7 +34,7 @@ The configured primary metric drives keep/discard decisions. `measure` records b
 Broad prompt:
 
 ```text
-Use Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
+/goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
 Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is a draft, read-only planning surface. It can return a proposed setup command, but it does not create session files until `setup` is run, and it does not prove the product claim.
@@ -42,7 +42,7 @@ Codex should call `prompt-plan` first. That turns the natural-language request i
 Specific prompt:
 
 ```text
-Use Codex Autoresearch for indexing pipeline speed and memory footprint optimization.
+/goal @Codex Autoresearch indexing pipeline speed and memory footprint optimization.
 Benchmark: npm test -- --runInBand
 Metric: seconds, lower is better
 Checks: npm test

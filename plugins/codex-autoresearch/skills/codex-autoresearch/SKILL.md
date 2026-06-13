@@ -27,7 +27,7 @@ AX, the AI experience:
 
 UX, the user experience:
 
-- Let the user ask in plain language: "Use Codex Autoresearch to improve this repo."
+- Let the user ask in plain language: "/goal @Codex Autoresearch improve this repo."
 - Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
 - For shippable, product, or final requests, identify the product claims before setup. If the request names retrieval, search, ranking, lazy behavior, accessibility, safety, or performance, require a quality constraint or checks path before promotion.
 - At session start and resume, stay on the CLI happy path unless setup is ambiguous, the user asks for the dashboard, packet freshness needs a browser readout, or the canonical action is blocked.
