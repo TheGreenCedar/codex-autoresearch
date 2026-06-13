@@ -33,6 +33,8 @@ Preview also reports semantic safety:
 - kept commits later reverted on the branch
 - final non-session branch files not covered by the selected review groups
 
+Preview and state also report `finalizationRunway`. Treat it as the publication path, not a decorative status. A review branch can be missing, local-only, equivalent, stale, divergent, checked out, PR-open, CI-blocked, merged, or cleanup-ready. Local-only means a branch exists on the workstation but has no push or PR evidence; do not call that published or final. Stale, divergent, checked-out, or unsafe branches must be resolved before branch reuse, merge claims, or cleanup.
+
 ## Product-Grade Finalization Bar
 
 Do not finalize an experimental primitive as a shippable deliverable.
@@ -112,6 +114,8 @@ After branch creation, verify:
 - excluded commits did not leak planned files
 - generated review summary is accurate
 - cleanup targets are recorded without executable cleanup commands
+
+If a review branch already exists, the finalizer classifies it before reuse. Equivalent branches can continue through verification. Divergent, stale, checked-out, or unsafe branches stop with the runway recovery reason instead of a generic "branch already exists" failure.
 
 ## Final Report
 

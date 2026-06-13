@@ -39,11 +39,41 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "finalize-preview",
     fallbackKeys: ["finalizePreview", "state"],
   }),
+  "finalization-runway": actionMetadata({
+    label: "Inspect finalization runway",
+    commandLabel: "Preview",
+    safeAction: "finalize-preview",
+    fallbackKeys: ["finalizePreview", "state"],
+  }),
   "safety-blocker": actionMetadata({
     label: "Resolve safety blocker",
     commandLabel: "Doctor",
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
+  }),
+  "goal-contract": actionMetadata({
+    label: "Resolve goal contract",
+    commandLabel: "Goal",
+    safeAction: "codex-goal-brief",
+    fallbackKeys: ["codexGoalBrief", "state", "recommendNext"],
+  }),
+  "approval-gate": actionMetadata({
+    label: "Record scoped approval",
+    commandLabel: "Approval",
+    safeAction: "lane-runner",
+    fallbackKeys: ["laneRunner", "state"],
+  }),
+  "resource-governor": actionMetadata({
+    label: "Resolve resource preflight",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext", "doctor"],
+  }),
+  "evidence-maturity": actionMetadata({
+    label: "Inspect evidence maturity",
+    commandLabel: "Preview",
+    safeAction: "finalize-preview",
+    fallbackKeys: ["finalizePreview", "state"],
   }),
   "workflow-friction": actionMetadata({
     label: "Remove workflow friction",
@@ -86,6 +116,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     commandLabel: "State",
     safeAction: "state",
     fallbackKeys: ["state", "laneRunner"],
+  }),
+  "lane-orchestration": actionMetadata({
+    label: "Resolve lane orchestration",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext", "doctor"],
   }),
   "stale-packet": actionMetadata({
     label: "Replace stale packet",

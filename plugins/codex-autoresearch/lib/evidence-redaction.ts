@@ -3,7 +3,9 @@ import path from "node:path";
 import { type UnknownRecord } from "./types/json.js";
 
 const SECRET_ASSIGNMENT =
-  /\b(api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|password|secret|token)\b\s*[:=]\s*["']?([A-Za-z0-9._~+/\-=]{8,})["']?/gi;
+  /\b(api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|password|secret|token)\b\s*[:=]\s*(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'<>]{8,})/gi;
+const SECRET_FLAG =
+  /(^|[\s([{:;,])(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer|client[-_]?secret|password|secret|token|credential|credentials))(?:(=)\s*|\s+)(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|(?!--)[^\s"'<>]{8,})/gi;
 const SECRET_PHRASE =
   /\b(api\s+key|access\s+token|auth\s+token|bearer|client\s+secret|password|secret|token)\s+([A-Za-z0-9._~+/\-=]{8,})/gi;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/\-=]{12,}/gi;
@@ -49,6 +51,10 @@ export function redactEvidenceText(value: unknown, context: UnknownRecord = {}):
   let text = String(value || "");
   text = text.replace(URL_CREDENTIALS, "$1<credentials>@");
   text = text.replace(SECRET_ASSIGNMENT, (_match, key) => `${key}=<redacted>`);
+  text = text.replace(
+    SECRET_FLAG,
+    (_match, prefix, flag, equals) => `${prefix}${flag}${equals ? "=" : " "}<redacted>`,
+  );
   text = text.replace(BEARER_TOKEN, "Bearer <redacted>");
   text = text.replace(SECRET_PHRASE, (_match, key) => `${key} <redacted>`);
   text = redactEnvFileTokens(text);

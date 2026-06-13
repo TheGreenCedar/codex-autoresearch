@@ -151,7 +151,7 @@ export const toolSchemas = applyToolContracts([
   {
     name: "session_forensics",
     description:
-      "Parse a Codex rollout JSONL into bounded session counts, waste signals, and optional safe context-capsule artifacts.",
+      "Parse a Codex rollout JSONL into compact session counts, waste signals, and optional safe context-capsule artifacts. Pass json_full for full signal arrays.",
     inputSchema: {
       type: "object",
       properties: {
@@ -164,6 +164,8 @@ export const toolSchemas = applyToolContracts([
         allow_outside_workdir: { type: "boolean" },
         max_snippets: { type: "integer" },
         max_snippet_chars: { type: "integer" },
+        json_full: { type: "boolean" },
+        verbose: { type: "boolean" },
       },
       required: ["working_dir", "session_jsonl", "research_slug"],
     },

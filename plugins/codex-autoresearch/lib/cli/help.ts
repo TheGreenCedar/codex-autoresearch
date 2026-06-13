@@ -44,7 +44,7 @@ const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]",
   "  node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]",
   "  node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]",
-  "  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir]",
+  "  node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir] [--json-full|--verbose]",
   "  node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]",
   "  node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]",
   "  node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--packet-env-mode inherit|minimal] [--timeout-seconds <n>]",

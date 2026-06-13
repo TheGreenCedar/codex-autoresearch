@@ -5,6 +5,7 @@ import path from "node:path";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
+import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
 import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim-coverage.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
@@ -84,6 +85,11 @@ export async function finalizePreview(args: LooseObject) {
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const sessionDecisionCapsule = readActiveSessionDecisionCapsule(workDir, ledgerEntries);
   const { groups, missingCommitCount, warnings } = await buildKeptRunGroups(workDir, keptRuns);
+  const finalizationRunway = await buildFinalizationRunwaySummary({
+    workDir,
+    sourceBranch: branch,
+    groups,
+  });
   const capsuleFinalizationBlocked =
     sessionDecisionCapsule?.enforcement?.blocksFinalization === true;
   if (capsuleFinalizationBlocked) {
@@ -178,6 +184,7 @@ export async function finalizePreview(args: LooseObject) {
       finalTreeCoverage: finalTreePlan.finalTreeCoverage,
       semanticSafety,
       productClaimCoverage,
+      finalizationRunway,
       productGradeReady: productClaimCoverage.productGradeReady,
       productGradeIssue,
       sessionDecisionCapsule,
@@ -186,6 +193,7 @@ export async function finalizePreview(args: LooseObject) {
       blockers: [
         ...semanticSafety.blockers.map((blocker) => blocker.message),
         ...(productGradeIssue ? [productGradeIssue] : []),
+        ...finalizationRunway.blockers,
       ],
       summary: productGradeIssue
         ? "Experimental review branch only: product-grade proof is missing."
@@ -208,6 +216,57 @@ export async function finalizePreview(args: LooseObject) {
     startedAt,
     ready ? "completed" : "blocked",
   );
+}
+
+async function buildFinalizationRunwaySummary({
+  workDir,
+  sourceBranch,
+  groups,
+}: {
+  groups: RunGroup[];
+  sourceBranch: string;
+  workDir: string;
+}): Promise<LooseObject> {
+  const goal = safeSlug(sourceBranch || "autoresearch");
+  const branches = [];
+  for (let index = 0; index < groups.length; index += 1) {
+    const branch = reviewBranchName(goal, groups[index], index);
+    const exists = (await gitOk(["rev-parse", "--verify", branch], workDir)).ok;
+    const upstream = exists
+      ? await gitOk(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], workDir)
+      : { ok: false, stdout: "", stderr: "", code: 1 };
+    branches.push(
+      classifyFinalizationRunwayFromFacts({
+        branch,
+        branchExists: exists,
+        equivalent: false,
+        localOnly: exists && !upstream.ok,
+      }),
+    );
+  }
+  const blockers = branches.flatMap((branch) => branch.blockers || []);
+  const warnings = branches.flatMap((branch) => branch.warnings || []);
+  const localOnly = branches.find((branch) => branch.status === "local-only");
+  const unverified = branches.find((branch) => branch.status === "unverified");
+  const unsafe = branches.find((branch) => (branch.blockers || []).length > 0);
+  const missing = branches.find((branch) => branch.status === "missing");
+  return {
+    status: unsafe?.status || localOnly?.status || unverified?.status || missing?.status || "ready",
+    branches,
+    blockers,
+    warnings,
+    nextAction:
+      unsafe?.nextAction ||
+      localOnly?.nextAction ||
+      unverified?.nextAction ||
+      missing?.nextAction ||
+      "Preview is ready; create review branches, then push or open PRs before merge claims.",
+  };
+}
+
+function reviewBranchName(goal: string, group: RunGroup, index: number): string {
+  const number = String(index + 1).padStart(2, "0");
+  return `autoresearch-review/${goal}/${number}-${safeSlug(group.slug || group.title || "change")}`;
 }
 
 async function buildKeptRunGroups(workDir: string, keptRuns: KeptRun[]) {

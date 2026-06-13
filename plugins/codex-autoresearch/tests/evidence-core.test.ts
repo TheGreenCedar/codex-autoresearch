@@ -59,6 +59,7 @@ import { parseSessionForensics } from "../lib/session-forensics.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import {
   benchmarkContractFixtureEntries,
+  benchmarkOverfitFixtureEntries,
   fixtureJsonl,
   outputBudgetFixtureEntries,
   searchLatencyFixtureEntries,
@@ -250,6 +251,10 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
     "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
     "api_key=sk-test-1234567890abcdef",
     "family key api key abcdefghijklmnop",
+    "node scripts/private-check.mjs --api-key flagsecretvalue123",
+    'node scripts/private-check.mjs --client-secret "flag secret value 456"',
+    "node scripts/private-check.mjs --api-key=flag:secret:value789",
+    "node scripts/private-check.mjs --tokenize publicidentifier123",
     "https://user:pass@example.test/path",
     "C:\\Users\\albert\\project\\.env.local",
     "/home/albert/project/.env",
@@ -260,10 +265,17 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
   const redacted = redactCommandDisplay(text);
   assert.doesNotMatch(redacted, /abcdefghijklmnopqrstuvwxyz/);
   assert.doesNotMatch(redacted, /abcdefghijklmnop/);
+  assert.doesNotMatch(redacted, /flagsecretvalue123/);
+  assert.doesNotMatch(redacted, /flag secret value 456/);
+  assert.doesNotMatch(redacted, /flag:secret:value789/);
   assert.doesNotMatch(redacted, /sk-test/);
   assert.doesNotMatch(redacted, /user:pass/);
   assert.doesNotMatch(redacted, /albert/);
   assert.doesNotMatch(redacted, /\.env\.production/);
+  assert.match(redacted, /--api-key <redacted>/);
+  assert.match(redacted, /--client-secret <redacted>/);
+  assert.match(redacted, /--api-key=<redacted>/);
+  assert.match(redacted, /--tokenize publicidentifier123/);
   assert.match(redacted, /<redacted>|<credentials>|<env-file>|<user>/);
 
   const object = redactEvidenceObject({
@@ -909,6 +921,12 @@ test("workflow friction uses forensics, churn, dirty tree, recipes, and quality_
       ],
     },
     forensics: {
+      productSignals: [
+        {
+          kind: "benchmark_overfit_steering",
+          message: "Benchmark-specific row wins were treated as product proof.",
+        },
+      ],
       workflowWaste: [
         {
           kind: "output_budget_exceeded",
@@ -923,6 +941,11 @@ test("workflow friction uses forensics, churn, dirty tree, recipes, and quality_
   });
   const byKind = new Map(signals.map((signal) => [signal.kind, signal]));
 
+  assert.equal(byKind.get("benchmark_overfit_steering")?.severity, "blocker");
+  assert.match(
+    byKind.get("benchmark_overfit_steering")?.suggestedAction.reason || "",
+    /blind holdout|breadth gate/i,
+  );
   assert.equal(byKind.get("output_budget_exceeded")?.severity, "warning");
   assert.equal(byKind.get("verification_churn")?.count, 3);
   assert.equal(byKind.get("dirty_tree_recovery")?.severity, "blocker");
@@ -1162,6 +1185,32 @@ test("session forensics prioritizes broken benchmark contracts over more packets
     assert.equal(
       result.decisionCapsule.wrongNextActions.some((action) =>
         /run next or finalize/i.test(action),
+      ),
+      true,
+    );
+  });
+});
+
+test("session forensics hard-blocks benchmark overfit steering before promotion", async () => {
+  await withTempDir("session-forensics-benchmark-overfit", async (dir) => {
+    const sessionPath = path.join(dir, "rollout.jsonl");
+    await writeFile(sessionPath, fixtureJsonl(benchmarkOverfitFixtureEntries()));
+
+    const result = await parseSessionForensics({ sessionJsonl: sessionPath });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(
+      result.productSignals.some((signal) => signal.kind === "benchmark_overfit_steering"),
+      true,
+    );
+    assert.equal(result.decisionCapsule.enforcement.mode, "hard-block");
+    assert.equal(result.decisionCapsule.enforcement.canRunNextPacket, false);
+    assert.equal(result.decisionCapsule.enforcement.blocksFinalization, true);
+    assert.match(result.decisionCapsule.bottleneck, /epistemic trust/i);
+    assert.match(result.decisionCapsule.nextExperiment, /blind holdout|breadth gate/i);
+    assert.equal(
+      result.decisionCapsule.wrongNextActions.some((action) =>
+        /task-family detectors|holdout evidence/i.test(action),
       ),
       true,
     );

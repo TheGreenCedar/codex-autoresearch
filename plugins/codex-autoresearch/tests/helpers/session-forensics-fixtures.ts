@@ -24,6 +24,30 @@ export function benchmarkContractFixtureEntries(): RolloutEntry[] {
   ];
 }
 
+export function benchmarkOverfitFixtureEntries(): RolloutEntry[] {
+  return [
+    { timestamp: "2026-06-11T20:24:14.000Z", type: "session_meta", payload: { id: "019eb85a" } },
+    {
+      timestamp: "2026-06-12T22:40:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "The harness work is mostly generalizable; the CodeStory wins are substantially overfit.",
+              "The targeted row wins are benchmark-specific retrieval steering through task-family detectors, protected probes, and static citations.",
+              "Treat them as diagnostic row repair until a blind holdout proves broader value.",
+            ].join(" "),
+          },
+        ],
+      },
+    },
+  ];
+}
+
 export function searchLatencyFixtureEntries(): RolloutEntry[] {
   return [
     { timestamp: "2026-05-31T20:00:00.000Z", type: "session_meta", payload: { id: "019e5d3a" } },
@@ -96,6 +120,106 @@ export function outputBudgetFixtureEntries(): RolloutEntry[] {
         type: "function_call",
         name: "exec_command",
         arguments: JSON.stringify({ cmd: "rg -n important artifacts target logs" }),
+      },
+    },
+  ];
+}
+
+export function session019eb85aControlPlaneFixtureEntries(): RolloutEntry[] {
+  return [
+    { timestamp: "2026-06-12T18:00:00.000Z", type: "session_meta", payload: { id: "019eb85a" } },
+    {
+      timestamp: "2026-06-12T18:05:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "Implemented the review remediation pass and finalized all issues.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:06:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "This is not done; impossible that you solved it that fast. I approved that earlier and the approval loop stalled and wasted my whole night.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:07:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        call_id: "call_goal_contract",
+        output:
+          'Original token count: 28000\nTotal output lines: 1400\n{"goalFrame":{"codexObjectiveRole":"missing"}}',
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:08:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "RAM and CPU hit 100% and I had to reboot after repeated process-manager polling.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:09:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "I did not push anything; the finalization branches are local only.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:10:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "Cleanup after the fact: deleted worktree and remove branch entries after verification.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-12T18:11:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "The wins are overfit to row-specific detectors, protected probes, static citations, and answer-key steering; treat them as diagnostic until holdout proof exists.",
+          },
+        ],
       },
     },
   ];

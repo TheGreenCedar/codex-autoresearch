@@ -747,6 +747,22 @@ test("current-tree finalization acceptance requires only one issue and a finaliz
   );
 });
 
+test("unverified finalization runway blocks the next packet even without top-level blockers", () => {
+  const status = buildLoopContractStatus({
+    finalizationRunway: {
+      status: "unverified",
+      blockers: [],
+      warnings: [],
+      nextAction:
+        "Verify branch content against the finalization plan or recreate the review branch.",
+    },
+  });
+
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.strongestAction?.kind, "finalization-runway");
+  assert.match(status.strongestAction?.reason || "", /verify|recreate|content|unverified/i);
+});
+
 test("loop contract summarizes blockers and warnings", () => {
   const status = buildLoopContractStatus({
     contextDistillation: { required: true, reason: "Session is too large." },
@@ -974,6 +990,149 @@ test("session decision rules capture Codex prompt versus research goal correctio
   assert.match(capsule.bottleneck, /goal-frame drift/i);
   assert.match(capsule.nextExperiment, /durable Autoresearch goal/i);
   assert.match(capsule.evidence.join("\n"), /Codex prompt was mistaken/);
+});
+
+test("session decision rules hard-block benchmark-specific overfit steering", () => {
+  const text = [
+    "The harness work is mostly generalizable, but the targeted row wins are substantially overfit.",
+    "This is benchmark-specific retrieval steering with task-family detectors, protected probes, and static citations.",
+  ].join(" ");
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    true,
+  );
+
+  const capsule = buildSessionDecisionCapsule({
+    compactions: 0,
+    first: "2026-06-11T20:24:14.000Z",
+    last: "2026-06-12T22:40:00.000Z",
+    productSignals: matches,
+    workflowWaste: [],
+    blockers: [],
+    userCorrections: [],
+    toolCounts: {},
+    commandClasses: {},
+    thresholds: {
+      functionCalls: 30,
+      outputSegmentTokenBudget: 20_000,
+      repeatedCommandHeadCount: 3,
+      shellPolls: 12,
+    },
+  });
+
+  assert.equal(capsule.enforcement.mode, "hard-block");
+  assert.equal(capsule.enforcement.canRunNextPacket, false);
+  assert.equal(capsule.enforcement.blocksFinalization, true);
+  assert.deepEqual(capsule.enforcement.triggeredBy, ["sessionDecisionCapsule", "benchmarkOverfit"]);
+  assert.match(capsule.bottleneck, /epistemic trust/i);
+  assert.match(capsule.nextExperiment, /diagnostic\/provisional/i);
+  assert.match(capsule.wrongNextActions.join("\n"), /task-family detectors/i);
+});
+
+test("session decision rules do not flag negated overfit feedback without steering evidence", () => {
+  const text = "This was not overfit, and no benchmark-specific steering was added to the harness.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    false,
+  );
+});
+
+test("session decision rules do not flag benign benchmark-specific test planning", () => {
+  const text = "Add benchmark-specific regression tests around command rendering.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    false,
+  );
+});
+
+test("session decision rules flag bare benchmark-specific steering", () => {
+  const text = "This was benchmark-specific steering.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    true,
+  );
+});
+
+test("session decision rules do not flag negated steering vocabulary", () => {
+  const cases = [
+    "This is not benchmark-specific retrieval steering; no protected probes were added.",
+    "The patch used no static citations and no task-family detectors.",
+    "We repaired the parser without row-specific steering or answer key logic.",
+    "We repaired the parser without answer key logic.",
+    "The session had not learned the test, and no static citations were added.",
+    "The session never learned the test, and no static citations were added.",
+    "No evidence the session learned the test; no static citations were added.",
+    "No evidence of answer key logic was found.",
+    "The patch avoided answer key logic.",
+    "The audit ruled out answer key logic.",
+    "This is not test-specific retrieval steering.",
+    "This used no row-specific retrieval steering.",
+    "No evidence of overfitting was found.",
+    "The audit ruled out overfitting.",
+    "The patch avoided overfitting.",
+    "This is not an overfit.",
+    "Do not add benchmark-specific retrieval steering.",
+    "Do not use answer key logic.",
+    "Do not add benchmark-specific exact files.",
+    "This was benchmark-specific with no exact files.",
+    "This was row-specific with no exact symbols.",
+  ];
+
+  for (const text of cases) {
+    const matches = matchDecisionRules(text, "message");
+    assert.equal(
+      matches.some((match) => match.kind === "benchmark_overfit_steering"),
+      false,
+      text,
+    );
+  }
+});
+
+test("session decision rules flag learned-test claims despite negated mechanisms", () => {
+  const text = "The session learned the test, but no static citations were added.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    true,
+  );
+});
+
+test("session decision rules flag positive steering despite negated secondary mechanisms", () => {
+  const text =
+    "This is benchmark-specific retrieval steering with task-family detectors and no static citations.";
+  const matches = matchDecisionRules(text, "message");
+
+  assert.equal(
+    matches.some((match) => match.kind === "benchmark_overfit_steering"),
+    true,
+  );
+});
+
+test("session decision rules flag positive overfit evidence after earlier negated segments", () => {
+  const cases = [
+    "Earlier notes said this was not benchmark-specific retrieval steering. The current packet added benchmark-specific retrieval steering with task-family detectors.",
+    "Earlier notes said this was not benchmark-specific retrieval steering and the current packet added benchmark-specific retrieval steering with task-family detectors.",
+    "The parser was repaired without answer key logic. The new row fix added answer key logic for benchmark wins.",
+    "The baseline was not overfit. The latest targeted row wins are overfit.",
+  ];
+
+  for (const text of cases) {
+    const matches = matchDecisionRules(text, "message");
+    assert.equal(
+      matches.some((match) => match.kind === "benchmark_overfit_steering"),
+      true,
+      text,
+    );
+  }
 });
 
 test("lane lifecycle marks stale planned lanes and records latest results", () => {

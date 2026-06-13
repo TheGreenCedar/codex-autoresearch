@@ -409,6 +409,67 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalizer refuses existing review branch with same files but stale content",
+  "finalize-stale-review-branch-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init"], repo);
+    await git(["config", "user.email", "codex@example.test"], repo);
+    await git(["config", "user.name", "Codex"], repo);
+    await fsp.mkdir(path.join(repo, "src"), { recursive: true });
+    await fsp.writeFile(path.join(repo, "src", "value.txt"), "base\n", "utf8");
+    await git(["add", "src/value.txt"], repo);
+    await git(["commit", "-m", "base"], repo);
+    await git(["branch", "-M", "main"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await git(["switch", "-c", "codex/session"], repo);
+    await fsp.writeFile(path.join(repo, "src", "value.txt"), "planned\n", "utf8");
+    await git(["commit", "-am", "planned value"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await git(["switch", "--detach", base], repo);
+    await git(["switch", "-c", "autoresearch-review/stale-test/01-planned-value"], repo);
+    await fsp.writeFile(path.join(repo, "src", "value.txt"), "stale\n", "utf8");
+    await git(["commit", "-am", "stale review value"], repo);
+    await git(["switch", "codex/session"], repo);
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "stale-test",
+          groups: [
+            {
+              title: "Planned value",
+              body: "Exercise stale branch detection.",
+              last_commit: finalTree,
+              slug: "planned-value",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+    assert.notEqual(result.code, 0);
+    assert.match(
+      result.stderr + result.stdout,
+      /divergent|differs from the planned review content/i,
+    );
+  },
+);
+
+testWithTempRoot(
   "finalize preview blocks unlogged non-session commits from the final tree",
   "autoresearch-finalize-preview-",
   async (root) => {

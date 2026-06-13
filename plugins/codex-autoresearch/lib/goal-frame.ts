@@ -9,6 +9,12 @@ export interface GoalFrameInput {
   codexGoalObjective?: unknown;
 }
 
+export interface GoalContractInput extends GoalFrameInput {
+  benchmarkGoal?: unknown;
+  finalizationClaim?: unknown;
+  recoveryCommand?: unknown;
+}
+
 export interface GoalFrame {
   authoritativeGoal: string;
   codexGoalObjective: string;
@@ -16,6 +22,17 @@ export interface GoalFrame {
   mismatch: boolean;
   warning: string;
   operatorLine: string;
+}
+
+export interface GoalContract extends GoalFrame {
+  benchmarkGoal: string;
+  finalizationClaim: string;
+  status: "ok" | "warning" | "blocked";
+  blockers: string[];
+  warnings: string[];
+  recoveryCommand: string;
+  blocksPacket: boolean;
+  blocksFinalization: boolean;
 }
 
 export function buildGoalFrame({
@@ -39,6 +56,68 @@ export function buildGoalFrame({
     operatorLine: authoritativeGoal
       ? `Research goal: ${authoritativeGoal}`
       : "Research goal is not configured; run setup-plan or prompt-plan before packet work.",
+  };
+}
+
+export function buildGoalContract({
+  autoresearchGoal,
+  codexGoalObjective,
+  benchmarkGoal,
+  finalizationClaim,
+  recoveryCommand,
+}: GoalContractInput = {}): GoalContract {
+  const frame = buildGoalFrame({ autoresearchGoal, codexGoalObjective });
+  const normalizedBenchmarkGoal = cleanGoal(benchmarkGoal);
+  const normalizedFinalizationClaim = cleanGoal(finalizationClaim);
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  const command =
+    cleanGoal(recoveryCommand) || "node scripts/autoresearch.mjs codex-goal-brief --cwd <project>";
+
+  if (!frame.authoritativeGoal) {
+    warnings.push(
+      "Autoresearch has no durable goal; run setup-plan or prompt-plan before packet work.",
+    );
+  }
+  if (frame.codexObjectiveRole === "missing") {
+    warnings.push(
+      "No live Codex goal objective was provided; refresh the Codex goal brief before broad work.",
+    );
+  }
+  if (frame.mismatch && frame.authoritativeGoal) {
+    blockers.push(frame.warning || "Codex prompt does not match the durable Autoresearch goal.");
+  } else if (frame.mismatch) {
+    warnings.push(frame.warning || "Codex prompt is an operator instruction, not a durable goal.");
+  }
+  if (
+    normalizedBenchmarkGoal &&
+    frame.authoritativeGoal &&
+    !sameGoal(frame.authoritativeGoal, normalizedBenchmarkGoal)
+  ) {
+    blockers.push("Benchmark goal differs from the durable Autoresearch goal.");
+  }
+  if (
+    normalizedFinalizationClaim &&
+    frame.authoritativeGoal &&
+    !sameGoal(frame.authoritativeGoal, normalizedFinalizationClaim)
+  ) {
+    blockers.push("Finalization claim differs from the durable Autoresearch goal.");
+  }
+
+  const blocksPacket = blockers.length > 0;
+  const blocksFinalization = blocksPacket || Boolean(normalizedFinalizationClaim && frame.mismatch);
+  const status = blockers.length > 0 ? "blocked" : warnings.length > 0 ? "warning" : "ok";
+
+  return {
+    ...frame,
+    benchmarkGoal: normalizedBenchmarkGoal,
+    finalizationClaim: normalizedFinalizationClaim,
+    status,
+    blockers,
+    warnings,
+    recoveryCommand: command,
+    blocksPacket,
+    blocksFinalization,
   };
 }
 

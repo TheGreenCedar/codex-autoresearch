@@ -239,7 +239,7 @@ const CONTRACTS = {
     ]),
   },
   session_forensics: {
-    purpose: "Parse Codex rollout JSONL into bounded session and waste signals.",
+    purpose: "Parse Codex rollout JSONL into compact session and waste signals.",
     whenToUse: "Use to import a long Codex session before more Autoresearch packets.",
     contrast: "Use read_state for the current Autoresearch ledger only.",
     safety:

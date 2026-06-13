@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
+import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
 import {
   assertGeneratedPlanMetadata,
   finalizationPlanFingerprint,
@@ -80,6 +81,7 @@ type FinalizePlan = LooseObject & {
 type BranchResult = {
   branch: string;
   deleted?: boolean;
+  runway?: LooseObject;
   skipped?: boolean;
   stat: string;
 };
@@ -771,7 +773,9 @@ async function createBranchForGroup(
 ): Promise<BranchResult> {
   const branch = branchName(config, group, index);
   if (!group.files.length) return { branch, skipped: true, deleted: true, stat: "" };
-  if (await branchExists(branch, cwd)) throw new Error(`Branch already exists: ${branch}`);
+  if (await branchExists(branch, cwd)) {
+    return await reuseExistingBranchForGroup(config, group, branch, cwd);
+  }
   await git(["switch", "--detach", config.base], cwd);
   await git(["switch", "-c", branch], cwd);
   try {
@@ -792,6 +796,88 @@ async function createBranchForGroup(
   }
 }
 
+async function reuseExistingBranchForGroup(
+  config: FinalizePlan,
+  group: CollectedGroup,
+  branch: string,
+  cwd: string,
+): Promise<BranchResult> {
+  const current = await currentBranch(cwd);
+  const branchFiles = await changedFiles(config.base, branch, cwd);
+  const sameFiles = sameStringSet(branchFiles, group.files);
+  const upstream = await git(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], cwd, true);
+  if (current === branch) {
+    const runway = classifyFinalizationRunwayFromFacts({
+      branch,
+      branchExists: true,
+      checkedOut: true,
+      divergent: !sameFiles,
+      equivalent: false,
+      localOnly: upstream.code !== 0,
+    });
+    if (runway.blockers.length > 0) {
+      throw new Error(`${runway.status}: ${runway.nextAction}`);
+    }
+  }
+  const contentEquivalent = sameFiles
+    ? await existingBranchMatchesPlannedGroup(config, group, branch, cwd)
+    : false;
+  const runway = classifyFinalizationRunwayFromFacts({
+    branch,
+    branchExists: true,
+    divergent: !sameFiles || !contentEquivalent,
+    equivalent: contentEquivalent,
+    localOnly: upstream.code !== 0,
+  });
+  if (runway.blockers.length > 0) {
+    throw new Error(`${runway.status}: ${runway.nextAction}`);
+  }
+  return {
+    branch,
+    skipped: false,
+    deleted: false,
+    runway,
+    stat: await branchStat(branch, cwd),
+  };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
+  }
+  return true;
+}
+
+async function existingBranchMatchesPlannedGroup(
+  config: FinalizePlan,
+  group: CollectedGroup,
+  branch: string,
+  cwd: string,
+): Promise<boolean> {
+  return await withTemporaryVerificationBranch(
+    config,
+    cwd,
+    `verify-${safeSlug(group.slug || group.title || "group")}`,
+    async (verifyBranch) => {
+      await applyGroupSources(group, cwd);
+      await git(["add", "-A"], cwd);
+      await git(["commit", "--allow-empty", "-m", "verify: planned autoresearch group"], cwd);
+      const diff = await git(
+        ["diff", "--quiet", verifyBranch, branch, "--", ...group.files],
+        cwd,
+        true,
+      );
+      return diff.code === 0;
+    },
+    async () => {
+      await git(["switch", "--detach", config.base], cwd, true);
+    },
+  );
+}
+
 async function verifyUnion(
   config: FinalizePlan,
   groups: CollectedGroup[],
@@ -799,31 +885,54 @@ async function verifyUnion(
   createdBranches: string[],
   cwd: string,
 ): Promise<void> {
-  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/verify-tmp`;
-  if (await branchExists(verifyBranch, cwd)) {
-    await git(["branch", "-D", verifyBranch], cwd, true);
-  }
   let nonSession: string[] = [];
-  try {
-    await git(["switch", "--detach", config.base], cwd);
-    await git(["switch", "-c", verifyBranch], cwd);
-    for (const group of groups) {
-      await applyGroupSources(group, cwd);
-    }
-    await git(["add", "-A"], cwd);
-    await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
-    const diff = await git(["diff", "--name-only", "HEAD", config.final_tree], cwd);
-    nonSession = cleanLines(diff.stdout).filter(
-      (file) => !isAutoresearchSessionArtifact(file, "finalization"),
-    );
-  } finally {
-    await restoreSourceBranch(sourceBranch, cwd);
-    await git(["branch", "-D", verifyBranch], cwd, true);
-  }
+  await withTemporaryVerificationBranch(
+    config,
+    cwd,
+    "verify-tmp",
+    async () => {
+      for (const group of groups) {
+        await applyGroupSources(group, cwd);
+      }
+      await git(["add", "-A"], cwd);
+      await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
+      const diff = await git(["diff", "--name-only", "HEAD", config.final_tree], cwd);
+      nonSession = cleanLines(diff.stdout).filter(
+        (file) => !isAutoresearchSessionArtifact(file, "finalization"),
+      );
+    },
+    async () => {
+      await restoreSourceBranch(sourceBranch, cwd);
+    },
+  );
   if (nonSession.length > 0) {
     throw new Error(
       `Union of groups differs from final tree:\n${nonSession.join("\n")}\nCreated branches were left intact:\n${createdBranches.join("\n")}`,
     );
+  }
+}
+
+async function withTemporaryVerificationBranch<T>(
+  config: FinalizePlan,
+  cwd: string,
+  suffix: string,
+  runOnBranch: (verifyBranch: string) => Promise<T>,
+  restoreAfter: () => Promise<void>,
+): Promise<T> {
+  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/${suffix}`;
+  if (await branchExists(verifyBranch, cwd)) {
+    await git(["branch", "-D", verifyBranch], cwd, true);
+  }
+  try {
+    await git(["switch", "--detach", config.base], cwd);
+    await git(["switch", "-c", verifyBranch], cwd);
+    return await runOnBranch(verifyBranch);
+  } finally {
+    try {
+      await restoreAfter();
+    } finally {
+      await git(["branch", "-D", verifyBranch], cwd, true);
+    }
   }
 }
 

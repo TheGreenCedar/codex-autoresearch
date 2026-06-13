@@ -178,6 +178,36 @@ export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
     ],
   },
   {
+    kind: "benchmark_overfit_steering",
+    severity: "blocker",
+    enforcement: {
+      mode: "hard-block",
+      canRunNextPacket: false,
+      allowBoundedNext: false,
+      blocksFinalization: true,
+      clearingCondition:
+        "Record the overfit/generalization audit, downgrade row-specific evidence, and pass a blind holdout, breadth, or promotion gate before finalization.",
+      commandHint: "node scripts/autoresearch.mjs state --cwd <project> --compact",
+      triggeredBy: ["sessionDecisionCapsule", "benchmarkOverfit"],
+    },
+    patterns: [
+      /\boverfit(?:ted|ting)?\b/i,
+      /benchmark[- ]specific|test[- ]specific|row[- ]specific/i,
+      /task[- ]family detectors?|protected probes?|static citations?|exact (?:files?|symbols?|libraries?)/i,
+      /retrieval steering|answer key|learned the test/i,
+    ],
+    message: "The session flagged benchmark-specific steering or overfit row wins.",
+    bottleneck:
+      "The immediate blocker is epistemic trust: targeted benchmark wins may be row-specific repairs rather than general product proof.",
+    nextExperiment:
+      "Split general harness changes from row-specific repairs, log row wins as diagnostic/provisional, then run a blind holdout or breadth gate before promotion.",
+    wrongNextActions: [
+      "Do not add more task-family detectors, protected probes, or static citations as product wins.",
+      "Do not finalize broad product superiority claims from targeted row metrics.",
+      "Do not reuse changed benchmark rows as holdout evidence.",
+    ],
+  },
+  {
     kind: "search_latency_bottleneck",
     severity: "warning",
     enforcement: BOUNDED_NEXT_REQUIRED,
@@ -320,6 +350,9 @@ export function matchDecisionRules(text: string, source: string): SessionDecisio
   for (const rule of SESSION_DECISION_RULES) {
     if (rule.patterns.length === 0) continue;
     if (!rule.patterns.some((pattern) => pattern.test(text))) continue;
+    if (rule.kind === "benchmark_overfit_steering" && !isBenchmarkOverfitSteeringFeedback(text)) {
+      continue;
+    }
     findings.push({
       kind: rule.kind,
       severity: rule.severity,
@@ -328,6 +361,154 @@ export function matchDecisionRules(text: string, source: string): SessionDecisio
     });
   }
   return findings;
+}
+
+function isBenchmarkOverfitSteeringFeedback(text: string): boolean {
+  return benchmarkOverfitFeedbackSegments(text).some(isBenchmarkOverfitSteeringSegment);
+}
+
+function benchmarkOverfitFeedbackSegments(text: string): string[] {
+  return text
+    .split(
+      /(?:[.!?;]+|\bbut\b|\bhowever\b|\band the current\b|\band the latest\b|\bwhile the current\b|\bwhile the latest\b)/i,
+    )
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function isBenchmarkOverfitSteeringSegment(segment: string): boolean {
+  const hasOverfitClaim =
+    /\boverfit(?:ted|ting)?\b/i.test(segment) && !hasNegatedOverfitFeedback(segment);
+  const hasLearnedTestClaim =
+    /learned the test/i.test(segment) && !hasNegatedLearnedTestFeedback(segment);
+  const hasAnswerKeyClaim =
+    /\banswer key\b/i.test(segment) && !hasNegatedAnswerKeyFeedback(segment);
+  const hasScopedSteeringClaim =
+    hasPositiveBenchmarkScope(segment) && hasPositiveSteeringMechanism(segment);
+  return hasOverfitClaim || hasLearnedTestClaim || hasAnswerKeyClaim || hasScopedSteeringClaim;
+}
+
+function hasPositiveBenchmarkScope(text: string): boolean {
+  return (
+    /benchmark[- ]specific|test[- ]specific|row[- ]specific/i.test(text) &&
+    !/\b(?:not|no|without)\s+(?:benchmark[- ]specific|test[- ]specific|row[- ]specific)\b/i.test(
+      text,
+    )
+  );
+}
+
+function hasPositiveSteeringMechanism(text: string): boolean {
+  return (
+    hasPositiveBareScopedSteering(text) ||
+    (/\bretrieval steering\b/i.test(text) && !hasNegatedRetrievalSteeringFeedback(text)) ||
+    (/\btask[- ]family detectors?\b/i.test(text) && !hasNegatedTaskFamilyDetectorFeedback(text)) ||
+    (/\bprotected probes?\b/i.test(text) && !hasNegatedProtectedProbeFeedback(text)) ||
+    (/\bstatic citations?\b/i.test(text) && !hasNegatedStaticCitationFeedback(text)) ||
+    hasPositiveExactReference(text)
+  );
+}
+
+function hasPositiveExactReference(text: string): boolean {
+  return (
+    /\bexact (?:files?|symbols?|libraries?)\b/i.test(text) &&
+    !hasNegatedExactReferenceFeedback(text)
+  );
+}
+
+function hasPositiveBareScopedSteering(text: string): boolean {
+  return (
+    /\b(?:benchmark[- ]specific|test[- ]specific|row[- ]specific)\s+steering\b/i.test(text) &&
+    !hasNegatedBareScopedSteeringFeedback(text)
+  );
+}
+
+function hasNegatedOverfitFeedback(text: string): boolean {
+  return (
+    /\bnot\s+(?:an?\s+|substantially\s+)?overfit(?:ted|ting)?\b/i.test(text) ||
+    /\bno evidence(?:\s+of)?\b[^.?!;]*\boverfit(?:ted|ting)?\b/i.test(text) ||
+    /\bruled out\b[^.?!;]*\boverfit(?:ted|ting)?\b/i.test(text) ||
+    /\bavoided\b[^.?!;]*\boverfit(?:ted|ting)?\b/i.test(text)
+  );
+}
+
+function hasNegatedAnswerKeyFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(text, String.raw`answer key(?:\s+logic)?`) ||
+    /\bno evidence(?:\s+of)?\b[^.?!;]*\banswer key(?:\s+logic)?\b/i.test(text) ||
+    /\b(?:no|not)\s+answer key(?:\s+logic)?\b/i.test(text) ||
+    /\bwithout\b[^.?!;]*\banswer key(?:\s+logic)?\b/i.test(text) ||
+    /\bavoided\b[^.?!;]*\banswer key(?:\s+logic)?\b/i.test(text) ||
+    /\bruled out\b[^.?!;]*\banswer key(?:\s+logic)?\b/i.test(text)
+  );
+}
+
+function hasNegatedLearnedTestFeedback(text: string): boolean {
+  return (
+    /\b(?:had\s+)?not\s+learned the test\b/i.test(text) ||
+    /\bnever\s+learned the test\b/i.test(text) ||
+    /\bno evidence\b[^.?!;]*\blearned the test\b/i.test(text)
+  );
+}
+
+function hasNegatedBareScopedSteeringFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(
+      text,
+      String.raw`(?:benchmark[- ]specific|test[- ]specific|row[- ]specific)\s+steering`,
+    ) ||
+    /\b(?:not|no)\s+(?:benchmark[- ]specific|test[- ]specific|row[- ]specific)\s+steering\b/i.test(
+      text,
+    ) ||
+    /\bwithout\s+(?:row[- ]specific|benchmark[- ]specific|test[- ]specific)\s+steering\b/i.test(
+      text,
+    )
+  );
+}
+
+function hasNegatedRetrievalSteeringFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(
+      text,
+      String.raw`(?:(?:benchmark|test|row)[- ]specific\s+)?retrieval steering`,
+    ) ||
+    /\bnot\s+(?:(?:benchmark|test|row)[- ]specific\s+)?retrieval steering\b/i.test(text) ||
+    /\bno\s+(?:(?:benchmark|test|row)[- ]specific\s+)?retrieval steering\b/i.test(text)
+  );
+}
+
+function hasNegatedTaskFamilyDetectorFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(text, String.raw`task[- ]family detectors?`) ||
+    /\b(?:no|not|without)\s+task[- ]family detectors?\b/i.test(text)
+  );
+}
+
+function hasNegatedProtectedProbeFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(text, String.raw`protected probes?`) ||
+    /\b(?:no|not|without)\s+protected probes?\b/i.test(text)
+  );
+}
+
+function hasNegatedStaticCitationFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(text, String.raw`static citations?`) ||
+    /\b(?:no|not|without)\s+static citations?\b/i.test(text)
+  );
+}
+
+function hasNegatedExactReferenceFeedback(text: string): boolean {
+  return (
+    hasDirectiveNegationFor(text, String.raw`exact (?:files?|symbols?|libraries?)`) ||
+    /\b(?:no|not|without)\s+exact (?:files?|symbols?|libraries?)\b/i.test(text)
+  );
+}
+
+function hasDirectiveNegationFor(text: string, targetPattern: string): boolean {
+  return new RegExp(
+    String.raw`\bdo\s+not\s+(?:add|use|introduce|rely\s+on|count|treat|reuse)\b[^.?!;]*\b(?:${targetPattern})\b`,
+    "i",
+  ).test(text);
 }
 
 export function buildSessionDecisionCapsule(
@@ -357,7 +538,7 @@ export function buildSessionDecisionCapsule(
     `${input.compactions} compactions, ${execCount} exec commands, ${pollCount} shell polls.`,
     ...prioritizedDecisionEvidence(input.productSignals, input.workflowWaste)
       .slice(0, 5)
-      .map((signal) => signal.message),
+      .map(decisionEvidenceMessage),
     ...input.workflowWaste.slice(0, 4).map((signal) => signal.message),
   ].filter(Boolean);
   return {
@@ -433,6 +614,7 @@ function selectRule(
   const kinds = new Set(signals.map((signal) => signal.kind));
   for (const kind of [
     "benchmark_contract_broken",
+    "benchmark_overfit_steering",
     "product_bar_rejection",
     "false_done_admission",
     "goal_frame_mismatch",
@@ -473,23 +655,38 @@ function prioritizedDecisionEvidence(
 ): CapsuleSignal[] {
   const priority = new Map([
     ["benchmark_contract_broken", 0],
-    ["product_bar_rejection", 1],
-    ["false_done_admission", 2],
-    ["goal_frame_mismatch", 3],
-    ["search_latency_bottleneck", 4],
-    ["metric_reframe_feedback", 5],
-    ["probe_churn_feedback", 6],
-    ["skill_preflight_feedback", 7],
-    ["carry_forward_request", 8],
-    ["context_distillation_required", 9],
-    ["oversized_tool_output", 10],
-    ["closed_stdin_poll", 11],
-    ["output_budget_exceeded", 12],
-    ["quality_gap_wording", 13],
+    ["benchmark_overfit_steering", 1],
+    ["product_bar_rejection", 2],
+    ["false_done_admission", 3],
+    ["goal_frame_mismatch", 4],
+    ["search_latency_bottleneck", 5],
+    ["metric_reframe_feedback", 6],
+    ["probe_churn_feedback", 7],
+    ["skill_preflight_feedback", 8],
+    ["carry_forward_request", 9],
+    ["context_distillation_required", 10],
+    ["oversized_tool_output", 11],
+    ["closed_stdin_poll", 12],
+    ["output_budget_exceeded", 13],
+    ["quality_gap_wording", 14],
   ]);
-  return [...productSignals, ...workflowWaste].sort(
+  const byKind = new Map<string, CapsuleSignal>();
+  for (const signal of [...productSignals, ...workflowWaste].sort(
     (left, right) => (priority.get(left.kind) ?? 99) - (priority.get(right.kind) ?? 99),
-  );
+  )) {
+    const existing = byKind.get(signal.kind);
+    if (existing) {
+      existing.count = Number(existing.count || 1) + 1;
+      continue;
+    }
+    byKind.set(signal.kind, { ...signal, count: signal.count || 1 });
+  }
+  return [...byKind.values()];
+}
+
+function decisionEvidenceMessage(signal: CapsuleSignal): string {
+  const count = Number(signal.count || 0);
+  return count > 1 ? `${signal.message} (${count} occurrences)` : signal.message;
 }
 
 function capsuleWrongActions(

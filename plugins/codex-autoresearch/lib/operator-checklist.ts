@@ -15,7 +15,10 @@ export function buildOperatorChecklist(
   context: LooseObject = {},
 ): OperatorChecklist {
   const action = objectValue(canonicalAction) || {};
-  const command = stringValue(action.command) || inspectCommandForAction(action, context);
+  const command =
+    stringValue(action.command) ||
+    stringValue(context.primaryCommand) ||
+    inspectCommandForAction(action, context);
   return {
     command,
     safetyReason:

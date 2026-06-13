@@ -4,7 +4,42 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 2.3.0
+
+### Changed
+
+- Added shared control-plane contracts across compact state, recommendations,
+  loop governance, packet preflight, lane approvals, evidence maturity,
+  session forensics, and finalization runway readouts so goal mismatches,
+  approval stalls, stale process residue, unsupported broad claims, local-only
+  review branches, and unsafe branch reuse become explicit blockers or
+  warnings.
+- Tightened Autoresearch control-plane behavior: finalization review branches
+  now require content-equivalence before reuse, big-idea approvals remain
+  durable after lane results are recorded, repeated command heads, including
+  benchmark commands, are warnings instead of hard resource blockers, and the
+  temporary control-plane spec pack has been removed from the release diff.
+- Clarified Autoresearch trust guidance for benchmark-shaped wins: row-specific
+  detectors, exact probes, static benchmark citations, or manifest-tuned fixes
+  are diagnostic/provisional until holdout, repeat, breadth, or promotion-gate
+  evidence proves the broader claim.
+- Added session-forensics detection for benchmark overfit/steering so imported
+  sessions can hard-block generic packets and finalization until row-specific
+  evidence is downgraded and holdout or breadth validation has passed.
+- Made `session-forensics` compact by default, preserving full signal and
+  command-class output behind `--json-full`/`--verbose` for direct JSON
+  consumers that need `commandClasses` or ungrouped arrays, and render imported
+  capsule commands with the plugin launcher instead of target-repo-relative
+  `scripts/autoresearch.mjs` paths.
+- Tightened the Codex-facing skill so loop-contract blockers outrank source
+  cleanliness when deciding whether to spend another packet.
+- Updated public prompt examples to begin with `/goal` and mention
+  `@Codex Autoresearch`, while keeping marketplace starters as simple
+  `@Codex Autoresearch` mentions.
+
+### Release
+
+- Bumped public package, lockfile, and plugin manifest surfaces to `2.3.0`.
 
 ## 2.2.1
 

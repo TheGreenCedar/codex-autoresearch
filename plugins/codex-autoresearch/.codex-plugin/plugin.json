@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
   "author": {
     "name": "Albert Najjar",
@@ -23,9 +23,9 @@
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/privacy.md",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/terms.md",
     "defaultPrompt": [
-      "Use Codex Autoresearch to improve this repo.",
-      "Plan an Autoresearch loop from this prompt.",
-      "Serve the live dashboard when useful."
+      "@Codex Autoresearch improve this repo.",
+      "@Codex Autoresearch plan a measured loop from this prompt.",
+      "@Codex Autoresearch serve the live dashboard when useful."
     ],
     "brandColor": "#0F8F88",
     "composerIcon": "./assets/icon.svg",

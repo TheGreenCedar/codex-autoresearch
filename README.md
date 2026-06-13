@@ -19,14 +19,14 @@ Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/a
 
 Ask Codex to use Codex Autoresearch.
 
-Broad prompts work:
+Broad prompts work, with a caveat: they are discovery mode, not the ideal way to fly the whole loop. Autoresearch can turn fuzzy work into a measured path, but you should still be the master of what is happening: tighten the goal, evidence bar, budget, benchmark, and scope as soon as you can.
 
 ```text
-Use $Codex Autoresearch to improve the speed of my indexer's pipeline, while keeping it memory efficient.
+/goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
 ```text
-Use $Codex Autoresearch to keep reducing bugs in the codebase, starting with
+/goal @Codex Autoresearch keep reducing bugs in the codebase, starting with
 the most obvious low hanging fruits. Run at most 5 packets or 30 minutes,
 stop if checks fail twice, and report the best kept change.
 ```
@@ -34,7 +34,7 @@ stop if checks fail twice, and report the best kept change.
 You can also hand it a sharper investigation:
 
 ```text
-Use $Codex Autoresearch to figure out why my graphql service's p99 latency is so much higher
+/goal @Codex Autoresearch figure out why my graphql service's p99 latency is so much higher
 than its p90 latency at 1 minute metric resolution. I suspect: DNS lookup, event loop throttling,
 memory spike, CPU spike. For each, run the 4-5 appropriate experiments @experiments.md and if the
 results are promising keep iterating, otherwise stop and report back.
@@ -43,7 +43,7 @@ results are promising keep iterating, otherwise stop and report back.
 Or be exact about the benchmark and scope:
 
 ```text
-Use $Codex Autoresearch to optimize my unit tests' speed. different libraries are allowed, but try to avoid it.
+/goal @Codex Autoresearch optimize my unit tests' speed. different libraries are allowed, but try to avoid it.
 Benchmark: npm test -- --runInBand
 Metric: seconds, lower is better
 Checks: npm test
@@ -168,7 +168,7 @@ Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a c
 For product, docs, UX, or broad research, ask for a quality-gap loop:
 
 ```text
-Use Codex Autoresearch to study this project and improve the dashboard.
+/goal @Codex Autoresearch study this project and improve the dashboard.
 Turn accepted findings into a quality-gap loop, implement them, and keep the live dashboard open.
 ```
 
