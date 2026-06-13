@@ -23,9 +23,9 @@
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/privacy.md",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/terms.md",
     "defaultPrompt": [
-      "/goal @Codex Autoresearch improve this repo.",
-      "/goal @Codex Autoresearch plan a measured loop from this prompt.",
-      "/goal @Codex Autoresearch serve the live dashboard when useful."
+      "@Codex Autoresearch improve this repo.",
+      "@Codex Autoresearch plan a measured loop from this prompt.",
+      "@Codex Autoresearch serve the live dashboard when useful."
     ],
     "brandColor": "#0F8F88",
     "composerIcon": "./assets/icon.svg",

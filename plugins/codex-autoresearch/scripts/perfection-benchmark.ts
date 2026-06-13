@@ -486,7 +486,7 @@ const checks = [
   {
     id: "manifest-single-skill-prompts",
     file: ".codex-plugin/plugin.json",
-    description: "Marketplace prompts start in Goal mode and point to the plugin by mention.",
+    description: "Marketplace prompts point to the plugin by mention without forcing Goal mode.",
     run: async () => {
       const manifest = await readJson(".codex-plugin/plugin.json");
       const prompts = (manifest.interface?.defaultPrompt || []) as string[];
@@ -494,9 +494,9 @@ const checks = [
       return prompts.length <= 3 &&
         prompts.every((prompt) => prompt.length < 128) &&
         includesAll(promptText, [
-          "/goal @Codex Autoresearch improve this repo.",
-          "/goal @Codex Autoresearch plan a measured loop from this prompt.",
-          "/goal @Codex Autoresearch serve the live dashboard when useful.",
+          "@Codex Autoresearch improve this repo.",
+          "@Codex Autoresearch plan a measured loop from this prompt.",
+          "@Codex Autoresearch serve the live dashboard when useful.",
         ]) &&
         manifest.interface?.longDescription?.includes("one skill surface")
         ? pass()

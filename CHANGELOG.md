@@ -33,8 +33,9 @@ This project uses a root-only changelog because the root README is the public do
   `scripts/autoresearch.mjs` paths.
 - Tightened the Codex-facing skill so loop-contract blockers outrank source
   cleanliness when deciding whether to spend another packet.
-- Updated public prompt examples and marketplace starters to begin with
-  `/goal` and mention `@Codex Autoresearch`.
+- Updated public prompt examples to begin with `/goal` and mention
+  `@Codex Autoresearch`, while keeping marketplace starters as simple
+  `@Codex Autoresearch` mentions.
 
 ### Release
 

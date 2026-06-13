@@ -19,7 +19,7 @@ Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/a
 
 Ask Codex to use Codex Autoresearch.
 
-Broad prompts work:
+Broad prompts work, with a caveat: they are discovery mode, not the ideal way to fly the whole loop. Autoresearch can turn fuzzy work into a measured path, but you should still be the master of what is happening: tighten the goal, evidence bar, budget, benchmark, and scope as soon as you can.
 
 ```text
 /goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
