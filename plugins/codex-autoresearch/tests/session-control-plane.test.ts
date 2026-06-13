@@ -124,6 +124,113 @@ test("resource preflight catches stale process residue, repeated commands, and o
   assert.match(preflight.warnings.join(" "), /bounded summaries|compact forensics/);
 });
 
+test("resource preflight treats repeated benchmark command heads as warnings", () => {
+  const preflight = buildResourcePreflight({
+    command: "node scripts/benchmark.mjs --suite smoke",
+    entries: Array.from({ length: 5 }, () => ({
+      command: "node scripts/benchmark.mjs --suite smoke",
+    })),
+    budgets: { maxRepeatedCommandHeads: 5 },
+  });
+
+  assert.equal(preflight.canStart, true);
+  assert.equal(preflight.status, "warning");
+  assert.equal(
+    preflight.blockers.some((item) => /Command head repeated/.test(item)),
+    false,
+  );
+  assert.match(preflight.warnings.join(" "), /Command head repeated 5 times/);
+});
+
+test("resource preflight residue does not echo raw ledger bodies", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      {
+        type: "response_item",
+        timestamp: "2026-06-13T12:00:00.000Z",
+        payload: {
+          output: "pid 1234 stale reboot residue SECRET_TOKEN=abc123 C:/Users/alber/private.env",
+        },
+      },
+    ],
+  });
+
+  assert.equal(preflight.canStart, false);
+  assert.equal(preflight.residue.length, 1);
+  assert.deepEqual(preflight.residue[0], {
+    type: "response_item",
+    status: "stale-process-residue",
+    timestamp: "2026-06-13T12:00:00.000Z",
+    reason: "ledger entry matched process residue keywords",
+  });
+  assert.doesNotMatch(JSON.stringify(preflight.residue), /SECRET_TOKEN|private\.env|abc123/);
+});
+
+test("resource preflight residue redacts unsafe ledger metadata", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      {
+        type: "response_item SECRET_TOKEN=abc123",
+        timestamp: "C:/Users/alber/private.env",
+        payload: {
+          output: "pid 4321 stale reboot residue",
+        },
+      },
+    ],
+  });
+
+  assert.equal(preflight.canStart, false);
+  assert.deepEqual(preflight.residue, [
+    {
+      type: "ledger-entry",
+      status: "stale-process-residue",
+      timestamp: "",
+      reason: "ledger entry matched process residue keywords",
+    },
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(preflight.residue),
+    /SECRET_TOKEN|abc123|C:\/Users\/alber\/private\.env/,
+  );
+});
+
+test("resource preflight residue maps token-shaped ledger types to generic entries", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      {
+        type: "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        status: "stale-process-residue",
+        timestamp: "2026-06-13T12:00:00Z",
+        reason: "ledger entry matched process residue keywords",
+        payload: {
+          output: "process_manager stale reboot residue",
+        },
+      },
+      {
+        type: "AKIAIOSFODNN7EXAMPLE",
+        status: "stale-process-residue",
+        timestamp: "",
+        reason: "ledger entry matched process residue keywords",
+        payload: {
+          output: "process_manager stale reboot residue",
+        },
+      },
+    ],
+  });
+
+  const serializedResidue = JSON.stringify(preflight.residue);
+
+  assert.equal(preflight.canStart, false);
+  assert.deepEqual(
+    preflight.residue.map((fact) => fact.type),
+    ["ledger-entry", "ledger-entry"],
+  );
+  assert.doesNotMatch(
+    serializedResidue,
+    /ghp_abcdefghijklmnopqrstuvwxyz1234567890|AKIAIOSFODNN7EXAMPLE/,
+  );
+});
+
 test("evidence maturity downgrades row-specific wins until broad proof exists", () => {
   const diagnostic = classifyEvidenceMaturity({
     requestedClaim: "broad product-grade superiority",

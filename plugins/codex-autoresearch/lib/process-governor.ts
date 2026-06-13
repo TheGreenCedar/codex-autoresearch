@@ -15,9 +15,16 @@ export interface ResourcePreflightStatus {
   canStart: boolean;
   commandHead: string;
   nextAction: string;
-  residue: string[];
+  residue: ResourceResidueFact[];
   status: "ok" | "blocked" | "warning";
   warnings: string[];
+}
+
+export interface ResourceResidueFact {
+  reason: string;
+  status: "stale-process-residue";
+  timestamp: string;
+  type: string;
 }
 
 const DEFAULT_BUDGETS: ResourceBudgets = {
@@ -28,6 +35,21 @@ const DEFAULT_BUDGETS: ResourceBudgets = {
   maxWallClockSeconds: 60 * 60,
   pollBudget: 80,
 };
+
+const SAFE_LEDGER_TYPES = new Set([
+  "approval",
+  "autoresearch.log.pending",
+  "compacted",
+  "config",
+  "event_msg",
+  "lane_result",
+  "process_manager",
+  "research_fanout",
+  "response_item",
+  "run",
+  "session_meta",
+  "turn_context",
+]);
 
 export function buildResourcePreflight({
   activeProcesses = 0,
@@ -64,7 +86,9 @@ export function buildResourcePreflight({
     );
   }
   if (repeated >= resolvedBudgets.maxRepeatedCommandHeads) {
-    blockers.push(`Command head repeated ${repeated} times: ${head}.`);
+    warnings.push(
+      `Command head repeated ${repeated} times: ${head}. Confirm this is intentional benchmark repetition before another packet.`,
+    );
   }
   if (output.tokens >= resolvedBudgets.maxCommandOutputTokens) {
     warnings.push(
@@ -102,18 +126,24 @@ export function buildResourcePreflight({
   };
 }
 
-export function classifyProcessResidue(entries: unknown[]): string[] {
-  const residue: string[] = [];
+export function classifyProcessResidue(entries: unknown[]): ResourceResidueFact[] {
+  const residue: ResourceResidueFact[] = [];
   for (const entry of entries) {
     const text = safeStringify(entry).toLowerCase();
     if (
       /\b(process[-_ ]?manager|active_process|pid)\b/.test(text) &&
       /\b(stale|orphan|reboot|residue|zombie|unreconciled)\b/.test(text)
     ) {
-      residue.push(summarize(text));
+      const record = isUnknownRecord(entry) ? entry : {};
+      residue.push({
+        type: safeLedgerType(record.type),
+        status: "stale-process-residue",
+        timestamp: safeLedgerTimestamp(record.timestamp),
+        reason: "ledger entry matched process residue keywords",
+      });
     }
   }
-  return unique(residue).slice(0, 5);
+  return uniqueResidue(residue).slice(0, 5);
 }
 
 function repeatedCommandHeadCount(entries: unknown[], targetHead: string): number {
@@ -172,16 +202,32 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function summarize(value: string): string {
-  return value.replace(/\s+/g, " ").slice(0, 220);
-}
-
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+function safeLedgerType(value: unknown): string {
+  const type = stringValue(value);
+  return SAFE_LEDGER_TYPES.has(type) ? type : "ledger-entry";
+}
+
+function safeLedgerTimestamp(value: unknown): string {
+  const timestamp = stringValue(value);
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(timestamp)
+    ? timestamp
+    : "";
+}
+
+function uniqueResidue(items: ResourceResidueFact[]): ResourceResidueFact[] {
+  const seen = new Set<string>();
+  const out: ResourceResidueFact[] = [];
+  for (const item of items) {
+    const key = `${item.type}\0${item.status}\0${item.timestamp}\0${item.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 export function resourceBudgetFromConfig(config: UnknownRecord = {}): Partial<ResourceBudgets> {
