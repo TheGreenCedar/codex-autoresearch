@@ -57,4 +57,4 @@ All 30 acceptance criteria were traced to implementation tasks for the historica
 
 ## 4. Follow-up Validation
 
-The initial implementation has landed. Validation for the follow-up review-resolution commit must include targeted tests for finalization branch reuse, durable approval replay, resource preflight warnings, lane-orchestration authority, and the full package gate.
+Follow-up review-resolution validation covered targeted tests for finalization branch reuse, durable approval replay, resource preflight warnings, and lane-orchestration authority. Package-gate evidence remains branch-level validation, not a future instruction inside this archived spec. Final branch verification remains tracked by the active implementation branch, not this archived spec.
