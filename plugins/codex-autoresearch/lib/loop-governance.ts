@@ -21,6 +21,8 @@ export interface LoopContractStatus {
 
 const LOOP_PRIORITY = {
   essentialSafety: 1,
+  goalContract: 1.25,
+  approvalGate: 1.5,
   laneCleanup: 2,
   pendingPacket: 2.5,
   validationGate: 3,
@@ -54,6 +56,83 @@ function loopAction(
 export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContractStatus {
   const blockers: LoopAction[] = [];
   const warnings: LoopAction[] = [];
+  const goalContract = objectValue(envelope.goalContract);
+  if (goalContract?.blocksPacket === true || goalContract?.blocksFinalization === true) {
+    const goalBlockers = stringList(goalContract.blockers, []);
+    blockers.push(
+      loopAction(
+        "goal-contract",
+        LOOP_PRIORITY.goalContract,
+        goalBlockers[0] || "Resolve the goal contract before broad packet or finalization work.",
+        goalContract.recoveryCommand || goalContract.command,
+        ["goalContract"],
+      ),
+    );
+  }
+
+  const approvalLedger = objectValue(envelope.approvalLedger);
+  const approvalBlockers = stringList(approvalLedger?.blockers, []);
+  if (approvalBlockers.length > 0 || approvalLedger?.status === "blocked") {
+    blockers.push(
+      loopAction(
+        "approval-gate",
+        LOOP_PRIORITY.approvalGate,
+        approvalBlockers[0] || "Record the required scoped approval before continuing.",
+        approvalLedger?.command,
+        ["approvalLedger"],
+      ),
+    );
+  }
+
+  const resourcePreflight = objectValue(envelope.resourcePreflight);
+  const resourceBlockers = stringList(resourcePreflight?.blockers, []);
+  if (resourcePreflight?.canStart === false || resourceBlockers.length > 0) {
+    blockers.push(
+      loopAction(
+        "resource-governor",
+        LOOP_PRIORITY.essentialSafety,
+        resourceBlockers[0] ||
+          resourcePreflight?.nextAction ||
+          "Resolve resource preflight blockers.",
+        resourcePreflight?.command,
+        ["resourcePreflight"],
+      ),
+    );
+  } else if (resourcePreflight?.status === "warning") {
+    const resourceWarnings = stringList(resourcePreflight.warnings, []);
+    warnings.push(
+      loopAction(
+        "resource-governor",
+        LOOP_PRIORITY.validationGate,
+        resourceWarnings[0] ||
+          resourcePreflight.nextAction ||
+          "Review resource preflight warnings.",
+        resourcePreflight.command,
+        ["resourcePreflight"],
+      ),
+    );
+  }
+
+  const evidenceMaturity = objectValue(envelope.evidenceMaturity);
+  const evidenceBlockers = stringList(evidenceMaturity?.blockers, []);
+  if (
+    evidenceMaturity?.blocksPacket === true ||
+    evidenceMaturity?.blocksFinalization === true ||
+    evidenceBlockers.length > 0
+  ) {
+    blockers.push(
+      loopAction(
+        "evidence-maturity",
+        LOOP_PRIORITY.validationGate,
+        evidenceBlockers[0] ||
+          evidenceMaturity?.weakerClaim ||
+          "Evidence maturity does not support the requested claim.",
+        evidenceMaturity?.command,
+        ["evidenceMaturity"],
+      ),
+    );
+  }
+
   const contextDistillation = objectValue(envelope.contextDistillation);
   if (contextDistillation?.required === true) {
     blockers.push(
@@ -321,6 +400,34 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
   const currentTreeFinalization = currentTreeFinalizationAction(finalizationReadiness);
   if (currentTreeFinalization) {
     blockers.push(currentTreeFinalization);
+  }
+  const finalizationRunway = objectValue(envelope.finalizationRunway);
+  const runwayBlockers = stringList(finalizationRunway?.blockers, []);
+  if (runwayBlockers.length > 0 || finalizationRunway?.stage === "unsafe") {
+    blockers.push(
+      loopAction(
+        "finalization-runway",
+        LOOP_PRIORITY.currentTreeFinalization,
+        runwayBlockers[0] ||
+          finalizationRunway?.nextAction ||
+          "Resolve finalization branch runway before merge or cleanup claims.",
+        finalizationRunway?.command,
+        ["finalizationRunway"],
+      ),
+    );
+  } else if (
+    ["local-only", "equivalent", "pr-open"].includes(stringValue(finalizationRunway?.status))
+  ) {
+    warnings.push(
+      loopAction(
+        "finalization-runway",
+        LOOP_PRIORITY.finalizationReadiness,
+        finalizationRunway?.nextAction ||
+          "Publish or verify the review branch before calling finalization complete.",
+        finalizationRunway?.command,
+        ["finalizationRunway"],
+      ),
+    );
   }
   const portfolioRecommendation = objectValue(envelope.portfolioRecommendation);
   if (blockers.length === 0 && portfolioRecommendation?.kind === "trust-blocker") {

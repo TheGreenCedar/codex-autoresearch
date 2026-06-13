@@ -16,6 +16,7 @@ The root `README.md` is the front door. These pages cover the operator workflow,
 Open these only when the short path is blocked, stale, or too vague to trust.
 
 - [Operate](operate.md): use this when resuming a messy run, deciding whether another packet is safe, serving a fresh dashboard, logging ASI, or opening parallel/quality-gap lanes.
+- [Control plane contracts](control-plane.md): use this when state, recommend-next, dashboard, packet, approval, evidence, lane, or finalization safety must agree.
 - [Workflow diagrams](workflows.md): use this when the loop order is unclear and you need the setup, packet, fanout, dashboard, or finalization flow at a glance.
 - [Architecture diagrams](architecture.md): use this when changing internals or checking that the CLI, skill, dashboard, state files, and finalizer still have clear ownership.
 - [Recipes](recipes.md): use this when no benchmark exists yet or the request needs a starter metric plan.

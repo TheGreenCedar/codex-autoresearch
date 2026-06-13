@@ -18,6 +18,7 @@ export interface CompactStateBuilderInput {
   developmentBest?: unknown;
   promotionBest?: unknown;
   goalFrame?: unknown;
+  goalContract?: unknown;
   operatorHandoff?: unknown;
   evidenceRegistry?: unknown;
   productClaimCoverage?: unknown;
@@ -58,6 +59,12 @@ export interface CompactStateBuilderInput {
   preflight?: unknown;
   portfolioRecommendation?: unknown;
   loopContract?: unknown;
+  approvalLedger?: unknown;
+  resourcePreflight?: unknown;
+  evidenceMaturity?: unknown;
+  laneOrchestration?: unknown;
+  finalizationRunway?: unknown;
+  operatorReadout?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
@@ -81,6 +88,7 @@ export interface CompactStateResponse {
   developmentBest: unknown;
   promotionBest: unknown;
   goalFrame: unknown;
+  goalContract: unknown;
   operatorHandoff: unknown;
   evidenceRegistry: unknown;
   productClaimCoverage: unknown;
@@ -121,6 +129,12 @@ export interface CompactStateResponse {
   preflight?: unknown;
   portfolioRecommendation?: unknown;
   loopContract?: unknown;
+  approvalLedger?: unknown;
+  resourcePreflight?: unknown;
+  evidenceMaturity?: unknown;
+  laneOrchestration?: unknown;
+  finalizationRunway?: unknown;
+  operatorReadout?: unknown;
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
@@ -145,6 +159,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     developmentBest: input.developmentBest ?? null,
     promotionBest: input.promotionBest ?? null,
     goalFrame: input.goalFrame ?? null,
+    goalContract: input.goalContract ?? null,
     operatorHandoff: input.operatorHandoff ?? null,
     evidenceRegistry: input.evidenceRegistry ?? null,
     productClaimCoverage: input.productClaimCoverage ?? null,
@@ -186,6 +201,12 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
   copyIfProvided(response, "preflight", input.preflight);
   copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
   copyIfProvided(response, "loopContract", input.loopContract);
+  copyIfProvided(response, "approvalLedger", input.approvalLedger);
+  copyIfProvided(response, "resourcePreflight", input.resourcePreflight);
+  copyIfProvided(response, "evidenceMaturity", input.evidenceMaturity);
+  copyIfProvided(response, "laneOrchestration", input.laneOrchestration);
+  copyIfProvided(response, "finalizationRunway", input.finalizationRunway);
+  copyIfProvided(response, "operatorReadout", input.operatorReadout);
   copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
   copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
   copyIfProvided(response, "commandExecutionBoundary", input.commandExecutionBoundary);

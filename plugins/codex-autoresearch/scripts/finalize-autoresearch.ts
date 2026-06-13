@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
+import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
 import {
   assertGeneratedPlanMetadata,
   finalizationPlanFingerprint,
@@ -80,6 +81,7 @@ type FinalizePlan = LooseObject & {
 type BranchResult = {
   branch: string;
   deleted?: boolean;
+  runway?: LooseObject;
   skipped?: boolean;
   stat: string;
 };
@@ -771,7 +773,9 @@ async function createBranchForGroup(
 ): Promise<BranchResult> {
   const branch = branchName(config, group, index);
   if (!group.files.length) return { branch, skipped: true, deleted: true, stat: "" };
-  if (await branchExists(branch, cwd)) throw new Error(`Branch already exists: ${branch}`);
+  if (await branchExists(branch, cwd)) {
+    return await reuseExistingBranchForGroup(config, group, branch, cwd);
+  }
   await git(["switch", "--detach", config.base], cwd);
   await git(["switch", "-c", branch], cwd);
   try {
@@ -790,6 +794,46 @@ async function createBranchForGroup(
     await git(["branch", "-D", branch], cwd, true);
     throw error;
   }
+}
+
+async function reuseExistingBranchForGroup(
+  config: FinalizePlan,
+  group: CollectedGroup,
+  branch: string,
+  cwd: string,
+): Promise<BranchResult> {
+  const current = await currentBranch(cwd);
+  const branchFiles = await changedFiles(config.base, branch, cwd);
+  const sameFiles = sameStringSet(branchFiles, group.files);
+  const upstream = await git(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], cwd, true);
+  const runway = classifyFinalizationRunwayFromFacts({
+    branch,
+    branchExists: true,
+    checkedOut: current === branch,
+    divergent: !sameFiles,
+    equivalent: sameFiles,
+    localOnly: upstream.code !== 0,
+  });
+  if (runway.blockers.length > 0) {
+    throw new Error(`${runway.status}: ${runway.nextAction}`);
+  }
+  return {
+    branch,
+    skipped: false,
+    deleted: false,
+    runway,
+    stat: await branchStat(branch, cwd),
+  };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
+  }
+  return true;
 }
 
 async function verifyUnion(

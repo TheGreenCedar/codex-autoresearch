@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
+import { buildOperatorReadout } from "./operator-readout.js";
 import { buildProductClaimCoverage, evidenceTextFromRun } from "./product-claim-coverage.js";
 import {
   readActiveSessionDecisionCapsule,
@@ -654,7 +655,13 @@ export function buildDecisionEnvelope({
       : null,
     contextDistillation,
     laneLifecycle: state?.laneLifecycle || null,
+    laneOrchestration: state?.laneOrchestration || null,
     runtimeProvenance: state?.runtimeProvenance || null,
+    goalContract: state?.goalContract || null,
+    approvalLedger: state?.approvalLedger || null,
+    resourcePreflight: state?.resourcePreflight || null,
+    evidenceMaturity: state?.evidenceMaturity || null,
+    finalizationRunway: state?.finalizationRunway || null,
     packetDiagnostics: state?.packetDiagnostics || null,
     sessionDecisionCapsule: state?.sessionDecisionCapsule || null,
     gateQuality: state?.gateQuality || null,
@@ -668,10 +675,16 @@ export function buildDecisionEnvelope({
   const canonicalNextAction = loopContractShouldOverrideSupplemental(loopContract)
     ? governanceAction
     : supplementalAction;
+  const operatorReadout = buildOperatorReadout({
+    canonicalNextAction,
+    loopContract,
+    runtimeProvenance: envelope.runtimeProvenance,
+  });
   return {
     ...envelope,
     loopContract,
     canonicalNextAction,
+    operatorReadout,
   };
 }
 

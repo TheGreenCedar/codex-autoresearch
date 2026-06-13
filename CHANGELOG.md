@@ -8,6 +8,12 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- Added shared control-plane contracts across compact state, recommendations,
+  loop governance, packet preflight, lane approvals, evidence maturity,
+  session forensics, and finalization runway readouts so goal mismatches,
+  approval stalls, stale process residue, unsupported broad claims, local-only
+  review branches, and unsafe branch reuse become explicit blockers or
+  warnings.
 - Clarified Autoresearch trust guidance for benchmark-shaped wins: row-specific
   detectors, exact probes, static benchmark citations, or manifest-tuned fixes
   are diagnostic/provisional until holdout, repeat, breadth, or promotion-gate

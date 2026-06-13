@@ -1,5 +1,10 @@
 import type { ShellRunResult } from "../runner.js";
 import { normalizeBoundedLaneRecommendation } from "../lane-briefs.js";
+import {
+  approvalRecordsFromLedger,
+  buildApprovalRecord,
+  resolveApproval,
+} from "../approval-ledger.js";
 
 type LooseObject = Record<string, any>;
 
@@ -33,6 +38,7 @@ export interface LaneRunnerCommandDeps {
     fallback: number | null,
     optionName: string,
   ) => number | null;
+  readJsonl: (workDir: string) => LooseObject[];
   resolveLaneWorktree: (workDir: string, worktreePath: string) => Promise<string>;
   resolveWorkDir: (value: string) => { workDir: string; config: LooseObject };
   runShell: (
@@ -75,6 +81,18 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       args.human_approval ?? args.humanApproval ?? args.approved,
       false,
     );
+    const approvalGate =
+      mode === "big_idea"
+        ? {
+            gate: "big_idea_architecture",
+            scope: String(lane.id || lane.label || laneId),
+            action: "Approve big-idea lane before implementation or measured packets.",
+          }
+        : null;
+    const approvalResolution = approvalGate
+      ? resolveApproval(approvalRecordsFromLedger(deps.readJsonl(workDir)), approvalGate)
+      : null;
+    const approvalSatisfied = humanApproval || approvalResolution?.approved === true;
     const timeBudgetSeconds =
       deps.positiveIntegerOption(
         args.time_budget_seconds ??
@@ -192,7 +210,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     const resultStatus =
       args.result_status ||
       args.resultStatus ||
-      (humanApproval ? "approved" : "") ||
+      (approvalSatisfied ? "approved" : "") ||
       (commandResult
         ? commandResult.code === 0 && !commandResult.timedOut
           ? "completed"
@@ -219,17 +237,19 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       evidence: bigIdeaRecommendation?.evidence || [],
       risks: bigIdeaRecommendation?.risks || [],
       boundedRecommendation: bigIdeaRecommendation,
-      approvalRequired: mode === "big_idea" && !humanApproval,
-      humanApproval,
+      approvalRequired: mode === "big_idea" && !approvalSatisfied,
+      humanApproval: approvalSatisfied,
       approvalGate:
-        mode === "big_idea"
+        mode === "big_idea" && approvalGate
           ? {
-              required: !humanApproval,
-              humanApproval,
+              ...approvalGate,
+              required: !approvalSatisfied,
+              humanApproval: approvalSatisfied,
               requiredBefore: ["implementation_lane", "measured_packet"],
               message:
                 bigIdeaRecommendation?.approvalGate ||
                 "Human approval is required before implementation or measured packet work.",
+              matchedApproval: approvalResolution?.matched || null,
             }
           : null,
       command: command || "",
@@ -260,7 +280,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       laneResults,
       fallbackLane: lane,
     });
-    if (mode === "big_idea" && !humanApproval) {
+    if (mode === "big_idea" && !approvalSatisfied) {
       coordinatorRecommendation.status = "awaiting_human_approval";
       coordinatorRecommendation.nextAction =
         "Ask the operator to approve or reject the big-idea architecture recommendation before starting an implementation lane or measured packet.";
@@ -270,7 +290,20 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       coordinatorRecommendation.approvalRequired = true;
       coordinatorRecommendation.approvalGate = result.approvalGate;
     }
-    if (!dryRun) deps.appendJsonl(workDir, entry);
+    if (!dryRun) {
+      if (approvalGate && humanApproval) {
+        deps.appendJsonl(
+          workDir,
+          buildApprovalRecord({
+            gate: approvalGate.gate,
+            scope: approvalGate.scope,
+            source: "lane-runner --human-approval",
+            evidence: [explicitSummary, explicitRecommendation].filter(Boolean),
+          }),
+        );
+      }
+      deps.appendJsonl(workDir, entry);
+    }
     return {
       ok: true,
       workDir,

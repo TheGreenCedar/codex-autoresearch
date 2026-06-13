@@ -197,6 +197,24 @@ function observeMessage(
   ) {
     state.userCorrections.push(signal("user_correction", "info", summarize(text), "message"));
   }
+  if (
+    payload.role === "user" &&
+    /impossible that you solved it that fast|said you (were )?done|why.*done|false done|not done/i.test(
+      text,
+    )
+  ) {
+    state.productSignals.push(
+      signal("early_false_done_correction", "blocker", summarize(text), "message"),
+    );
+  }
+  if (/\bapproved\b/i.test(text) && /\b(wait|stall|again|approval|night|waste)\b/i.test(text)) {
+    state.productSignals.push(signal("approval_stall", "blocker", summarize(text), "message"));
+  }
+  if (/\b(ram|cpu|memory|reboot|100%|frozen|hung)\b/i.test(text)) {
+    state.workflowWaste.push(
+      signal("resource_interruption", "blocker", summarize(text), "message"),
+    );
+  }
   if (/segment.+not.+best|metric formula|metric details|tell me nothing|chart/i.test(text)) {
     state.productSignals.push(
       signal("dashboard_ux_feedback", "warning", summarize(text), "message"),
@@ -237,6 +255,28 @@ function observeMessage(
       ),
     );
   }
+  if (
+    payload.role === "assistant" &&
+    /\b(implemented|finalized|done|complete)\b/i.test(text) &&
+    /\b(review remediation|everything|all issues|finalized)\b/i.test(text)
+  ) {
+    state.productSignals.push(
+      signal(
+        "early_false_done_claim",
+        "warning",
+        "Assistant made a broad completion claim before the remediation surface was fully verified.",
+        "message",
+      ),
+    );
+  }
+  if (/\b(did not push|not pushed|local only|local-only|only locally)\b/i.test(text)) {
+    state.productSignals.push(
+      signal("finalization_local_only", "blocker", summarize(text), "message"),
+    );
+  }
+  if (/\b(cleanup|deleted worktree|delete branch|remove branch)\b/i.test(text)) {
+    state.workflowWaste.push(signal("cleanup_afterthought", "warning", summarize(text), "message"));
+  }
   addSnippet(state, "message", text, snippetOptions);
 }
 
@@ -269,6 +309,28 @@ function observeFunctionOutput(
   }
   if (/unknown recipe/i.test(output)) {
     state.blockers.push(signal("unknown_recipe", "warning", summarize(output), callId));
+  }
+  if (
+    /"codexObjectiveRole"\s*:\s*"(missing|operator_instruction|different_research_goal)"/.test(
+      output,
+    )
+  ) {
+    state.productSignals.push(
+      signal(
+        "goal_contract_gap",
+        "blocker",
+        "Forensics observed a missing or mismatched Codex goal objective in product output.",
+        callId,
+      ),
+    );
+  }
+  if (/\b(did not push|not pushed|local only|local-only|only locally)\b/i.test(output)) {
+    state.productSignals.push(
+      signal("finalization_local_only", "blocker", summarize(output), callId),
+    );
+  }
+  if (/\b(cleanup|deleted worktree|delete branch|remove branch)\b/i.test(output)) {
+    state.workflowWaste.push(signal("cleanup_afterthought", "warning", summarize(output), callId));
   }
   if (/timed out|timeout/i.test(output)) {
     state.blockers.push(signal("timeout", "warning", summarize(output), callId));

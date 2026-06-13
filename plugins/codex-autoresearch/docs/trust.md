@@ -123,6 +123,10 @@ Planning that validation is not product proof. Finalization remains blocked
 until the holdout, repeat, breadth run, or promotion gate is actually logged and
 passes for the claim being promoted.
 
+`evidenceMaturity` repeats that rule in compact state and recommendations. If
+the accepted evidence only supports a diagnostic or provisional claim, report
+that weaker claim rather than broad superiority.
+
 The command response is compact by default so importing a large session does not
 repeat the same output-budget failure. Use `--json-full` or `--verbose` only
 when direct JSON consumers need `commandClasses` or ungrouped command, product,

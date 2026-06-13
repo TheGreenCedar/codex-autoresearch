@@ -48,6 +48,10 @@ import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
+import { buildApprovalLedgerStatus, approvalRequirementFromLane } from "../lib/approval-ledger.js";
+import { classifyEvidenceMaturity, runsFromState } from "../lib/evidence-maturity.js";
+import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
+import { buildResourcePreflight, resourceBudgetFromConfig } from "../lib/process-governor.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
   buildProtectedBenchmarkGuard,
@@ -80,7 +84,7 @@ import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
-import { buildGoalFrame } from "../lib/goal-frame.js";
+import { buildGoalContract, buildGoalFrame } from "../lib/goal-frame.js";
 import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
@@ -308,6 +312,7 @@ const laneRunner = createLaneRunnerCommand({
   normalizeParallelLane,
   normalizeRelativePaths,
   positiveIntegerOption,
+  readJsonl,
   resolveLaneWorktree,
   resolveWorkDir,
   runShell,
@@ -2251,6 +2256,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
         operatorChecklist: buildOperatorChecklist(action, {
           workDir,
           pluginRoot: PLUGIN_ROOT,
+          primaryCommand: (response.commands as LooseObject)?.primary,
           loopContract: (response.loopContract || null) as LooseObject | null,
           source: recommendNextChecklistSource(
             action,
@@ -2342,6 +2348,12 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     operatorChecklist,
     runtimeProvenance: authority.runtimeProvenance,
     loopContract,
+    approvalLedger: compact.approvalLedger,
+    resourcePreflight: compact.resourcePreflight,
+    evidenceMaturity: compact.evidenceMaturity,
+    laneOrchestration: compact.laneOrchestration,
+    finalizationRunway: compact.finalizationRunway,
+    operatorReadout: compact.operatorReadout || decisionEnvelope?.operatorReadout || null,
     laneLifecycle: compact.laneLifecycle,
     packetDiagnostics: compact.packetDiagnostics,
     portfolioRecommendation: compact.portfolioRecommendation,
@@ -2352,15 +2364,19 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
 
 function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
   const envelope = compactRecord(compact.decisionEnvelope) || compactRecord(compact.resumeAudit);
+  const envelopeCanonical = compactRecord(envelope?.canonicalNextAction);
+  const compactCanonical = compactRecord(compact.canonicalNextAction);
   const canonicalNextAction =
-    compactRecord(compact.canonicalNextAction) || compactRecord(envelope?.canonicalNextAction);
+    envelopeCanonical && compactCanonical && envelopeCanonical.kind === compactCanonical.kind
+      ? { ...envelopeCanonical, command: envelopeCanonical.command || compactCanonical.command }
+      : envelopeCanonical || compactCanonical;
   const sessionDecisionCapsule = compactSessionCapsuleForHandoff(
-    envelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule,
+    compact.sessionDecisionCapsule || envelope?.sessionDecisionCapsule,
   );
   const minimalEnvelope = envelope
     ? {
         activeSegment: envelope.activeSegment || null,
-        canonicalNextAction: envelope.canonicalNextAction || canonicalNextAction || null,
+        canonicalNextAction: canonicalNextAction || envelope.canonicalNextAction || null,
         finalizationReadiness: envelope.finalizationReadiness || null,
         latestPacketFreshness: envelope.latestPacketFreshness || null,
         loopContract: envelope.loopContract || compact.loopContract || null,
@@ -2386,6 +2402,7 @@ function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
     developmentBest: compact.developmentBest,
     promotionBest: compact.promotionBest,
     goalFrame: compact.goalFrame,
+    goalContract: compact.goalContract,
     operatorHandoff: compact.operatorHandoff,
     canonicalNextAction,
     nextAction: compact.nextAction,
@@ -2394,6 +2411,12 @@ function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
     decisionEnvelope: minimalEnvelope,
     sessionDecisionCapsule,
     portfolioRecommendation: compact.portfolioRecommendation,
+    approvalLedger: compact.approvalLedger,
+    resourcePreflight: compact.resourcePreflight,
+    evidenceMaturity: compact.evidenceMaturity,
+    laneOrchestration: compact.laneOrchestration,
+    finalizationRunway: compact.finalizationRunway,
+    operatorReadout: compact.operatorReadout,
     workflowFriction: compact.workflowFriction,
   };
 }
@@ -2406,6 +2429,7 @@ function compactRecommendCommands(
   const compactCommands: LooseObject = {};
   const primary = canonicalNextAction?.command || commands.state;
   if (primary) compactCommands.primary = primary;
+  if (commands.state) compactCommands.state = commands.state;
   return compactCommands;
 }
 
@@ -2453,6 +2477,7 @@ function compactSessionCapsuleIdentity(capsule: LooseObject | null): LooseObject
       ? {
           canRunNextPacket: (capsule.enforcement as LooseObject).canRunNextPacket ?? null,
           blocksFinalization: (capsule.enforcement as LooseObject).blocksFinalization ?? null,
+          commandHint: (capsule.enforcement as LooseObject).commandHint || "",
         }
       : null,
   };
@@ -5094,9 +5119,10 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     settings,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const records = readJsonl(workDir);
   const laneLifecycle = buildLaneLifecycle({
     state,
-    records: readJsonl(workDir),
+    records,
     fanoutPlan,
     parallelLanes,
     laneResults: latestLaneResults(workDir, state.segment),
@@ -5167,6 +5193,16 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     best: state.best,
     current: state.current,
   });
+  const controlPlane = buildControlPlaneContracts({
+    workDir,
+    config,
+    state,
+    records,
+    codexGoalObjective: context.codexGoalObjective || context.codex_goal_objective,
+    parallelLanes,
+    workflowFriction,
+    finalization: effectiveFinalizePreview,
+  });
   const commands = dashboardCommands(workDir, qualityGap);
   const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
   const canonicalCommandHints = {
@@ -5180,6 +5216,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       state: {
         ...stateWithQualityGap,
         portfolioRecommendation,
+        ...controlPlane,
         limit: iterationLimitInfo(state, config),
       },
       nextAction: continuation.nextAction,
@@ -5215,6 +5252,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     partialResults,
     workflowFriction,
     portfolioRecommendation,
+    ...controlPlane,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
@@ -5435,6 +5473,14 @@ async function runExperiment(args: LooseObject) {
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const resourcePreflight = buildResourcePreflight({
+    command,
+    entries: readJsonl(workDir),
+    budgets: resourceBudgetFromConfig(config),
+  });
+  if (!resourcePreflight.canStart) {
+    throw new Error(`Resource preflight blocked packet start: ${resourcePreflight.nextAction}`);
+  }
   let progressSnapshot = createProgressSnapshot({
     packetId: `packet-${state.results.length + 1}-active`,
     command,
@@ -5591,6 +5637,7 @@ async function runExperiment(args: LooseObject) {
     metricUnit: state.config.metricUnit,
     progress,
     protectedBenchmarkGuard,
+    resourcePreflight,
     checks: checks
       ? {
           command: checksCommand,
@@ -6557,6 +6604,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   }
 
   const state = loadSessionState(workDir, args.readCache);
+  const records = readJsonl(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
@@ -6581,7 +6629,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const laneLifecycle = buildLaneLifecycle({
     state,
-    records: readJsonl(workDir),
+    records,
     fanoutPlan,
     parallelLanes,
     laneResults: latestLaneResults(workDir, state.segment),
@@ -6652,6 +6700,16 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     best: state.best,
     current: state.current,
   });
+  const controlPlane = buildControlPlaneContracts({
+    workDir,
+    config,
+    state,
+    records,
+    codexGoalObjective,
+    parallelLanes,
+    workflowFriction,
+    finalization,
+  });
   const statusCounts = Object.fromEntries(
     [...STATUS_VALUES].map((status: string) => [
       status,
@@ -6668,6 +6726,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       state: {
         ...stateWithQualityGap,
         portfolioRecommendation,
+        ...controlPlane,
         limit: iterationLimitInfo(state, config),
       },
       nextAction: continuation.nextAction,
@@ -6733,6 +6792,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
     portfolioRecommendation,
+    ...controlPlane,
     watchdogSummary,
     memory,
     experimentEconomics,
@@ -6757,6 +6817,7 @@ async function publicCompactState({
   readCache?: unknown;
 }): Promise<LooseObject> {
   const state = loadSessionState(workDir, readCache as any);
+  const records = readJsonl(workDir);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -6775,7 +6836,7 @@ async function publicCompactState({
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const laneLifecycle = buildLaneLifecycle({
     state,
-    records: readJsonl(workDir),
+    records,
     fanoutPlan,
     parallelLanes,
     laneResults: latestLaneResults(workDir, state.segment),
@@ -6848,11 +6909,22 @@ async function publicCompactState({
     warnings: [error.message],
     nextAction: "Fix finalization preview errors before relying on review readiness.",
   }));
+  const controlPlane = buildControlPlaneContracts({
+    workDir,
+    config,
+    state,
+    records,
+    codexGoalObjective,
+    parallelLanes,
+    workflowFriction: [],
+    finalization,
+  });
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: {
         ...stateWithQualityGap,
         portfolioRecommendation,
+        ...controlPlane,
         limit: iterationLimitInfo(state, config),
       },
       nextAction: continuation.nextAction,
@@ -6924,11 +6996,80 @@ async function publicCompactState({
     experimentEconomics,
     partialResults,
     workflowFriction: [],
+    ...controlPlane,
     codexGoalObjective,
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
     continuation,
   });
+}
+
+function buildControlPlaneContracts({
+  workDir,
+  config,
+  state,
+  records,
+  codexGoalObjective,
+  parallelLanes,
+  workflowFriction = [],
+  finalization = null,
+}: {
+  workDir: string;
+  config: LooseObject;
+  state: LooseObject;
+  records: LooseObject[];
+  codexGoalObjective?: unknown;
+  parallelLanes?: unknown[];
+  workflowFriction?: unknown[];
+  finalization?: LooseObject | null;
+}): LooseObject {
+  const commands = continuationCommands(workDir);
+  const goalContract = buildGoalContract({
+    autoresearchGoal: state.config?.goal || config.goal,
+    codexGoalObjective,
+    benchmarkGoal: config.benchmarkGoal || state.config?.benchmarkGoal || state.config?.goal,
+    finalizationClaim:
+      config.finalizationClaim ||
+      state.config?.finalizationClaim ||
+      finalization?.finalizationClaim,
+    recoveryCommand: commands.codexGoalBrief || commands.state,
+  });
+  const approvalRequirements = (Array.isArray(parallelLanes) ? parallelLanes : [])
+    .map(approvalRequirementFromLane)
+    .filter((requirement): requirement is NonNullable<typeof requirement> => Boolean(requirement));
+  const approvalLedger = buildApprovalLedgerStatus({
+    entries: records,
+    required: approvalRequirements,
+  });
+  const resourcePreflight = buildResourcePreflight({
+    entries: records,
+    budgets: resourceBudgetFromConfig(config),
+  });
+  const evidenceMaturity = classifyEvidenceMaturity({
+    runs: runsFromState(state),
+    requestedClaim:
+      config.finalizationClaim ||
+      state.config?.finalizationClaim ||
+      finalization?.summary ||
+      finalization?.productGradeSummary,
+  });
+  const laneOrchestration = planFailureRecoveryLanes({
+    signals: [
+      ...(Array.isArray(workflowFriction) ? workflowFriction : []),
+      ...(Array.isArray(state.sessionDecisionCapsule?.productSignals)
+        ? state.sessionDecisionCapsule.productSignals
+        : []),
+    ],
+    writeScope: config.commitPaths || [],
+  });
+  return {
+    goalContract,
+    approvalLedger,
+    resourcePreflight,
+    evidenceMaturity,
+    laneOrchestration,
+    finalizationRunway: finalization?.finalizationRunway || finalization?.runway || null,
+  };
 }
 
 function compactPublicState(state: LooseObject) {
@@ -6963,6 +7104,15 @@ function compactPublicState(state: LooseObject) {
     autoresearchGoal: state.config?.goal,
     codexGoalObjective: state.codexGoalObjective,
   });
+  const goalContract =
+    state.goalContract ||
+    buildGoalContract({
+      autoresearchGoal: state.config?.goal,
+      codexGoalObjective: state.codexGoalObjective,
+      benchmarkGoal: state.config?.benchmarkGoal || state.config?.goal,
+      finalizationClaim: state.config?.finalizationClaim,
+      recoveryCommand: state.commands?.codexGoalBrief || state.commands?.state,
+    });
   const operatorHandoff = {
     goal: goalFrame.operatorLine,
     next: canonicalNextAction?.reason || continuation.nextAction || "Run doctor, then next.",
@@ -6987,6 +7137,7 @@ function compactPublicState(state: LooseObject) {
     developmentBest: state.development?.best ?? null,
     promotionBest: state.promotion?.best ?? null,
     goalFrame,
+    goalContract,
     operatorHandoff,
     evidenceRegistry: state.evidenceRegistry
       ? {
@@ -7137,6 +7288,12 @@ function compactPublicState(state: LooseObject) {
         }
       : null,
     loopContract: compactDecisionEnvelope?.loopContract,
+    approvalLedger: state.approvalLedger || null,
+    resourcePreflight: state.resourcePreflight || null,
+    evidenceMaturity: state.evidenceMaturity || null,
+    laneOrchestration: state.laneOrchestration || null,
+    finalizationRunway: state.finalizationRunway || null,
+    operatorReadout: compactDecisionEnvelope?.operatorReadout || state.operatorReadout || null,
     laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
     packetDiagnostics: state.packetDiagnostics,
     metricSemanticsWarning: state.metricSemanticsWarning || null,
@@ -7174,6 +7331,12 @@ function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject 
     benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
     dirtySourceDrift: envelope.dirtySourceDrift || null,
     sourceCleanliness: envelope.sourceCleanliness || null,
+    goalContract: envelope.goalContract || null,
+    approvalLedger: envelope.approvalLedger || null,
+    resourcePreflight: envelope.resourcePreflight || null,
+    evidenceMaturity: envelope.evidenceMaturity || null,
+    laneOrchestration: envelope.laneOrchestration || null,
+    finalizationRunway: envelope.finalizationRunway || null,
     budgetStatus: envelope.budgetStatus || null,
     qualityRound: envelope.qualityRound || null,
     scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
@@ -7193,6 +7356,7 @@ function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject 
     nextAction: envelope.nextAction || "",
     loopContract: envelope.loopContract || null,
     canonicalNextAction: envelope.canonicalNextAction || null,
+    operatorReadout: envelope.operatorReadout || null,
   };
 }
 
