@@ -3,8 +3,48 @@ import { createSessionReadCache } from "./session-core.js";
 
 type LooseObject = Record<string, any>;
 type CliHandler = (args: LooseObject) => Promise<LooseObject>;
+type CliDependency = (...args: any[]) => any;
 
-export function createCliCommandHandlers(deps: LooseObject): Record<string, CliHandler> {
+export interface CliCommandDeps {
+  benchmarkInspect: CliDependency;
+  benchmarkLint: CliDependency;
+  checksInspect: CliDependency;
+  clearSession: CliDependency;
+  codexGoalBrief: CliDependency;
+  configureSession: CliDependency;
+  doctorHooks: CliDependency;
+  doctorSession: CliDependency;
+  exportDashboard: CliDependency;
+  finalizeCurrentTree: CliDependency;
+  finalizePreview: CliDependency;
+  gapCandidates: CliDependency;
+  guidedSetup: CliDependency;
+  initExperiment: CliDependency;
+  integrationsCommand: CliDependency;
+  interactiveSetup: CliDependency;
+  laneRunner: CliDependency;
+  logExperiment: CliDependency;
+  measureQualityGap: CliDependency;
+  newSegment: CliDependency;
+  nextExperiment: CliDependency;
+  onboardingPacket: CliDependency;
+  parseJsonOption: CliDependency;
+  partialResultsCommand: CliDependency;
+  promoteGate: CliDependency;
+  promptPlan: CliDependency;
+  publicState: CliDependency;
+  recipeCommand: CliDependency;
+  recommendNext: CliDependency;
+  researchFanout: CliDependency;
+  runExperiment: CliDependency;
+  serveDashboard: CliDependency;
+  sessionForensics: CliDependency;
+  setupPlan: CliDependency;
+  setupResearchSession: CliDependency;
+  setupSession: CliDependency;
+}
+
+export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, CliHandler> {
   return normalizeCliHandlers({
     setup: async (args) => {
       if (args.interactive) {

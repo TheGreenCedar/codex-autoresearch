@@ -19,6 +19,7 @@ Open these only when the short path is blocked, stale, or too vague to trust.
 - [Control plane contracts](control-plane.md): use this when state, recommend-next, dashboard, packet, approval, evidence, lane, or finalization safety must agree.
 - [Workflow diagrams](workflows.md): use this when the loop order is unclear and you need the setup, packet, fanout, dashboard, or finalization flow at a glance.
 - [Architecture diagrams](architecture.md): use this when changing internals or checking that the CLI, skill, dashboard, state files, and finalizer still have clear ownership.
+- [Perfection spec pack](perfection-spec/blueprint.md): use this when executing the post-audit branch plan for safety, performance, architecture, release, and docs hardening.
 - [Recipes](recipes.md): use this when no benchmark exists yet or the request needs a starter metric plan.
 - [Concepts](concepts.md): use this when a term in state, ASI, dashboard output, or reviewer feedback is unfamiliar.
 - [Troubleshooting](troubleshooting.md): use this when symptoms point to cache drift, stale dashboards, missing metrics, Git dirtiness, lane isolation, or provenance blockers.

@@ -6,6 +6,10 @@ import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.j
 
 type LooseObject = Record<string, unknown>;
 
+export const LIVE_LEDGER_MAX_ENTRIES = 5000;
+export const LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES = 200;
+export const LIVE_RESEARCH_FINGERPRINT_MAX_DEPTH = 2;
+
 interface LiveViewModelCache {
   expiresAt: number;
   fingerprint: string;
@@ -27,6 +31,14 @@ export async function serveAutoresearch(args: LooseObject) {
   let serverPort = 0;
   const server = http.createServer(async (req, res) => {
     try {
+      if (!isAllowedHostHeader(req.headers.host, serverPort)) {
+        sendJson(
+          res,
+          { ok: false, error: "Host header is not allowed for this local server." },
+          403,
+        );
+        return;
+      }
       const url = new URL(req.url || "/", "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/") {
         send(res, 200, "text/html; charset=utf-8", await dashboardHtml({}));
@@ -124,13 +136,36 @@ function send(res: ServerResponse, status: number, contentType: string, body: st
   res.writeHead(status, {
     "content-type": contentType,
     "cache-control": "no-store",
+    "content-security-policy":
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
   });
   res.end(body);
 }
 
+function isAllowedHostHeader(host: string | string[] | undefined, activePort: number): boolean {
+  if (!host || Array.isArray(host) || activePort <= 0) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${host}`);
+  } catch {
+    return false;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const port = Number(parsed.port || 80);
+  return (
+    port === activePort &&
+    (hostname === "127.0.0.1" ||
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]")
+  );
+}
+
 function redactJsonl(text: string, context: LooseObject): string {
-  return text
-    .split(/\r?\n/)
+  return boundLedgerLines(text.split(/\r?\n/))
     .map((line) => {
       if (!line.trim()) return line;
       try {
@@ -177,7 +212,7 @@ async function readCachedLiveViewModel({
   };
 }
 
-async function liveSessionFingerprint(
+export async function liveSessionFingerprint(
   workDir: string,
   options: {
     cached: LiveViewModelCache | null;
@@ -218,22 +253,45 @@ async function liveSessionStamp(workDir: string): Promise<string> {
   return parts.join("|");
 }
 
-async function fingerprintTree(root: string, label: string): Promise<string> {
+async function fingerprintTree(
+  root: string,
+  label: string,
+  options: {
+    budget?: { entries: number; truncated: boolean };
+    depth?: number;
+  } = {},
+): Promise<string> {
+  const depth = options.depth || 0;
+  const budget = options.budget || { entries: 0, truncated: false };
+  const rootStats = await fsp
+    .stat(root)
+    .catch((error: unknown) => (isFileNotFound(error) ? null : Promise.reject(error)));
+  if (!rootStats) return `${label}:missing`;
+  if (!rootStats.isDirectory()) return `${label}:${rootStats.size}:${rootStats.mtimeMs}`;
+  if (depth >= LIVE_RESEARCH_FINGERPRINT_MAX_DEPTH) {
+    return `${label}:dir:${rootStats.mtimeMs}:depth-capped`;
+  }
   const entries = await fsp
     .readdir(root, { withFileTypes: true })
     .catch((error: unknown) => (isFileNotFound(error) ? [] : Promise.reject(error)));
-  if (!entries.length) return `${label}:missing`;
+  if (!entries.length) return `${label}:dir:${rootStats.mtimeMs}:empty`;
   const parts: string[] = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (budget.entries >= LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES) {
+      budget.truncated = true;
+      break;
+    }
+    budget.entries += 1;
     const fullPath = path.join(root, entry.name);
     const childLabel = `${label}/${entry.name}`;
     if (entry.isDirectory()) {
-      parts.push(await fingerprintTree(fullPath, childLabel));
+      parts.push(await fingerprintTree(fullPath, childLabel, { budget, depth: depth + 1 }));
     } else if (entry.isFile()) {
       parts.push(await fingerprintPath(fullPath, childLabel));
     }
   }
-  return parts.join("|");
+  if (budget.truncated) parts.push(`${label}:truncated:${budget.entries}`);
+  return `${label}:dir:${rootStats.mtimeMs}:${parts.join("|")}`;
 }
 
 async function fingerprintPath(filePath: string, label: string): Promise<string> {
@@ -259,18 +317,23 @@ async function readRedactedLedgerEntries(
       if (isFileNotFound(error)) return "";
       throw error;
     });
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        const entry = redactEvidenceObject(JSON.parse(line), context);
-        return isLooseObject(entry) ? [entry] : [];
-      } catch {
-        return [];
-      }
-    });
+  return boundLedgerLines(
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  ).flatMap((line) => {
+    try {
+      const entry = redactEvidenceObject(JSON.parse(line), context);
+      return isLooseObject(entry) ? [entry] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function boundLedgerLines(lines: string[]): string[] {
+  return lines.length > LIVE_LEDGER_MAX_ENTRIES ? lines.slice(-LIVE_LEDGER_MAX_ENTRIES) : lines;
 }
 
 function isFileNotFound(error: unknown): boolean {

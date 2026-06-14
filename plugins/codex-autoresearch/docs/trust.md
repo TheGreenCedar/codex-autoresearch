@@ -216,7 +216,11 @@ Review generated commands before running them, keep secrets out of command lines
 
 `run` and `next` default to `--packet-env-mode inherit`, which preserves the current process environment and overlays keys from `--packet-env-file`. Use `--packet-env-mode minimal` when you want a smaller environment: Autoresearch keeps only `PATH`, `SystemRoot`, `TEMP`, and `TMP` from the parent process, then overlays explicit packet env file keys. Packet evidence records the mode and explicit key names, not env values.
 
-Evidence redaction is best-effort, not a confidentiality guarantee. Dashboard, ledger, and packet evidence paths try to scrub common secrets, credentials, home paths, and env-file references, but sensitive data should not be emitted into Autoresearch evidence in the first place.
+Evidence redaction is best-effort, not a confidentiality guarantee. CLI JSON responses, dashboard payloads, ledger debug views, and packet evidence paths try to scrub common secrets, credentials, env-file references, home paths, and local/network paths in evidence-bearing fields, but sensitive data should not be emitted into Autoresearch evidence in the first place.
+
+The served dashboard binds to loopback and rejects non-loopback or wrong-port `Host` headers. It also sends no-store and defensive browser headers. The raw `autoresearch.jsonl` endpoint remains disabled unless the server is started with `--debug-ledger`, and the debug ledger is still redacted line by line.
+
+Partial-result salvage reads only artifacts that stay inside the working directory lexically and by realpath. Oversized artifacts are skipped, excessive rows are capped with an `artifact_rows_truncated` notice, malformed or missing artifacts are reported as skipped artifacts, and any salvaged row remains diagnostic `measure` evidence only.
 
 Trusted external recipes store catalog provenance in session config. `doctor` and `next` revalidate that provenance and block when the recipe or catalog has drifted, cannot be fetched, or no longer matches the trusted hash.
 

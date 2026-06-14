@@ -415,7 +415,6 @@ function enforceCompactHandoffBudget(response: RecommendNextResponse): Recommend
   if (handoffOutputLength(current) <= COMPACT_HANDOFF_BUDGET) return current;
   current = {
     ...current,
-    frictionSignals: [],
     sessionDecisionCapsule: sanitizeSessionCapsuleForBudget(current.sessionDecisionCapsule),
   };
   if (handoffOutputLength(current) <= COMPACT_HANDOFF_BUDGET) return current;

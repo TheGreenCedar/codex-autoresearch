@@ -7,9 +7,12 @@ import {
   appendJsonl,
   buildDecisionEnvelope,
   buildLastRunFreshnessSnapshot,
+  createSessionReadCache,
   currentState,
   finiteMetric,
   lastRunPacketFreshness,
+  loadSessionRecords,
+  loadSessionState,
   normalizeScopedFileFingerprints,
   readJsonlTail,
   streamJsonl,
@@ -199,6 +202,23 @@ test("session JSONL helpers can stream and return bounded tails", async () => {
       tail.map((entry) => entry.run),
       [1, 2],
     );
+  });
+});
+
+test("session read cache reuses parsed records and derives state from them", async () => {
+  await withTempDir("session-read-cache", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "cached", metricName: "seconds" });
+    appendJsonl(dir, { run: 1, metric: 3, status: "measure", description: "Baseline." });
+
+    const cache = createSessionReadCache();
+    const records = loadSessionRecords(dir, cache);
+    const state = loadSessionState(dir, cache);
+    appendJsonl(dir, { run: 2, metric: 2, status: "keep", description: "Later run." });
+
+    assert.equal(loadSessionRecords(dir, cache), records);
+    assert.equal(loadSessionState(dir, cache), state);
+    assert.equal(state.results.length, 1);
+    assert.equal(currentState(dir).results.length, 2);
   });
 });
 

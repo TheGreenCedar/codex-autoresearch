@@ -13,6 +13,10 @@ import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
+import {
+  PARTIAL_RESULT_ARTIFACT_MAX_BYTES,
+  PARTIAL_RESULT_ARTIFACT_MAX_ROWS,
+} from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import {
   createCliRunner,
@@ -468,6 +472,52 @@ test("compact state exposes authoritative goal frame and operator handoff", asyn
   });
 });
 
+test("state recommend-next and dashboard share workflow friction readout", async () => {
+  await withTempDir("shared-workflow-friction-readout", async (dir) => {
+    const repeatedCommand = "node scripts/check.mjs --fast";
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "shared friction",
+          goal: "Keep the operator readout consistent.",
+          metricName: "seconds",
+          bestDirection: "lower",
+        }),
+        ...Array.from({ length: 10 }, (_, index) =>
+          JSON.stringify({
+            run: index + 1,
+            metric: 10 - index,
+            status: "measure",
+            command: repeatedCommand,
+            benchmarkContract: { command: repeatedCommand },
+            description: `Repeat verification ${index + 1}`,
+          }),
+        ),
+      ].join("\n") + "\n",
+    );
+
+    const fullState = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
+    const compactState = JSON.parse((await runCli(["state", "--cwd", dir, "--compact"])).stdout);
+    const recommendNext = JSON.parse(
+      (await runCli(["recommend-next", "--cwd", dir, "--compact"])).stdout,
+    );
+    const exported = JSON.parse((await runCli(["export", "--cwd", dir, "--json-full"])).stdout);
+
+    const hasVerificationChurn = (signals) =>
+      Array.isArray(signals) && signals.some((signal) => signal?.kind === "verification_churn");
+    assert.equal(hasVerificationChurn(fullState.workflowFriction), true);
+    assert.equal(hasVerificationChurn(compactState.workflowFriction), true);
+    assert.equal(hasVerificationChurn(compactState.decisionEnvelope?.workflowFriction), true);
+    assert.match((recommendNext.frictionSignals || []).join("\n"), /ran 10 times/);
+    assert.equal(
+      hasVerificationChurn(exported.viewModel?.decisionEnvelope?.workflowFriction),
+      true,
+    );
+  });
+});
+
 test(
   "compact read commands stay within a warm local startup budget",
   { skip: process.env.CI_PERF_UNSTABLE === "1" },
@@ -667,6 +717,118 @@ test("partial-results records diagnostic measure evidence from a failed packet a
       "utf8",
     );
     assert.match(evidenceIndex, /benchmark-artifact/);
+  });
+});
+
+test("partial-results bounds oversized malformed missing and truncated artifacts", async () => {
+  await withTempDir("partial-results-bounds", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "partial bounds", "--metric-name", "seconds"]);
+    const rows = Array.from({ length: PARTIAL_RESULT_ARTIFACT_MAX_ROWS + 5 }, (_, index) => ({
+      seconds: index + 1,
+    }));
+    await writeFile(
+      path.join(dir, "rows-many.json"),
+      JSON.stringify({ schemaVersion: 1, formulaVersion: "v1", rows }),
+      "utf8",
+    );
+    await writeFile(path.join(dir, "rows-bad.json"), "{ nope", "utf8");
+    await writeFile(
+      path.join(dir, "rows-huge.json"),
+      " ".repeat(PARTIAL_RESULT_ARTIFACT_MAX_BYTES + 1),
+      "utf8",
+    );
+
+    const many = await runCli([
+      "partial-results",
+      "--cwd",
+      dir,
+      "--artifact",
+      "rows-many.json",
+      "--command-hash",
+      "hash",
+    ]);
+    assert.equal(many.code, 0, many.stderr);
+    const manyPayload = JSON.parse(many.stdout);
+    assert.equal(manyPayload.candidates.length, PARTIAL_RESULT_ARTIFACT_MAX_ROWS);
+    assert.equal(
+      manyPayload.skippedArtifacts.some((item) => item.reason === "artifact_rows_truncated"),
+      true,
+    );
+
+    const huge = await runCli(["partial-results", "--cwd", dir, "--artifact", "rows-huge.json"]);
+    assert.equal(huge.code, 0, huge.stderr);
+    assert.equal(JSON.parse(huge.stdout).skippedArtifacts[0].reason, "artifact_too_large");
+
+    const malformed = await runCli([
+      "partial-results",
+      "--cwd",
+      dir,
+      "--artifact",
+      "rows-bad.json",
+    ]);
+    assert.equal(malformed.code, 0, malformed.stderr);
+    assert.equal(JSON.parse(malformed.stdout).skippedArtifacts[0].reason, "artifact_invalid_json");
+
+    const missing = await runCli([
+      "partial-results",
+      "--cwd",
+      dir,
+      "--artifact",
+      "missing-rows.json",
+    ]);
+    assert.equal(missing.code, 0, missing.stderr);
+    assert.equal(JSON.parse(missing.stdout).skippedArtifacts[0].reason, "artifact_missing");
+  });
+});
+
+test("partial-results rejects outside and linked artifact paths", async (t) => {
+  await withTempDir("partial-results-outside", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "partial outside", "--metric-name", "seconds"]);
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outsideDir, { recursive: true });
+    try {
+      const outsideRows = path.join(outsideDir, "rows.json");
+      await writeFile(
+        outsideRows,
+        JSON.stringify({ schemaVersion: 1, formulaVersion: "v1", rows: [{ seconds: 1 }] }),
+        "utf8",
+      );
+
+      const absoluteOutside = await runCli([
+        "partial-results",
+        "--cwd",
+        dir,
+        "--artifact",
+        outsideRows,
+      ]);
+      assert.equal(absoluteOutside.code, 0, absoluteOutside.stderr);
+      assert.equal(
+        JSON.parse(absoluteOutside.stdout).skippedArtifacts[0].reason,
+        "artifact_path_outside_workdir",
+      );
+
+      const linkPath = path.join(dir, "linked-rows.json");
+      try {
+        await symlink(outsideRows, linkPath, "file");
+      } catch (error) {
+        t.skip(`file symlink unavailable on this platform: ${error}`);
+        return;
+      }
+      const linked = await runCli([
+        "partial-results",
+        "--cwd",
+        dir,
+        "--artifact",
+        "linked-rows.json",
+      ]);
+      assert.equal(linked.code, 0, linked.stderr);
+      assert.equal(
+        JSON.parse(linked.stdout).skippedArtifacts[0].reason,
+        "artifact_path_outside_workdir",
+      );
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1659,6 +1821,68 @@ test("state and dashboard math keep zero-valued metrics visible", async () => {
   });
 });
 
+test("showcase export scrubs local paths from embedded ledger entries", async () => {
+  await withTempDir("showcase-public-entry-scrub", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "public scrub", "--metric-name", "seconds"]);
+    const localPath = "D:\\Sensitive\\client\\file.txt";
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      `Evidence at ${localPath}`,
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    const exported = await runCli(["export", "--cwd", dir, "--showcase"]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    assert.doesNotMatch(dashboard, /D:\\\\Sensitive\\\\client/);
+    assert.match(dashboard, /local-path/);
+  });
+});
+
+test("static export bounds embedded ledger entries for long sessions", async () => {
+  await withTempDir("static-export-ledger-bounds", async (dir) => {
+    const entries = [
+      { type: "config", name: "large export", metricName: "seconds", bestDirection: "lower" },
+      ...Array.from({ length: 5100 }, (_, index) => ({
+        run: index + 1,
+        metric: index + 1,
+        status: "measure",
+        description: `measurement ${index + 1}`,
+      })),
+    ];
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const exported = await runCli(["export", "--cwd", dir]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    const dataMatch = dashboard.match(
+      /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
+    );
+    const metaMatch = dashboard.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+    assert.ok(dataMatch);
+    assert.ok(metaMatch);
+    const data = JSON.parse(dataMatch[1]);
+    const meta = JSON.parse(metaMatch[1]);
+
+    assert.equal(data.length, 5000);
+    assert.equal(data[0].type, "config");
+    assert.equal(data.at(-1).run, 5100);
+    assert.equal(meta.ledgerBounds.truncated, true);
+    assert.equal(meta.ledgerBounds.omittedEntries, 101);
+  });
+});
+
 test("log accepts metrics from a JSON file for PowerShell-safe logging", async () => {
   await withTempDir("metrics-file", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "metrics file", "--metric-name", "seconds"]);
@@ -1699,6 +1923,35 @@ test("log accepts metrics from a JSON file for PowerShell-safe logging", async (
     assert.equal(payload.experiment.metrics.windowsPath, "C:\\tmp\\artifact.json");
     assert.equal(payload.experiment.evidenceStatus, "accepted");
     assert.equal(payload.experiment.promotion.label, "promotion_eligible");
+  });
+});
+
+test("log succeeds with recovery warning when session note update fails", async () => {
+  await withTempDir("log-note-warning", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "note warning", "--metric-name", "seconds"]);
+    const notePath = path.join(dir, "autoresearch.md");
+    await rm(notePath, { recursive: true, force: true });
+    await mkdir(notePath);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "measure",
+      "--description",
+      "Durable log despite note failure",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const payload = JSON.parse(logged.stdout);
+    assert.equal(payload.ok, true);
+    assert.match(payload.recovery, /durably logged to autoresearch\.jsonl/i);
+    assert.match(payload.warnings.join("\n"), /autoresearch\.md could not be updated/i);
+
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.match(ledger, /Durable log despite note failure/);
   });
 });
 
@@ -2316,8 +2569,14 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
       `${quoteForShell(process.execPath)} runner.mjs`,
     ]);
     assert.equal(packet.code, 0, packet.stderr);
+    assert.doesNotMatch(packet.stdout, /abcdefghijklmnop/);
+    assert.doesNotMatch(packet.stdout, /zyxwvutsrqponmlkjihgfedcba/);
+    assert.match(packet.stdout, /api_key=<redacted>/);
+    assert.match(packet.stdout, /Bearer <redacted>/);
     const payload = JSON.parse(packet.stdout);
     assert.equal(payload.packetEvidence.stdoutTail.includes("abcdefghijklmnop"), false);
+    assert.equal(payload.run.tailOutput.includes("abcdefghijklmnop"), false);
+    assert.doesNotMatch(JSON.stringify(payload.run.progressSnapshot), /zyxwvutsrqponmlkjihgfedcba/);
 
     const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
     assert.doesNotMatch(lastRunText, /abcdefghijklmnop/);
@@ -2339,6 +2598,53 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
     const loggedPayload = JSON.parse(logged.stdout);
     assert.equal(loggedPayload.experiment.metric, 1);
     assert.equal(loggedPayload.lastRunCleared, true);
+  });
+});
+
+test("run command response redacts raw benchmark evidence", async () => {
+  await withTempDir("run-response-redaction", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "redacted run", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "runner.mjs"),
+      [
+        "console.log('METRIC seconds=1');",
+        "console.log('api_key=abcdefghijklmnop');",
+        "console.log('Bearer zyxwvutsrqponmlkjihgfedcba');",
+        "console.log('win_path=C:\\\\Users\\\\alice\\\\secret.txt');",
+        "console.log('win_slash=C:/Users/alice/secret.txt');",
+        "console.log('posix_path=/home/alice/secret.txt');",
+        "console.log('unc_path=\\\\\\\\server\\\\share\\\\secret.txt');",
+        "console.log('secret_from_env=' + process.env.SAMPLE_SECRET);",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(path.join(dir, ".env.secret"), "SAMPLE_SECRET=from-env-secret-value\n", "utf8");
+
+    const result = await runCli([
+      "run",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} runner.mjs`,
+      "--packet-env-file",
+      ".env.secret",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /abcdefghijklmnop/);
+    assert.doesNotMatch(result.stdout, /zyxwvutsrqponmlkjihgfedcba/);
+    assert.doesNotMatch(result.stdout, /from-env-secret-value/);
+    assert.doesNotMatch(result.stdout, /C:\\\\Users\\\\alice/);
+    assert.doesNotMatch(result.stdout, /C:\/Users\/alice/);
+    assert.doesNotMatch(result.stdout, /\/home\/alice/);
+    assert.doesNotMatch(result.stdout, /server\\\\share/);
+    assert.match(result.stdout, /api_key=<redacted>/);
+    assert.match(result.stdout, /Bearer <redacted>/);
+    assert.match(result.stdout, /secret_from_env=<redacted>/);
+    assert.match(result.stdout, /<network-path>/);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.envFile, "<env-file>");
+    assert.equal(payload.tailOutput.includes("abcdefghijklmnop"), false);
+    assert.doesNotMatch(JSON.stringify(payload.progressSnapshot), /zyxwvutsrqponmlkjihgfedcba/);
   });
 });
 
@@ -6092,6 +6398,84 @@ test("keep logs preflight missing commit paths before git add mutates the index"
     assert.doesNotMatch(blocked.stderr, /pathspec/);
     assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "");
     assert.match(await git(dir, ["status", "--short"]), /M tracked\.txt/);
+  });
+});
+
+test("keep logs reject Git pathspec magic in commit paths", async () => {
+  await withTempDir("commit-path-pathspec-magic", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "a.txt"), "before\n", "utf8");
+    await writeFile(path.join(dir, "b.txt"), "before\n", "utf8");
+    await git(dir, ["add", "a.txt", "b.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "pathspec commit", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ commitPaths: [":(top)"] }, null, 2),
+      "utf8",
+    );
+    await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
+    await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Blocked pathspec keep",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /pathspec magic/);
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "");
+    assert.match(await git(dir, ["status", "--short"]), /M a\.txt/);
+    assert.match(await git(dir, ["status", "--short"]), /M b\.txt/);
+  });
+});
+
+test("discard cleanup rejects Git pathspec magic in revert paths", async () => {
+  await withTempDir("revert-path-pathspec-magic", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "a.txt"), "before\n", "utf8");
+    await writeFile(path.join(dir, "b.txt"), "before\n", "utf8");
+    await git(dir, ["add", "a.txt", "b.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "pathspec revert", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
+    await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "discard",
+      "--description",
+      "Blocked pathspec discard",
+      "--revert-paths",
+      ":(top)",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /pathspec magic/);
+    assert.match(await git(dir, ["status", "--short"]), /M a\.txt/);
+    assert.match(await git(dir, ["status", "--short"]), /M b\.txt/);
   });
 });
 

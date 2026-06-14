@@ -409,6 +409,125 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalizer rejects Git pathspec magic in plan files",
+  "autoresearch-finalize-pathspec-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "a.txt"), "base\n");
+    await writeFile(path.join(repo, "b.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await git(["switch", "-c", "codex/pathspec-plan"], repo);
+    await writeFile(path.join(repo, "a.txt"), "kept\n");
+    await git(["commit", "-am", "keep a"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "pathspec-plan",
+          groups: [
+            {
+              title: "Pathspec plan",
+              body: "Should reject magic.",
+              last_commit: finalTree,
+              slug: "pathspec-plan",
+              files: [":(top)"],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /pathspec magic/);
+    const branches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
+    assert.equal(branches, "");
+  },
+);
+
+test("finalizer refuses cleanup through linked directory parents", async (t) => {
+  await withTempRoot("autoresearch-finalize-linked-parent-", async (root) => {
+    const repo = path.join(root, "repo");
+    const outside = path.join(root, "outside");
+    const linkPath = path.join(repo, "linked-output");
+    const outsideVictim = path.join(outside, "victim.txt");
+    await fsp.mkdir(repo, { recursive: true });
+    await fsp.mkdir(outside, { recursive: true });
+    await fsp.writeFile(outsideVictim, "outside data\n", "utf8");
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, ".gitignore"), "linked-output/\n");
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await git(["switch", "-c", "codex/linked-parent-plan"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
+    await git(["commit", "-am", "keep value"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    try {
+      await fsp.symlink(outside, linkPath, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory links are unavailable in this environment: ${String(error)}`);
+      return;
+    }
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "linked-parent-plan",
+          groups: [
+            {
+              title: "Linked parent plan",
+              body: "Should not delete outside the repo.",
+              last_commit: finalTree,
+              slug: "linked-parent-plan",
+              files: ["linked-output/victim.txt"],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /outside the working directory/);
+    assert.equal(await fsp.readFile(outsideVictim, "utf8"), "outside data\n");
+    const branches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
+    assert.equal(branches, "");
+  });
+});
+
+testWithTempRoot(
   "finalizer refuses existing review branch with same files but stale content",
   "finalize-stale-review-branch-",
   async (root) => {

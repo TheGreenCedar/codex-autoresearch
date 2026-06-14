@@ -22,12 +22,15 @@ import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
+import { buildNextPacketId } from "../lib/commands/next.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
+import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
+import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import {
   defaultCommandShell,
   normalizeCommandShell,
@@ -49,14 +52,11 @@ import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 import {
-  approvalRequirementsFromLaneResults,
-  approvalRequirementFromLane,
-  buildApprovalLedgerStatus,
-  dedupeApprovalRequirements,
-} from "../lib/approval-ledger.js";
-import { classifyEvidenceMaturity, runsFromState } from "../lib/evidence-maturity.js";
-import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
-import { buildResourcePreflight, resourceBudgetFromConfig } from "../lib/process-governor.js";
+  buildCheapFinalizationPressure,
+  buildSessionReadModel,
+  buildSessionReadModelState,
+  statusCountsFromState,
+} from "../lib/session-read-model.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
   buildProtectedBenchmarkGuard,
@@ -134,6 +134,7 @@ import {
   buildDecisionEnvelope,
   finiteMetric,
   currentState,
+  loadSessionRecords,
   loadSessionState,
   listOption,
   readJsonl,
@@ -228,6 +229,7 @@ const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
 const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
 const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
 const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
+const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = 5000;
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
@@ -489,11 +491,12 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
       normalized.startsWith("../") ||
       normalized.includes("/../") ||
       normalized === ".." ||
+      normalized.startsWith(":") ||
       normalized.startsWith(".git/") ||
       normalized === ".git"
     ) {
       throw new Error(
-        `${optionName} must contain project-relative paths that do not escape the working directory: ${item}`,
+        `${optionName} must contain literal project-relative paths that do not escape the working directory or use Git pathspec magic: ${item}`,
       );
     }
     return normalized.replace(/\/$/, "");
@@ -3720,13 +3723,6 @@ async function writePendingLogTransaction(workDir: string, inGit: boolean, recei
   return receiptPath;
 }
 
-async function clearPendingLogTransaction(receiptPath: string | null) {
-  if (!receiptPath) return;
-  await fsp.unlink(receiptPath).catch((error: any) => {
-    if (error?.code !== "ENOENT") throw error;
-  });
-}
-
 async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
   const warnings = [];
   for (const receiptPath of await pendingLogTransactionCandidatePaths(workDir, inGit)) {
@@ -5124,7 +5120,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     settings,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-  const records = readJsonl(workDir);
+  const records = loadSessionRecords(workDir);
   const laneLifecycle = buildLaneLifecycle({
     state,
     records,
@@ -5155,8 +5151,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       warningDetails: warnings,
     }),
   );
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -5165,7 +5161,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -5198,7 +5194,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     best: state.best,
     current: state.current,
   });
-  const controlPlane = buildControlPlaneContracts({
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
@@ -5207,7 +5203,17 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     parallelLanes,
     workflowFriction,
     finalization: effectiveFinalizePreview,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
+  const controlPlane = readModel.controlPlane;
   const commands = dashboardCommands(workDir, qualityGap);
   const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
   const canonicalCommandHints = {
@@ -5478,16 +5484,13 @@ async function runExperiment(args: LooseObject) {
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
-  const resourcePreflight = buildResourcePreflight({
+  const resourcePreflight = assertRunResourcePreflight({
     command,
+    config,
     entries: readJsonl(workDir),
-    budgets: resourceBudgetFromConfig(config),
   });
-  if (!resourcePreflight.canStart) {
-    throw new Error(`Resource preflight blocked packet start: ${resourcePreflight.nextAction}`);
-  }
   let progressSnapshot = createProgressSnapshot({
-    packetId: `packet-${state.results.length + 1}-active`,
+    packetId: buildActiveRunPacketId(state.results.length + 1),
     command,
     startedAt: new Date().toISOString(),
     timeoutSeconds,
@@ -5893,6 +5896,7 @@ async function logExperiment(args: any) {
   let revertMessage = "";
   let pendingLogReceiptPath: string | null = null;
   let pendingLogReceiptWarning = "";
+  const logWarnings: string[] = [];
 
   if (status === "keep" && inGit) {
     if (explicitCommit) {
@@ -6047,20 +6051,26 @@ async function logExperiment(args: any) {
   );
   appendJsonl(workDir, experiment);
   if (pendingLogReceiptPath) {
-    try {
-      await clearPendingLogTransaction(pendingLogReceiptPath);
-    } catch (error: unknown) {
-      pendingLogReceiptWarning = `Pending receipt cleanup failed: ${errorMessage(error)}.`;
+    const cleanupWarning = await clearPendingLogTransactionWithWarning(pendingLogReceiptPath);
+    if (cleanupWarning) {
+      pendingLogReceiptWarning = cleanupWarning;
+      logWarnings.push(pendingLogReceiptWarning);
     }
   }
   if (lastPacket) await deleteLastRunPacket(workDir);
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
-  await appendSessionRunNote(workDir, experiment, stateAfter, {
-    gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
-    revertMessage,
-  });
+  try {
+    await appendSessionRunNote(workDir, experiment, stateAfter, {
+      gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
+      revertMessage,
+    });
+  } catch (error: unknown) {
+    logWarnings.push(
+      `Run was durably logged to autoresearch.jsonl, but autoresearch.md could not be updated: ${errorMessage(error)}.`,
+    );
+  }
   return {
     ok: true,
     workDir,
@@ -6071,7 +6081,8 @@ async function logExperiment(args: any) {
     limit,
     git: gitMessage,
     revert: revertMessage,
-    recovery: pendingLogReceiptWarning,
+    recovery: logWarnings.join(" "),
+    warnings: logWarnings,
     lastRunCleared: Boolean(lastPacket),
     continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
@@ -6121,18 +6132,36 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const staticExport =
     meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
   const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
-  const dataForClient = redactEvidenceObject(
-    staticExport ? stripDashboardCommandFields(entries) : entries,
-    dashboardContext,
-  );
-  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
-  const metaForClient = stripDashboardCommandFields(meta);
   const publicExport = Boolean(
     meta.publicExport ||
     meta.showcaseMode ||
     meta.settings?.publicExport ||
     meta.settings?.showcaseMode,
   );
+  const entriesForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
+  const boundedEntries = staticExport
+    ? boundDashboardStaticExportEntries(entriesForClient)
+    : {
+        entries: entriesForClient,
+        truncated: false,
+        omittedEntries: 0,
+        maxEntries: Array.isArray(entriesForClient) ? entriesForClient.length : 0,
+      };
+  const dataForClient = redactEvidenceObject(
+    publicExport ? scrubDashboardPublicExport(boundedEntries.entries) : boundedEntries.entries,
+    dashboardContext,
+  );
+  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
+  const metaForClient = stripDashboardCommandFields({
+    ...meta,
+    ledgerBounds: staticExport
+      ? {
+          truncated: boundedEntries.truncated,
+          omittedEntries: boundedEntries.omittedEntries,
+          maxEntries: boundedEntries.maxEntries,
+        }
+      : undefined,
+  });
   const metaData = JSON.stringify(
     redactEvidenceObject(
       publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
@@ -6162,6 +6191,32 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
     .replace(DASHBOARD_META_PLACEHOLDER, () => metaData)
     .replace(DASHBOARD_CSS_PLACEHOLDER, () => dashboardCss)
     .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
+}
+
+function boundDashboardStaticExportEntries(entries: any[]): {
+  entries: any[];
+  maxEntries: number;
+  omittedEntries: number;
+  truncated: boolean;
+} {
+  if (!Array.isArray(entries) || entries.length <= DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES) {
+    return {
+      entries: Array.isArray(entries) ? entries : [],
+      maxEntries: DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES,
+      omittedEntries: 0,
+      truncated: false,
+    };
+  }
+  const tail = entries.slice(-DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES);
+  const latestConfig = [...entries].reverse().find((entry) => entry?.type === "config");
+  const bounded =
+    latestConfig && !tail.includes(latestConfig) ? [latestConfig, ...tail.slice(1)] : tail;
+  return {
+    entries: bounded,
+    maxEntries: DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES,
+    omittedEntries: entries.length - bounded.length,
+    truncated: true,
+  };
 }
 
 function readDashboardBuildAsset(fileName: string) {
@@ -6334,6 +6389,7 @@ function redactRunPacketProcessEvidence(
   if (value.stdoutTail) value.stdoutTail = redactEvidenceText(value.stdoutTail, context);
   if (value.stderrTail) value.stderrTail = redactEvidenceText(value.stderrTail, context);
   redactProgressEvidence(value.progress, context);
+  redactProgressEvidence(value.progressSnapshot, context);
   if (value.commandDiagnostics) {
     value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
   }
@@ -6372,6 +6428,86 @@ function redactBenchmarkContractForStorage(
   }
   if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
   if (value.envFile) value.envFile = "<env-file>";
+}
+
+const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
+  "latestOutputTail",
+  "outputPreview",
+  "outputTail",
+  "stderrTail",
+  "stdoutTail",
+  "tailOutput",
+]);
+
+function redactCliResponseForOutput<T>(result: T): T {
+  const cloned = JSON.parse(JSON.stringify(result ?? null));
+  redactCliResponseNode(cloned, { workDir: inferCliResponseWorkDir(cloned) });
+  return cloned as T;
+}
+
+function redactCliResponseNode(value: unknown, context: LooseObject): void {
+  if (Array.isArray(value)) {
+    for (const item of value) redactCliResponseNode(item, context);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const node = value as LooseObject;
+  const localContext = { ...context, workDir: inferCliResponseWorkDir(node, context.workDir) };
+  if (looksLikeProcessEvidence(node)) redactRunPacketProcessEvidence(node, localContext);
+  if (node.packetEvidence) {
+    node.packetEvidence = redactEvidenceObject(node.packetEvidence, localContext);
+    redactProgressEvidence(node.packetEvidence.progressSnapshot, localContext);
+  }
+  if (node.history) {
+    if (node.history.command) {
+      node.history.command = redactCommandDisplay(node.history.command, localContext);
+    }
+    redactBenchmarkContractForStorage(node.history.benchmarkContract, localContext);
+  }
+  redactBenchmarkContractForStorage(node.benchmarkContract, localContext);
+
+  for (const [key, child] of Object.entries(node)) {
+    if (typeof child === "string") {
+      if (key === "commandFile") {
+        node[key] = redactPathDisplay(child, localContext.workDir);
+        continue;
+      }
+      if (key === "envFile" && child) {
+        node[key] = "<env-file>";
+        continue;
+      }
+      if (CLI_RESPONSE_TEXT_EVIDENCE_KEYS.has(key)) {
+        node[key] = redactEvidenceText(child, localContext);
+        continue;
+      }
+    }
+    redactCliResponseNode(child, localContext);
+  }
+}
+
+function inferCliResponseWorkDir(value: unknown, fallback = ""): string {
+  if (!value || typeof value !== "object") return fallback;
+  const node = value as LooseObject;
+  const candidates = [
+    node.workDir,
+    node.history?.workDir,
+    node.run?.workDir,
+    node.doctor?.workDir,
+    node.settings?.workDir,
+  ];
+  const found = candidates.find((candidate) => typeof candidate === "string" && candidate);
+  return found ? path.resolve(String(found)) : fallback;
+}
+
+function looksLikeProcessEvidence(value: LooseObject): boolean {
+  return Boolean(
+    Object.hasOwn(value, "tailOutput") ||
+    Object.hasOwn(value, "stdoutTail") ||
+    Object.hasOwn(value, "stderrTail") ||
+    Object.hasOwn(value, "progressSnapshot") ||
+    Object.hasOwn(value, "commandDiagnostics") ||
+    (Object.hasOwn(value, "exitCode") && Object.hasOwn(value, "command")),
+  );
 }
 
 async function readLastRunPacket(workDir: string) {
@@ -6609,7 +6745,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   }
 
   const state = loadSessionState(workDir, args.readCache);
-  const records = readJsonl(workDir);
+  const records = loadSessionRecords(workDir, args.readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir);
@@ -6661,8 +6797,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     scaffoldHealth,
     warningDetails,
   });
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -6672,7 +6808,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -6705,7 +6841,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     best: state.best,
     current: state.current,
   });
-  const controlPlane = buildControlPlaneContracts({
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
@@ -6714,13 +6850,19 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     workflowFriction,
     finalization,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
-  const statusCounts = Object.fromEntries(
-    [...STATUS_VALUES].map((status: string) => [
-      status,
-      state.current.filter((run: any) => run.status === status).length,
-    ]),
-  );
+  const controlPlane = readModel.controlPlane;
+  const statusCounts = readModel.statusCounts;
   const continuation = loopContinuation(workDir, state, config, "state");
   const stateCommands = {
     ...continuation.commands,
@@ -6822,7 +6964,7 @@ async function publicCompactState({
   readCache?: unknown;
 }): Promise<LooseObject> {
   const state = loadSessionState(workDir, readCache as any);
-  const records = readJsonl(workDir);
+  const records = loadSessionRecords(workDir, readCache as any);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -6868,8 +7010,8 @@ async function publicCompactState({
     scaffoldHealth,
     warningDetails,
   });
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -6879,8 +7021,19 @@ async function publicCompactState({
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails,
+    recipes: recipeSummaries,
+  });
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
@@ -6897,33 +7050,39 @@ async function publicCompactState({
     best: state.best,
     current: state.current,
   });
-  const statusCounts = Object.fromEntries(
-    [...STATUS_VALUES].map((status: string) => [
-      status,
-      state.current.filter((run: any) => run.status === status).length,
-    ]),
-  );
+  const statusCounts = statusCountsFromState(state);
   const continuation = loopContinuation(workDir, state, config, "state");
   const compactCommands = {
     ...continuation.commands,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
-  const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
-    ok: false,
-    ready: false,
-    warnings: [error.message],
-    nextAction: "Fix finalization preview errors before relying on review readiness.",
-  }));
-  const controlPlane = buildControlPlaneContracts({
+  const finalization = await compactFinalizationPressure({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails,
+  });
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
     records,
     codexGoalObjective,
     parallelLanes,
-    workflowFriction: [],
+    workflowFriction,
     finalization,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
+  const controlPlane = readModel.controlPlane;
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: {
@@ -6941,7 +7100,7 @@ async function publicCompactState({
       finalization,
       experimentEconomics,
       salvageCandidates: partialResults.candidates,
-      workflowFriction: [],
+      workflowFriction,
       experimentMemory: memory,
       watchdog: watchdogSummary,
     }),
@@ -7000,7 +7159,7 @@ async function publicCompactState({
     portfolioRecommendation,
     experimentEconomics,
     partialResults,
-    workflowFriction: [],
+    workflowFriction,
     ...controlPlane,
     codexGoalObjective,
     resumeAudit: decisionEnvelope,
@@ -7009,77 +7168,38 @@ async function publicCompactState({
   });
 }
 
-function buildControlPlaneContracts({
+async function compactFinalizationPressure({
   workDir,
-  config,
   state,
-  records,
-  codexGoalObjective,
-  parallelLanes,
-  workflowFriction = [],
-  finalization = null,
+  qualityGap,
+  warningDetails,
 }: {
   workDir: string;
-  config: LooseObject;
   state: LooseObject;
-  records: LooseObject[];
-  codexGoalObjective?: unknown;
-  parallelLanes?: unknown[];
-  workflowFriction?: unknown[];
-  finalization?: LooseObject | null;
-}): LooseObject {
-  const commands = continuationCommands(workDir);
-  const goalContract = buildGoalContract({
-    autoresearchGoal: state.config?.goal || config.goal,
-    codexGoalObjective,
-    benchmarkGoal: config.benchmarkGoal || state.config?.benchmarkGoal || state.config?.goal,
-    finalizationClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.finalizationClaim,
-    recoveryCommand: commands.codexGoalBrief || commands.state,
-  });
-  const approvalRequirements = dedupeApprovalRequirements([
-    ...(Array.isArray(parallelLanes) ? parallelLanes : [])
-      .map(approvalRequirementFromLane)
-      .filter((requirement): requirement is NonNullable<typeof requirement> =>
-        Boolean(requirement),
-      ),
-    ...approvalRequirementsFromLaneResults(records),
-  ]);
-  const approvalLedger = buildApprovalLedgerStatus({
-    entries: records,
-    required: approvalRequirements,
-  });
-  const resourcePreflight = buildResourcePreflight({
-    entries: records,
-    budgets: resourceBudgetFromConfig(config),
-  });
-  const evidenceMaturity = classifyEvidenceMaturity({
-    runs: runsFromState(state),
-    requestedClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.summary ||
-      finalization?.productGradeSummary,
-  });
-  const laneOrchestration = planFailureRecoveryLanes({
-    signals: [
-      ...(Array.isArray(workflowFriction) ? workflowFriction : []),
-      ...(Array.isArray(state.sessionDecisionCapsule?.productSignals)
-        ? state.sessionDecisionCapsule.productSignals
-        : []),
-    ],
-    writeScope: config.commitPaths || [],
-  });
-  return {
-    goalContract,
-    approvalLedger,
-    resourcePreflight,
-    evidenceMaturity,
-    laneOrchestration,
-    finalizationRunway: finalization?.finalizationRunway || finalization?.runway || null,
-  };
+  qualityGap: LooseObject | null;
+  warningDetails: LooseObject[];
+}): Promise<LooseObject> {
+  const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
+  if (!hasCommitBackedKeepEvidence(state)) return cheap;
+  return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+    ...cheap,
+    ok: false,
+    ready: false,
+    warnings: [...(cheap.warnings || []), error.message],
+    nextAction:
+      cheap.nextAction || "Fix finalization preview errors before relying on review readiness.",
+  }));
+}
+
+function hasCommitBackedKeepEvidence(state: LooseObject): boolean {
+  return (Array.isArray(state.current) ? state.current : []).some(
+    (run: LooseObject) =>
+      run?.commit &&
+      (run.status === "keep" ||
+        run.status === "kept" ||
+        run.evidenceStatus === "accepted" ||
+        run.accepted === true),
+  );
 }
 
 function compactPublicState(state: LooseObject) {
@@ -8885,7 +9005,7 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .digest("hex");
   const artifacts = artifactList(run.artifacts, run.workDir);
   const taskArtifacts = await taskArtifactsForRun(run);
-  const packetId = `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`;
+  const packetId = buildNextPacketId(history, fingerprint);
   return {
     packetId,
     cwd: redactPathDisplay(run.workDir, run.workDir),
@@ -9496,15 +9616,9 @@ async function executeAutoresearchCli(
     benchmarkInspect,
     benchmarkLint,
     checksInspect,
-    buildDriftReport,
-    buildDashboardViewModel,
     clearSession,
     codexGoalBrief,
     configureSession,
-    dashboardCommands,
-    dashboardHtml,
-    dashboardSettings,
-    dashboardViewModel,
     doctorHooks,
     doctorSession,
     exportDashboard,
@@ -9522,18 +9636,14 @@ async function executeAutoresearchCli(
     onboardingPacket,
     parseJsonOption,
     partialResultsCommand,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
     promoteGate,
     promptPlan,
     publicState,
     recommendNext,
     sessionForensics,
-    readJsonl,
     recipeCommand,
     researchFanout,
     laneRunner,
-    resolveWorkDir,
     runExperiment,
     serveDashboard,
     setupPlan,
@@ -9545,7 +9655,7 @@ async function executeAutoresearchCli(
     writeStdout(outcome.text);
     return;
   }
-  writeStdout(JSON.stringify(outcome.result, null, 2));
+  writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 

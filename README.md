@@ -9,11 +9,11 @@
 
 Codex Autoresearch helps Codex turn "make this better" into a measured loop.
 
-Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs each keep or discard with evidence, preserves ASI and metrics across context loss, and turns useful changes into reviewable branches.
+Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs keep, discard, measure, crash, and checks_failed decisions with evidence, preserves ASI and metrics across context loss, and previews useful kept changes as reviewable branches.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
-Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts the measured-loop idea for Codex plugin workflows, repo-local benchmarks, durable session files, an evidence trail, live dashboards, and reviewable finalization.
+Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts the measured-loop idea for Codex plugin workflows, repo-local benchmarks, durable session files, an evidence trail, live readouts, and reviewable finalization previews.
 
 ## Try it
 
@@ -260,7 +260,7 @@ codex plugin marketplace upgrade thegreencedar-autoresearch
 codex plugin marketplace remove thegreencedar-autoresearch
 ```
 
-Prefer the plugin UI when the terminal marketplace commands are unavailable.
+`marketplace remove` removes the source marketplace registration. It may not uninstall an already installed workspace plugin. Prefer the plugin UI for installed-plugin refresh/uninstall actions, and use terminal marketplace commands only for source registration when your Codex build supports them.
 
 ## Changelog
 

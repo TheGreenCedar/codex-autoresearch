@@ -16,8 +16,25 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  workflow-policy:
+    name: Workflow policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Enforce third-party action pinning
+        run: node .github/scripts/check-workflow-policy.mjs
+
   test:
+    needs: workflow-policy
+    timeout-minutes: 45
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -44,3 +61,6 @@ jobs:
 
       - name: Run CLI smoke test
         run: node scripts/autoresearch.mjs --help
+
+      - name: Run finalizer launcher smoke test
+        run: node scripts/finalize-autoresearch.mjs --help

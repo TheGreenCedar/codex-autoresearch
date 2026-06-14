@@ -3,7 +3,7 @@ import path from "node:path";
 import { type UnknownRecord } from "./types/json.js";
 
 const SECRET_ASSIGNMENT =
-  /\b(api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|password|secret|token)\b\s*[:=]\s*(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'<>]{8,})/gi;
+  /\b([A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|credential|credentials|password|secret|token)[A-Za-z0-9_-]*)\b\s*[:=]\s*(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s"'<>]{8,})/gi;
 const SECRET_FLAG =
   /(^|[\s([{:;,])(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer|client[-_]?secret|password|secret|token|credential|credentials))(?:(=)\s*|\s+)(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|(?!--)[^\s"'<>]{8,})/gi;
 const SECRET_PHRASE =
@@ -11,6 +11,8 @@ const SECRET_PHRASE =
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/\-=]{12,}/gi;
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi;
 const WINDOWS_HOME = /[A-Za-z]:\\Users\\[^\\\s"'<>]+/g;
+const WINDOWS_HOME_SLASH = /[A-Za-z]:\/Users\/[^/\s"'<>]+/g;
+const UNC_PATH = /\\\\[^\\\s"'<>]+\\[^\\\s"'<>]+(?:\\[^\\\s"'<>]+)*/g;
 const POSIX_HOME = /\/(?:Users|home)\/[^/\s"'<>]+/g;
 const NODE_STACK_FRAME =
   /^([ \t]*)at\s+.*(?:\((?:file:\/\/)?(?:[A-Za-z]:\\|\/)[^)]+:\d+:\d+\)|(?:file:\/\/)?(?:[A-Za-z]:\\|\/)\S+:\d+:\d+).*$/gm;
@@ -58,7 +60,9 @@ export function redactEvidenceText(value: unknown, context: UnknownRecord = {}):
   text = text.replace(BEARER_TOKEN, "Bearer <redacted>");
   text = text.replace(SECRET_PHRASE, (_match, key) => `${key} <redacted>`);
   text = redactEnvFileTokens(text);
+  text = text.replace(UNC_PATH, "<network-path>");
   text = text.replace(WINDOWS_HOME, "C:\\Users\\<user>");
+  text = text.replace(WINDOWS_HOME_SLASH, "C:/Users/<user>");
   text = text.replace(POSIX_HOME, (match) =>
     match.startsWith("/Users/") ? "/Users/<user>" : "/home/<user>",
   );

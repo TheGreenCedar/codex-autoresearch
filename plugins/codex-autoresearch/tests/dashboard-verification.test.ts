@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { buildChart, DASHBOARD_CHART_MAX_POINTS } from "../dashboard/src/model/chart.js";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import { asiText } from "../dashboard/src/model/asi.js";
 import type { SessionRun } from "../dashboard/src/types.js";
@@ -45,6 +46,67 @@ test.after(async () => {
 
 test.afterEach(() => {
   dashboard.closeDashboardWindows();
+});
+
+test("dashboard chart downsamples long histories while preserving anchor points", () => {
+  const runs: SessionRun[] = Array.from(
+    { length: DASHBOARD_CHART_MAX_POINTS + 75 },
+    (_, index) => ({
+      run: index + 1,
+      metric: index + 1,
+      status: "keep",
+      description: `Run ${index + 1}`,
+      metrics: {},
+      asi: {},
+      segment: 0,
+    }),
+  );
+  const bestRun = runs[250]!;
+  const chart = buildChart(
+    {
+      segment: 0,
+      config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
+      runs,
+    },
+    {
+      baseline: 1,
+      baselineRun: runs[0],
+      best: bestRun.metric,
+      bestRun,
+      latestPlottedRun: runs.at(-1) || null,
+      latestFailure: null,
+      nextAction: "Continue.",
+      confidence: null,
+      confidenceText: "",
+      improvement: null,
+      recentRuns: runs.slice(-4),
+      plottedRuns: runs,
+      metricDefinition: {
+        requestedMode: "raw",
+        mode: "raw",
+        metricName: "seconds",
+        displayUnit: "s",
+        bestDirection: "lower",
+        valueLabel: "Real value",
+        percentLabel: "Percent",
+        weights: { time: 0.7, memory: 0.3 },
+        memoryKey: "memory_mb",
+        formulaInline: "",
+        formulaDetails: "",
+        formulaSource: "",
+        formulaConfigured: false,
+        fallbackNote: "",
+        baselineMetric: 1,
+        baselineTime: 1,
+        baselineMemory: null,
+      },
+    },
+  );
+
+  assert.ok(chart.points.length <= DASHBOARD_CHART_MAX_POINTS);
+  assert.equal(chart.points[0].run.run, 1);
+  assert.equal(chart.points.at(-1)?.run.run, runs.length);
+  assert.ok(chart.points.some((point) => point.run === bestRun));
 });
 
 test("dashboard command safety accepts read-only autoresearch commands", () => {

@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
@@ -21,6 +20,18 @@ import {
   isMetricEligibleStatus,
   isPromotionalStatus,
 } from "./run-status.js";
+import { loadSessionRecords, readJsonl, type SessionReadCache } from "./session-records.js";
+
+export {
+  appendJsonl,
+  createSessionReadCache,
+  jsonlPath,
+  loadSessionRecords,
+  readJsonl,
+  readJsonlTail,
+  streamJsonl,
+  type SessionReadCache,
+} from "./session-records.js";
 
 export {
   FAILURE_STATUSES,
@@ -60,14 +71,6 @@ type SessionState = LooseObject & {
   current: RunRecord[];
   sessionDecisionCapsule: SessionDecisionCapsule | null;
 };
-
-export interface SessionReadCache {
-  stateByCwd: Map<string, unknown>;
-}
-
-export function createSessionReadCache(): SessionReadCache {
-  return { stateByCwd: new Map() };
-}
 
 export function listOption(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -140,66 +143,6 @@ export function resolveWorkDir(cwdArg?: string): {
     throw new Error(`Working directory does not exist: ${workDir}`);
   }
   return { sessionCwd, workDir, config };
-}
-
-export function jsonlPath(workDir: string): string {
-  return path.join(workDir, "autoresearch.jsonl");
-}
-
-export function appendJsonl(workDir: string, entry: LooseObject): void {
-  fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
-}
-
-export function readJsonl(workDir: string): LooseObject[] {
-  const filePath = jsonlPath(workDir);
-  if (!fs.existsSync(filePath)) return [];
-  return parseJsonlLines(fs.readFileSync(filePath, "utf8"), filePath);
-}
-
-export async function* streamJsonl(workDir: string): AsyncGenerator<LooseObject> {
-  const filePath = jsonlPath(workDir);
-  if (!fs.existsSync(filePath)) return;
-  const stream = fs.createReadStream(filePath, { encoding: "utf8" });
-  const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  let index = 0;
-  try {
-    for await (const rawLine of lines) {
-      index += 1;
-      const line = String(rawLine).trim();
-      if (!line) continue;
-      yield parseJsonlLine(line, filePath, index);
-    }
-  } finally {
-    stream.destroy();
-  }
-}
-
-export async function readJsonlTail(workDir: string, maxEntries = 50): Promise<LooseObject[]> {
-  const limit = Math.max(0, Math.floor(Number(maxEntries) || 0));
-  if (limit === 0) return [];
-  const tail = [];
-  for await (const entry of streamJsonl(workDir)) {
-    tail.push(entry);
-    if (tail.length > limit) tail.shift();
-  }
-  return tail;
-}
-
-function parseJsonlLines(text: string, filePath: string): LooseObject[] {
-  return String(text)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => parseJsonlLine(line, filePath, index + 1));
-}
-
-function parseJsonlLine(line: string, filePath: string, index: number): LooseObject {
-  try {
-    return JSON.parse(line);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${message}`);
-  }
 }
 
 export function bestMetric(runs: RunRecord[], direction: Direction | string): number | null {
@@ -313,7 +256,10 @@ export function computeConfidence(runs: RunRecord[], direction: Direction | stri
 }
 
 export function currentState(workDir: string): SessionState {
-  const entries = readJsonl(workDir);
+  return stateFromSessionRecords(workDir, readJsonl(workDir));
+}
+
+export function stateFromSessionRecords(workDir: string, entries: LooseObject[]): SessionState {
   let config: StateConfig = {
     name: null,
     goal: "",
@@ -427,7 +373,7 @@ export function loadSessionState(
   const cacheKey = path.resolve(workDir);
   const cached = readCache.stateByCwd.get(cacheKey);
   if (cached) return cached as SessionState;
-  const state = currentState(workDir);
+  const state = stateFromSessionRecords(workDir, loadSessionRecords(workDir, readCache));
   readCache.stateByCwd.set(cacheKey, state);
   return state;
 }

@@ -7,6 +7,9 @@ import {
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
+import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
+import { buildNextPacketId } from "../lib/commands/next.js";
+import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
@@ -30,6 +33,42 @@ test("command rendering quotes hostile benchmark args for the selected shell", (
     ),
     "& { $PSNativeCommandArgumentPassing = 'Legacy'; & 'C:\\Program Files\\nodejs\\node.exe' scripts\\autoresearch.mjs --flag 'node -e \\\"console.log(''METRIC seconds=1 $HOME $(whoami) `whoami` C:\\bench path'')\\\"' }",
   );
+});
+
+test("log command helper reports pending receipt cleanup failure without losing durable log", async () => {
+  const warning = await clearPendingLogTransactionWithWarning(
+    "/tmp/autoresearch/pending-log-transaction.json",
+    async () => {
+      throw new Error("filesystem denied unlink");
+    },
+  );
+
+  assert.match(warning || "", /Pending receipt cleanup failed: filesystem denied unlink\./);
+});
+
+test("run command helper blocks packets when resource budgets are exhausted", () => {
+  assert.throws(
+    () =>
+      assertRunResourcePreflight({
+        command: "node benchmark.js",
+        config: {},
+        entries: [
+          {
+            type: "process_manager",
+            status: "stale",
+            timestamp: "2026-06-01T00:00:00.000Z",
+            reason: "stale active_process residue after reboot",
+          },
+        ],
+      }),
+    /Resource preflight blocked packet start:/,
+  );
+  assert.equal(buildActiveRunPacketId(2), "packet-2-active");
+});
+
+test("next command helper builds stable packet evidence ids", () => {
+  assert.equal(buildNextPacketId({ nextRun: 7 }, "abcdef1234567890"), "packet-7-abcdef123456");
+  assert.equal(buildNextPacketId({}, "1234567890abcdef"), "packet-next-1234567890ab");
 });
 
 if (process.platform === "win32") {

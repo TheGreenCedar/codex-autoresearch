@@ -15,13 +15,30 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  workflow-policy:
+    name: Workflow policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Enforce third-party action pinning
+        run: node .github/scripts/check-workflow-policy.mjs
+
   test:
+    needs: workflow-policy
+    timeout-minutes: 45
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -49,9 +66,17 @@ jobs:
       - name: Run CLI smoke test
         run: node scripts/autoresearch.mjs --help
 
+      - name: Run finalizer launcher smoke test
+        run: node scripts/finalize-autoresearch.mjs --help
+
   publish:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
     defaults:
       run:
         working-directory: plugins/codex-autoresearch
@@ -129,6 +154,11 @@ jobs:
           sha256sum "$tarball" > "$tarball.sha256"
           sha256sum -c "$tarball.sha256"
 
+      - name: Attest package provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: plugins/codex-autoresearch/codex-autoresearch-${{ steps.version.outputs.version }}.tgz
+
       - name: Smoke release package
         run: |
           set -euo pipefail
@@ -139,6 +169,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
           tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
           node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
+          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/finalize-autoresearch.mjs" --help
 
       - name: Create GitHub release with tarball
         env:

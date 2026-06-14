@@ -113,6 +113,7 @@ Use the served dashboard when a live readout is useful:
 - Share the served `http://127.0.0.1:<port>/` URL by default.
 - Static exports are read-only snapshots; serve a fresh dashboard when packet freshness matters.
 - Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
+- The live server accepts only loopback Host headers for its active port, sends defensive headers, and keeps the raw ledger endpoint disabled unless `--debug-ledger` is explicitly used.
 - Preserve the chart-first dashboard direction: the metric trend/readiness chart remains the first major evidence readout, with decision envelope, Codex brief, current decision, ledger/ASI, finalization, quality-gap, runtime drift, and process hygiene around or below that flow.
 
 ## Deep Research Loops
@@ -130,6 +131,8 @@ Use this for qualitative but checklist-measured work: study, accept gaps, measur
 8. Start a fresh round before claiming there are no more high-impact gaps.
 
 quality_gap=0 only means the accepted checklist for the current round is closed. It does not prove discovery is complete. Read `freshRoundSuggested`, `researchIntegrity`, `sourceCleanliness`, finalization readiness, and plateau reason fields before deciding whether to start another round, run a promotion gate, finalize, or start a new segment.
+
+For crashed or timed-out packets with artifact rows, use `partial-results --from-last` before rerunning expensive work. Salvaged rows are diagnostic `measure` evidence only; oversized, truncated, malformed, missing, or outside-workdir artifacts must remain notices, not promotion proof.
 
 ## Finalize
 

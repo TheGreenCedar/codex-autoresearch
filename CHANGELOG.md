@@ -4,6 +4,51 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Added
+
+- Added a traceable perfection spec pack under
+  `plugins/codex-autoresearch/docs/perfection-spec/` covering the
+  post-audit safety, redaction, transactionality, read-model, performance,
+  dashboard, artifact-ingestion, release, and documentation hardening plan.
+- Added regression coverage for literal Git path handling, finalizer linked
+  parent containment, CLI response redaction, public showcase export scrubbing,
+  log-note recovery warnings, long experiment-memory sessions, live dashboard
+  Host/header hardening, and partial-result artifact caps.
+- Added a reusable GitHub Actions workflow policy check, finalizer launcher
+  smoke coverage in CI/release jobs, and release tarball provenance
+  attestation.
+
+### Changed
+
+- Hardened CLI and dashboard evidence redaction for response payloads, env-file
+  references, common secret-key variants, home paths, network paths, and public
+  showcase ledger entries.
+- The live dashboard now validates loopback Host headers for the active port,
+  sends defensive browser headers, and keeps the raw ledger endpoint disabled
+  unless `--debug-ledger` is explicitly used.
+- Partial-result salvage now byte-caps and row-caps artifacts, reports
+  oversized/truncated/malformed/missing/outside artifacts as notices, and keeps
+  salvaged rows diagnostic-only.
+- Experiment memory now appends family runs without repeated array copies for
+  long sessions.
+- Compact state, `recommend-next --compact`, and dashboard exports now share
+  workflow-friction readouts instead of hiding compact-path friction.
+- Public README, package metadata, plugin metadata, trust docs, and the
+  Codex-facing skill now use guarded language for measured loops, live readouts,
+  approved finalization, uninstall scope, and all packet decision classes.
+
+### Fixed
+
+- Rejected Git pathspec magic in keep `commitPaths`, discard `revertPaths`, and
+  finalizer plan files before Git can expand them beyond the intended scope.
+- Guarded finalizer recursive removal against linked parent directories that
+  resolve outside the working directory.
+- Logging now treats `autoresearch.md` update failures as recovery warnings
+  after durable `autoresearch.jsonl` persistence instead of reporting the whole
+  log as failed.
+
 ## 2.3.0
 
 ### Changed

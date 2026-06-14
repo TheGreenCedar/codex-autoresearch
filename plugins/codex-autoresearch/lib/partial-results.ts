@@ -14,6 +14,9 @@ export interface PartialResultSalvagerOptions {
   primaryMetricName?: string;
 }
 
+export const PARTIAL_RESULT_ARTIFACT_MAX_BYTES = 1024 * 1024;
+export const PARTIAL_RESULT_ARTIFACT_MAX_ROWS = 500;
+
 export interface DiscoverPartialResultCandidatesOptions extends PartialResultSalvagerOptions {
   lastRunPacket: unknown;
 }
@@ -71,6 +74,7 @@ interface ParsedArtifact {
   schemaVersion: string | number | null;
   formulaVersion: string | null;
   metricName: string | null;
+  notices: string[];
 }
 
 export class PartialResultSalvager {
@@ -125,6 +129,13 @@ export class PartialResultSalvager {
           reason: parsed.reason,
         });
         continue;
+      }
+      for (const reason of parsed.artifact.notices) {
+        skippedArtifacts.push({
+          artifactName: artifact.name,
+          artifactPath: resolved.artifact.relativePath,
+          reason,
+        });
       }
 
       for (const [rowIndex, row] of parsed.artifact.rows.entries()) {
@@ -182,6 +193,10 @@ async function readPartialResultArtifact(
 ): Promise<{ ok: true; artifact: ParsedArtifact } | { ok: false; reason: string }> {
   let body: string;
   try {
+    const stats = await fsp.stat(artifactPath);
+    if (stats.size > PARTIAL_RESULT_ARTIFACT_MAX_BYTES) {
+      return { ok: false, reason: "artifact_too_large" };
+    }
     body = await fsp.readFile(artifactPath, "utf8");
   } catch (error: unknown) {
     return {
@@ -200,7 +215,7 @@ async function readPartialResultArtifact(
 function parsePartialResultArtifact(value: unknown): ParsedArtifact {
   if (Array.isArray(value)) {
     return {
-      rows: value,
+      ...capPartialResultRows(value),
       schemaVersion: null,
       formulaVersion: null,
       metricName: null,
@@ -211,10 +226,18 @@ function parsePartialResultArtifact(value: unknown): ParsedArtifact {
   }
   const rows = Array.isArray(value.rows) ? value.rows : [];
   return {
-    rows,
+    ...capPartialResultRows(rows),
     schemaVersion: versionValue(value.schemaVersion),
     formulaVersion: stringValue(value.formulaVersion),
     metricName: stringValue(value.metricName),
+  };
+}
+
+function capPartialResultRows(rows: unknown[]): { rows: unknown[]; notices: string[] } {
+  if (rows.length <= PARTIAL_RESULT_ARTIFACT_MAX_ROWS) return { rows, notices: [] };
+  return {
+    rows: rows.slice(0, PARTIAL_RESULT_ARTIFACT_MAX_ROWS),
+    notices: ["artifact_rows_truncated"],
   };
 }
 

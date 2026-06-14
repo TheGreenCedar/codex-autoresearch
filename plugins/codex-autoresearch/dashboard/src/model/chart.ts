@@ -14,6 +14,8 @@ interface MeasuredRun {
   value: number;
 }
 
+export const DASHBOARD_CHART_MAX_POINTS = 500;
+
 export function buildChart(session: SessionSegment, readout: DashboardReadout): ChartModel {
   const definition = readout.metricDefinition;
   const measured = measuredRuns(readout, definition);
@@ -21,11 +23,11 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
   if (!measured.length) {
     return emptyChart(readout);
   }
-  const chartRuns = chartRunsFor(session, definition);
+  const bestRun = readout.bestRun;
+  const chartRuns = chartRunsFor(session, definition, bestRun ? [bestRun] : []);
   const values = measured.map((item) => item.value);
   const { domain, domainSpan } = metricDomain(values, readout);
   const { xFor, yFor } = chartScales(chartRuns, domain, domainSpan);
-  const bestRun = readout.bestRun;
   const latest = chartRuns.at(-1);
   const points = buildChartPoints({
     allRuns: session.runs,
@@ -75,10 +77,38 @@ function measuredRuns(
     .filter((item): item is MeasuredRun => finiteMetric(item.value));
 }
 
-function chartRunsFor(session: SessionSegment, definition: WeightedMetricDefinition): SessionRun[] {
-  return session.runs.filter(
-    (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
+function chartRunsFor(
+  session: SessionSegment,
+  definition: WeightedMetricDefinition,
+  anchors: SessionRun[] = [],
+): SessionRun[] {
+  return downsampleChartRuns(
+    session.runs.filter(
+      (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
+    ),
+    anchors,
   );
+}
+
+function downsampleChartRuns(runs: SessionRun[], anchors: SessionRun[]): SessionRun[] {
+  if (runs.length <= DASHBOARD_CHART_MAX_POINTS) return runs;
+  const selected = new Set<SessionRun>();
+  const add = (run: SessionRun | null | undefined) => {
+    if (run && runs.includes(run)) selected.add(run);
+  };
+  add(runs[0]);
+  add(runs.at(-1));
+  for (const anchor of anchors) add(anchor);
+  const remainingSlots = Math.max(1, DASHBOARD_CHART_MAX_POINTS - selected.size);
+  const step = Math.max(1, Math.ceil((runs.length - selected.size) / remainingSlots));
+  for (
+    let index = 1;
+    index < runs.length - 1 && selected.size < DASHBOARD_CHART_MAX_POINTS;
+    index += step
+  ) {
+    selected.add(runs[index]);
+  }
+  return runs.filter((run) => selected.has(run));
 }
 
 function chartScales(chartRuns: SessionRun[], domain: [number, number], domainSpan: number) {
