@@ -6,6 +6,13 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.3.6 - 2026-06-15
+
+### Changed
+
+- Added regression coverage for large repeated experiment families so memory
+  summaries keep exhausted-family counts intact.
+
 ## 2.3.5 - 2026-06-15
 
 ### Changed

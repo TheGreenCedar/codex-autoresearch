@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.3.5",
+  "version": "2.3.6",
   "description": "Measured Codex loops with benchmark output, local evidence, live readouts, and reviewable branch previews.",
   "author": {
     "name": "Albert Najjar",
