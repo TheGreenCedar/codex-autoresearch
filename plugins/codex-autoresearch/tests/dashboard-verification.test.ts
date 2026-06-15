@@ -3158,9 +3158,7 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(queryById("live-actions-panel"), null);
   assert.equal(queryById("mission-control-grid"), null);
   assert.equal(queryById("action-grid"), null);
-  const missionCommand = getById("mission-control").querySelector(".mission-command");
-  assert.match(missionCommand?.textContent || "", /finalize-preview/);
-  assert.doesNotMatch(missionCommand?.textContent || "", /\blog\b/);
+  assert.equal(getById("mission-control").querySelector(".mission-command"), null);
 });
 
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
