@@ -307,6 +307,7 @@ export interface AiSummaryModel {
 export interface DashboardViewModel {
   summary?: DashboardSummary;
   ledgerEntries?: DashboardEntry[];
+  ledgerBounds?: LedgerBounds;
   decisionEnvelope?: DecisionEnvelopeModel | null;
   decisionEnvelopeSummary?: DecisionEnvelopeSummary;
   nextBestAction?: NextBestAction;
@@ -393,12 +394,19 @@ export interface DashboardMode {
   actionNote: string;
 }
 
+export interface LedgerBounds {
+  truncated?: boolean;
+  omittedEntries?: number;
+  maxEntries?: number;
+}
+
 export interface DashboardMeta {
   deliveryMode?: string;
   liveRefreshAvailable?: boolean;
   liveActionsAvailable?: boolean;
   showcaseMode?: boolean;
   generatedAt?: string;
+  ledgerBounds?: LedgerBounds;
   refreshMs?: number;
   modeGuidance?: { title?: string; detail?: string; [key: string]: unknown };
   settings?: { showcaseMode?: boolean; [key: string]: unknown };

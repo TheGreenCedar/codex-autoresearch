@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile } from "node:fs/promises";
+import http from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
-import { serveAutoresearch } from "../lib/live-server.js";
+import {
+  LIVE_LEDGER_MAX_ENTRIES,
+  LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES,
+  liveSessionFingerprint,
+  serveAutoresearch,
+} from "../lib/live-server.js";
 import {
   buildServeRegistryHealthInput,
   readServeRegistry,
@@ -15,6 +21,25 @@ import {
   writeServeRegistry,
 } from "../lib/dashboard-server-registry.js";
 import { withTempDir } from "./helpers/process.js";
+
+async function requestText(url: string, headers: Record<string, string> = {}) {
+  return await new Promise<{
+    body: string;
+    headers: http.IncomingHttpHeaders;
+    status: number;
+  }>((resolve, reject) => {
+    const req = http.request(url, { headers }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => resolve({ body, headers: res.headers, status: res.statusCode || 0 }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 test("serve dashboard command reuses a healthy registry instead of starting another server", async () => {
   await withTempDir("autoresearch", "serve-registry-reuse", async (dir) => {
@@ -79,6 +104,56 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
         existing.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
       });
     }
+  });
+});
+
+test("serve dashboard resolves config fresh for deferred live view model", async () => {
+  await withTempDir("autoresearch", "serve-fresh-config", async (dir) => {
+    let configVersion = 1;
+    let capturedViewModel: (() => Promise<Record<string, any>>) | null = null;
+    const fakeServer = {
+      on() {
+        return fakeServer;
+      },
+    };
+    const { serveDashboard } = createDashboardCommands({
+      boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+      buildDriftReport: async () => ({ ok: true, status: "fresh" }),
+      dashboardCommands: () => [],
+      dashboardHtml: () => "",
+      dashboardSettings: (config) => ({ version: config.version }),
+      dashboardViewModel: async (_workDir, config) => ({ summary: { runs: config.version } }),
+      operationProgress: (options) => options,
+      pluginRoot: process.cwd(),
+      pluginVersion: PLUGIN_VERSION,
+      readJsonl: () => [],
+      resolveOutputInside: () => "",
+      resolveWorkDir: () => ({
+        workDir: dir,
+        config: { dashboardRefreshSeconds: 1, version: configVersion },
+      }),
+      serveAutoresearch: async (options) => {
+        capturedViewModel = options.viewModel;
+        return {
+          debugLedger: false,
+          port: 9,
+          server: fakeServer,
+          url: "http://127.0.0.1:9/",
+          workDir: dir,
+        };
+      },
+      shellQuote: JSON.stringify,
+      writeFile: async () => {},
+    });
+
+    await serveDashboard({ cwd: dir, port: 0 });
+    assert.ok(capturedViewModel);
+    const first = await capturedViewModel();
+    configVersion = 2;
+    const second = await capturedViewModel();
+
+    assert.equal(first.summary.runs, 1);
+    assert.equal(second.summary.runs, 2);
   });
 });
 
@@ -275,6 +350,150 @@ test("live dashboard health endpoint exposes read-only process metadata", async 
     } finally {
       await new Promise<void>((resolve, reject) => {
         result.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+test("live dashboard validates Host and sends defensive headers", async () => {
+  await withTempDir("autoresearch", "serve-host-headers", async (dir) => {
+    const result = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      const hostile = await requestText(`${result.url}health`, {
+        Host: `evil.example:${result.port}`,
+      });
+      assert.equal(hostile.status, 403);
+      assert.match(hostile.body, /Host header is not allowed/);
+
+      const loopback = await requestText(`${result.url}health`, {
+        Host: `localhost:${result.port}`,
+      });
+      assert.equal(loopback.status, 200);
+      assert.equal(loopback.headers["x-content-type-options"], "nosniff");
+      assert.equal(loopback.headers["x-frame-options"], "DENY");
+      assert.equal(loopback.headers["referrer-policy"], "no-referrer");
+      assert.match(String(loopback.headers["content-security-policy"]), /frame-ancestors 'none'/);
+      assert.equal(loopback.headers["cache-control"], "no-store");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        result.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+test("live dashboard fingerprints research trees with a bounded traversal", async () => {
+  await withTempDir("autoresearch", "serve-fingerprint-cap", async (dir) => {
+    const researchRoot = path.join(dir, "autoresearch.research");
+    await mkdir(researchRoot, { recursive: true });
+    for (let index = 0; index < LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES + 25; index += 1) {
+      await writeFile(path.join(researchRoot, `artifact-${index}.json`), "{}\n", "utf8");
+    }
+
+    const fingerprint = await liveSessionFingerprint(dir, {
+      cached: null,
+      nowMs: Date.now(),
+      ttlMs: 0,
+    });
+
+    assert.match(fingerprint, /autoresearch\.research:truncated:/);
+  });
+});
+
+test("live dashboard keeps debug ledger disabled unless explicitly enabled", async () => {
+  await withTempDir("autoresearch", "serve-debug-ledger", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      `${JSON.stringify({ type: "config", secret: "abcdefghijklmnop" })}\n`,
+      "utf8",
+    );
+    const disabled = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+    const enabled = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      debugLedger: true,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      const disabledLedger = await requestText(`${disabled.url}autoresearch.jsonl`, {
+        Host: `127.0.0.1:${disabled.port}`,
+      });
+      assert.equal(disabledLedger.status, 404);
+      assert.match(disabledLedger.body, /disabled/);
+
+      const enabledLedger = await requestText(`${enabled.url}autoresearch.jsonl`, {
+        Host: `127.0.0.1:${enabled.port}`,
+      });
+      assert.equal(enabledLedger.status, 200);
+      assert.doesNotMatch(enabledLedger.body, /abcdefghijklmnop/);
+      assert.match(enabledLedger.body, /"<redacted>"/);
+    } finally {
+      await Promise.all(
+        [disabled, enabled].map(
+          (server) =>
+            new Promise<void>((resolve, reject) => {
+              server.server.close((error: Error | undefined) =>
+                error ? reject(error) : resolve(),
+              );
+            }),
+        ),
+      );
+    }
+  });
+});
+
+test("live dashboard debug ledger response is bounded before redaction", async () => {
+  await withTempDir("autoresearch", "serve-debug-ledger-bounds", async (dir) => {
+    const malformedLineCount = 6_000;
+    const runCount = LIVE_LEDGER_MAX_ENTRIES + 3;
+    const lines = [
+      ...Array.from({ length: malformedLineCount }, (_, index) => `{malformed-${index}`),
+      JSON.stringify({ type: "config", name: "debug bounds", metricName: "seconds" }),
+      ...Array.from({ length: runCount }, (_, index) =>
+        JSON.stringify({ type: "run", run: index + 1, status: "keep", metric: index + 1 }),
+      ),
+      "",
+    ];
+    await writeFile(path.join(dir, "autoresearch.jsonl"), lines.join("\n"), "utf8");
+    const server = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      debugLedger: true,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      const response = await requestText(`${server.url}autoresearch.jsonl`, {
+        Host: `127.0.0.1:${server.port}`,
+      });
+      const responseLines = response.body.split(/\r?\n/).filter(Boolean);
+
+      assert.equal(response.status, 200);
+      assert.equal(responseLines.length, LIVE_LEDGER_MAX_ENTRIES);
+      assert.doesNotMatch(response.body, /malformed-0/);
+      assert.match(response.body, /"type":"config"/);
+      assert.match(response.body, /"run":5/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
       });
     }
   });
