@@ -13,6 +13,7 @@ import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const FINALIZATION_GIT_PROBE_CONCURRENCY = 4;
 type LooseObject = Record<string, any>;
 type GitResult = { code: number | null; ok?: boolean; stderr: string; stdout: string };
 type ProgressKind = "finalize-preview" | "finalize-current-tree";
@@ -228,22 +229,23 @@ async function buildFinalizationRunwaySummary({
   workDir: string;
 }): Promise<LooseObject> {
   const goal = safeSlug(sourceBranch || "autoresearch");
-  const branches = [];
-  for (let index = 0; index < groups.length; index += 1) {
-    const branch = reviewBranchName(goal, groups[index], index);
-    const exists = (await gitOk(["rev-parse", "--verify", branch], workDir)).ok;
-    const upstream = exists
-      ? await gitOk(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], workDir)
-      : { ok: false, stdout: "", stderr: "", code: 1 };
-    branches.push(
-      classifyFinalizationRunwayFromFacts({
+  const branches = await mapWithConcurrency(
+    groups,
+    FINALIZATION_GIT_PROBE_CONCURRENCY,
+    async (group, index) => {
+      const branch = reviewBranchName(goal, group, index);
+      const exists = (await gitOk(["rev-parse", "--verify", branch], workDir)).ok;
+      const upstream = exists
+        ? await gitOk(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], workDir)
+        : { ok: false, stdout: "", stderr: "", code: 1 };
+      return classifyFinalizationRunwayFromFacts({
         branch,
         branchExists: exists,
         equivalent: false,
         localOnly: exists && !upstream.ok,
-      }),
-    );
-  }
+      });
+    },
+  );
   const blockers = branches.flatMap((branch) => branch.blockers || []);
   const warnings = branches.flatMap((branch) => branch.warnings || []);
   const localOnly = branches.find((branch) => branch.status === "local-only");
@@ -273,29 +275,37 @@ async function buildKeptRunGroups(workDir: string, keptRuns: KeptRun[]) {
   const groups: RunGroup[] = [];
   const warnings: string[] = [];
   let missingCommitCount = 0;
-  for (const run of keptRuns) {
-    const commit = String(run.commit || "");
-    if (!commit) {
-      missingCommitCount += 1;
-      continue;
-    }
-    const full = await gitOk(["rev-parse", commit], workDir);
-    if (!full.ok) {
-      warnings.push(`Kept run #${run.run} commit ${commit} could not be resolved.`);
-      continue;
-    }
-    const hash = full.stdout.trim();
-    const files = await changedFilesForCommit(hash, workDir);
-    groups.push({
-      title: run.description || `Autoresearch run #${run.run}`,
-      run: run.run,
-      commit: hash,
-      shortCommit: hash.slice(0, 12),
-      files,
-      metric: run.metric,
-      asi: run.asi || {},
-      slug: safeSlug(run.description || `run-${run.run}`),
-    });
+  const results = await mapWithConcurrency(
+    keptRuns,
+    FINALIZATION_GIT_PROBE_CONCURRENCY,
+    async (run) => {
+      const commit = String(run.commit || "");
+      if (!commit) return { missingCommit: true };
+      const full = await gitOk(["rev-parse", commit], workDir);
+      if (!full.ok)
+        return {
+          warning: `Kept run #${run.run} commit ${commit} could not be resolved.`,
+        };
+      const hash = full.stdout.trim();
+      const files = await changedFilesForCommit(hash, workDir);
+      return {
+        group: {
+          title: run.description || `Autoresearch run #${run.run}`,
+          run: run.run,
+          commit: hash,
+          shortCommit: hash.slice(0, 12),
+          files,
+          metric: run.metric,
+          asi: run.asi || {},
+          slug: safeSlug(run.description || `run-${run.run}`),
+        },
+      };
+    },
+  );
+  for (const result of results) {
+    if (result.missingCommit) missingCommitCount += 1;
+    if (result.warning) warnings.push(result.warning);
+    if (result.group) groups.push(result.group);
   }
   return { groups, missingCommitCount, warnings };
 }
@@ -795,41 +805,47 @@ async function buildSemanticSafety({
   ledgerRuns: KeptRun[];
   base: string;
 }) {
-  const blockers: Array<{ code: string; run: number; commit: string; message: string }> = [];
-  for (const group of groups) {
-    const later = ledgerRuns.filter(
-      (run) =>
-        run.run > group.run &&
-        run.commit &&
-        commitRefsMayMatch(run.commit, group.commit) &&
-        run.status !== "keep" &&
-        explicitEvidenceInvalidationText(run),
-    );
-    if (later.length) {
-      blockers.push({
-        code: "later_invalidated_keep",
-        run: group.run,
-        commit: group.shortCommit || group.commit,
-        message: `Kept run #${group.run} (${group.shortCommit}) was later explicitly invalidated for the same commit.`,
-      });
-    }
-    if (explicitEvidenceInvalidationText(group)) {
-      blockers.push({
-        code: "invalidated_keep",
-        run: group.run,
-        commit: group.shortCommit || group.commit,
-        message: `Kept run #${group.run} is marked invalidated or contaminated in ASI/description.`,
-      });
-    }
-    if (base && (await keptCommitWasReverted(workDir, group))) {
-      blockers.push({
-        code: "reverted_keep",
-        run: group.run,
-        commit: group.shortCommit || group.commit,
-        message: `Kept run #${group.run} (${group.shortCommit}) appears to have been reverted later in the branch.`,
-      });
-    }
-  }
+  const blockersByGroup = await mapWithConcurrency(
+    groups,
+    FINALIZATION_GIT_PROBE_CONCURRENCY,
+    async (group) => {
+      const blockers: Array<{ code: string; run: number; commit: string; message: string }> = [];
+      const later = ledgerRuns.filter(
+        (run) =>
+          run.run > group.run &&
+          run.commit &&
+          commitRefsMayMatch(run.commit, group.commit) &&
+          run.status !== "keep" &&
+          explicitEvidenceInvalidationText(run),
+      );
+      if (later.length) {
+        blockers.push({
+          code: "later_invalidated_keep",
+          run: group.run,
+          commit: group.shortCommit || group.commit,
+          message: `Kept run #${group.run} (${group.shortCommit}) was later explicitly invalidated for the same commit.`,
+        });
+      }
+      if (explicitEvidenceInvalidationText(group)) {
+        blockers.push({
+          code: "invalidated_keep",
+          run: group.run,
+          commit: group.shortCommit || group.commit,
+          message: `Kept run #${group.run} is marked invalidated or contaminated in ASI/description.`,
+        });
+      }
+      if (base && (await keptCommitWasReverted(workDir, group))) {
+        blockers.push({
+          code: "reverted_keep",
+          run: group.run,
+          commit: group.shortCommit || group.commit,
+          message: `Kept run #${group.run} (${group.shortCommit}) appears to have been reverted later in the branch.`,
+        });
+      }
+      return blockers;
+    },
+  );
+  const blockers = blockersByGroup.flat();
   return {
     ok: blockers.length === 0,
     blockers,
@@ -875,20 +891,24 @@ async function unkeptCommitsSinceBase(
 ): Promise<CommitSummary[]> {
   const kept = new Set(groups.map((group) => group.commit));
   const result = await git(["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`], cwd);
-  const commits: CommitSummary[] = [];
-  for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
-    const [hash, subject = ""] = line.split("\x1f");
-    if (!hash || kept.has(hash)) continue;
-    const files = await changedFilesForCommit(hash, cwd);
-    if (!files.length) continue;
-    commits.push({
-      commit: hash,
-      shortCommit: hash.slice(0, 12),
-      subject,
-      files,
-    });
-  }
-  return commits;
+  const candidates = result.stdout.split(/\r?\n/).filter(Boolean);
+  const commits = await mapWithConcurrency(
+    candidates,
+    FINALIZATION_GIT_PROBE_CONCURRENCY,
+    async (line): Promise<CommitSummary | null> => {
+      const [hash, subject = ""] = line.split("\x1f");
+      if (!hash || kept.has(hash)) return null;
+      const files = await changedFilesForCommit(hash, cwd);
+      if (!files.length) return null;
+      return {
+        commit: hash,
+        shortCommit: hash.slice(0, 12),
+        subject,
+        files,
+      };
+    },
+  );
+  return commits.filter((commit): commit is CommitSummary => commit !== null);
 }
 
 function findExcludedPlannedFileConflicts(
@@ -943,4 +963,24 @@ async function gitOk(args: string[], cwd: string): Promise<GitResult> {
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
   return { ...result, ok: result.code === 0 };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
