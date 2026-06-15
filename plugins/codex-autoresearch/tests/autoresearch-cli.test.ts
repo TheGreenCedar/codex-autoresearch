@@ -1880,6 +1880,17 @@ test("static export bounds embedded ledger entries for long sessions", async () 
     assert.equal(data.at(-1).run, 5100);
     assert.equal(meta.ledgerBounds.truncated, true);
     assert.equal(meta.ledgerBounds.omittedEntries, 101);
+    assert.equal(meta.viewModel.readout.measurementRunCount, 5100);
+    assert.equal(meta.viewModel.readout.measurementRuns.length, 50);
+    assert.equal(meta.viewModel.readout.measurementRuns[0].run, 5051);
+    assert.equal(meta.viewModel.readout.measurementRuns.at(-1).run, 5100);
+    assert.equal(meta.viewModel.readout.measurementRunsTruncated, true);
+    assert.equal(meta.viewModel.readout.measurementRunsOmitted, 5050);
+    assert.ok(
+      JSON.stringify(meta.viewModel).length < 500_000,
+      "static export view model should stay transport-bounded",
+    );
+    assert.ok(dashboard.length < 2_500_000, "static export HTML should stay transport-bounded");
   });
 });
 
@@ -4836,6 +4847,114 @@ test("stale last-run packets are rejected when untracked directory contents chan
     ]);
     assert.notEqual(stale.code, 0);
     assert.match(stale.stderr, /dirty file contents changed|Git dirty state changed/);
+  });
+});
+
+test("next refuses runs when dirty fingerprints would be truncated", async () => {
+  await withTempDir("stale-last-run-truncated-dirty", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "truncated dirty packet",
+      "--metric-name",
+      "seconds",
+    ]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const scratch = path.join(dir, "scratch");
+    await mkdir(scratch, { recursive: true });
+    for (let index = 0; index < 505; index += 1) {
+      await writeFile(path.join(scratch, `file-${String(index).padStart(3, "0")}.txt`), "x\n");
+    }
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.ok, false);
+    assert.equal(packet.refused, true);
+    assert.equal(packet.code, "next_blocked_by_truncated_fingerprints");
+    assert.match(
+      JSON.stringify(packet.git.dirtyFileFingerprints),
+      /dirty_file_entry_limit|directory_entry_limit/,
+    );
+    assert.match(packet.nextAction, /Clean or narrow the dirty tree/);
+    await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
+    await assert.rejects(access(path.join(dir, ".git", "autoresearch", "last-run.json")));
+  });
+});
+
+test("next allows clean repos with broad scoped commit paths", async () => {
+  await withTempDir("large-clean-scoped-commit-path", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    const srcDir = path.join(dir, "src");
+    await mkdir(srcDir, { recursive: true });
+    for (let index = 0; index < 501; index += 1) {
+      await writeFile(path.join(srcDir, `file-${String(index).padStart(3, "0")}.txt`), "x\n");
+    }
+    await git(dir, ["add", "src"]);
+    await git(dir, ["commit", "-m", "initial src"]);
+
+    await runCli(["init", "--cwd", dir, "--name", "large clean scope", "--metric-name", "seconds"]);
+    const configured = await runCli(["config", "--cwd", dir, "--commit-paths", "src"]);
+    assert.equal(configured.code, 0, configured.stderr);
+    await git(dir, ["add", "autoresearch.config.json", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session config"]);
+    const status = await git(dir, ["status", "--short"]);
+    assert.equal(status, "");
+
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.notEqual(packet.code, "next_blocked_by_truncated_fingerprints");
+    assert.equal(packet.decision.metric, 3);
+    const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
+    assert.match(JSON.stringify(lastRun.history.git.fileFingerprints), /scoped_file_entry_limit/);
+    assert.equal(
+      JSON.stringify(lastRun.history.git.dirtyFileFingerprints).includes("truncated"),
+      false,
+    );
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Large clean scoped path measurement",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
   });
 });
 

@@ -8,10 +8,6 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Added
 
-- Added a traceable perfection spec pack under
-  `plugins/codex-autoresearch/docs/perfection-spec/` covering the
-  post-audit safety, redaction, transactionality, read-model, performance,
-  dashboard, artifact-ingestion, release, and documentation hardening plan.
 - Added regression coverage for literal Git path handling, finalizer linked
   parent containment, CLI response redaction, public showcase export scrubbing,
   log-note recovery warnings, long experiment-memory sessions, live dashboard
@@ -35,19 +31,53 @@ This project uses a root-only changelog because the root README is the public do
   long sessions.
 - Compact state, `recommend-next --compact`, and dashboard exports now share
   workflow-friction readouts instead of hiding compact-path friction.
+- Static and live dashboard readouts now bound long ledger payloads with config
+  continuity, downsample chart history, and compact large view-model memory
+  lists; the raw `--json-full` escape hatch applies only to the `export`
+  command's JSON response, not live dashboard transport.
+- Live dashboard pages now start from the live `/view-model.json` payload when
+  served with an empty bootstrap instead of flashing or keeping demo data.
+- Served live dashboard view-model refreshes now reuse parsed session state
+  while `autoresearch.jsonl` is unchanged and coalesce concurrent reads of the
+  same session fingerprint, reducing long-ledger refresh cost while avoiding
+  stale state/config cache installs or mixed readouts after watched files
+  change mid-refresh.
+- Dashboard charts now avoid attaching full-session best values to omitted
+  visible runs and distinguish visible crash totals from downsampled plotted
+  crash markers.
 - Public README, package metadata, plugin metadata, trust docs, and the
   Codex-facing skill now use guarded language for measured loops, live readouts,
   approved finalization, uninstall scope, and all packet decision classes.
+- The public docs map now separates first-run operation, trust, troubleshooting,
+  architecture, and maintainer surfaces.
 
 ### Fixed
 
+- CLI help now shows the accepted `--direction lower|higher` setup/setup-plan
+  flag so terminal usage matches the start docs and Codex-facing skill.
+- Full CLI help and the Codex-facing skill now spell out the
+  `finalize-current-tree` contract: clean non-trunk source branch, session
+  artifacts excluded by default, plan review first, then finalizer execution.
 - Rejected Git pathspec magic in keep `commitPaths`, discard `revertPaths`, and
   finalizer plan files before Git can expand them beyond the intended scope.
 - Guarded finalizer recursive removal against linked parent directories that
   resolve outside the working directory.
+- Live dashboard ledger bounds are applied before full entry redaction and
+  view-model transport parsing, keeping long-session readouts and debug ledger
+  responses bounded while still carrying the governing config for the visible
+  run window.
+- Dashboard transport payloads now recursively cap long view-model arrays so
+  static exports do not embed full-history diagnostic state after the visible
+  ledger has already been bounded.
+- Dashboard, state, and compact readouts now reuse loaded session records for
+  fanout and lane readouts instead of reparsing the ledger during the same
+  view-model build.
 - Logging now treats `autoresearch.md` update failures as recovery warnings
   after durable `autoresearch.jsonl` persistence instead of reporting the whole
   log as failed.
+- `next` now refuses before benchmark execution when dirty Git fingerprint
+  evidence would be truncated, avoiding fresh packets that later cannot be
+  proven log-safe.
 
 ## 2.3.0
 

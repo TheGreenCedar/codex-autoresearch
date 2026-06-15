@@ -23,19 +23,18 @@ export function buildCheapFinalizationPressure({
   warningDetails?: ReadModelRecord[];
 }): ReadModelRecord {
   const current = Array.isArray(state.current) ? state.current : [];
-  const kept = current.filter((run: ReadModelRecord) => isKeepStatus(run.status));
   const productClaimCoverage = (state.productClaimCoverage as ReadModelRecord) || {};
   const productGradeReady = productClaimCoverage.productGradeReady !== false;
-  const blockers = Array.isArray(warningDetails)
-    ? warningDetails.filter((warning) => warning?.severity === "blocker")
-    : [];
-  const hasAcceptedEvidence = kept.length > 0;
+  const hasBlockers = Array.isArray(warningDetails)
+    ? warningDetails.some((warning) => warning?.severity === "blocker")
+    : false;
+  const hasAcceptedEvidence = current.some((run: ReadModelRecord) => isKeepStatus(run.status));
   const qualityGapOpen =
     qualityGap?.done === false &&
     (Number(qualityGap.open ?? qualityGap.openItems ?? qualityGap.remaining ?? 0) > 0 ||
       (Array.isArray(qualityGap.openItems) && qualityGap.openItems.length > 0));
   const readyForPreview =
-    hasAcceptedEvidence && productGradeReady && blockers.length === 0 && !qualityGapOpen;
+    hasAcceptedEvidence && productGradeReady && !hasBlockers && !qualityGapOpen;
   return {
     available: true,
     cheap: true,
@@ -105,12 +104,15 @@ export function buildSessionReadModelState({
 
 export function statusCountsFromState(state: ReadModelRecord): Record<string, number> {
   const current = Array.isArray(state.current) ? state.current : [];
-  return Object.fromEntries(
-    [...STATUS_VALUES].map((status: string) => [
-      status,
-      current.filter((run: ReadModelRecord) => run.status === status).length,
-    ]),
+  const counts: Record<string, number> = Object.fromEntries(
+    [...STATUS_VALUES].map((status: string) => [status, 0]),
   );
+  for (const run of current) {
+    if (typeof run?.status === "string" && run.status in counts) {
+      counts[run.status] += 1;
+    }
+  }
+  return counts;
 }
 
 export function buildSessionReadModel({
@@ -190,14 +192,13 @@ export function buildControlPlaneContracts({
   finalization?: ReadModelRecord | null;
   commands?: ReadModelRecord;
 }): ReadModelRecord {
+  const finalizationClaim =
+    config.finalizationClaim || state.config?.finalizationClaim || finalization?.finalizationClaim;
   const goalContract = buildGoalContract({
     autoresearchGoal: state.config?.goal || config.goal,
     codexGoalObjective,
     benchmarkGoal: config.benchmarkGoal || state.config?.benchmarkGoal || state.config?.goal,
-    finalizationClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.finalizationClaim,
+    finalizationClaim,
     recoveryCommand: commands.codexGoalBrief || commands.state || "",
   });
   const approvalRequirements = dedupeApprovalRequirements([
@@ -218,11 +219,7 @@ export function buildControlPlaneContracts({
   });
   const evidenceMaturity = classifyEvidenceMaturity({
     runs: runsFromState(state),
-    requestedClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.summary ||
-      finalization?.productGradeSummary,
+    requestedClaim: finalizationClaim || finalization?.summary || finalization?.productGradeSummary,
   });
   const laneOrchestration = planFailureRecoveryLanes({
     signals: [

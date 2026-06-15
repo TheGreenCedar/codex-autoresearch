@@ -60,16 +60,30 @@ export function redactEvidenceText(value: unknown, context: UnknownRecord = {}):
   text = text.replace(BEARER_TOKEN, "Bearer <redacted>");
   text = text.replace(SECRET_PHRASE, (_match, key) => `${key} <redacted>`);
   text = redactEnvFileTokens(text);
+  text = redactStackTraceFrames(text);
+  text = redactScopedWorkDir(text, context.workDir);
   text = text.replace(UNC_PATH, "<network-path>");
   text = text.replace(WINDOWS_HOME, "C:\\Users\\<user>");
   text = text.replace(WINDOWS_HOME_SLASH, "C:/Users/<user>");
   text = text.replace(POSIX_HOME, (match) =>
     match.startsWith("/Users/") ? "/Users/<user>" : "/home/<user>",
   );
-  if (context.workDir) {
-    text = text.split(String(context.workDir)).join("<workdir>");
+  return text;
+}
+
+function redactScopedWorkDir(text: string, workDir: unknown): string {
+  const raw = String(workDir || "").trim();
+  if (raw.length <= 3) return text;
+  const variants = new Set([raw, raw.replace(/\\/g, "/"), raw.replace(/\//g, "\\")]);
+  if (path.isAbsolute(raw)) {
+    const resolved = path.resolve(raw);
+    variants.add(resolved);
+    variants.add(resolved.replace(/\\/g, "/"));
+    variants.add(resolved.replace(/\//g, "\\"));
   }
-  text = redactStackTraceFrames(text);
+  for (const variant of [...variants].sort((a, b) => b.length - a.length)) {
+    if (variant.length > 3) text = text.split(variant).join("<workdir>");
+  }
   return text;
 }
 

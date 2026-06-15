@@ -1,7 +1,11 @@
 import http from "node:http";
 import type { ServerResponse } from "node:http";
+import { createReadStream } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
+import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
 
 type LooseObject = Record<string, unknown>;
@@ -9,6 +13,7 @@ type LooseObject = Record<string, unknown>;
 export const LIVE_LEDGER_MAX_ENTRIES = 5000;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES = 200;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_DEPTH = 2;
+const LIVE_VIEW_MODEL_REFRESH_RETRY_LIMIT = 1;
 
 interface LiveViewModelCache {
   expiresAt: number;
@@ -16,6 +21,37 @@ interface LiveViewModelCache {
   fingerprintExpiresAt: number;
   fingerprintStamp: string;
   payload: LooseObject;
+}
+
+interface LiveViewModelCacheState {
+  current: LiveViewModelCache | null;
+  pending: LiveViewModelRefresh | null;
+}
+
+interface LiveViewModelRefresh {
+  fingerprint: string;
+  promise: Promise<LiveViewModelResult>;
+}
+
+interface LiveViewModelResult {
+  body: LooseObject;
+  cacheable: boolean;
+  cached: LiveViewModelCache;
+  statusCode?: number;
+}
+
+interface LiveSessionSnapshot {
+  fingerprint: string;
+  stamp: string;
+}
+
+interface LedgerReadout {
+  entries: LooseObject[];
+  ledgerBounds: DashboardLedgerBounds;
+}
+
+interface BoundedLedgerLines extends DashboardLedgerBounds {
+  lines: string[];
 }
 
 export async function serveAutoresearch(args: LooseObject) {
@@ -27,7 +63,7 @@ export async function serveAutoresearch(args: LooseObject) {
   const version = String(args.pluginVersion || args.version || "");
   const debugLedger = args.debugLedger === true;
   const viewModelCacheTtlMs = normalizeCacheTtlMs(args.viewModelCacheTtlMs);
-  let viewModelCache: LiveViewModelCache | null = null;
+  const viewModelCache: LiveViewModelCacheState = { current: null, pending: null };
   let serverPort = 0;
   const server = http.createServer(async (req, res) => {
     try {
@@ -57,8 +93,13 @@ export async function serveAutoresearch(args: LooseObject) {
           );
           return;
         }
-        const jsonl = await fsp.readFile(path.join(workDir, "autoresearch.jsonl"), "utf8");
-        send(res, 200, "application/jsonl; charset=utf-8", redactJsonl(jsonl, { workDir }));
+        const ledgerLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+        send(
+          res,
+          200,
+          "application/jsonl; charset=utf-8",
+          redactLedgerLines(ledgerLines.lines, { workDir }),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/view-model.json") {
@@ -67,10 +108,9 @@ export async function serveAutoresearch(args: LooseObject) {
           viewModel,
           nowMs: Date.now(),
           ttlMs: viewModelCacheTtlMs,
-          cached: viewModelCache,
+          cache: viewModelCache,
         });
-        viewModelCache = payload.cached;
-        sendJson(res, payload.body);
+        sendJson(res, payload.body, payload.statusCode ?? 200);
         return;
       }
       if (req.method === "GET" && url.pathname === "/health") {
@@ -164,8 +204,8 @@ function isAllowedHostHeader(host: string | string[] | undefined, activePort: nu
   );
 }
 
-function redactJsonl(text: string, context: LooseObject): string {
-  return boundLedgerLines(text.split(/\r?\n/))
+function redactLedgerLines(lines: string[], context: LooseObject): string {
+  return lines
     .map((line) => {
       if (!line.trim()) return line;
       try {
@@ -182,34 +222,160 @@ async function readCachedLiveViewModel({
   viewModel,
   nowMs,
   ttlMs,
-  cached,
+  cache,
 }: {
   workDir: string;
   viewModel: () => Promise<LooseObject>;
   nowMs: number;
   ttlMs: number;
-  cached: LiveViewModelCache | null;
-}): Promise<{ body: LooseObject; cached: LiveViewModelCache }> {
-  const fingerprint = await liveSessionFingerprint(workDir, {
+  cache: LiveViewModelCacheState;
+}): Promise<LiveViewModelResult> {
+  const cached = cache.current;
+  const snapshot = await liveSessionSnapshot(workDir, {
     cached,
     nowMs,
     ttlMs,
   });
+  const fingerprint = snapshot.fingerprint;
   if (cached && cached.fingerprint === fingerprint && cached.expiresAt > nowMs) {
-    return { body: cached.payload, cached };
+    return { body: cached.payload, cacheable: true, cached };
   }
-  const ledgerEntries = await readRedactedLedgerEntries(workDir, { workDir });
-  const body = redactEvidenceObject({ ...(await viewModel()), ledgerEntries }, { workDir });
+  if (cache.pending && cache.pending.fingerprint === fingerprint) {
+    return cache.pending.promise;
+  }
+  const pending: LiveViewModelRefresh = {
+    fingerprint,
+    promise: buildLiveViewModelRefresh({ workDir, viewModel, ttlMs, fingerprint }),
+  };
+  cache.pending = pending;
+  try {
+    const payload = await pending.promise;
+    if (payload.cacheable) cache.current = payload.cached;
+    return payload;
+  } finally {
+    if (cache.pending === pending) cache.pending = null;
+  }
+}
+
+async function buildLiveViewModelRefresh({
+  workDir,
+  viewModel,
+  ttlMs,
+  fingerprint,
+}: {
+  workDir: string;
+  viewModel: () => Promise<LooseObject>;
+  ttlMs: number;
+  fingerprint: string;
+}): Promise<LiveViewModelResult> {
+  let expectedFingerprint = fingerprint;
+  for (let attempt = 0; ; attempt += 1) {
+    const refresh = await buildLiveViewModelBody({ workDir, viewModel });
+    if (refresh.completedSnapshot.fingerprint === expectedFingerprint) {
+      return liveViewModelResult({
+        body: refresh.body,
+        cacheable: true,
+        completedAt: refresh.completedAt,
+        fingerprint: expectedFingerprint,
+        fingerprintStamp: refresh.completedSnapshot.stamp,
+        ttlMs,
+      });
+    }
+    if (attempt >= LIVE_VIEW_MODEL_REFRESH_RETRY_LIMIT) {
+      return liveViewModelChangedDuringRefreshResult({
+        completedAt: refresh.completedAt,
+        completedSnapshot: refresh.completedSnapshot,
+        ttlMs,
+      });
+    }
+    expectedFingerprint = refresh.completedSnapshot.fingerprint;
+  }
+}
+
+async function buildLiveViewModelBody({
+  workDir,
+  viewModel,
+}: {
+  workDir: string;
+  viewModel: () => Promise<LooseObject>;
+}): Promise<{
+  body: LooseObject;
+  completedAt: number;
+  completedSnapshot: LiveSessionSnapshot;
+}> {
+  const ledgerReadout = await readRedactedLedgerEntries(workDir, { workDir });
+  const body = redactEvidenceObject(
+    {
+      ...compactDashboardTransportViewModel(await viewModel()),
+      ledgerEntries: ledgerReadout.entries,
+      ledgerBounds: ledgerReadout.ledgerBounds,
+    },
+    { workDir },
+  );
+  const completedAt = Date.now();
+  const completedSnapshot = await liveSessionSnapshot(workDir, {
+    cached: null,
+    nowMs: completedAt,
+    ttlMs: 0,
+  });
+  return { body, completedAt, completedSnapshot };
+}
+
+function liveViewModelResult({
+  body,
+  cacheable,
+  completedAt,
+  fingerprint,
+  fingerprintStamp,
+  ttlMs,
+  statusCode,
+}: {
+  body: LooseObject;
+  cacheable: boolean;
+  completedAt: number;
+  fingerprint: string;
+  fingerprintStamp: string;
+  ttlMs: number;
+  statusCode?: number;
+}): LiveViewModelResult {
   return {
     body,
+    cacheable,
+    statusCode,
     cached: {
-      expiresAt: nowMs + ttlMs,
+      expiresAt: cacheable ? completedAt + ttlMs : 0,
       fingerprint,
-      fingerprintExpiresAt: nowMs + ttlMs,
-      fingerprintStamp: await liveSessionStamp(workDir),
+      fingerprintExpiresAt: cacheable ? completedAt + ttlMs : 0,
+      fingerprintStamp,
       payload: body,
     },
   };
+}
+
+function liveViewModelChangedDuringRefreshResult({
+  completedAt,
+  completedSnapshot,
+  ttlMs,
+}: {
+  completedAt: number;
+  completedSnapshot: LiveSessionSnapshot;
+  ttlMs: number;
+}): LiveViewModelResult {
+  return liveViewModelResult({
+    body: {
+      ok: false,
+      code: "live_view_model_changed_during_refresh",
+      retryable: true,
+      message:
+        "Session files changed while the live dashboard readout was refreshing. Retry to avoid a mixed ledger/readout snapshot.",
+    },
+    cacheable: false,
+    completedAt,
+    fingerprint: completedSnapshot.fingerprint,
+    fingerprintStamp: completedSnapshot.stamp,
+    ttlMs,
+    statusCode: 409,
+  });
 }
 
 export async function liveSessionFingerprint(
@@ -220,13 +386,24 @@ export async function liveSessionFingerprint(
     ttlMs: number;
   },
 ): Promise<string> {
+  return (await liveSessionSnapshot(workDir, options)).fingerprint;
+}
+
+async function liveSessionSnapshot(
+  workDir: string,
+  options: {
+    cached: LiveViewModelCache | null;
+    nowMs: number;
+    ttlMs: number;
+  },
+): Promise<LiveSessionSnapshot> {
   const stamp = await liveSessionStamp(workDir);
   if (
     options.cached &&
     options.cached.fingerprintStamp === stamp &&
     options.cached.fingerprintExpiresAt > options.nowMs
   ) {
-    return options.cached.fingerprint;
+    return { fingerprint: options.cached.fingerprint, stamp };
   }
   const parts = await Promise.all([
     fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
@@ -236,7 +413,7 @@ export async function liveSessionFingerprint(
     fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
     fingerprintTree(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
   ]);
-  return parts.join("|");
+  return { fingerprint: parts.join("|"), stamp };
 }
 
 async function liveSessionStamp(workDir: string): Promise<string> {
@@ -310,19 +487,9 @@ function normalizeCacheTtlMs(value: unknown): number {
 async function readRedactedLedgerEntries(
   workDir: string,
   context: LooseObject,
-): Promise<LooseObject[]> {
-  const text = await fsp
-    .readFile(path.join(workDir, "autoresearch.jsonl"), "utf8")
-    .catch((error: unknown) => {
-      if (isFileNotFound(error)) return "";
-      throw error;
-    });
-  return boundLedgerLines(
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  ).flatMap((line) => {
+): Promise<LedgerReadout> {
+  const boundedLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+  const parsedEntries = boundedLines.lines.flatMap((line) => {
     try {
       const entry = redactEvidenceObject(JSON.parse(line), context);
       return isLooseObject(entry) ? [entry] : [];
@@ -330,10 +497,115 @@ async function readRedactedLedgerEntries(
       return [];
     }
   });
+  return {
+    entries: parsedEntries,
+    ledgerBounds: {
+      maxEntries: boundedLines.maxEntries,
+      omittedEntries: boundedLines.omittedEntries,
+      truncated: boundedLines.truncated,
+    },
+  };
 }
 
-function boundLedgerLines(lines: string[]): string[] {
-  return lines.length > LIVE_LEDGER_MAX_ENTRIES ? lines.slice(-LIVE_LEDGER_MAX_ENTRIES) : lines;
+async function readBoundedLedgerLines(filePath: string): Promise<BoundedLedgerLines> {
+  const maxEntries = LIVE_LEDGER_MAX_ENTRIES;
+  const empty = { lines: [], maxEntries, omittedEntries: 0, truncated: false };
+  const stats = await fsp
+    .stat(filePath)
+    .catch((error: unknown) => (isFileNotFound(error) ? null : Promise.reject(error)));
+  if (!stats) return empty;
+
+  const lines: string[] = [];
+  let totalLines = 0;
+  let latestConfigBeforeTail: string | null = null;
+
+  if (maxEntries <= 0) {
+    return { ...empty, truncated: stats.size > 0 };
+  }
+
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const rawLine of reader) {
+      const line = String(rawLine).trim();
+      if (!line) continue;
+      totalLines += 1;
+      lines.push(line);
+      if (lines.length > maxEntries) {
+        const removed = lines.shift();
+        if (isConfigLedgerLine(removed)) latestConfigBeforeTail = removed || null;
+      }
+    }
+  } catch (error) {
+    if (isFileNotFound(error)) return empty;
+    throw error;
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  const bounded =
+    maxEntries > 1 && latestConfigBeforeTail && tailNeedsGoverningConfig(lines)
+      ? trimBoundLedgerLines([latestConfigBeforeTail, ...lines], maxEntries)
+      : lines;
+  return {
+    lines: bounded,
+    maxEntries,
+    omittedEntries: Math.max(0, totalLines - bounded.length),
+    truncated: totalLines > bounded.length,
+  };
+}
+
+function tailNeedsGoverningConfig(lines: string[]): boolean {
+  const firstRunOffset = lines.findIndex(isRunLedgerLine);
+  if (firstRunOffset < 0) return false;
+  for (let index = firstRunOffset; index >= 0; index -= 1) {
+    if (isConfigLedgerLine(lines[index])) return false;
+  }
+  return true;
+}
+
+function trimBoundLedgerLines(lines: string[], maxEntries: number): string[] {
+  const bounded = [...lines];
+  while (bounded.length > maxEntries) {
+    const removable = bounded.findIndex((line, index) => index > 0 && !isConfigLedgerLine(line));
+    bounded.splice(removable >= 0 ? removable : bounded.length - 1, 1);
+  }
+  return bounded;
+}
+
+function isConfigLedgerLine(line: string | undefined): boolean {
+  return ledgerLineType(line) === "config";
+}
+
+function isRunLedgerLine(line: string | undefined): boolean {
+  return ledgerLineType(line) === "run";
+}
+
+function ledgerLineType(line: string | undefined): "config" | "run" | "other" {
+  if (!line) return "other";
+  if (
+    !line.includes('"type"') &&
+    !line.includes('"run"') &&
+    !line.includes('"metric"') &&
+    !line.includes('"status"')
+  ) {
+    return "other";
+  }
+  try {
+    const entry = JSON.parse(line);
+    if (!isLooseObject(entry)) return "other";
+    if (entry.type === "config") return "config";
+    if (
+      entry.type === "run" ||
+      (!entry.type && ("run" in entry || "metric" in entry || "status" in entry))
+    ) {
+      return "run";
+    }
+  } catch {
+    return "other";
+  }
+  return "other";
 }
 
 function isFileNotFound(error: unknown): boolean {

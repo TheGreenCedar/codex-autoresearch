@@ -92,7 +92,7 @@ export function Header({
               hidden={!mode.liveRefresh}
               onClick={() => refreshLiveData()}
             >
-              Refresh now
+              Refresh Readout
             </button>
             <button
               id="live-toggle"
@@ -102,7 +102,7 @@ export function Header({
               onClick={() => setLiveEnabled((value) => !value)}
               aria-pressed={liveEnabled}
             >
-              {liveEnabled ? "Pause auto-refresh" : "Resume auto-refresh"}
+              {liveEnabled ? "Pause Refresh" : "Resume Refresh"}
             </button>
             <button
               id="copy-dashboard-url"
@@ -112,7 +112,7 @@ export function Header({
               onClick={copyDashboardUrl}
               aria-describedby="copy-dashboard-url-status"
             >
-              {copiedUrl ? "Copied live URL" : "Copy live URL"}
+              {copiedUrl ? "Copied Readout URL" : "Copy Readout URL"}
             </button>
             <button
               id="theme-toggle"
@@ -138,7 +138,7 @@ export function Header({
             hidden={!copiedUrl}
             aria-live="polite"
           >
-            Copied live dashboard URL; no session state changed.
+            Copied readout URL; no session state changed.
           </em>
           <em
             id="copy-dashboard-url-error"
@@ -183,6 +183,8 @@ function ThemeToggleContent({ theme }: { theme: "light" | "dark" }) {
     return (
       <>
         <svg
+          aria-hidden="true"
+          focusable="false"
           width="12"
           height="12"
           viewBox="0 0 24 24"
@@ -202,6 +204,8 @@ function ThemeToggleContent({ theme }: { theme: "light" | "dark" }) {
   return (
     <>
       <svg
+        aria-hidden="true"
+        focusable="false"
         width="12"
         height="12"
         viewBox="0 0 24 24"
@@ -320,7 +324,9 @@ function liveReceiptFor({
   const port = portFromUrl(dashboardUrl);
   return {
     label: mode.liveRefresh ? "Live handoff" : "Dashboard handoff",
-    value: [dashboardUrl || "No live URL", port ? `port ${port}` : ""].filter(Boolean).join(" / "),
+    value: [dashboardUrl || "No readout URL", port ? `port ${port}` : ""]
+      .filter(Boolean)
+      .join(" / "),
     detail: staleOrDead
       ? liveStatus.detail || "Live readout is stale or unavailable."
       : mode.liveRefresh

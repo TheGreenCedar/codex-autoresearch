@@ -28,11 +28,12 @@ export function buildReadout(
     allowSummaryMetrics && finiteMetric(summary?.baseline)
       ? Number(summary.baseline)
       : metricValueForRun(baselineRun, metricDefinition);
-  const bestRun = bestRunFor(kept, metricDefinition);
-  const best =
-    allowSummaryMetrics && finiteMetric(summary?.best)
-      ? Number(summary.best)
-      : metricValueForRun(bestRun, metricDefinition);
+  const visibleBestRun = bestRunFor(kept, metricDefinition);
+  const summaryBest =
+    allowSummaryMetrics && finiteMetric(summary?.best) ? Number(summary.best) : null;
+  const visibleBestValue = metricValueForRun(visibleBestRun, metricDefinition);
+  const bestRun = summaryBest != null && visibleBestValue !== summaryBest ? null : visibleBestRun;
+  const best = summaryBest ?? visibleBestValue;
   const latestPlottedRun = evidence.at(-1) || null;
   const latestFailure =
     [...runs]

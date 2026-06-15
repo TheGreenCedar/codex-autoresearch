@@ -222,6 +222,44 @@ test("session read cache reuses parsed records and derives state from them", asy
   });
 });
 
+test("stamp-aware session read cache refreshes when the ledger changes", async () => {
+  await withTempDir("session-read-cache-refresh", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "cached", metricName: "seconds" });
+    appendJsonl(dir, { run: 1, metric: 3, status: "measure", description: "Baseline." });
+
+    const cache = createSessionReadCache({ invalidateOnLedgerChange: true });
+    const records = loadSessionRecords(dir, cache);
+    const state = loadSessionState(dir, cache);
+    appendJsonl(dir, { run: 2, metric: 2, status: "keep", description: "Later run." });
+
+    const refreshedRecords = loadSessionRecords(dir, cache);
+    const refreshedState = loadSessionState(dir, cache);
+    assert.notEqual(refreshedRecords, records);
+    assert.notEqual(refreshedState, state);
+    assert.equal(refreshedRecords.length, 3);
+    assert.equal(refreshedState.results.length, 2);
+  });
+});
+
+test("stamp-aware session read cache refreshes state before records after ledger changes", async () => {
+  await withTempDir("session-read-cache-state-first", async (dir) => {
+    appendJsonl(dir, { type: "config", name: "cached", metricName: "seconds" });
+    appendJsonl(dir, { run: 1, metric: 3, status: "measure", description: "Baseline." });
+
+    const cache = createSessionReadCache({ invalidateOnLedgerChange: true });
+    const state = loadSessionState(dir, cache);
+    const records = loadSessionRecords(dir, cache);
+    appendJsonl(dir, { run: 2, metric: 2, status: "keep", description: "Later run." });
+
+    const refreshedState = loadSessionState(dir, cache);
+    const refreshedRecords = loadSessionRecords(dir, cache);
+    assert.notEqual(refreshedState, state);
+    assert.notEqual(refreshedRecords, records);
+    assert.equal(refreshedState.results.length, 2);
+    assert.equal(refreshedRecords.length, 3);
+  });
+});
+
 test("core last-run freshness can validate command, git, and scoped file context", async () => {
   await withTempDir("last-run-freshness", async (dir) => {
     appendJsonl(dir, { type: "config", name: "evidence", metricName: "seconds" });

@@ -20,7 +20,12 @@ import {
   isMetricEligibleStatus,
   isPromotionalStatus,
 } from "./run-status.js";
-import { loadSessionRecords, readJsonl, type SessionReadCache } from "./session-records.js";
+import {
+  loadSessionRecords,
+  readJsonl,
+  refreshSessionReadCacheForLedgerStamp,
+  type SessionReadCache,
+} from "./session-records.js";
 
 export {
   appendJsonl,
@@ -371,6 +376,7 @@ export function loadSessionState(
 ): SessionState {
   if (!readCache) return currentState(workDir);
   const cacheKey = path.resolve(workDir);
+  refreshSessionReadCacheForLedgerStamp(workDir, readCache);
   const cached = readCache.stateByCwd.get(cacheKey);
   if (cached) return cached as SessionState;
   const state = stateFromSessionRecords(workDir, loadSessionRecords(workDir, readCache));

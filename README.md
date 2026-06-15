@@ -147,7 +147,7 @@ Use a regular Codex task when:
 * the metric can improve by weakening the benchmark
 * secrets, deployment paths, or unrelated dirty files are in scope
 
-Protected benchmark folders are recursively inspected and hashed. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory.
+Protected benchmark folders use bounded recursive snapshots, not unbounded hashing. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory; large or deep folders can make `next` refuse until the benchmark surface is narrowed.
 
 ## Dashboard
 
@@ -191,18 +191,28 @@ Finalization should:
 
 ## Docs
 
+Start and operate:
+
 * [Docs index](plugins/codex-autoresearch/docs/index.md)
-* [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 * [Start](plugins/codex-autoresearch/docs/start.md)
-* [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
-* [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
+* [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md)
 * [Operate](plugins/codex-autoresearch/docs/operate.md)
+* [Finish](plugins/codex-autoresearch/docs/finish.md)
+
+Trust and troubleshooting:
+
+* [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 * [Trust](plugins/codex-autoresearch/docs/trust.md)
 * [Privacy](plugins/codex-autoresearch/docs/privacy.md)
 * [Terms](plugins/codex-autoresearch/docs/terms.md)
-* [Finish](plugins/codex-autoresearch/docs/finish.md)
-* [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
+
+Architecture and maintenance:
+
+* [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
+* [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
+* [Control plane contracts](plugins/codex-autoresearch/docs/control-plane.md)
+* [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Hooks](plugins/codex-autoresearch/docs/hooks.md)
 * [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
 

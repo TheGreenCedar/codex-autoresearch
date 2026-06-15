@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildChart, DASHBOARD_CHART_MAX_POINTS } from "../dashboard/src/model/chart.js";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
+import { buildReadout } from "../dashboard/src/model/readout.js";
 import { asiText } from "../dashboard/src/model/asi.js";
 import type { SessionRun } from "../dashboard/src/types.js";
 import {
@@ -13,6 +14,12 @@ import {
   buildDashboardViewModel,
   buildTrustState,
 } from "../lib/dashboard-view-model.js";
+import {
+  DASHBOARD_TRANSPORT_ARRAY_LIMIT,
+  DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT,
+  compactDashboardTransportViewModel,
+} from "../lib/dashboard-transport.js";
+import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
 import {
   DASHBOARD_COMMAND_FIELD_NAMES,
   DASHBOARD_COMMAND_KEY_ALIASES,
@@ -25,7 +32,7 @@ import {
 } from "../lib/dashboard-command-safety.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
-import { serveAutoresearch } from "../lib/live-server.js";
+import { LIVE_LEDGER_MAX_ENTRIES, serveAutoresearch } from "../lib/live-server.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -107,6 +114,117 @@ test("dashboard chart downsamples long histories while preserving anchor points"
   assert.equal(chart.points[0].run.run, 1);
   assert.equal(chart.points.at(-1)?.run.run, runs.length);
   assert.ok(chart.points.some((point) => point.run === bestRun));
+});
+
+test("dashboard chart does not attach an omitted best value to the first visible run", () => {
+  const runs: SessionRun[] = Array.from({ length: 4 }, (_, index) => ({
+    run: index + 102,
+    metric: index + 102,
+    status: "keep",
+    description: `Visible run ${index + 102}`,
+    metrics: {},
+    asi: {},
+    segment: 0,
+  }));
+  const session = {
+    segment: 0,
+    config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
+    runs,
+  };
+  const readout = buildReadout(session, {
+    summary: { segment: 0, baseline: 101, best: 1, runs: 105 },
+  });
+  const chart = buildChart(session, readout);
+
+  assert.equal(readout.best, 1);
+  assert.equal(readout.bestRun, null);
+  assert.match(chart.summary, /Best value 1s is outside the visible ledger window/);
+  assert.doesNotMatch(chart.summary, /Best #102 at 1s/);
+});
+
+test("dashboard chart crash copy distinguishes visible crashes from plotted crashes", () => {
+  const runs: SessionRun[] = Array.from({ length: 1000 }, (_, index) => {
+    const run = index + 1;
+    const crash = run % 5 === 0;
+    return {
+      run,
+      metric: crash ? null : run,
+      status: crash ? "crash" : "keep",
+      description: `${crash ? "Crash" : "Keep"} ${run}`,
+      metrics: {},
+      asi: {},
+      segment: 0,
+    };
+  });
+  const session = {
+    segment: 0,
+    config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
+    runs,
+  };
+  const readout = buildReadout(session);
+  const chart = buildChart(session, readout);
+
+  assert.match(chart.summary, /200 crash runs in visible history; \d+ plotted after downsampling/);
+  assert.doesNotMatch(chart.summary, /200 crash runs are plotted/);
+});
+
+test("dashboard chart handles very large histories without spread limits", () => {
+  const runCount = 150_000;
+  const runs: SessionRun[] = Array.from({ length: runCount }, (_, index) => ({
+    run: index + 1,
+    metric: index + 1,
+    status: "keep",
+    description: `Run ${index + 1}`,
+    metrics: {},
+    asi: {},
+    segment: 0,
+  }));
+  const bestRun = runs.at(-1)!;
+  const chart = buildChart(
+    {
+      segment: 0,
+      config: { metricName: "quality", metricUnit: "pts", bestDirection: "higher" },
+      runs,
+    },
+    {
+      baseline: 1,
+      baselineRun: runs[0],
+      best: bestRun.metric,
+      bestRun,
+      latestPlottedRun: bestRun,
+      latestFailure: null,
+      nextAction: "Continue.",
+      confidence: null,
+      confidenceText: "",
+      improvement: null,
+      recentRuns: runs.slice(-4),
+      plottedRuns: runs,
+      metricDefinition: {
+        requestedMode: "raw",
+        mode: "raw",
+        metricName: "quality",
+        displayUnit: "pts",
+        bestDirection: "higher",
+        valueLabel: "Real value",
+        percentLabel: "Percent",
+        weights: { time: 0.7, memory: 0.3 },
+        memoryKey: "memory_mb",
+        formulaInline: "",
+        formulaDetails: "",
+        formulaSource: "",
+        formulaConfigured: false,
+        fallbackNote: "",
+        baselineMetric: 1,
+        baselineTime: 1,
+        baselineMemory: null,
+      },
+    },
+  );
+
+  assert.ok(chart.points.length <= DASHBOARD_CHART_MAX_POINTS);
+  assert.equal(chart.points.at(-1)?.run.run, runCount);
+  assert.match(chart.summary, /\d+ plotted runs out of 150000 logged runs/);
+  assert.match(chart.note, /150000 finite measurements/);
 });
 
 test("dashboard command safety accepts read-only autoresearch commands", () => {
@@ -401,6 +519,106 @@ test("dashboard finalization preview strips executable command-shaped fields", (
   );
   assert.doesNotMatch(serialized, /finalize-autoresearch|finalize-current-tree/);
   assert.match(serialized, /Preview finalization readiness/);
+});
+
+test("dashboard transport view model caps large memory arrays", () => {
+  const oversized = Array.from(
+    { length: DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT + 5 },
+    (_, index) => ({ id: index }),
+  );
+  const viewModel = compactDashboardTransportViewModel({
+    experimentMemory: {
+      kept: oversized,
+      rejected: oversized,
+      nextActions: oversized,
+      missingAsiDetails: oversized,
+      families: oversized,
+      metricShelves: oversized,
+      exhaustedFamilies: oversized,
+      lanePortfolio: oversized,
+    },
+    portfolio: {
+      families: oversized,
+      lanes: oversized,
+    },
+    partialResults: {
+      candidates: oversized,
+      skippedArtifacts: oversized,
+    },
+    decisionEnvelope: {
+      state: {
+        current: oversized.map((item, index) => ({
+          ...item,
+          run: index + 1,
+          metric: index + 1,
+          status: "measure",
+        })),
+      },
+      workflowFriction: oversized,
+    },
+    transportBounds: {
+      ledger: true,
+    },
+  });
+
+  assert.equal(viewModel.transportBounds.memoryListLimit, DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT);
+  assert.equal(viewModel.transportBounds.arrayLimit, DASHBOARD_TRANSPORT_ARRAY_LIMIT);
+  assert.equal(viewModel.transportBounds.ledger, true);
+  assert.equal(viewModel.experimentMemory.kept.length, DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT);
+  assert.equal(viewModel.experimentMemory.kept[0].id, 5);
+  assert.equal(viewModel.experimentMemory.rejected[0].id, 5);
+  assert.equal(viewModel.experimentMemory.nextActions[0].id, 5);
+  assert.equal(viewModel.experimentMemory.missingAsiDetails[0].id, 5);
+  assert.equal(viewModel.experimentMemory.families.length, DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT);
+  assert.equal(viewModel.experimentMemory.families[0].id, 0);
+  assert.equal(viewModel.experimentMemory.lanePortfolio[0].id, 0);
+  assert.equal(viewModel.portfolio.families[0].id, 0);
+  assert.equal(viewModel.partialResults.candidates[0].id, 0);
+  assert.equal(viewModel.decisionEnvelope.state.current.length, DASHBOARD_TRANSPORT_ARRAY_LIMIT);
+  assert.equal(viewModel.decisionEnvelope.state.current[0].run, 6);
+  assert.equal(viewModel.decisionEnvelope.workflowFriction.length, DASHBOARD_TRANSPORT_ARRAY_LIMIT);
+  assert.equal(viewModel.decisionEnvelope.workflowFriction[0].id, 0);
+});
+
+test("dashboard ledger bounder preserves governing config when there is room for a run", () => {
+  const entries = [
+    { type: "config", name: "old", metricName: "seconds" },
+    { type: "run", run: 1, status: "measure", metric: 1 },
+    { type: "run", run: 2, status: "measure", metric: 2 },
+    { type: "config", name: "current", metricName: "quality" },
+    ...Array.from({ length: 6 }, (_, index) => ({
+      type: "run",
+      run: index + 3,
+      status: "keep",
+      metric: index + 3,
+    })),
+  ];
+
+  const bounded = boundDashboardLedgerEntries(entries, 5);
+
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.maxEntries, 5);
+  assert.equal(bounded.omittedEntries, 5);
+  assert.equal(bounded.entries.length, 5);
+  assert.equal(bounded.entries[0].type, "config");
+  assert.equal(bounded.entries[0].name, "current");
+  assert.equal(bounded.entries[1].run, 5);
+  assert.equal(bounded.entries.at(-1)?.run, 8);
+});
+
+test("dashboard ledger bounder keeps latest ledger entry when cap is one", () => {
+  const entries = [
+    { type: "config", name: "tight", metricName: "seconds" },
+    { type: "run", run: 1, status: "measure", metric: 1 },
+    { type: "run", run: 2, status: "keep", metric: 2 },
+  ];
+
+  const bounded = boundDashboardLedgerEntries(entries, 1);
+
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.maxEntries, 1);
+  assert.equal(bounded.omittedEntries, 2);
+  assert.deepEqual(bounded.entries, [{ type: "run", run: 2, status: "keep", metric: 2 }]);
 });
 
 test("dashboard action rail uses blocker metadata instead of next fallback", () => {
@@ -945,6 +1163,37 @@ test("dashboard renders the full run log without blank scroll space", async () =
   assert.equal(getById("ledger-body").tagName, "TBODY");
   assert.match(ledgerHtml, /#100/);
   assert.match(ledgerHtml, /#1<\/td>/);
+});
+
+test("dashboard labels bounded static export ledgers as partial", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "bounded export", metricName: "seconds", metricUnit: "s" }),
+    ...Array.from({ length: 12 }, (_, index) => ({
+      type: "run",
+      run: index + 1,
+      metric: 100 - index,
+      status: "keep",
+      description: `Experiment ${index + 1}`,
+      confidence: 1,
+    })),
+  ];
+
+  const { getById } = await runDashboard(
+    entries,
+    emptyCommandMeta({
+      deliveryMode: "static-export",
+      ledgerBounds: { truncated: true, omittedEntries: 101, maxEntries: 5000 },
+    }),
+  );
+
+  assert.match(
+    getById("ledger-note").textContent,
+    /12 visible runs \/ newest first \/ 101 older ledger entries omitted/,
+  );
+  assert.match(
+    getById("ledger-scroll").querySelector("table")?.getAttribute("aria-label") || "",
+    /12 visible runs, 101 older ledger entries omitted/,
+  );
 });
 
 test("dashboard renders a generated Codex summary of history and plan", async () => {
@@ -2856,6 +3105,22 @@ test("served dashboard exposes live refresh but no command-center controls", asy
       safeAction: "finalize-preview",
       command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
     },
+    missionControl: {
+      activeStep: "finalize",
+      steps: [
+        {
+          id: "finalize",
+          title: "Finalize",
+          state: "ready",
+          detail: "Review the packet.",
+          primaryCommand: {
+            label: "Preview",
+            command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
+          },
+          command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep",
+        },
+      ],
+    },
   };
   const entries = [
     {
@@ -2884,8 +3149,8 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(getById("live-title").textContent, "Live Readout");
   assert.match(getById("live-detail").textContent || "", /refresh the view model/);
   assert.equal(queryById("trust-strip"), null);
-  assert.equal(getById("refresh-now").textContent, "Refresh now");
-  assert.equal(getById("live-toggle").textContent, "Pause auto-refresh");
+  assert.equal(getById("refresh-now").textContent, "Refresh Readout");
+  assert.equal(getById("live-toggle").textContent, "Pause Refresh");
   assert.equal(getById("live-toggle").getAttribute("aria-pressed"), "true");
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-toggle").hidden, false);
@@ -2893,6 +3158,9 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(queryById("live-actions-panel"), null);
   assert.equal(queryById("mission-control-grid"), null);
   assert.equal(queryById("action-grid"), null);
+  const missionCommand = getById("mission-control").querySelector(".mission-command");
+  assert.match(missionCommand?.textContent || "", /finalize-preview/);
+  assert.doesNotMatch(missionCommand?.textContent || "", /\blog\b/);
 });
 
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
@@ -3393,6 +3661,32 @@ test("run toast announces status changes", async () => {
   dom.window.close();
 });
 
+test("empty chart state and theme toggle stay accessible", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "empty chart a11y",
+      metricName: "seconds",
+      bestDirection: "lower",
+      metricUnit: "s",
+    },
+  ];
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const chart = getById("trend-chart");
+  const emptyState = chart.querySelector(".chart-empty-state");
+  const chartDescription = dom.window.document.getElementById("trend-chart-desc");
+  const themeIcon = getById("theme-toggle").querySelector("svg");
+
+  assert.ok(emptyState, "zero-run chart should render a visible empty state");
+  assert.match(emptyState.textContent || "", /No finite plotted metrics yet/);
+  assert.match(emptyState.textContent || "", /Waiting for numeric evidence/);
+  assert.equal(emptyState.getAttribute("aria-hidden"), "true");
+  assert.match(chartDescription?.textContent || "", /No finite plotted metrics yet/);
+  assert.equal(themeIcon?.getAttribute("aria-hidden"), "true");
+  assert.equal(themeIcon?.getAttribute("focusable"), "false");
+  dom.window.close();
+});
+
 test("dashboard keeps navigation targets visible when the ledger is empty", async () => {
   const entries = [
     {
@@ -3482,6 +3776,7 @@ test("served dashboard live refresh starts by default and can be stopped", async
   const liveViewModel = {
     summary: { segment: 0, baseline: 1, best: 0, confidence: 2, runs: 2 },
     ledgerEntries: refreshedEntries,
+    ledgerBounds: { truncated: true, omittedEntries: 25, maxEntries: 5000 },
   };
   const { getById, dom } = await runDashboard(
     entries,
@@ -3536,6 +3831,10 @@ test("served dashboard live refresh starts by default and can be stopped", async
     () => getById("runs-value").textContent === "2 (2 kept)",
     "Live dashboard did not refresh from embedded view-model entries.",
   );
+  assert.match(
+    getById("ledger-note").textContent,
+    /2 visible runs \/ newest first \/ 25 older ledger entries omitted/,
+  );
   assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(dom.window.__liveIntervalCalls, 1);
@@ -3548,6 +3847,180 @@ test("served dashboard live refresh starts by default and can be stopped", async
     "Live toggle did not clear the interval.",
   );
   dom.window.close();
+});
+
+test("served dashboard empty bootstrap renders live view-model instead of demo data", async () => {
+  const liveEntries = [
+    {
+      type: "config",
+      name: "package live session",
+      metricName: "quality_gap",
+      bestDirection: "lower",
+      metricUnit: "gaps",
+    },
+    {
+      type: "run",
+      run: 1,
+      metric: 0,
+      status: "keep",
+      description: "Package gate passed",
+      confidence: 4,
+    },
+  ];
+  const liveViewModel = {
+    summary: { segment: 0, baseline: 0, best: 0, confidence: 4, runs: 1 },
+    ledgerEntries: liveEntries,
+    ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5000 },
+  };
+  const { getById, dom } = await runDashboard(
+    [],
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 60000,
+      viewModel: {},
+    },
+    {
+      beforeParse(window) {
+        window.__refreshFetches = [];
+        window.fetch = async (url) => {
+          window.__refreshFetches.push(String(url));
+          return { ok: true, json: async () => liveViewModel };
+        };
+        window.setInterval = () => 1;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => getById("runs-value").textContent === "1 (1 kept)",
+    "Live dashboard kept demo data after fetching view-model entries.",
+  );
+  assert.match(
+    dom.window.document.querySelector(".toolbar-session strong")?.textContent || "",
+    /package live session/i,
+  );
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
+  dom.window.close();
+});
+
+test("live dashboard view model reports ledger bounds when entries are capped", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-bounds-"));
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>bounds</title>",
+    viewModel: async () => ({ summary: { runs: LIVE_LEDGER_MAX_ENTRIES + 3 } }),
+  });
+
+  try {
+    const lines = [
+      JSON.stringify({ type: "config", name: "bounds", metricName: "seconds" }),
+      ...Array.from({ length: LIVE_LEDGER_MAX_ENTRIES + 3 }, (_, index) =>
+        JSON.stringify({ type: "run", run: index + 1, status: "keep", metric: index + 1 }),
+      ),
+      "",
+    ];
+    await writeFile(path.join(dir, "autoresearch.jsonl"), lines.join("\n"), "utf8");
+
+    const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(snapshot.ledgerEntries.length, LIVE_LEDGER_MAX_ENTRIES);
+    assert.deepEqual(snapshot.ledgerBounds, {
+      maxEntries: LIVE_LEDGER_MAX_ENTRIES,
+      omittedEntries: 4,
+      truncated: true,
+    });
+    assert.equal(snapshot.ledgerEntries[0].type, "config");
+    assert.equal(snapshot.ledgerEntries[1].run, 5);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard ledger bounds count omitted raw ledger history before parsing", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-raw-bounds-"));
+  const malformedLineCount = 6_000;
+  const runCount = LIVE_LEDGER_MAX_ENTRIES + 3;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>raw bounds</title>",
+    viewModel: async () => ({ summary: { runs: runCount } }),
+  });
+
+  try {
+    const lines = [
+      ...Array.from({ length: malformedLineCount }, (_, index) => `{malformed-${index}`),
+      JSON.stringify({ type: "config", name: "raw bounds", metricName: "seconds" }),
+      ...Array.from({ length: runCount }, (_, index) =>
+        JSON.stringify({ type: "run", run: index + 1, status: "keep", metric: index + 1 }),
+      ),
+      "",
+    ];
+    await writeFile(path.join(dir, "autoresearch.jsonl"), lines.join("\n"), "utf8");
+
+    const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(snapshot.ledgerEntries.length, LIVE_LEDGER_MAX_ENTRIES);
+    assert.deepEqual(snapshot.ledgerBounds, {
+      maxEntries: LIVE_LEDGER_MAX_ENTRIES,
+      omittedEntries: malformedLineCount + 4,
+      truncated: true,
+    });
+    assert.equal(snapshot.ledgerEntries[0].type, "config");
+    assert.equal(snapshot.ledgerEntries[1].run, 5);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard ledger bounds preserve governing config by position", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-duplicate-config-"));
+  const runCount = LIVE_LEDGER_MAX_ENTRIES + 3;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>duplicate config</title>",
+    viewModel: async () => ({ summary: { runs: runCount } }),
+  });
+
+  try {
+    const configLine = JSON.stringify({
+      type: "config",
+      name: "duplicate config",
+      metricName: "seconds",
+    });
+    const runLines = Array.from({ length: runCount }, (_, index) =>
+      JSON.stringify({ type: "run", run: index + 1, status: "keep", metric: index + 1 }),
+    );
+    const lines = [configLine, ...runLines.slice(0, 10), configLine, ...runLines.slice(10), ""];
+    await writeFile(path.join(dir, "autoresearch.jsonl"), lines.join("\n"), "utf8");
+
+    const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(snapshot.ledgerEntries.length, LIVE_LEDGER_MAX_ENTRIES);
+    assert.deepEqual(snapshot.ledgerBounds, {
+      maxEntries: LIVE_LEDGER_MAX_ENTRIES,
+      omittedEntries: 5,
+      truncated: true,
+    });
+    assert.equal(snapshot.ledgerEntries[0].type, "config");
+    assert.equal(snapshot.ledgerEntries[1].run, 6);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("live dashboard view model cache invalidates on session state changes", async () => {
@@ -3599,6 +4072,188 @@ test("live dashboard view model cache invalidates on session state changes", asy
     assert.equal(third.summary.runs, 2);
     assert.equal(recomputes, 2);
     assert.equal(third.ledgerEntries.length, 3);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache starts its ttl after slow recomputes finish", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-slow-"));
+  let recomputes = 0;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 25,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>slow cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { summary: { runs: recomputes } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "slow cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(first.summary.runs, 1);
+    assert.equal(second.summary.runs, 1);
+    assert.equal(recomputes, 1);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache coalesces concurrent refreshes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-concurrent-"));
+  let recomputes = 0;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>concurrent cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { summary: { runs: recomputes } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "concurrent cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const [first, second] = await Promise.all([
+      fetch(`${server.url}view-model.json`).then((res) => res.json()),
+      fetch(`${server.url}view-model.json`).then((res) => res.json()),
+    ]);
+
+    assert.equal(first.summary.runs, 1);
+    assert.equal(second.summary.runs, 1);
+    assert.equal(recomputes, 1);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache retries stale mid-refresh snapshots", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-race-"));
+  let recomputes = 0;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>cache race</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      if (recomputes === 1) {
+        await appendFile(
+          path.join(dir, "autoresearch.jsonl"),
+          `${JSON.stringify({ type: "run", run: 2, status: "keep", metric: 0.5 })}\n`,
+          "utf8",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { summary: { runs: recomputes } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "cache race", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(first.summary.runs, 2);
+    assert.equal(first.ledgerEntries.length, 3);
+    assert.equal(second.summary.runs, 2);
+    assert.equal(recomputes, 2);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model returns retry when refresh keeps changing files", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-retry-"));
+  let recomputes = 0;
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>cache retry</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      if (recomputes <= 2) {
+        await appendFile(
+          path.join(dir, "autoresearch.jsonl"),
+          `${JSON.stringify({
+            type: "run",
+            run: recomputes + 1,
+            status: "keep",
+            metric: recomputes,
+          })}\n`,
+          "utf8",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { summary: { runs: recomputes } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "cache retry", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const retryResponse = await fetch(`${server.url}view-model.json`);
+    const retryPayload = await retryResponse.json();
+    const recovered = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(retryResponse.status, 409);
+    assert.equal(retryPayload.code, "live_view_model_changed_during_refresh");
+    assert.equal(retryPayload.retryable, true);
+    assert.equal(recomputes, 3);
+    assert.equal(recovered.summary.runs, 3);
+    assert.equal(recovered.ledgerEntries.length, 4);
   } finally {
     server.server.close();
     await rm(dir, { recursive: true, force: true });

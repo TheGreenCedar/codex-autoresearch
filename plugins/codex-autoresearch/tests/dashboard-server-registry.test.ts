@@ -8,6 +8,7 @@ import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
 import {
+  LIVE_LEDGER_MAX_ENTRIES,
   LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES,
   liveSessionFingerprint,
   serveAutoresearch,
@@ -103,6 +104,56 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
         existing.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
       });
     }
+  });
+});
+
+test("serve dashboard resolves config fresh for deferred live view model", async () => {
+  await withTempDir("autoresearch", "serve-fresh-config", async (dir) => {
+    let configVersion = 1;
+    let capturedViewModel: (() => Promise<Record<string, any>>) | null = null;
+    const fakeServer = {
+      on() {
+        return fakeServer;
+      },
+    };
+    const { serveDashboard } = createDashboardCommands({
+      boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+      buildDriftReport: async () => ({ ok: true, status: "fresh" }),
+      dashboardCommands: () => [],
+      dashboardHtml: () => "",
+      dashboardSettings: (config) => ({ version: config.version }),
+      dashboardViewModel: async (_workDir, config) => ({ summary: { runs: config.version } }),
+      operationProgress: (options) => options,
+      pluginRoot: process.cwd(),
+      pluginVersion: PLUGIN_VERSION,
+      readJsonl: () => [],
+      resolveOutputInside: () => "",
+      resolveWorkDir: () => ({
+        workDir: dir,
+        config: { dashboardRefreshSeconds: 1, version: configVersion },
+      }),
+      serveAutoresearch: async (options) => {
+        capturedViewModel = options.viewModel;
+        return {
+          debugLedger: false,
+          port: 9,
+          server: fakeServer,
+          url: "http://127.0.0.1:9/",
+          workDir: dir,
+        };
+      },
+      shellQuote: JSON.stringify,
+      writeFile: async () => {},
+    });
+
+    await serveDashboard({ cwd: dir, port: 0 });
+    assert.ok(capturedViewModel);
+    const first = await capturedViewModel();
+    configVersion = 2;
+    const second = await capturedViewModel();
+
+    assert.equal(first.summary.runs, 1);
+    assert.equal(second.summary.runs, 2);
   });
 });
 
@@ -403,6 +454,47 @@ test("live dashboard keeps debug ledger disabled unless explicitly enabled", asy
             }),
         ),
       );
+    }
+  });
+});
+
+test("live dashboard debug ledger response is bounded before redaction", async () => {
+  await withTempDir("autoresearch", "serve-debug-ledger-bounds", async (dir) => {
+    const malformedLineCount = 6_000;
+    const runCount = LIVE_LEDGER_MAX_ENTRIES + 3;
+    const lines = [
+      ...Array.from({ length: malformedLineCount }, (_, index) => `{malformed-${index}`),
+      JSON.stringify({ type: "config", name: "debug bounds", metricName: "seconds" }),
+      ...Array.from({ length: runCount }, (_, index) =>
+        JSON.stringify({ type: "run", run: index + 1, status: "keep", metric: index + 1 }),
+      ),
+      "",
+    ];
+    await writeFile(path.join(dir, "autoresearch.jsonl"), lines.join("\n"), "utf8");
+    const server = await serveAutoresearch({
+      cwd: dir,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      debugLedger: true,
+      dashboardHtml: async () => "<!doctype html><title>Autoresearch</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+
+    try {
+      const response = await requestText(`${server.url}autoresearch.jsonl`, {
+        Host: `127.0.0.1:${server.port}`,
+      });
+      const responseLines = response.body.split(/\r?\n/).filter(Boolean);
+
+      assert.equal(response.status, 200);
+      assert.equal(responseLines.length, LIVE_LEDGER_MAX_ENTRIES);
+      assert.doesNotMatch(response.body, /malformed-0/);
+      assert.match(response.body, /"type":"config"/);
+      assert.match(response.body, /"run":5/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
     }
   });
 });

@@ -11,6 +11,8 @@ test("default help leads with the short happy path", () => {
   assert.match(help, /setup-plan --cwd <project>/);
   assert.match(help, /prompt-plan --cwd <project>/);
   assert.match(help, /node scripts\/autoresearch\.mjs setup --cwd <project>/);
+  assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
+  assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /node scripts\/autoresearch\.mjs finalize-preview --cwd <project>/);
   assert.ok(help.indexOf("setup-plan --cwd <project>") < help.indexOf("setup --cwd <project>"));
   assert.ok(help.indexOf("prompt-plan --cwd <project>") < help.indexOf("setup --cwd <project>"));
@@ -25,6 +27,11 @@ test("full help preserves advanced and maintainer commands", () => {
   assert.match(help, /codex-goal-brief/);
   assert.match(help, /session-forensics/);
   assert.match(help, /finalize-current-tree/);
+  assert.match(help, /Current-tree finalization:/);
+  assert.match(help, /clean Git-backed non-trunk source branch/);
+  assert.match(help, /session artifacts are excluded by default/);
+  assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
+  assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /clear --cwd <project>/);
   assert.doesNotMatch(help, /Run `--help --all`/);
 });

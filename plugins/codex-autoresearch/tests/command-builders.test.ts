@@ -46,6 +46,21 @@ test("log command helper reports pending receipt cleanup failure without losing 
   assert.match(warning || "", /Pending receipt cleanup failed: filesystem denied unlink\./);
 });
 
+test("log command helper redacts local paths in pending receipt cleanup warnings", async () => {
+  const warning = await clearPendingLogTransactionWithWarning(
+    "C:\\Users\\Alice\\secret-client\\.git\\autoresearch\\pending-log-transaction.json",
+    async () => {
+      throw new Error(
+        "EPERM: operation not permitted, unlink 'C:\\Users\\Alice\\secret-client\\.git\\autoresearch\\pending-log-transaction.json'",
+      );
+    },
+    { workDir: "C:\\Users\\Alice\\secret-client" },
+  );
+
+  assert.doesNotMatch(warning || "", /Alice|secret-client/);
+  assert.match(warning || "", /<workdir>|C:\\Users\\<user>/);
+});
+
 test("run command helper blocks packets when resource budgets are exhausted", () => {
   assert.throws(
     () =>

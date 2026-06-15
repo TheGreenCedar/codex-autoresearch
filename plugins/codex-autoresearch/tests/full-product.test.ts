@@ -1227,6 +1227,12 @@ test("live server exposes health and view-model endpoints", async () => {
       assert.match(ledgerBody.error, /--debug-ledger/);
       const html = await fetch(payload.url).then((res) => res.text());
       assert.match(html, /"deliveryMode":"live-server"/);
+      const embeddedEntries = JSON.parse(
+        html.match(
+          /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
+        )?.[1] || "null",
+      );
+      assert.deepEqual(embeddedEntries, []);
       for (const forbidden of [
         "Live actions available",
         "live-actions-panel",

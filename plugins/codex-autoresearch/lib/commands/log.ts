@@ -1,9 +1,16 @@
 import fsp from "node:fs/promises";
 
-type UnlinkFn = (filePath: string) => Promise<void>;
+import { redactEvidenceText } from "../evidence-redaction.js";
 
-export function pendingReceiptCleanupWarning(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+type UnlinkFn = (filePath: string) => Promise<void>;
+type CleanupWarningContext = { workDir?: string };
+
+export function pendingReceiptCleanupWarning(
+  error: unknown,
+  context: CleanupWarningContext = {},
+): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = redactEvidenceText(rawMessage, context);
   return `Pending receipt cleanup failed: ${message}.`;
 }
 
@@ -22,11 +29,12 @@ export async function clearPendingLogTransaction(
 export async function clearPendingLogTransactionWithWarning(
   receiptPath: string | null,
   unlink: UnlinkFn = fsp.unlink,
+  context: CleanupWarningContext = {},
 ): Promise<string | null> {
   try {
     await clearPendingLogTransaction(receiptPath, unlink);
     return null;
   } catch (error) {
-    return pendingReceiptCleanupWarning(error);
+    return pendingReceiptCleanupWarning(error, context);
   }
 }

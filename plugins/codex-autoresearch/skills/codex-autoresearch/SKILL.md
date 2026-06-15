@@ -145,11 +145,12 @@ Use finalization when noisy loop history has useful kept commits.
 5. Treat previews and plans as read-only.
 6. Review dirty tree, stale plan, overlap, semantic safety, unkept base..HEAD commits, excluded commits, and excluded-file warnings.
 7. Session artifacts are excluded by default. Use `--include-session-artifacts` only when the reviewer explicitly wants them in the branch.
-8. Ask before creating branches unless the user already approved finalization.
-9. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
-10. Do not suggest branch cleanup until merge verification has succeeded.
-11. Classify existing review branches before reuse: equivalent, stale, divergent, checked-out, unsafe, local-only, PR-open, merged, or cleanup-ready.
-12. Report created review branches, files, metric improvement, claim coverage, verification, runway status, and remaining risk.
+8. When `state` or `finalize-preview` says the current tree is the review unit, use `finalize-current-tree --cwd <project>` from a clean Git-backed non-trunk source branch. It writes a plan only when ready; review that plan, then run the finalizer with the plan file.
+9. Ask before creating branches unless the user already approved finalization.
+10. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
+11. Do not suggest branch cleanup until merge verification has succeeded.
+12. Classify existing review branches before reuse: equivalent, stale, divergent, checked-out, unsafe, local-only, PR-open, merged, or cleanup-ready.
+13. Report created review branches, files, metric improvement, claim coverage, verification, runway status, and remaining risk.
 
 ## Subagent Handoffs
 

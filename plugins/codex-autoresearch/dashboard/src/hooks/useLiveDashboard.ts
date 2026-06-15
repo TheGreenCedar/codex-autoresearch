@@ -59,6 +59,7 @@ export function useLiveDashboard({
           ...current,
           viewModel: snapshot.viewModel,
           generatedAt: snapshot.generatedAt,
+          ledgerBounds: snapshot.viewModel.ledgerBounds || current.ledgerBounds,
         }));
         if (source === "manual" || shouldAnnounceAutoRefresh(lastAutoAnnouncementAt.current)) {
           if (source === "auto") lastAutoAnnouncementAt.current = Date.now();
