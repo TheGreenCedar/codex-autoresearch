@@ -6,6 +6,20 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.3.2 - 2026-06-15
+
+### Changed
+
+- Added shared session record/read-model helpers for compact state,
+  recommendations, dashboard exports, and command readouts.
+- Split log, next, run, and recommendation command behavior into focused
+  command modules while preserving the public CLI surface.
+
+### Fixed
+
+- Reused loaded session records across state and compact readouts instead of
+  reparsing the ledger during the same view-model build.
+
 ## 2.3.1 - 2026-06-15
 
 ### Changed

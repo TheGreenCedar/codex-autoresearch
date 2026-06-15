@@ -7,6 +7,7 @@ import {
   summarizeServeRegistry,
   writeServeRegistry,
 } from "../dashboard-server-registry.js";
+import { compactDashboardTransportViewModel } from "../dashboard-transport.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 
 type LooseObject = Record<string, any>;
@@ -14,6 +15,7 @@ type LooseObject = Record<string, any>;
 export interface DashboardCommandDeps {
   boolOption: (value: unknown, fallback: boolean) => boolean;
   buildDriftReport: (options: LooseObject) => Promise<LooseObject>;
+  createSessionReadCache?: (options?: LooseObject) => LooseObject;
   dashboardCommands: (workDir: string, ...extra: unknown[]) => LooseObject[];
   dashboardHtml: (entries: LooseObject[], meta: LooseObject) => string;
   dashboardSettings: (config: LooseObject, extra?: LooseObject) => LooseObject;
@@ -71,7 +73,9 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       suppressEnvironmentWarnings: showcaseExport,
     };
     const rawViewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
-    const viewModel = showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel;
+    const viewModel = compactDashboardTransportViewModel(
+      showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel,
+    );
     const html = deps.dashboardHtml(entries, {
       workDir,
       generatedAt,
@@ -108,27 +112,31 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       args.json_full ?? args.jsonFull ?? args.full ?? args.verbose,
       false,
     );
+    const summary = recordOrNull(viewModel.summary);
+    const nextBestAction = recordOrNull(viewModel.nextBestAction);
+    const readout = recordOrNull(viewModel.readout);
     const result: LooseObject = {
       ok: true,
       workDir,
       output,
-      summary: viewModel.summary,
+      summary,
       decisionEnvelopeSummary: viewModel.decisionEnvelopeSummary || null,
-      baseline: viewModel.summary?.baseline ?? null,
-      best: viewModel.summary?.best ?? null,
-      nextAction: viewModel.nextBestAction?.detail || viewModel.readout?.nextAction || "",
+      baseline: summary?.baseline ?? null,
+      best: summary?.best ?? null,
+      nextAction: nextBestAction?.detail || readout?.nextAction || "",
       modeGuidance,
       progress,
     };
-    if (fullJson) result.viewModel = viewModel;
+    if (fullJson) result.viewModel = rawViewModel;
     return result;
   }
 
   async function serveDashboard(args: LooseObject) {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
-    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const debugLedger = deps.boolOption(args.debugLedger ?? args.debug_ledger, false);
+    const liveReadCache = deps.createSessionReadCache?.({ invalidateOnLedgerChange: true });
     let liveUrl = "";
     let dashboardServerRegistry: LooseObject | null = null;
     if (!args.port && debugLedger !== true) {
@@ -146,6 +154,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         });
       }
     }
+
     const runtimeDrift = await deps
       .buildDriftReport({
         pluginRoot: deps.pluginRoot,
@@ -160,7 +169,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       startedAt: startedAtIso,
       scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
       dashboardHtml: async () => {
-        const entries = deps.readJsonl(workDir);
+        const { config } = deps.resolveWorkDir(args.working_dir || args.cwd);
         const generatedAt = new Date().toISOString();
         const dashboardContext = {
           deliveryMode: "live-server",
@@ -172,7 +181,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           activeServerCount: liveDashboardServers.size,
           dashboardServerRegistry,
         };
-        return deps.dashboardHtml(entries, {
+        return deps.dashboardHtml([], {
           workDir,
           generatedAt,
           jsonlName: "autoresearch.jsonl",
@@ -189,8 +198,9 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           viewModel: {},
         });
       },
-      viewModel: async () =>
-        deps.dashboardViewModel(workDir, config, {
+      viewModel: async () => {
+        const { config } = deps.resolveWorkDir(args.working_dir || args.cwd);
+        return deps.dashboardViewModel(workDir, config, {
           deliveryMode: "live-server",
           liveUrl,
           generatedAt: new Date().toISOString(),
@@ -199,7 +209,9 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           runtimeDrift,
           activeServerCount: liveDashboardServers.size,
           dashboardServerRegistry,
-        }),
+          readCache: liveReadCache,
+        });
+      },
     });
     liveUrl = serveResult.url;
     liveDashboardServers.add(serveResult.server);
@@ -360,6 +372,12 @@ function emitProgress(args: LooseObject, stage: string, message: string): void {
     return;
   }
   process.stderr.write(`[autoresearch:${stage}] ${message}\n`);
+}
+
+function recordOrNull(value: unknown): LooseObject | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as LooseObject)
+    : null;
 }
 
 function sanitizePublicShowcaseViewModel(value: LooseObject): LooseObject {

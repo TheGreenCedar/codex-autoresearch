@@ -26,6 +26,8 @@ type RunLike = LooseObject & {
 };
 type CommandMap = Map<string, string>;
 
+export const DASHBOARD_READOUT_MEASUREMENT_RUN_LIMIT = 50;
+
 interface NormalizedDashboardSettings extends LooseObject {
   deliveryMode?: string;
   liveUrl?: string;
@@ -62,6 +64,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     ["discard", "crash", "checks_failed"].includes(String(run.status)),
   );
   const measurements = current.filter((run) => run.status === "measure");
+  const measurementReadout = boundedMeasurementRunReadout(measurements);
   const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
   const latestFailure = failures.at(-1) || null;
   const parallelLanes = Array.isArray(state.parallelLanes)
@@ -308,7 +311,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
     readout: {
       bestKept: bestKept ? compactRun(bestKept) : null,
       latestFailure: latestFailure ? compactRun(latestFailure) : null,
-      measurementRuns: measurements.map((run) => compactRun(run)),
+      measurementRuns: measurementReadout.runs,
+      measurementRunCount: measurements.length,
+      measurementRunsOmitted: measurementReadout.omitted,
+      measurementRunsTruncated: measurementReadout.truncated,
       nextAction: actionRail[0]?.detail || nextAction,
       confidenceText:
         state.confidence == null
@@ -2986,5 +2992,14 @@ function compactRun(run: RunLike) {
     description: redactEvidenceObject(run.description || ""),
     commit: run.commit || "",
     asi: redactEvidenceObject(run.asi || {}),
+  };
+}
+
+function boundedMeasurementRunReadout(measurements: RunLike[]) {
+  const bounded = measurements.slice(-DASHBOARD_READOUT_MEASUREMENT_RUN_LIMIT);
+  return {
+    runs: bounded.map((run) => compactRun(run)),
+    omitted: Math.max(0, measurements.length - bounded.length),
+    truncated: measurements.length > bounded.length,
   };
 }
