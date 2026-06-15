@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Activity } from "lucide-react";
 import { buildChart } from "../model";
@@ -29,7 +28,6 @@ interface TrendPanelProps {
   readout: DashboardReadout;
   detailsDefaultOpen?: boolean;
   chartHeight?: number;
-  afterChart?: ReactNode;
 }
 
 export function TrendPanel({
@@ -37,7 +35,6 @@ export function TrendPanel({
   readout,
   detailsDefaultOpen = true,
   chartHeight = 350,
-  afterChart = null,
 }: TrendPanelProps) {
   const [valueModeParam, setValueMode] = useUrlParam("value", VALUE_MODES, "value");
   const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
@@ -112,7 +109,6 @@ export function TrendPanel({
         {chart.summary}
       </p>
       <ChartDataList chartData={chartData} />
-      {afterChart}
 
       {detailsDefaultOpen ? (
         <MetricDetails readout={readout} session={session} point={detailPoint} />

@@ -220,6 +220,9 @@ function validateRepoRelativePath(file: unknown, cwd: string): string {
   ) {
     throw new Error(`Unsafe finalizer file path must be repo-relative: ${file}`);
   }
+  if (normalized.startsWith(":")) {
+    throw new Error(`Unsafe finalizer file path must not use Git pathspec magic: ${file}`);
+  }
   const parts = normalized.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) {
     throw new Error(
@@ -236,6 +239,54 @@ function validateRepoRelativePath(file: unknown, cwd: string): string {
     throw new Error(`Unsafe finalizer file path resolves outside the repo: ${file}`);
   }
   return parts.join("/");
+}
+
+function pathInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+async function nearestExistingParent(start: string): Promise<string> {
+  let cursor = path.resolve(start);
+  for (;;) {
+    try {
+      await fsp.access(cursor);
+      return cursor;
+    } catch {
+      const next = path.dirname(cursor);
+      if (next === cursor) return cursor;
+      cursor = next;
+    }
+  }
+}
+
+async function resolveRepoRemovalTarget(cwd: string, safeFile: string): Promise<string> {
+  const root = path.resolve(cwd);
+  const target = path.resolve(root, safeFile);
+  if (!pathInside(root, target)) {
+    throw new Error(`Unsafe finalizer file path resolves outside the repo: ${safeFile}`);
+  }
+  const nearestParent = await nearestExistingParent(path.dirname(target));
+  let realRoot: string;
+  let realParent: string;
+  try {
+    realRoot = await fsp.realpath(root);
+    realParent = await fsp.realpath(nearestParent);
+  } catch (error) {
+    throw new Error(
+      `Unsafe finalizer file path could not be resolved safely: ${safeFile}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!pathInside(realRoot, realParent)) {
+    throw new Error(
+      `Unsafe finalizer file path escapes outside the working directory through a linked parent: ${safeFile}`,
+    );
+  }
+  return target;
 }
 
 async function currentBranch(cwd: string): Promise<string> {
@@ -286,7 +337,7 @@ async function applyFileFromCommit(ref: string, file: unknown, cwd: string): Pro
     await git(["checkout", ref, "--", safeFile], cwd);
     return;
   }
-  await fsp.rm(path.resolve(cwd, safeFile), { recursive: true, force: true });
+  await fsp.rm(await resolveRepoRemovalTarget(cwd, safeFile), { recursive: true, force: true });
   await git(["rm", "-r", "--ignore-unmatch", "--", safeFile], cwd, true);
 }
 

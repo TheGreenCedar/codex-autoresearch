@@ -2,52 +2,56 @@
 
 Find the failing layer first. Do not retry a live step until a precondition has changed.
 
-| Symptom | Likely Layer | What To Do |
+| Symptom | Likely layer | What to do |
 | --- | --- | --- |
-| CLI command is missing or fails before loading runtime | Source checkout missing `dist/` | Run `node scripts/autoresearch.mjs --help` from the plugin directory once to hydrate the matching release runtime. |
+| CLI command missing or fails before loading runtime | Source checkout missing `dist/` | Run `node scripts/autoresearch.mjs --help` from the plugin directory once to hydrate the matching release runtime. |
 | Source differs from Codex behavior | Installed runtime drift | Refresh the installed plugin/cache before changing source again. |
 | Benchmark has no primary metric | Benchmark contract | Run `benchmark-lint`; repair output to `METRIC <primary>=<number>`. |
-| Benchmark parses but is not promotable | Research integrity | Inspect `researchIntegrity`; add repeat/holdout/freshness/promotion metadata before treating a dev best as final. |
-| Speed metric improved but correctness was not checked | Quality constraint | Add a checks command or quality gate for accuracy, recall, ranking, accessibility, security, or data integrity before product-grade promotion. Treat the result as an experimental primitive until claim coverage is present. |
-| Perfect metric looks too good | Evaluator contamination or cache replay | Treat it as suspicious until breadth, freshness, holdout/adversarial coverage, and repeat evidence are present. |
-| Current benchmark is far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor/check-benchmark and start a new segment if the old phase is stale. |
-| Setup wrapper loops forever or calls itself | Scaffold health | Inspect `scaffoldHealth`; replace the self-recursive wrapper with the real workload or rerun setup with `--benchmark-command`. |
-| Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL for fresh state. |
-| Dashboard looks actionable but does not mutate | Product contract | The dashboard is a readout. Use CLI for setup, packet runs, logging, gap review, export, and finalization preview. |
-| Last packet will not log | Packet freshness or raw `run` probe | Rerun `next` to create a loggable packet, or log a manual diagnostic with `log --metric <value> --status measure`. |
-| Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or intentionally use `--allow-add-all`. |
-| Configured commit paths are missing | Stale config | Update `autoresearch.config.json` or pass explicit paths on the next log. |
-| Finalization preview blocks | Dirty tree, semantic safety, or coverage | Clean/scope the tree, inspect kept runs, resolve invalidated/reverted evidence, or use `finalize-current-tree` when current branch contents are the review unit. Session artifacts are excluded by default. |
-| Source is clean but session artifacts are dirty | Session artifact cleanliness | Read `sourceCleanliness`. Continue read/run work if needed, but before finalization temporarily stash or commit `autoresearch.*` / `autoresearch.research/**` artifacts; `finalize-current-tree` excludes them by default after the worktree is clean. |
-| Finalization or export looks hung | Slow command with quiet JSON stdout | Rerun with `--progress` to print heartbeat lines on stderr while keeping stdout machine-readable JSON. |
-| Finalization preview includes rejected or provisional evidence | Evidence status | Confirm runs are accepted/current keeps before finalization. Rejected, provisional, superseded, and quarantined evidence stays audit-only. |
-| Finalization preview sounds shippable without claim coverage | Product-grade bar | Re-run `state --compact` and `finalize-preview`; missing accuracy, lazy behavior, ranking, or docs/tests proof means the branch is experimental review only, not a shippable deliverable. |
-| `quality_gap=0` or `agent_value_gap=0` looks final | Research scope confusion | It closes or saturates the cheap metric only. Check `researchIntegrity`, promotion metadata, finalization readiness, and open quality gaps before declaring the work promotable or complete. |
-| Watchdog fires | No-progress window | Inspect the process, finalize useful kept work, rescope the segment, or start a fresh segment before running another packet. |
-| Operator checklist blocks `next` | Loop governance | Follow the checklist command first. It outranks another packet until the named blocker is cleared. |
-| Codex resumes, compacts, or treats the latest prompt as the goal | Goal frame mismatch | Read `state --compact` and use `goalFrame.authoritativeGoal`; if a prior session contains a correction, run `node scripts/autoresearch.mjs session-forensics --cwd . --session-jsonl .\rollout.jsonl --research-slug goal-frame --dry-run` from a directory where `.\rollout.jsonl` is the saved session export. |
-| `next` returns `next_blocked_by_loop_contract` | Active decision capsule or loop contract | Follow `blockingAction.command`, repair the named condition, then clear by a later ledger acknowledgement, measurement-contract repair, or fresh segment. |
-| `benchmark-lint` times out or parses no primary `METRIC` | Benchmark contract | Repair the wrapper, warm-cache mode, sample, or bounded task slice until lint proves the metric. Log this as measurement-contract repair, not product progress. |
-| Loop keeps running but not learning | Degenerate loop shape | Stop packet work. Read `recommend-next --compact --operator-checklist`, inspect ASI/families/plateau, and run `session-forensics --dry-run`, `research-fanout --dry-run`, or a fresh segment before another near-neighbor tweak. |
-| Heavy benchmark was about to rerun after crash or timeout | Packet economics | Run `partial-results --from-last` and inspect artifacts first; record useful rows as diagnostic `measure` evidence, then rerun only a bounded slice. |
-| Runtime provenance is unavailable or stale | Runtime drift | Inspect or refresh the installed plugin/cache before claiming source behavior is live. |
-| Packet diagnostics report evidence loss | Packet evidence | Treat the run as diagnostic evidence. Repair citation carry, synthesis, quality scoring, or benchmark failure before promoting it. |
-| `lane-runner` refuses a command outside Git | Lane isolation | Run the lane in a Git worktree, record a read-only summary without a command, or pass `--allow-non-git-command` only when that non-Git command is intentionally admitted. |
-| Benchmark runs but no METRIC line | Benchmark output | The command must print `METRIC name=value` to stdout. Wrap the workload in a script that captures timing and emits the line, or use `--benchmark-prints-metric false` to let the wrapper time it. |
-| Accidentally logged a wrong keep | Log correction | Discard cleanup must be scoped. Use `revertPaths` to roll back the kept commit. Then rerun `next` and log correctly. The ledger is append-only — the bad entry stays as historical evidence. |
-| Later run invalidates a keep | Evidence correction | Log the later packet with ASI explaining contamination, failed repeat, cache replay, or rollback. `finalize-preview` should then block that earlier keep from promotion. |
-| Dashboard chart is empty | No logged packets | Run at least one `next` and `log` cycle. Use `measure` for legitimate baseline or diagnostic evidence that should appear in trend readouts without becoming finalizer evidence. |
-| Want to change the primary metric | Session reconfiguration | Use `new-segment` to start a fresh segment with the new metric. Do not edit `autoresearch.jsonl` by hand. |
-| Session has too many packets | Session age | Use `new-segment --dry-run` to preview a fresh segment, then confirm. Old history is preserved in the ledger. |
+| Benchmark parses but is not promotable | Research integrity | Inspect `researchIntegrity`; add repeat/holdout/freshness/promotion metadata. |
+| Speed improved but correctness unchecked | Quality constraint | Add checks for accuracy, recall, ranking, accessibility, security, or data integrity. Treat as experimental until claim coverage is present. |
+| Perfect metric looks too good | Evaluator contamination or cache replay | Require breadth, freshness, holdout, and repeat evidence. |
+| Current benchmark far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor and start a new segment if the old phase is stale. |
+| Setup wrapper loops or calls itself | Scaffold health | Replace self-recursive wrapper or rerun setup with `--benchmark-command`. |
+| Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL. |
+| Live refresh reports HTTP 409 | Session changed mid-refresh | Retry refresh or wait for next auto-refresh. |
+| Dashboard looks actionable but does not mutate | Product contract | Dashboard is readout only. Use CLI for setup, packets, logging, and finalization. |
+| Last packet will not log | Packet freshness or raw `run` probe | Rerun `next`, or log manually with `log --metric <value> --status measure`. |
+| Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or use `--allow-add-all` intentionally. |
+| Configured commit paths missing | Stale config | Update `autoresearch.config.json` or pass explicit paths on next log. |
+| Finalization preview blocks | Dirty tree, semantic safety, coverage | Clean/scope tree, resolve invalidated evidence, or use `finalize-current-tree`. |
+| Source clean but session artifacts dirty | Session artifact cleanliness | Stash or commit `autoresearch.*` / `autoresearch.research/**` before branch-changing finalization. |
+| Finalization or export looks hung | Slow command, quiet JSON stdout | Rerun with `--progress` for stderr heartbeats. |
+| Preview includes rejected or provisional evidence | Evidence status | Confirm runs are accepted/current keeps. |
+| Preview sounds shippable without claim coverage | Product-grade bar | Re-run `state --compact` and `finalize-preview`; branch is experimental review only. |
+| `quality_gap=0` looks final | Research scope confusion | Closes the cheap metric only. Check `researchIntegrity`, promotion metadata, and open gaps. |
+| Watchdog fires | No-progress window | Inspect process, finalize kept work, rescope, or start a fresh segment. |
+| Checklist blocks `next` | Loop governance | Follow the checklist command first. |
+| `next_blocked_by_truncated_fingerprints` | Dirty Git fingerprint trust | Clean, commit, stash, or scope dirty files, then rerun `next`. |
+| Resume treats latest prompt as the goal | Goal frame mismatch | Read `goalFrame.authoritativeGoal` from `state --compact`; run `session-forensics` if a prior session contains a correction. |
+| `next_blocked_by_loop_contract` | Decision capsule or loop contract | Follow `blockingAction.command`, repair the condition, acknowledge or start fresh segment. |
+| `benchmark-lint` times out | Benchmark contract | Repair wrapper, warm-cache, or bounded task slice. Measurement-contract repair, not product progress. |
+| Loop keeps running but not learning | Degenerate loop shape | Stop packets. Read `recommend-next --compact --operator-checklist`, inspect ASI/plateau, run `session-forensics --dry-run` or `research-fanout --dry-run`. |
+| Heavy benchmark about to rerun after crash | Packet economics | Run `partial-results --from-last` first; record useful rows as diagnostic `measure`. |
+| Runtime provenance unavailable | Runtime drift | Inspect or refresh installed plugin/cache. |
+| Packet diagnostics report evidence loss | Packet evidence | Repair citation carry, synthesis, or benchmark failure before promoting. |
+| `lane-runner` refuses command outside Git | Lane isolation | Use a worktree, record read-only summary, or pass `--allow-non-git-command` intentionally. |
+| Benchmark runs but no METRIC line | Benchmark output | Command must print `METRIC name=value`, or use `--benchmark-prints-metric false` for wrapper timing. |
+| Accidentally logged wrong keep | Log correction | Scope discard cleanup with `revertPaths`. Ledger is append-only. |
+| Later run invalidates a keep | Evidence correction | Log later packet with ASI explaining contamination or rollback. |
+| Dashboard chart empty | No logged packets | Run at least one `next` and `log` cycle. |
+| Want to change primary metric | Session reconfiguration | Use `new-segment`. Do not edit `autoresearch.jsonl` by hand. |
+| Session has too many packets | Session age | Use `new-segment --dry-run` then confirm. Old history is preserved. |
 
-## Common Mistakes
+Compact-state field names: [state-fields](concepts.md#state-fields).
 
-- **Logging before checking**: running `log --from-last` without verifying that `doctor` or `state --compact` shows a clean session. Always check freshness first.
-- **Treating dashboard as truth**: the dashboard is a readout. If it shows stale data, serve a fresh instance instead of reading old state as current.
-- **Broad Git cleanup after discard**: using `--allow-add-all` or broad revert when only experiment files should change. Scope reverts with `revertPaths`.
-- **Skipping ASI**: logging decisions without hypothesis/evidence/next-action metadata. The next session then has no memory and repeats failed approaches.
+## Common mistakes
 
-Before any command that can commit, discard, revert, or change branches, run a local checkpoint:
+- **Logging before checking**: running `log --from-last` without verifying freshness in `doctor` or `state --compact`.
+- **Treating dashboard as truth**: serve a fresh instance when data looks stale.
+- **Broad Git cleanup after discard**: scope reverts with `revertPaths`; avoid `--allow-add-all` unless every dirty file is intentional.
+- **Skipping ASI**: the next session has no memory and repeats failed approaches.
+
+Before any command that can commit, discard, revert, or change branches:
 
 ```bash
 git status --short
@@ -55,9 +59,7 @@ node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
 
-If unrelated files, protected benchmark drift, stale last-run packets, pending log transactions, or runtime drift appear, resolve or isolate that layer before retrying the mutating command.
-
-## Fast Diagnostics
+## Fast diagnostics
 
 ```bash
 node scripts/autoresearch.mjs state --cwd <project> --compact
@@ -66,8 +68,12 @@ node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 ```
 
-For this repo, run from the wrapper root:
+From the wrapper root:
 
 ```bash
 node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
 ```
+
+---
+
+Previous: [Hooks](hooks.md) · Next: [Index](index.md).

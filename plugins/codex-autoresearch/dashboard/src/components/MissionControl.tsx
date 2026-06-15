@@ -68,7 +68,7 @@ function MissionStepItem({
 }) {
   const { copied, copy } = useCopyText();
   const primary = step.primaryCommand as { label?: string; command?: string } | undefined;
-  const cmd = primary?.command || step.command;
+  const cmd = primary?.command;
   const label = stateLabel(step.state, active);
   const title = step.title || step.id || "Step";
 
@@ -92,7 +92,7 @@ function MissionStepItem({
               {cmd}
             </code>
             <button type="button" className="tool-button subtle" onClick={() => copy(cmd)}>
-              {copied ? "Copied" : primary?.label || "Copy"}
+              {copied ? "Copied" : primary?.label || "Copy CLI Command"}
             </button>
           </div>
         )}

@@ -122,10 +122,11 @@ export function TrendChartFigure({
   }, [chartData, selectedRunNumber]);
   const selectedPoint =
     chartData.find((item) => item.runNumber === selectedRunNumber) || chartData.at(-1) || null;
+  const hasChartData = chartData.length > 0;
   return (
     <figure
       id="trend-chart"
-      className="chart-frame"
+      className={`chart-frame${hasChartData ? "" : " chart-frame-empty"}`}
       aria-labelledby="trend-chart-title trend-chart-desc"
     >
       <figcaption id="trend-chart-title" className="sr-only">
@@ -242,6 +243,12 @@ export function TrendChartFigure({
           </Line>
         </ComposedChart>
       </ResponsiveContainer>
+      {!hasChartData ? (
+        <div className="chart-empty-state" aria-hidden="true">
+          <strong>No finite plotted metrics yet.</strong>
+          <span>Waiting for numeric evidence.</span>
+        </div>
+      ) : null}
       <div className="chartRunTicks" aria-hidden="true">
         {chartData.map((item) => (
           <span key={`tick-${item.runNumber}`} />

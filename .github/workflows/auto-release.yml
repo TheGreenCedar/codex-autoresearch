@@ -13,13 +13,30 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: auto-release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  workflow-policy:
+    name: Workflow policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Enforce third-party action pinning
+        run: node .github/scripts/check-workflow-policy.mjs
+
   detect-version:
     name: Detect version bump
+    needs: workflow-policy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       should_release: ${{ steps.version.outputs.should_release }}
       version: ${{ steps.version.outputs.version }}
@@ -94,7 +111,9 @@ jobs:
     needs: detect-version
     if: needs.detect-version.outputs.should_release == 'true'
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     uses: ./.github/workflows/release.yml
     with:
       version: ${{ needs.detect-version.outputs.version }}

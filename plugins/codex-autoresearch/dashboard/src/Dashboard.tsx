@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import type { DashboardEntry, DashboardMeta, DashboardViewModel } from "./types";
-import { buildReadout, dashboardMode, recordFrom } from "./model";
+import type { DashboardEntry, DashboardMeta } from "./types";
+import { buildReadout, dashboardMode } from "./model";
 import { DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW } from "./constants";
 import type { DashboardView } from "./constants";
 import { useDashboardSession } from "./hooks/useDashboardSession";
@@ -58,7 +58,6 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
   const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
   const view = viewParam as DashboardView;
   const auditView = view === "audit";
-  const proofSignalsFirst = hasProofOrFinalizationBlockers(viewModel);
 
   const decisionRail = (
     <section className="decision-layout" aria-label="Current operator decision">
@@ -100,38 +99,38 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           setView={setViewParam}
         />
 
-        {auditView ? <MobileNextAction viewModel={viewModel} /> : null}
-
         <section
           className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
           aria-label="Metric evidence"
         >
           <div className="metric-primary-column">
-            {proofSignalsFirst ? <SignalStrip view={view} viewModel={viewModel} priority /> : null}
             <TrendPanel
               session={session}
               readout={readout}
-              detailsDefaultOpen={auditView}
+              detailsDefaultOpen={false}
               chartHeight={auditView ? 350 : 420}
-              afterChart={
-                proofSignalsFirst ? null : <SignalStrip view={view} viewModel={viewModel} />
-              }
             />
-            {auditView ? decisionRail : null}
+            <div className="post-chart-runway" aria-label="Post-chart action runway">
+              {decisionRail}
+              {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
+              <SignalStrip view={view} viewModel={viewModel} />
+            </div>
           </div>
           {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
         </section>
 
-        {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
         {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
-        {!auditView ? decisionRail : null}
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />
           {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
         </section>
 
-        <Ledger session={session} readout={readout} />
+        <Ledger
+          session={session}
+          readout={readout}
+          ledgerBounds={meta.ledgerBounds || viewModel.ledgerBounds}
+        />
 
         {auditView ? (
           <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">
@@ -168,49 +167,4 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       </div>
     </div>
   );
-}
-
-function MobileNextAction({ viewModel }: { viewModel: DashboardViewModel }) {
-  const action = recordFrom(viewModel.nextBestAction);
-  const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
-  const title =
-    cleanActionText(action.title) || cleanActionText(envelope.title) || "Choose next action";
-  const packetBrake = action.packetBrake === true;
-  const detail = packetBrake
-    ? "Do not run another packet"
-    : cleanActionText(action.detail) || cleanActionText(envelope.detail) || "Decision envelope";
-
-  return (
-    <section
-      className={`mobile-next-action${packetBrake ? " warn" : ""}`}
-      id="mobile-next-action"
-      aria-label={`Next: ${title}. ${detail}`}
-    >
-      <span className="signal-label">Next</span>
-      <strong title={title}>{title}</strong>
-      <em title={detail}>{detail}</em>
-    </section>
-  );
-}
-
-function cleanActionText(value: unknown) {
-  return String(value ?? "").trim();
-}
-
-function hasProofOrFinalizationBlockers(viewModel: DashboardViewModel) {
-  const coverage = recordFrom(viewModel.productClaimCoverage);
-  const finalization = recordFrom(viewModel.finalizePreview);
-  const checklist = recordFrom(viewModel.finalizationChecklist);
-  return (
-    coverage.productGradeReady === false ||
-    toList(coverage.blockers).length > 0 ||
-    toList(coverage.missingRequiredProof).length > 0 ||
-    toList(finalization.warnings).length > 0 ||
-    toList(checklist.warnings).length > 0
-  );
-}
-
-function toList(value: unknown) {
-  if (!value) return [];
-  return Array.isArray(value) ? value : [value];
 }

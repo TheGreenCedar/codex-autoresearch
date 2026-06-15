@@ -6,10 +6,10 @@ const HAPPY_PATH = "setup -> doctor -> next -> log -> state -> finalize-preview"
 
 const DEFAULT_USAGE_LINES = [
   "  Read-only planning:",
-  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--name <name>] [--metric-name <name>] [--benchmark-command <cmd>]",
+  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--name <name>] [--metric-name <name>] [--direction lower|higher] [--benchmark-command <cmd>]",
   "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
   "  Writes session files:",
-  "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--benchmark-command <cmd>] [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
+  "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
   "  node scripts/autoresearch.mjs doctor --cwd <project> [--check-benchmark] [--explain]",
   "  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--timeout-seconds <n>]",
   "  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text>",
@@ -23,6 +23,7 @@ const SETUP_GUIDANCE_FLAGS = [
   "[--trust-catalog]",
   "[--name <name>]",
   "[--metric-name <name>]",
+  "[--direction lower|higher]",
   "[--benchmark-command <cmd>]",
   "[--checks-command <cmd>]",
   "[--commit-paths <paths>]",
@@ -38,7 +39,7 @@ const SETUP_GUIDANCE_FLAGS = [
 const FULL_USAGE_LINES = [
   `  node scripts/autoresearch.mjs setup-plan --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
   "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
-  "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
+  "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--direction lower|higher] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
   "  node scripts/autoresearch.mjs setup --cwd <project> --interactive",
   `  node scripts/autoresearch.mjs guide --cwd <project> ${SETUP_GUIDANCE_FLAGS}`,
   "  node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]",
@@ -73,6 +74,14 @@ const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]",
 ];
 
+const FULL_GUIDANCE_LINES = [
+  "",
+  "Current-tree finalization:",
+  "  finalize-current-tree is for stale or incomplete commit-level kept evidence when the current branch tree is the review unit.",
+  "  It writes a plan only from a clean Git-backed non-trunk source branch; session artifacts are excluded by default.",
+  "  After reviewing the plan, run the finalizer with that plan file.",
+];
+
 export function renderCliHelp({ all = false }: HelpOptions = {}): string {
   const usageLines = all ? FULL_USAGE_LINES : DEFAULT_USAGE_LINES;
   const sections = [
@@ -85,6 +94,8 @@ export function renderCliHelp({ all = false }: HelpOptions = {}): string {
   ];
   if (!all) {
     sections.push("", "Run `--help --all` for advanced diagnostics and maintainer commands.");
+  } else {
+    sections.push(...FULL_GUIDANCE_LINES);
   }
   sections.push("", "Benchmark output format:", "  METRIC name=value", "  ARTIFACT name=path", "");
   return sections.join("\n");

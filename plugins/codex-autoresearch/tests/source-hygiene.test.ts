@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -102,6 +103,54 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
       reason: "new local LooseObject compatibility alias; use UnknownRecord from lib/types/json.js",
     },
   ]);
+});
+
+test("public docs and plugin metadata keep customer-facing autoresearch wording", () => {
+  const repoRoot = path.resolve(pluginRoot, "..", "..");
+  const readRepoFile = (relativePath: string) =>
+    readFileSync(path.join(repoRoot, relativePath), "utf8");
+  const readme = readRepoFile("README.md");
+  const changelog = readRepoFile("CHANGELOG.md");
+  const packageJson = JSON.parse(readRepoFile("plugins/codex-autoresearch/package.json"));
+  const pluginJson = JSON.parse(
+    readRepoFile("plugins/codex-autoresearch/.codex-plugin/plugin.json"),
+  );
+  const currentChangelogEntry =
+    changelog.match(/## 2\.3\.5 - 2026-06-15[\s\S]*?(?=\n## 2\.3\.4 - 2026-06-15)/)?.[0] ?? "";
+
+  const publicCopy = [
+    readme,
+    packageJson.description,
+    pluginJson.description,
+    pluginJson.interface.shortDescription,
+    pluginJson.interface.longDescription,
+    currentChangelogEntry,
+  ].join("\n");
+
+  assert.equal(
+    packageJson.description,
+    "Codex plugin for bounded, measured benchmark and optimization loops.",
+  );
+  assert.match(pluginJson.description, /Measured Codex loops/);
+  assert.match(pluginJson.description, /local evidence/);
+  assert.match(pluginJson.description, /reviewable branch previews/);
+  assert.match(pluginJson.interface.longDescription, /benchmark output/);
+  assert.match(pluginJson.interface.longDescription, /local evidence/);
+  assert.match(pluginJson.interface.longDescription, /read-only live readout/);
+  assert.match(pluginJson.interface.longDescription, /after user approval/);
+  assert.match(currentChangelogEntry, /experiment outcomes|run outcomes/);
+
+  assert.doesNotMatch(publicCopy, /logs keep, discard, measure, crash, and checks_failed/i);
+  assert.doesNotMatch(publicCopy, /log decisions/i);
+  assert.doesNotMatch(publicCopy, /keep\/discard\/measure\/crash\/checks_failed/i);
+  assert.doesNotMatch(publicCopy, /\bASI\b/);
+  assert.doesNotMatch(publicCopy, /promotion labels/i);
+  assert.doesNotMatch(publicCopy, /one skill surface/i);
+  assert.doesNotMatch(publicCopy, /packet outcomes/i);
+  assert.doesNotMatch(
+    publicCopy,
+    /Run at most 5 packets|running one measured packet|fresh packet state|run one measured packet|A packet is one measured experiment cycle/i,
+  );
 });
 
 test("check phase selection succeeds for clean injected source hygiene only", async () => {

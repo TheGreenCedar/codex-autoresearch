@@ -4,6 +4,93 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+### Changed
+
+- README: problem/solution opener, worked example, and questions section (structure only; no behavior change).
+- Documentation rewrite: plain-warm senior-engineer voice, clearer audience split between human docs and agent contracts, restructured docs index, and `concepts.md#state-fields` glossary for compact-state labels.
+- Removed brittle doc-copy test gates (`ax-ux-golden-path`, `full-product-docs`, `loop-governance-docs`) and relaxed README phrase assertions in product tests.
+
+## 2.3.7 - 2026-06-15
+
+### Fixed
+
+- Dashboard readouts now keep the packet trend chart first; the next-action rail and readiness signals render below the chart instead of above or inside it.
+
+## 2.3.6 - 2026-06-15
+
+### Changed
+
+- Added regression coverage for large repeated experiment families so memory
+  summaries keep exhausted-family counts intact.
+
+## 2.3.5 - 2026-06-15
+
+### Changed
+
+- Public README, package metadata, plugin metadata, and trust docs now use
+  clearer customer-facing language for measured loops, live readouts, approved
+  finalization, uninstall scope, and experiment outcomes.
+- The public docs map now separates first-run operation, trust,
+  troubleshooting, architecture, and maintainer surfaces.
+
+## 2.3.4 - 2026-06-15
+
+### Changed
+
+- Partial-result salvage now byte-caps and row-caps artifacts, reports unsafe
+  artifact notices, and keeps salvaged rows diagnostic-only.
+- Hardened CLI and dashboard evidence redaction for response payloads, env-file
+  references, common secret-key variants, home paths, and network paths.
+
+### Fixed
+
+- Rejected Git pathspec magic in keep, discard, and finalizer path inputs before
+  Git can expand them beyond the intended scope.
+- Guarded finalizer recursive removal against linked parent directories that
+  resolve outside the working directory.
+- `next` now refuses before benchmark execution when dirty Git fingerprint
+  evidence would be truncated.
+
+## 2.3.3 - 2026-06-15
+
+### Changed
+
+- Bounded long live dashboard ledger payloads with config continuity, chart
+  downsampling, and compact view-model transport.
+- Updated dashboard readout copy and refreshed the public live-readout
+  screenshot, checked-in dashboard bundle, and showcase export.
+- Served dashboard refreshes now retry one structured retryable view-model
+  conflict before reporting a live refresh failure.
+
+### Fixed
+
+- Live dashboard pages now start from the served `/view-model.json` payload
+  when bootstrapped empty instead of retaining demo data.
+
+## 2.3.2 - 2026-06-15
+
+### Changed
+
+- Added shared session record/read-model helpers for compact state,
+  recommendations, dashboard exports, and command readouts.
+- Split log, next, run, and recommendation command behavior into focused
+  command modules while preserving the public CLI surface.
+
+### Fixed
+
+- Reused loaded session records across state and compact readouts instead of
+  reparsing the ledger during the same view-model build.
+
+## 2.3.1 - 2026-06-15
+
+### Changed
+
+- Added reusable workflow policy validation and tightened CI/release launcher
+  smoke coverage for the Codex Autoresearch package.
+- Stabilized compiled CLI test sharding by reducing the CLI shard worker count.
+
 ## 2.3.0
 
 ### Changed

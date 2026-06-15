@@ -82,8 +82,7 @@ function readSegmentParam(): number | null {
 }
 
 function initialEntriesFor(initialEntries?: DashboardEntry[]) {
-  const sourceEntries = Array.isArray(initialEntries) ? initialEntries : [];
-  return sourceEntries.length ? sourceEntries : DEMO_ENTRIES;
+  return Array.isArray(initialEntries) ? initialEntries : DEMO_ENTRIES;
 }
 
 function sessionFor(normalized: NormalizedEntries, activeSegment: number): SessionSegment {

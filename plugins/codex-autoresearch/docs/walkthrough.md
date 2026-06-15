@@ -1,8 +1,8 @@
 # Walkthrough
 
-This walkthrough shows a complete Codex Autoresearch loop shape. The commands are copyable, but the JSON and terminal output below is illustrative example output; treat your local `doctor`, `state`, dashboard, and finalization readouts as the source of truth.
+This walkthrough shows a complete Codex Autoresearch loop. Commands are copyable; JSON and terminal output below is illustrative — trust your local `doctor`, `state`, dashboard, and finalization readouts.
 
-## 1. Prompt and Plan
+## 1. Prompt and plan
 
 You give Codex a broad request:
 
@@ -10,59 +10,29 @@ You give Codex a broad request:
 /goal @Codex Autoresearch study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist.
 ```
 
-Codex uses `prompt-plan` to convert this into a structured approach. Example output:
+Codex uses `prompt-plan` to structure the approach. Example output (abbreviated):
 
 ```json
 {
   "kind": "codex-autoresearch-prompt-plan",
   "intent": {
     "loopKind": "quality-gap",
-    "metric": {
-      "name": "quality_gap",
-      "unit": "gaps",
-      "direction": "lower"
-    },
+    "metric": { "name": "quality_gap", "direction": "lower" },
     "setupDefaults": {
       "recipe": "quality-gap",
-      "name": "Dashboard and docs quality-gap",
-      "goal": "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist.",
-      "metricName": "quality_gap",
-      "direction": "lower"
-    },
-    "nextAction": "Run setup, doctor, then one packet. Serve the live dashboard only if the operator asks or freshness needs a browser readout."
-  },
-  "setup": {
-    "recommendedRecipe": {
-      "id": "quality-gap",
-      "metricName": "quality_gap",
-      "benchmarkCommand": "node scripts/autoresearch.mjs quality-gap --cwd . --research-slug <slug>"
+      "goal": "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
     }
   },
   "nextStep": {
     "stage": "configured-session",
-    "nextAction": {
-      "title": "Verify configured session",
-      "toolName": "doctor",
-      "safety": "read_or_check"
-    }
-  },
-  "missingEssentials": [],
-  "firstRunChecklist": [
-    {
-      "step": "baseline",
-      "purpose": "Run the first measured packet."
-    },
-    {
-      "step": "log",
-      "purpose": "Record the first baseline as measure before starting another run."
-    }
-  ]
+    "nextAction": { "toolName": "doctor", "safety": "read_or_check" }
+  }
 }
 ```
 
 Codex confirms the evidence source and research slug before creating session files.
 
-## 2. Setup and Doctor
+## 2. Setup and doctor
 
 Codex creates the research scratchpad, configures the quality-gap session, and verifies the benchmark.
 
@@ -82,9 +52,9 @@ Doctor Checks
 No blocking issues. The session is ready for a first baseline measurement.
 ```
 
-If `benchmark-lint` passes but `doctor` reports dirty Git, runtime drift, finalization/current-tree coverage, missing promotion metadata, or stale packet blockers, repair those first. A parsed metric proves the benchmark line can be read; it does not prove the loop is finalization-ready.
+If `benchmark-lint` passes but `doctor` reports dirty Git, runtime drift, finalization coverage issues, or stale packet blockers, repair those first. A parsed metric proves the benchmark line can be read; it does not prove the loop is finalization-ready.
 
-## 3. The First Packet (Measure)
+## 3. First packet (measure)
 
 Codex runs the first packet to measure the accepted checklist before changing the product.
 
@@ -120,7 +90,7 @@ Primary Metric: quality_gap=3
 Continuation: shouldContinue=true
 ```
 
-## 4. Close Credible Candidates
+## 4. Close credible candidates
 
 Codex previews source-backed candidates, applies the credible ones, and runs another packet.
 
@@ -133,7 +103,6 @@ Illustrative output:
 
 ```text
 Packet Run
-Benchmark: node scripts/autoresearch.mjs quality-gap --cwd . --research-slug dashboard-study
 Benchmark output:
   METRIC quality_gap=0
 
@@ -148,16 +117,7 @@ node scripts/autoresearch.mjs state --cwd . --compact
 node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Closed accepted dashboard/docs quality gaps"
 ```
 
-Illustrative output:
-
-```text
-Log entry saved.
-Status: keep
-Primary Metric: quality_gap=0
-Continuation: shouldContinue=true
-```
-
-`quality_gap=0` closes the accepted checklist for this round. If the broader question is still alive, start a fresh research round instead of pretending the topic is exhausted.
+`quality_gap=0` closes the accepted checklist for this round. If the broader question is still alive, start a fresh research round. See [Concepts](concepts.md#quality-gap).
 
 ## 5. Finalization
 
@@ -177,11 +137,12 @@ Total kept commits: 3
 Files affected: README.md, docs/operate.md, dashboard/src/App.tsx
 Estimated overlap: safe to collapse
 
-Next step: Review `finalize-preview`, approve branch creation, then run the finalizer for the source branch that owns the kept work. Cleanup waits until the merge is verified.
+Next step: Review finalize-preview, approve branch creation, then run the finalizer.
+Cleanup waits until the merge is verified.
 ```
 
-If a dashboard is stale during review, serve a fresh dashboard rather than trusting an old `file://` export. If state reports plateau pressure, pivot to finalization, rescope, or a fresh quality-gap round instead of running another packet by habit. The loop is complete when the accepted work is documented, verified, and ready for human review.
+If a dashboard is stale during review, serve a fresh dashboard rather than trusting an old `file://` export. If state reports plateau pressure, pivot to finalization, rescope, or a fresh quality-gap round instead of running another packet by habit.
 
 ---
 
-Previous: [Recipes](recipes.md) · Next: [Troubleshooting](troubleshooting.md) — symptom-to-layer diagnosis.
+Previous: [Start](start.md) · Next: [Operate](operate.md) — resume, dashboard, packet logging.

@@ -17,10 +17,15 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+concurrency:
+  group: main-branch-source-guard-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   enforce-source-branch:
     name: Enforce source branch
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require repository dev source branch
         env:

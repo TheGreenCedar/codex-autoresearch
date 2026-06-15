@@ -42,7 +42,13 @@ test("perfection benchmark reports zero quality gaps for the local plugin", asyn
 test("compact read command paths use loadSessionState cache-aware loading", async () => {
   const source = await readFile(path.join(pluginRoot, "scripts", "autoresearch.ts"), "utf8");
   const cliHandlers = await readFile(path.join(pluginRoot, "lib", "cli-handlers.ts"), "utf8");
-  for (const functionName of ["guidedSetup", "onboardingPacket", "recommendNext", "publicState"]) {
+  for (const functionName of [
+    "setupPlan",
+    "guidedSetup",
+    "onboardingPacket",
+    "recommendNext",
+    "publicState",
+  ]) {
     const body = extractFunctionBody(source, functionName);
     const directStateLoads = (body.match(/\bcurrentState\(/g) || []).length;
     const cachedStateLoads = (body.match(/\bloadSessionState\(/g) || []).length;
@@ -56,11 +62,23 @@ test("compact read command paths use loadSessionState cache-aware loading", asyn
   assert.match(`${source}\n${cliHandlers}`, /\breadCache\b/);
 });
 
+test("dashboard orchestration reuses already-loaded ledger records", async () => {
+  const source = await readFile(path.join(pluginRoot, "scripts", "autoresearch.ts"), "utf8");
+  const dashboardBody = extractFunctionBody(source, "dashboardViewModel");
+  const orchestrationBody = extractFunctionBody(source, "buildParallelOrchestrationContext");
+
+  assert.match(dashboardBody, /\brecords\s*=\s*loadSessionRecords\(workDir,\s*readCache\)/);
+  assert.match(dashboardBody, /buildParallelOrchestrationContext\(\{[\s\S]*\brecords,/);
+  assert.doesNotMatch(orchestrationBody, /\breadJsonl\(/);
+  assert.match(orchestrationBody, /latestLaneResults\(workDir,\s*state\.segment,\s*records\)/);
+  assert.match(orchestrationBody, /resolveFanoutForSegment\([\s\S]*records[\s\S]*\)/);
+});
+
 function extractFunctionBody(source, functionName) {
-  const signature = new RegExp(`async function ${functionName}\\b`);
+  const signature = new RegExp(`(?:async\\s+)?function ${functionName}\\b`);
   const match = signature.exec(source);
   assert.ok(match, `Missing function ${functionName}`);
-  const openBrace = source.indexOf("{", match.index);
+  const openBrace = findFunctionBodyOpenBrace(source, match.index);
   assert.notEqual(openBrace, -1, `Missing body for ${functionName}`);
   let depth = 0;
   for (let index = openBrace; index < source.length; index += 1) {
@@ -72,4 +90,21 @@ function extractFunctionBody(source, functionName) {
     }
   }
   assert.fail(`Unclosed body for ${functionName}`);
+}
+
+function findFunctionBodyOpenBrace(source, startIndex) {
+  let parenDepth = 0;
+  let enteredParameters = false;
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "(") {
+      enteredParameters = true;
+      parenDepth += 1;
+    } else if (char === ")") {
+      parenDepth -= 1;
+    } else if (char === "{" && enteredParameters && parenDepth === 0) {
+      return index;
+    }
+  }
+  return -1;
 }

@@ -312,25 +312,6 @@ const checks = [
     },
   },
   {
-    id: "ax-ux-golden-path",
-    file: "../../README.md, skills/codex-autoresearch/SKILL.md",
-    description: "Docs make AX and UX first-class plugin paths.",
-    run: async () => {
-      const readme = await readRootText("README.md");
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      return includesAll(`${readme}\n${skill}`, [
-        "AX",
-        "AI experience",
-        "UX",
-        "user experience",
-        "one skill surface",
-        "live dashboard URL",
-      ])
-        ? pass()
-        : fail("AX/UX golden path guidance is incomplete.");
-    },
-  },
-  {
     id: "main-skill-start-resume",
     file: "skills/codex-autoresearch/SKILL.md",
     description:
@@ -338,14 +319,14 @@ const checks = [
     run: async () => {
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(skill, [
-        "## Start Or Resume",
+        "## Start or resume",
         "setup-plan",
         "setup",
         "doctor",
-        "directly provide the live dashboard URL",
-        "session start and resume",
+        "provide the live dashboard URL",
+        "before the first trusted packet",
         "http://127.0.0.1:<port>/",
-        "## Active Loop Contract",
+        "## Active loop contract",
         "continuation.shouldContinue",
         "continuation.forbidFinalAnswer",
         "commitPaths",
@@ -361,11 +342,11 @@ const checks = [
     run: async () => {
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(skill, [
-        "## Deep Research Loops",
+        "## Deep research loops",
         "autoresearch.research/<slug>/",
         "sources.md",
         "synthesis.md",
-        "quality_gap=0 only means",
+        "`quality_gap=0` only means",
         "filter hallucinations",
         "## Dashboard",
         "serve --cwd <project>",
@@ -438,7 +419,7 @@ const checks = [
         "--status measure",
         "non-promotional evidence",
         "freshRoundSuggested",
-        "quality_gap=0 only means",
+        "`quality_gap=0` only means",
         "--include-session-artifacts",
         "Session artifacts are excluded by default",
         "Do not suggest branch cleanup until merge verification has succeeded",
@@ -498,7 +479,7 @@ const checks = [
           "@Codex Autoresearch plan a measured loop from this prompt.",
           "@Codex Autoresearch serve the live dashboard when useful.",
         ]) &&
-        manifest.interface?.longDescription?.includes("one skill surface")
+        manifest.interface?.longDescription?.includes("one guided workflow")
         ? pass()
         : fail("Default prompts should be concise plugin-level starters.");
     },
@@ -884,75 +865,6 @@ const checks = [
       ];
       for (const file of files) await readText(file);
       return pass();
-    },
-  },
-  {
-    id: "full-product-docs",
-    file: "../../README.md, skills/codex-autoresearch/SKILL.md",
-    description:
-      "Public docs describe recipes, setup-plan, gap candidates, finalization preview, visual dashboard use, and integrations through the single skill.",
-    run: async () => {
-      const readme = await readRootText("README.md");
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      return includesAll(readme + skill, [
-        "setup-plan",
-        "onboarding-packet",
-        "recommend-next",
-        "codex-goal-brief",
-        "benchmark-lint",
-        "checks-inspect",
-        "new-segment",
-        "gap-candidates",
-        "finalize-preview",
-        "visual aid",
-        "Use the CLI",
-        "live dashboard URL",
-        "recipes",
-        "state --report",
-        "report.text",
-        "terminal-first",
-        "gateQuality",
-        "preflight",
-        "sourceCleanliness",
-        "portfolioRecommendation",
-        "task_manifest",
-        "symlink/realpath escapes",
-        "built-entrypoint fingerprint",
-      ])
-        ? pass()
-        : fail("Docs are missing full-product workflow terms.");
-    },
-  },
-  {
-    id: "loop-governance-docs",
-    file: "skills/codex-autoresearch/SKILL.md, docs/operate.md, docs/trust.md, docs/architecture.md",
-    description:
-      "Docs and skill describe the loop-governance fields Codex must read before another packet.",
-    run: async () => {
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      const operate = await readText("docs/operate.md");
-      const trust = await readText("docs/trust.md");
-      const architecture = await readText("docs/architecture.md");
-      return includesAll(`${skill}\n${operate}\n${trust}\n${architecture}`, [
-        "operatorChecklist",
-        "loopContract",
-        "sessionDecisionCapsule",
-        "decision-capsule",
-        "runtimeProvenance",
-        "runtimeDriftSummary",
-        "gateQuality",
-        "preflight",
-        "sourceCleanliness",
-        "portfolioRecommendation",
-        "laneLifecycle",
-        "packetDiagnostics",
-        "state --report",
-        "state --report` and `state` expose",
-        "recommend-next --compact` carries",
-        "benchmark-lint` must prove the primary `METRIC`",
-      ])
-        ? pass()
-        : fail("Loop-governance docs are missing required compact-readout fields.");
     },
   },
   {

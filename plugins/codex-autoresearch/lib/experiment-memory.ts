@@ -281,7 +281,12 @@ function summarizeFamilies(
         statuses: {},
       });
     }
-    familyRuns.set(key, [...(familyRuns.get(key) || []), run]);
+    let runsForFamily = familyRuns.get(key);
+    if (!runsForFamily) {
+      runsForFamily = [];
+      familyRuns.set(key, runsForFamily);
+    }
+    runsForFamily.push(run);
     const family = map.get(key)!;
     const status = run.status || "unknown";
     family.runs += 1;
