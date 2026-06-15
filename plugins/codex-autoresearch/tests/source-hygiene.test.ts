@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -102,6 +103,32 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
       reason: "new local LooseObject compatibility alias; use UnknownRecord from lib/types/json.js",
     },
   ]);
+});
+
+test("public docs and plugin metadata keep guarded autoresearch wording", () => {
+  const repoRoot = path.resolve(pluginRoot, "..", "..");
+  const readRepoFile = (relativePath: string) =>
+    readFileSync(path.join(repoRoot, relativePath), "utf8");
+  const readme = readRepoFile("README.md");
+  const packageJson = JSON.parse(readRepoFile("plugins/codex-autoresearch/package.json"));
+  const pluginJson = JSON.parse(
+    readRepoFile("plugins/codex-autoresearch/.codex-plugin/plugin.json"),
+  );
+
+  assert.match(
+    readme,
+    /logs keep, discard, measure, crash, and checks_failed decisions with evidence/,
+  );
+  assert.match(readme, /marketplace remove` removes the source marketplace registration/);
+  assert.match(readme, /Prefer the plugin UI for installed-plugin refresh\/uninstall actions/);
+  assert.equal(
+    packageJson.description,
+    "Codex plugin for bounded, measured benchmark and optimization loops.",
+  );
+  assert.match(pluginJson.description, /measured autoresearch loops/);
+  assert.match(pluginJson.description, /live readout/);
+  assert.match(pluginJson.interface.longDescription, /read-only live readout/);
+  assert.match(pluginJson.interface.longDescription, /after operator approval/);
 });
 
 test("check phase selection succeeds for clean injected source hygiene only", async () => {

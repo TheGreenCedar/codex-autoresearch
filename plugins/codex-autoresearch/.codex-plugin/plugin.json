@@ -1,7 +1,7 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.3.4",
-  "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live dashboard, and finalize kept changes.",
+  "version": "2.3.5",
+  "description": "One Codex skill for measured autoresearch loops: set up or resume, run packets, log decisions, use the live readout, and preview kept changes for review.",
   "author": {
     "name": "Albert Najjar",
     "email": "albertnajjar@outlook.com",
@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "Codex Autoresearch",
     "shortDescription": "Run measured Codex loops from one plugin skill",
-    "longDescription": "Codex Autoresearch gives Codex one skill surface for the full loop: onboard a human or AI agent, start or resume a measured session with one next safe action, lint benchmark METRIC output, convert deep research into quality_gap checkpoints, run next packets with evidence bundles, log keep/discard/measure/crash/checks_failed decisions with ASI and promotion labels, keep the live readout open, and split kept work into clean review branches.",
+    "longDescription": "Codex Autoresearch gives Codex one skill surface for the full loop: onboard a human or AI agent, start or resume a measured session with one next safe action, lint benchmark METRIC output, convert deep research into quality_gap checkpoints, run next packets with evidence bundles, log keep/discard/measure/crash/checks_failed decisions with ASI and promotion labels, keep the read-only live readout open, and preview accepted kept work as clean review branches after operator approval.",
     "developerName": "Albert Najjar",
     "category": "Coding",
     "capabilities": ["Interactive", "Read", "Write"],

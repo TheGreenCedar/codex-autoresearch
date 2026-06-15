@@ -153,7 +153,7 @@ node scripts/autoresearch.mjs partial-results --cwd <project> --from-last
 node scripts/autoresearch.mjs partial-results --cwd <project> --record <candidate-id>
 ```
 
-Recorded partial results are diagnostic `measure` evidence only. They link the source packet, artifact row, metric provenance, validation status, and evidence-index claim, but they are never promotion-grade evidence.
+Recorded partial results are diagnostic `measure` evidence only. They link the source packet, artifact row, metric provenance, validation status, and evidence-index claim, but they are never promotion-grade evidence. Partial-result artifacts are byte-capped and row-capped; oversized, truncated, malformed, missing, or outside-workdir artifacts appear as skipped-artifact notices instead of being silently trusted.
 
 Packet commands may also print optional task manifests with the existing artifact contract:
 

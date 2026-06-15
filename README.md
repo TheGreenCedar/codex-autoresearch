@@ -9,11 +9,11 @@
 
 Codex Autoresearch helps Codex turn "make this better" into a measured loop.
 
-Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs each keep or discard with evidence, preserves ASI and metrics across context loss, and turns useful changes into reviewable branches.
+Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs keep, discard, measure, crash, and checks_failed decisions with evidence, preserves ASI and metrics across context loss, and previews useful kept changes as reviewable branches.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
-Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts the measured-loop idea for Codex plugin workflows, repo-local benchmarks, durable session files, an evidence trail, live dashboards, and reviewable finalization.
+Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts the measured-loop idea for Codex plugin workflows, repo-local benchmarks, durable session files, an evidence trail, live readouts, and reviewable finalization previews.
 
 ## Try it
 
@@ -147,7 +147,7 @@ Use a regular Codex task when:
 * the metric can improve by weakening the benchmark
 * secrets, deployment paths, or unrelated dirty files are in scope
 
-Protected benchmark folders are recursively inspected and hashed. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory.
+Protected benchmark folders use bounded recursive snapshots, not unbounded hashing. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory; large or deep folders can make `next` refuse until the benchmark surface is narrowed.
 
 ## Dashboard
 
@@ -191,18 +191,28 @@ Finalization should:
 
 ## Docs
 
+Start and operate:
+
 * [Docs index](plugins/codex-autoresearch/docs/index.md)
-* [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 * [Start](plugins/codex-autoresearch/docs/start.md)
-* [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
-* [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
+* [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md)
 * [Operate](plugins/codex-autoresearch/docs/operate.md)
+* [Finish](plugins/codex-autoresearch/docs/finish.md)
+
+Trust and troubleshooting:
+
+* [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 * [Trust](plugins/codex-autoresearch/docs/trust.md)
 * [Privacy](plugins/codex-autoresearch/docs/privacy.md)
 * [Terms](plugins/codex-autoresearch/docs/terms.md)
-* [Finish](plugins/codex-autoresearch/docs/finish.md)
-* [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
+
+Architecture and maintenance:
+
+* [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
+* [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
+* [Control plane contracts](plugins/codex-autoresearch/docs/control-plane.md)
+* [Recipes](plugins/codex-autoresearch/docs/recipes.md)
 * [Hooks](plugins/codex-autoresearch/docs/hooks.md)
 * [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
 
@@ -260,7 +270,7 @@ codex plugin marketplace upgrade thegreencedar-autoresearch
 codex plugin marketplace remove thegreencedar-autoresearch
 ```
 
-Prefer the plugin UI when the terminal marketplace commands are unavailable.
+`marketplace remove` removes the source marketplace registration. It may not uninstall an already installed workspace plugin. Prefer the plugin UI for installed-plugin refresh/uninstall actions, and use terminal marketplace commands only for source registration when your Codex build supports them.
 
 ## Changelog
 
