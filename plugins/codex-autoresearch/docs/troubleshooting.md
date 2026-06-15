@@ -13,6 +13,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | Current benchmark is far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor/check-benchmark and start a new segment if the old phase is stale. |
 | Setup wrapper loops forever or calls itself | Scaffold health | Inspect `scaffoldHealth`; replace the self-recursive wrapper with the real workload or rerun setup with `--benchmark-command`. |
 | Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL for fresh state. |
+| Live refresh reports HTTP 409 | Session changed mid-refresh | Retry the refresh or wait for the next auto-refresh; the server refused to send a mixed ledger/readout snapshot. |
 | Dashboard looks actionable but does not mutate | Product contract | The dashboard is a readout. Use CLI for setup, packet runs, logging, gap review, export, and finalization preview. |
 | Last packet will not log | Packet freshness or raw `run` probe | Rerun `next` to create a loggable packet, or log a manual diagnostic with `log --metric <value> --status measure`. |
 | Keep will not commit | Git scope | Configure `commitPaths`, pass `--commit-paths`, or intentionally use `--allow-add-all`. |
@@ -25,6 +26,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | `quality_gap=0` or `agent_value_gap=0` looks final | Research scope confusion | It closes or saturates the cheap metric only. Check `researchIntegrity`, promotion metadata, finalization readiness, and open quality gaps before declaring the work promotable or complete. |
 | Watchdog fires | No-progress window | Inspect the process, finalize useful kept work, rescope the segment, or start a fresh segment before running another packet. |
 | Operator checklist blocks `next` | Loop governance | Follow the checklist command first. It outranks another packet until the named blocker is cleared. |
+| `next` returns `next_blocked_by_truncated_fingerprints` | Dirty Git fingerprint trust | Clean, commit, stash, remove, or scope dirty files so Autoresearch can fingerprint packet inputs before benchmark execution, then rerun `next`. |
 | Codex resumes, compacts, or treats the latest prompt as the goal | Goal frame mismatch | Read `state --compact` and use `goalFrame.authoritativeGoal`; if a prior session contains a correction, run `node scripts/autoresearch.mjs session-forensics --cwd . --session-jsonl .\rollout.jsonl --research-slug goal-frame --dry-run` from a directory where `.\rollout.jsonl` is the saved session export. |
 | `next` returns `next_blocked_by_loop_contract` | Active decision capsule or loop contract | Follow `blockingAction.command`, repair the named condition, then clear by a later ledger acknowledgement, measurement-contract repair, or fresh segment. |
 | `benchmark-lint` times out or parses no primary `METRIC` | Benchmark contract | Repair the wrapper, warm-cache mode, sample, or bounded task slice until lint proves the metric. Log this as measurement-contract repair, not product progress. |

@@ -6,6 +6,16 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.3.5 - 2026-06-15
+
+### Changed
+
+- Public README, package metadata, plugin metadata, and trust docs now use
+  clearer customer-facing language for measured loops, live readouts, approved
+  finalization, uninstall scope, and experiment outcomes.
+- The public docs map now separates first-run operation, trust,
+  troubleshooting, architecture, and maintainer surfaces.
+
 ## 2.3.4 - 2026-06-15
 
 ### Changed

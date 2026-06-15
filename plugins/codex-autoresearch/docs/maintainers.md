@@ -4,7 +4,8 @@ This repository is a wrapper for the Codex Autoresearch plugin. The active packa
 
 ## Repo Shape
 
-- Root `README.md` is the only README and the public documentation surface.
+- Root `README.md` is the public front door.
+- Narrow archive READMEs may exist under `docs/`, but they are not first-run onboarding.
 - Root `CHANGELOG.md` is the release-note surface for user-facing changes.
 - The main skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
 - Topic docs live in `plugins/codex-autoresearch/docs/`.
@@ -63,7 +64,7 @@ node --check scripts/autoresearch.mjs
 npm run test:cli
 npm run test:dashboard
 node scripts/autoresearch.mjs --help
-npm pack
+npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
@@ -75,7 +76,17 @@ When refreshing the checked-in demo, use the public showcase export so workstati
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
 ```
 
-Before publishing, inspect the package artifact itself. The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated and ignored in the Git tree. If a Git marketplace source checkout is missing `dist/`, the CLI launcher downloads the matching GitHub release tarball plus `codex-autoresearch-<version>.tgz.sha256`, verifies the SHA-256 entry names that exact tarball, verifies the packaged name/version, and only then extracts `dist/` into the plugin cache before importing the runtime. A publishable release tarball must include the built runtime, publish the adjacent checksum asset, exclude authored source and tests, ship no MCP launcher/config, and pass `node <extracted-package>/scripts/autoresearch.mjs --help`.
+Before publishing, inspect the package artifact itself. Use dry-run pack output
+for routine review, then create and extract a real tarball for release smoke.
+The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
+and ignored in the Git tree. If a Git marketplace source checkout is missing
+`dist/`, the CLI launcher downloads the matching GitHub release tarball plus
+`codex-autoresearch-<version>.tgz.sha256`, verifies the SHA-256 entry names that
+exact tarball, verifies the packaged name/version, and only then extracts
+`dist/` into the plugin cache before importing the runtime. A publishable
+release tarball must include the built runtime, publish the adjacent checksum
+asset, exclude authored source and tests, ship no MCP launcher/config, and pass
+`node <extracted-package>/scripts/autoresearch.mjs --help`.
 
 Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 
