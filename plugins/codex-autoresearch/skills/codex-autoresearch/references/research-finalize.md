@@ -2,7 +2,7 @@
 
 Load this for broad product study, qualitative research, fanout lanes, or branch finalization.
 
-## Deep Research
+## Deep research
 
 Use research loops for broad, qualitative, product-study, UX, architecture, or documentation prompts. Keep `sources.md` dated and claim-specific, write judgment in `synthesis.md`, filter hallucinations, then convert accepted findings into `quality-gaps.md`.
 
@@ -17,3 +17,11 @@ Use `research-fanout --dry-run` when serial packets are burning time. Dispatch r
 Run `finalize-preview` before branch creation. Current-tree finalization is for cases where the final branch contents are correct but old kept commits were corrected, reverted, or bundled with unkept support commits.
 
 Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup. Keep generated finalization artifacts until merge success. Do not suggest branch cleanup until merge verification has succeeded.
+
+## Product-grade bar
+
+Before merge-ready language, compare claim coverage against accepted evidence. Retrieval, lazy behavior, ranking, and performance claims need accuracy/ranking proof plus behavior proof — a faster benchmark alone is not enough.
+
+When claim coverage is missing, use experimental or development wording: "Experimental review branch only: product-grade proof is missing."
+
+Only accepted/current keeps drive review branches. Rejected, provisional, superseded, and quarantined evidence stays audit-visible only.

@@ -127,12 +127,6 @@ test("public docs and plugin metadata keep customer-facing autoresearch wording"
     currentChangelogEntry,
   ].join("\n");
 
-  assert.match(readme, /bounded benchmark experiments/);
-  assert.match(readme, /local evidence trail/);
-  assert.match(readme, /context-resumable state/);
-  assert.match(readme, /reviewable branch previews/);
-  assert.match(readme, /marketplace remove` removes the source marketplace registration/);
-  assert.match(readme, /Prefer the plugin UI for installed-plugin refresh\/uninstall actions/);
   assert.equal(
     packageJson.description,
     "Codex plugin for bounded, measured benchmark and optimization loops.",

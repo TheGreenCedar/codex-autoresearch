@@ -4,12 +4,12 @@
 
 ### Measured improvement loops for Codex
 
-**[Try it](#try-it)** - **[Install](#install)** - **[How it works](#how-it-works)** - **[Dashboard](#dashboard)** - **[Docs](#docs)** - **[Changelog](#changelog)**
+**[Try it](#try-it)** - **[Example](#example)** - **[Install](#install)** - **[How it works](#how-it-works)** - **[Questions](#questions)** - **[Dashboard](#dashboard)** - **[Docs](#docs)** - **[Changelog](#changelog)**
 </div>
 
-Codex Autoresearch helps Codex turn "make this better" into a measured loop.
+You ask Codex to make something faster, smaller, or more reliable. Without a benchmark and a paper trail, you get a convincing answer — not evidence you can resume, compare, or ship.
 
-Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded benchmark experiments, keeps a local evidence trail, preserves context-resumable state, and creates reviewable branch previews for useful changes.
+Codex Autoresearch keeps each attempt measured, logged, and scoped so you can see what changed, what improved, and what's worth keeping. It fits when the goal is measurable and the edit surface is small enough to review.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
@@ -19,7 +19,7 @@ Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/a
 
 Ask Codex to use Codex Autoresearch.
 
-Broad prompts work, with a caveat: they are discovery mode, not the ideal way to fly the whole loop. Autoresearch can turn fuzzy work into a measured path, but you should still be the master of what is happening: tighten the goal, evidence bar, budget, benchmark, and scope as soon as you can.
+Broad prompts work, but you should consider them as a discovery mode, not a real goal. Codex might be good, but it can't read your mind. Tighten the goal, evidence bar, budget, benchmark, and scope as soon as you can.
 
 ```text
 /goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
@@ -50,9 +50,17 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one measured benchmark experiment, and recording the evidence. Ask for the live dashboard when you want a visual readout or need fresh run state in the browser.
+Autoresearch stores loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
 
-Autoresearch stores its loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
+Ask for the live dashboard in a side chat when you want a visual readout or need fresh run state in the browser.
+
+## Example
+
+Your unit tests take too long. You want wall-clock seconds, not a gut feeling. You give Codex a tight scope — test runner config and helpers only — and a benchmark like `npm test -- --runInBand` with seconds as the metric.
+
+Codex sets up the loop, runs `doctor` to verify the benchmark contract, then runs measured experiments: change something scoped, run the benchmark, log the result, check state before the next attempt. When a change sticks, `finalize-preview` prepares a review branch with the metric evidence attached.
+
+The payoff is a kept change you can inspect and merge — not "Codex said it's faster." See [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md) for the full narrated loop.
 
 ## Install
 
@@ -86,40 +94,22 @@ A normal session follows this shape:
 setup -> doctor -> next -> log -> state -> finalize-preview
 ```
 
-When the goal, benchmark, metric, or scope is still fuzzy, start with one of the read-only planning
-surfaces before creating files:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs setup-plan --cwd <project>
-node plugins/codex-autoresearch/scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<plain-language goal>"
-```
-
-Codex Autoresearch helps Codex:
+Autoresearch helps you:
 
 1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface
 2. verify the benchmark contract and optional checks with `doctor`
 3. run one measured benchmark experiment with `next`
 4. record the result and evidence for the next decision
-5. inspect the compact state before spending another run
-6. preview finalization into reviewable branches when the kept evidence is ready
+5. inspect compact state before spending another run
+6. preview finalization into reviewable branches when kept evidence is ready
 
-That happy path is the default help surface. `serve` is an optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
+`serve` is an optional live dashboard handoff. Advanced diagnostics (`prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, `export`) are available with `--help --all` when a run needs deeper repair or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
 A benchmark experiment is one measured cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
 
-Autoresearch keeps structured session context with the hypothesis, evidence, next action hint, and relevant risk notes. It tells the next Codex session what happened, what was learned, and which path deserves the next attempt.
-
-For terminal-first resumes, ask for the compact report:
-
-```bash
-node plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd <project> --report
-```
-
-From inside `plugins/codex-autoresearch`, the shorter `node scripts/autoresearch.mjs ...` form is equivalent.
-
-It returns `report.text` for a one-screen readout and `report.json` for automation. Blockers outrank run recommendations, and missing dashboard liveness includes the command to serve or verify the dashboard instead of pretending a stale view is live.
+Autoresearch keeps structured session context — hypothesis, evidence, next action hint, and relevant risk notes — so the next session knows what happened and which path deserves the next attempt.
 
 ## When to use it
 
@@ -133,11 +123,7 @@ Use Codex Autoresearch when:
 * the editable scope is small enough to review
 * kept work should become reviewable commits or branches
 
-Use Autoresearch for qualitative work when it can be turned into a qualitative but checklist-measured loop: study the surface, accept evidence-backed gaps, close them, and verify `quality_gap`.
-
-```text
-research-setup -> quality-gap -> gap-candidates
-```
+For qualitative work — product study, docs, UX — Autoresearch can run a checklist-measured loop: study the surface, accept evidence-backed gaps, close them, and verify `quality_gap`. See [Concepts](plugins/codex-autoresearch/docs/concepts.md#quality-gap).
 
 Use a regular Codex task when:
 
@@ -145,9 +131,42 @@ Use a regular Codex task when:
 * the goal is mainly taste or judgment
 * the benchmark is flaky or very expensive
 * the metric can improve by weakening the benchmark
-* secrets, deployment paths, or unrelated dirty files are in scope
 
-Protected benchmark folders use bounded recursive snapshots, not unbounded hashing. Keep them small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory; large or deep folders can make `next` refuse until the benchmark surface is narrowed.
+Keep protected benchmark folders small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory; large or deep folders can make `next` refuse until the benchmark surface is narrowed.
+
+## Questions
+
+### What is Autoresearch actually doing?
+
+Bounded benchmark runs with a local ledger and resume state. Each attempt is measured, logged, and scoped — you decide what to keep, discard, or finalize. It is not open-ended autonomy.
+
+### Do I need my own benchmark?
+
+Yes, for optimization loops. The plugin can help you create one. You define the command, primary metric, checks, and edit scope. For checklist-style work without a numeric benchmark, the quality-gap recipe applies. See [Recipes](plugins/codex-autoresearch/docs/recipes.md).
+
+### Will it change the git history without my approval?
+
+Kept work uses scoped commit paths you configure. Finalization prepares review branches; you approve merges. Discard cleanup respects scoped revert paths. See [Trust](plugins/codex-autoresearch/docs/trust.md).
+
+### What if Codex goes in circles?
+
+Budgets, `state --report`, and the dashboard readout surface stop/rescope signals. If attempts repeat without progress, it will either do its best to find a solution or stop and ask you to tighten scope, fix a flaky benchmark, etc.
+
+### Is the dashboard required?
+
+No. The CLI does setup, runs, logging, and finalization. The dashboard is an optional live readout when run freshness or visual context helps.
+
+### How is this different from "just optimize my tests"?
+
+You get a repeatable metric, an evidence trail across attempts, explicit keep/discard discipline, and a finalization bar before anything lands on a review branch.
+There is also an opinionated research and review loop that optimizes for correctness and reliability over raw model output speed, and proud as I am of it, it's a secondary feature.
+The primary focus is on measuring and optimizing for a repeatable, reliable metric.
+
+Simple prompts can work when the context is obvious, but tighter goals, benchmarks, and edit scope make the loop safer and easier to review.
+
+### What should I avoid?
+
+Secrets in benchmark or check commands, flaky or very expensive benchmarks, and huge unscoped diffs. Do not put deployment paths, unrelated dirty files, or sensitive data in scope without reading [Privacy](plugins/codex-autoresearch/docs/privacy.md) and [Trust](plugins/codex-autoresearch/docs/trust.md) first.
 
 ## Dashboard
 
@@ -161,7 +180,7 @@ The dashboard answers three questions:
 
 Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, run diagnostics, finalization readiness, evidence history, and handoff details.
 
-Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
+Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface. See [Architecture](plugins/codex-autoresearch/docs/architecture.md).
 
 ## Quality-gap loops
 
@@ -172,7 +191,7 @@ For product, docs, UX, or broad research, ask for a quality-gap loop:
 Turn accepted findings into a quality-gap loop, implement them, and keep the live dashboard open.
 ```
 
-`quality_gap=0` means the accepted checklist for that round is closed. It does not mean discovery is complete. Start another round if the question is still alive.
+`quality_gap=0` means the accepted checklist for that round is closed — not that discovery is complete. See [Concepts](plugins/codex-autoresearch/docs/concepts.md#quality-gap).
 
 ## Finalization
 

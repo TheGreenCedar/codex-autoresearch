@@ -1,29 +1,37 @@
 # Codex Autoresearch Docs
 
-The root `README.md` is the front door. These pages cover the operator workflow, evidence rules, dashboard readouts, and release-maintainer details.
+The root [README.md](../../../README.md) is the front door. These pages cover setup, running sessions, trust, and wrapping up.
 
-## Start Here
+## Getting started
 
-1. [Start](start.md): the happy path, first five minutes, session files, benchmark contract, and first packet.
-2. [Walkthrough](walkthrough.md): an end-to-end narrated loop with copyable commands and explicitly illustrative output.
-3. [Trust](trust.md): metric integrity, stale packets, runtime provenance, packet diagnostics, evidence status, drift, dirty Git, static exports, and unsafe command gates.
-4. [Privacy](privacy.md): local session files, command evidence, redaction limits, external service boundaries, and deleting local data.
-5. [Terms](terms.md): local tooling terms, command responsibility, evidence limits, secrets, no warranty, and package/marketplace use.
-6. [Finish](finish.md): accepted/current evidence, finalization pressure, preview, review branches, merge/cleanup, and reporting.
+- [Start](start.md) — first five minutes, session files, benchmark contract, first packet
+- [Walkthrough](walkthrough.md) — end-to-end narrated loop with copyable commands
+- [Concepts](concepts.md) — glossary; compact-state field names live at [state-fields](concepts.md#state-fields)
 
-## Advanced Diagnostics
+## Running a session
 
-Open these only when the short path is blocked, stale, or too vague to trust.
+- [Operate](operate.md) — resume a messy run, dashboard, packet logging, lanes, quality-gap rounds
 
-- [Operate](operate.md): use this when resuming a messy run, deciding whether another packet is safe, serving a fresh dashboard, logging ASI, or opening parallel/quality-gap lanes.
-- [Control plane contracts](control-plane.md): use this when state, recommend-next, dashboard, packet, approval, evidence, lane, or finalization safety must agree.
-- [Workflow diagrams](workflows.md): use this when the loop order is unclear and you need the setup, packet, fanout, dashboard, or finalization flow at a glance.
-- [Architecture diagrams](architecture.md): use this when changing internals or checking that the CLI, skill, dashboard, state files, and finalizer still have clear ownership.
-- [Recipes](recipes.md): use this when no benchmark exists yet or the request needs a starter metric plan.
-- [Concepts](concepts.md): use this when a term in state, ASI, dashboard output, or reviewer feedback is unfamiliar.
-- [Troubleshooting](troubleshooting.md): use this when symptoms point to cache drift, stale dashboards, missing metrics, Git dirtiness, lane isolation, or provenance blockers.
-- [Hooks](hooks.md): use this only for optional Codex reminders; hooks are not required for the normal loop.
+## Trust and safety
 
-Reference pages:
+- [Trust](trust.md) — metric integrity, stale packets, drift, Git safety, command gates
+- [Privacy](privacy.md) — local session files, redaction limits, deleting data
+- [Terms](terms.md) — local tooling terms, evidence limits, no warranty
 
-- [Maintainers](maintainers.md)
+## Wrapping up
+
+- [Finish](finish.md) — finalization preview, review branches, merge and cleanup
+
+## Reference
+
+- [Recipes](recipes.md) — built-in benchmark shapes and external catalogs
+- [Workflows](workflows.md) — setup, packet, fanout, and finalization diagrams
+- [Architecture](architecture.md) — CLI, skill, dashboard, and state-file ownership
+- [Control plane](control-plane.md) — contracts that must agree across state, CLI, and dashboard
+- [Troubleshooting](troubleshooting.md) — symptom-to-layer diagnosis
+- [Hooks](hooks.md) — optional Codex reminders (not required for the normal loop)
+
+## Contributors
+
+- [Maintainers](maintainers.md) — repo shape, verification gates, release surfaces
+- [Style guide](STYLE.md) — voice rules for doc edits

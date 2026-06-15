@@ -1,8 +1,8 @@
 # Start
 
-Use this page for the first five minutes of a Codex Autoresearch session. The goal is to get one honest packet measured, logged, and ready to resume.
+Get one honest packet measured, logged, and ready to resume in about five minutes.
 
-## What You Need
+## What you need
 
 - a target repo or child package
 - one goal
@@ -29,7 +29,7 @@ METRIC memory_mb=410
 
 The configured primary metric drives keep/discard decisions. `measure` records baseline or diagnostic evidence without promotion. Secondary metrics explain tradeoffs.
 
-## Codex Prompt
+## Codex prompt
 
 Broad prompt:
 
@@ -37,7 +37,7 @@ Broad prompt:
 /goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
 ```
 
-Codex should call `prompt-plan` first. That turns the natural-language request into inferred metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is a draft, read-only planning surface. It can return a proposed setup command, but it does not create session files until `setup` is run, and it does not prove the product claim.
+Codex will likely call `prompt-plan` first to infer metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is read-only — it does not create session files until `setup` runs.
 
 Specific prompt:
 
@@ -49,10 +49,9 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should check Git, create or resume the session, verify the metric, run one packet, and log the decision with ASI. Serve the dashboard when the operator asks for it, when packet freshness matters in the browser, or when the CLI readout is not enough.
-Before spending another packet, Codex should read `recommend-next --compact` and clear any operator-checklist, watchdog, runtime-provenance, lane-lifecycle, packet-diagnostic, or finalization-pressure blocker.
+Ask for the live dashboard when you want a visual readout or fresh browser state. Before another packet, read `state --report` or `recommend-next --compact` and clear any blockers it names. Field names are in [state-fields](concepts.md#state-fields).
 
-## CLI Path
+## CLI path
 
 From `plugins/codex-autoresearch`:
 
@@ -70,48 +69,37 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
-`setup-plan` and `prompt-plan` are read-only planning surfaces. `prompt-plan` is only a draft inference from prose; review the proposed metric, benchmark, correctness checks, quality constraints, and claim coverage before `setup`. Use them before `setup` when essentials are ambiguous; skip them when the goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `onboarding-packet`, `benchmark-lint`, `recommend-next`, and `partial-results` are available with `--help --all` when setup is ambiguous, the dashboard needs inspection, or packet work is blocked.
+`setup-plan` and `prompt-plan` are read-only. Use them when essentials are ambiguous; skip them when goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff. Advanced diagnostics (`onboarding-packet`, `benchmark-lint`, `recommend-next`, `partial-results`) are on `--help --all`.
 
-`benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block or warn because the worktree is dirty, the active runtime is stale, promotion metadata is missing, finalization/current-tree coverage is unresolved, or other trust checks fail.
+`benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block because the worktree is dirty, runtime is stale, promotion metadata is missing, or other trust checks fail.
 
-After setup, optional stop conditions can be recorded with `config`:
+After setup, optional stop conditions:
 
 ```bash
 node scripts/autoresearch.mjs config --cwd <project> --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after the first focused pass."
 ```
 
-Budget exhaustion is a stop/rescope signal. It does not mean the optimization goal is complete, and Autoresearch does not track API or billing spend without an external integration.
+Budget exhaustion is a stop/rescope signal — not proof the optimization goal is complete. Autoresearch does not track API or billing spend without an external integration.
 
-For benchmark-sensitive loops, record the files that define the measurement and any secondary guardrails after the real benchmark is configured:
+For benchmark-sensitive loops, record protected paths and secondary guardrails after the real benchmark is configured:
 
 ```bash
 node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/" --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
 ```
 
-The primary metric still drives the loop. Secondary metric constraints only guard tradeoffs; blocking constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
+The primary metric still drives the loop. Blocking secondary constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
 
-For retrieval, search, ranking, accessibility, safety, data-integrity, or speed work that can break correctness, add a quality constraint or checks command before treating a speed win as product-grade. Lazy behavior and semantic retrieval claims need accuracy or ranking proof, not only a faster primary metric.
+For retrieval, search, ranking, accessibility, safety, or speed work that can break correctness, add a quality constraint or checks command before treating a speed win as product-grade.
 
-Before the first expensive `next`, prove the loop shape cheaply:
-
-- `recommend-next --compact --operator-checklist` names packet work as the next action.
-- the benchmark command is the real goal benchmark, not a placeholder recipe.
-- `benchmark-lint` proves the primary `METRIC` line can be parsed inside its timeout.
-- imported `sessionDecisionCapsule` state is clear, acknowledged, or deliberately being handled.
-- the first packet is bounded by timeout, sample, task slice, or command file.
-- unrelated dirty files are not part of keep/discard cleanup.
-
-If `recommend-next` returns a `decision-capsule` action, do that action first. Hard capsules refuse generic `next`; bounded-next capsules require an explicit bounded command.
-
-Use `recommend-next --compact` whenever you want exactly one safe next action:
+Use `recommend-next --compact` when you want exactly one safe next action:
 
 ```bash
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 ```
 
-Use `state --report` when you want a compact terminal readout. It returns `report.text` and `report.json` with blocker-first next action, gate quality, runtime drift, dashboard status, packet diagnostics, and portfolio guidance.
+Use `state --report` for a compact terminal readout (`report.text` and `report.json`): blockers first, then next action, gate quality, runtime drift, dashboard status, and packet diagnostics.
 
-## Session Files
+## Session files
 
 | File | Purpose |
 | --- | --- |
@@ -122,13 +110,13 @@ Use `state --report` when you want a compact terminal readout. It returns `repor
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks. |
 | `autoresearch.ideas.md` | Deferred hypotheses, avoided lanes, and next-action notes. |
 | `autoresearch.last-run.json` | Fallback last-packet record. |
-| `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad for evidence-backed qualitative work. |
-| `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation; reconcile it with `autoresearch.jsonl` before continuing. |
-| `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation after interrupted keep/discard automation. |
+| `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad. |
+| `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation. |
+| `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation. |
 
-In Git repositories, the pending log-mutation receipt lives under Git's private `.git/autoresearch/` path instead of the worktree.
+In Git repositories, the pending log-mutation receipt lives under `.git/autoresearch/` instead of the worktree.
 
-## First Packet
+## First packet
 
 Run:
 
@@ -149,17 +137,17 @@ Before any mutating log, keep, discard, or revert-producing command, check Git s
 - protected benchmark paths are clean unless you are intentionally starting a new segment.
 - `state --compact` or `doctor --explain` does not show stale packet, dirty source, runtime drift, pending transaction, or finalization blocker that changes the decision.
 
-Use `measure` for a baseline or diagnostic. Use `keep` only after a changed packet is safe to preserve, and use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
+Use `measure` for a baseline or diagnostic. Use `keep` only after a changed packet is safe to preserve. Use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
 
-## What Good Looks Like
+## What good looks like
 
 - `doctor` has no blocking issues.
 - The benchmark emits the configured primary metric.
 - The live dashboard URL is available when a fresh visual readout is needed.
 - The last packet is fresh before logging.
 - ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
-- Product-grade claims have claim coverage for accuracy, lazy behavior, ranking/correctness, and docs or tests; otherwise the output is an experimental primitive.
+- Product-grade claims have claim coverage; otherwise the output is an experimental primitive. See [Finish](finish.md).
 
 ---
 
-Previous: [Concepts](concepts.md) · Next: [Operate](operate.md) — resume, dashboard, packet logging, and quality-gap rounds.
+Previous: [Concepts](concepts.md) · Next: [Walkthrough](walkthrough.md) — narrated end-to-end loop.
