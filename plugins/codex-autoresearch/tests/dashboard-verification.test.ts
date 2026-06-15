@@ -726,17 +726,18 @@ test("dashboard signals Product proof when claim coverage blocks release readine
   assert.match(JSON.stringify(model.signals), /Product proof missing|claim coverage/i);
 });
 
-test("dashboard source renders proof signals before chart detail when blockers exist", () => {
+test("dashboard source keeps proof signals below the chart", () => {
   const dashboardSource = readFileSync(
     path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "Dashboard.tsx"),
     "utf8",
   );
 
-  assert.match(dashboardSource, /proofSignalsFirst/);
+  assert.doesNotMatch(dashboardSource, /proofSignalsFirst/);
+  assert.doesNotMatch(dashboardSource, /SignalStrip[^>]+priority/);
   assert.ok(
-    dashboardSource.indexOf("<SignalStrip view={view} viewModel={viewModel} priority />") <
-      dashboardSource.indexOf("<TrendPanel"),
-    "priority proof signals should render before the trend panel",
+    dashboardSource.indexOf("<TrendPanel") <
+      dashboardSource.indexOf("<SignalStrip view={view} viewModel={viewModel} />"),
+    "signal strip should render only after the chart panel",
   );
 });
 
@@ -1316,7 +1317,8 @@ test("dashboard view model and rail expose the authoritative decision envelope",
 
   const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
   assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
-  assert.match(getById("v2-release-signals").textContent, /Do not run another packet/);
+  assert.match(getById("decision-rail").textContent, /Last-run packet is stale/);
+  assert.doesNotMatch(getById("v2-release-signals").textContent || "", /Last-run packet is stale/);
   assert.match(getById("decision-envelope-summary").textContent, /1 measurement/);
   assert.match(getById("ledger-body").textContent, /Measurement/);
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
@@ -3278,6 +3280,11 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
       status: "medium",
       recommendation: "Preview finalization soon.",
     },
+    productClaimCoverage: {
+      productGradeReady: false,
+      missingRequiredProof: ["No screenshot proof."],
+      blockers: ["Claim coverage is missing dashboard handoff evidence."],
+    },
   };
   const entries = [
     dashboardConfigEntry({ name: "signal path", metricName: "seconds", metricUnit: "s" }),
@@ -3298,21 +3305,27 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
     );
     const chart = getById("trend-chart");
     const signalStrip = getById("v2-release-signals");
+    const decision = getById("decision-rail");
     const details = getById("metric-details");
 
     assert.equal(signalStrip.getAttribute("aria-label"), "Run readiness signals");
-    assert.equal(signalStrip.querySelectorAll(".signal-item").length, 5);
-    assert.match(signalStrip.textContent, /Repeat the best packet/);
+    assert.equal(signalStrip.querySelectorAll(".signal-item").length, 4);
+    assert.doesNotMatch(signalStrip.textContent || "", /Repeat the best packet/);
+    assert.match(decision.textContent || "", /Repeat the best packet/);
     assert.match(signalStrip.textContent, /2 current \/ 1 provisional \/ 1 audit-only/);
     assert.match(signalStrip.textContent, /1 active \/ 0 done/);
     assert.equal(signalStrip.querySelector("button"), null);
     assert.ok(
-      chart.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "signal strip should render after the chart",
+      chart.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "decision rail should render after the chart",
     );
     assert.ok(
-      signalStrip.compareDocumentPosition(details) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "signal strip should render before metric details",
+      details.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "decision rail should render after metric details, outside the chart panel",
+    );
+    assert.ok(
+      decision.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "readiness signals should render after the decision rail",
     );
     if (view === "operate") {
       assert.equal(queryById("workspace-grid"), null);
@@ -3323,7 +3336,7 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
   }
 });
 
-test("mobile audit dashboard exposes next action before chart content", async () => {
+test("mobile audit dashboard keeps next action below chart content", async () => {
   const viewModel = {
     nextBestAction: {
       title: "Preview finalization",
@@ -3344,24 +3357,29 @@ test("mobile audit dashboard exposes next action before chart content", async ()
     },
     { url: "file:///autoresearch-dashboard.html?view=audit" },
   );
-  const mobileNext = getById("mobile-next-action");
-  const trend = getById("trend-panel");
+  const chart = getById("trend-chart");
+  const signalStrip = getById("v2-release-signals");
+  const decision = getById("decision-rail");
   const css = readFileSync(
     path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
     "utf8",
   );
-  const mobileBlock = extractCssBlock(css, "@media (max-width: 720px)");
 
-  assert.equal(mobileNext.querySelector("button"), null);
-  assert.match(mobileNext.textContent, /Next/);
-  assert.match(mobileNext.textContent, /Preview finalization/);
-  assert.match(mobileNext.textContent, /Do not run another packet/);
+  assert.equal(dom.window.document.getElementById("mobile-next-action"), null);
+  assert.equal(signalStrip.querySelector("button"), null);
+  assert.match(decision.textContent || "", /Preview finalization/);
+  assert.match(decision.textContent || "", /Do not run another packet/);
+  assert.doesNotMatch(signalStrip.textContent || "", /Preview finalization/);
+  assert.doesNotMatch(signalStrip.textContent || "", /Do not run another packet/);
   assert.ok(
-    mobileNext.compareDocumentPosition(trend) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-    "mobile next action should appear before chart content in audit DOM order",
+    chart.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "decision rail should appear after chart content in audit DOM order",
   );
-  assert.match(css, /\.mobile-next-action\s*\{[\s\S]*?display:\s*none/);
-  assert.match(mobileBlock, /\.mobile-next-action\s*\{[\s\S]*?display:\s*grid/);
+  assert.ok(
+    decision.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "readiness signals should stay below the decision rail",
+  );
+  assert.doesNotMatch(css, /\.mobile-next-action\b/);
   dom.window.close();
 });
 

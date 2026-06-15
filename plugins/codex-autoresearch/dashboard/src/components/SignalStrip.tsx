@@ -6,7 +6,6 @@ import { laneActive, laneCompleted } from "./laneStatus";
 interface SignalStripProps {
   view: DashboardView;
   viewModel: DashboardViewModel;
-  priority?: boolean;
 }
 
 interface SignalItem {
@@ -18,12 +17,12 @@ interface SignalItem {
   live?: boolean;
 }
 
-export function SignalStrip({ view, viewModel, priority = false }: SignalStripProps) {
+export function SignalStrip({ view, viewModel }: SignalStripProps) {
   const signals = buildSignals(viewModel);
   const trustItems = buildTrustItems(viewModel);
   return (
     <section
-      className={`signal-strip signal-strip--${view}${priority ? " signal-strip--priority" : ""}`}
+      className={`signal-strip signal-strip--${view}`}
       id="v2-release-signals"
       aria-label="Run readiness signals"
       data-view={view}
@@ -66,7 +65,6 @@ function buildSignals(viewModel: DashboardViewModel): SignalItem[] {
     : [];
   return uniqueSignals([
     ...modeledSignals,
-    nextSignal(viewModel),
     evidenceSignal(viewModel),
     lanesSignal(viewModel),
     watchdogSignal(viewModel),
@@ -93,23 +91,6 @@ function signalFromModel(value: unknown): SignalItem | null {
     tone: ["good", "neutral", "warn", "danger"].includes(tone)
       ? (tone as SignalItem["tone"])
       : "warn",
-  };
-}
-
-function nextSignal(viewModel: DashboardViewModel): SignalItem {
-  const action = recordFrom(viewModel.nextBestAction);
-  const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
-  const title = clean(action.title) || clean(envelope.title) || "Choose next action";
-  const packetBrake = action.packetBrake === true;
-  return {
-    id: "next",
-    label: "Next",
-    value: title,
-    detail: packetBrake
-      ? "Do not run another packet"
-      : clean(action.priority) || clean(envelope.kind) || "Decision envelope",
-    tone: packetBrake || action.tone === "warn" ? "warn" : "neutral",
-    live: true,
   };
 }
 
