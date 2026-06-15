@@ -4334,6 +4334,78 @@ test("served dashboard ignores stale live refresh responses that resolve out of 
   dom.window.close();
 });
 
+test("served dashboard retries retryable live refresh conflicts before reporting failure", async () => {
+  const entries = [
+    {
+      type: "config",
+      name: "served dashboard",
+      metricName: "quality_gap",
+      bestDirection: "lower",
+      metricUnit: "gaps",
+    },
+    { type: "run", run: 1, metric: 1, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const refreshedEntries = [
+    ...entries,
+    {
+      type: "run",
+      run: 2,
+      metric: 0,
+      status: "keep",
+      description: "Retry recovered",
+      confidence: 2,
+    },
+  ];
+  const liveViewModel = {
+    summary: { segment: 0, baseline: 1, best: 0, confidence: 2, runs: 2 },
+    ledgerEntries: refreshedEntries,
+  };
+  const { getById, dom } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 60000,
+      viewModel: { summary: { segment: 0, baseline: 1, best: 1, confidence: 1 } },
+    },
+    {
+      beforeParse(window) {
+        window.__refreshFetches = [];
+        window.fetch = async (url) => {
+          const requestNumber = window.__refreshFetches.push(String(url));
+          if (requestNumber === 1) {
+            return {
+              ok: false,
+              status: 409,
+              statusText: "Conflict",
+              json: async () => ({
+                ok: false,
+                code: "live_view_model_changed_during_refresh",
+                retryable: true,
+                message:
+                  "Session files changed while the live dashboard readout was refreshing. Retry to avoid a mixed ledger/readout snapshot.",
+              }),
+            };
+          }
+          return { ok: true, json: async () => liveViewModel };
+        };
+        window.setInterval = () => 42;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => getById("runs-value").textContent === "2 (2 kept)",
+    "Live dashboard did not retry a retryable view-model conflict.",
+  );
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json", "view-model.json"]);
+  assert.doesNotMatch(getById("live-title").textContent || "", /failed/i);
+  assert.doesNotMatch(getById("live-detail").textContent || "", /409|Conflict/i);
+  dom.window.close();
+});
+
 test("served dashboard live refresh reports endpoint failures without success", async () => {
   const entries = [
     {

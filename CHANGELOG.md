@@ -42,6 +42,9 @@ This project uses a root-only changelog because the root README is the public do
   same session fingerprint, reducing long-ledger refresh cost while avoiding
   stale state/config cache installs or mixed readouts after watched files
   change mid-refresh.
+- Served dashboard refreshes now retry one structured retryable view-model
+  conflict before reporting a live refresh failure, avoiding a noisy 409 state
+  when files change during a normal readout refresh.
 - Dashboard charts now avoid attaching full-session best values to omitted
   visible runs and distinguish visible crash totals from downsampled plotted
   crash markers.
@@ -72,6 +75,8 @@ This project uses a root-only changelog because the root README is the public do
 - Dashboard, state, and compact readouts now reuse loaded session records for
   fanout and lane readouts instead of reparsing the ledger during the same
   view-model build.
+- Refreshed the checked-in showcase export and public dashboard screenshot so
+  README and plugin metadata surfaces match the current dashboard readout copy.
 - Logging now treats `autoresearch.md` update failures as recovery warnings
   after durable `autoresearch.jsonl` persistence instead of reporting the whole
   log as failed.

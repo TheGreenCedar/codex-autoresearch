@@ -10,6 +10,41 @@ type LiveDashboardSnapshot = {
   viewModel: DashboardViewModel;
 };
 
+const LIVE_VIEW_MODEL_RETRY_LIMIT = 1;
+
+type DashboardErrorPayload = {
+  code?: unknown;
+  detail?: unknown;
+  error?: unknown;
+  message?: unknown;
+  retryable?: unknown;
+};
+
+class DashboardResponseError extends Error {
+  readonly code: string | null;
+  readonly retryable: boolean;
+  readonly status: number;
+
+  constructor(
+    message: string,
+    {
+      code,
+      retryable,
+      status,
+    }: {
+      code: string | null;
+      retryable: boolean;
+      status: number;
+    },
+  ) {
+    super(message);
+    this.name = "DashboardResponseError";
+    this.code = code;
+    this.retryable = retryable;
+    this.status = status;
+  }
+}
+
 interface UseLiveDashboardArgs {
   meta: DashboardMeta;
   mode: DashboardMode;
@@ -116,23 +151,32 @@ function liveStatusFor(mode: DashboardMode, meta: DashboardMeta): LiveStatus {
 async function fetchLiveDashboardSnapshot(
   signal: AbortSignal | null,
 ): Promise<LiveDashboardSnapshot> {
-  const viewModelResponse = await fetch("view-model.json", noStoreRequest(signal));
-  const failure = responseFailure(viewModelResponse, "view-model.json");
-  if (failure) throw new Error(failure);
+  for (let attempt = 0; attempt <= LIVE_VIEW_MODEL_RETRY_LIMIT; attempt += 1) {
+    const viewModelResponse = await fetch("view-model.json", noStoreRequest(signal));
+    const failure = await responseFailure(viewModelResponse, "view-model.json");
+    if (failure) {
+      if (failure.retryable && attempt < LIVE_VIEW_MODEL_RETRY_LIMIT && !signal?.aborted) {
+        continue;
+      }
+      throw failure;
+    }
 
-  const payload = (await viewModelResponse.json()) as DashboardViewModel;
-  const embeddedEntries = entriesFromViewModel(payload);
-  return {
-    entries: embeddedEntries ?? (await fetchLegacyLedgerEntries(signal)),
-    generatedAt: new Date().toISOString(),
-    viewModel: payload || {},
-  };
+    const payload = (await viewModelResponse.json()) as DashboardViewModel;
+    const embeddedEntries = entriesFromViewModel(payload);
+    return {
+      entries: embeddedEntries ?? (await fetchLegacyLedgerEntries(signal)),
+      generatedAt: new Date().toISOString(),
+      viewModel: payload || {},
+    };
+  }
+
+  throw new Error("view-model.json could not be refreshed");
 }
 
 async function fetchLegacyLedgerEntries(signal: AbortSignal | null): Promise<DashboardEntry[]> {
   const jsonlResponse = await fetch("autoresearch.jsonl", noStoreRequest(signal));
-  const failure = responseFailure(jsonlResponse, "autoresearch.jsonl");
-  if (failure) throw new Error(failure);
+  const failure = await responseFailure(jsonlResponse, "autoresearch.jsonl");
+  if (failure) throw failure;
   return parseJsonl(await jsonlResponse.text());
 }
 
@@ -176,12 +220,42 @@ function refreshUnavailableStatus(): LiveStatus {
   };
 }
 
-function responseFailure(response: Response, label: string): string | null {
+async function responseFailure(
+  response: Response,
+  label: string,
+): Promise<DashboardResponseError | null> {
   if (response.ok) return null;
+  const payload = await readErrorPayload(response);
   const status = response.status ? ` ${response.status}` : "";
   const statusText = response.statusText ? ` ${response.statusText}` : "";
   const detail = `${status}${statusText}`.trim();
-  return detail ? `${label} returned HTTP ${detail}` : `${label} returned a non-OK response`;
+  const fallbackMessage = detail
+    ? `${label} returned HTTP ${detail}`
+    : `${label} returned a non-OK response`;
+  const payloadMessage =
+    stringValue(payload?.message) ?? stringValue(payload?.detail) ?? stringValue(payload?.error);
+  return new DashboardResponseError(payloadMessage || fallbackMessage, {
+    code: stringValue(payload?.code),
+    retryable: payload?.retryable === true,
+    status: response.status || 0,
+  });
+}
+
+async function readErrorPayload(response: Response): Promise<DashboardErrorPayload | null> {
+  const maybeJson = response as Response & { json?: () => Promise<unknown> };
+  if (typeof maybeJson.json !== "function") return null;
+  try {
+    const payload = await maybeJson.json();
+    return typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as DashboardErrorPayload)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function isAbortError(error: unknown): boolean {

@@ -30,6 +30,6 @@
     "brandColor": "#0F8F88",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/logo.svg",
-    "screenshots": ["./assets/demo-dashboard.svg"]
+    "screenshots": ["./assets/showcase/dashboard-demo.png"]
   }
 }
