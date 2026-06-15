@@ -475,7 +475,7 @@ test("finalizer refuses cleanup through linked directory parents", async (t) => 
     await git(["init", "-b", "main"], repo);
     await git(["config", "user.email", "codex@example.invalid"], repo);
     await git(["config", "user.name", "Codex Test"], repo);
-    await writeFile(path.join(repo, ".gitignore"), "linked-output/\n");
+    await writeFile(path.join(repo, ".gitignore"), "linked-output\n");
     await writeFile(path.join(repo, "src", "value.txt"), "base\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "base"], repo);
