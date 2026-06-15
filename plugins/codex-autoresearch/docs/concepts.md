@@ -22,15 +22,15 @@ A chapter of an autoresearch session. When a session is maxed, stale, or enterin
 
 The state returned after logging a packet. Contains `shouldContinue` (whether the loop should keep running) and `forbidFinalAnswer` (whether the agent must continue instead of returning a final report). See [Operate](operate.md#packet-loop).
 
-## Operator Checklist
+## Resume checklist
 
 A compact handoff from `recommend-next --compact --operator-checklist`. It names one command, one safety reason, one blocker, one evidence role, and one source so a resumed Codex session can continue without re-deciding the whole loop. See [Operate](operate.md#operator-checklist).
 
 ## Goal Frame
 
-The compact resume object that names the durable Autoresearch goal as authoritative and classifies a fresh Codex/user prompt as missing, matching, an operator instruction, or a different research goal. Use `goalFrame.authoritativeGoal` before stating the loop objective. See [Operate](operate.md#resume).
+The compact resume object that names the durable Autoresearch goal as authoritative and classifies a fresh Codex/user prompt as missing, matching, an instruction, or a different research goal. Use `goalFrame.authoritativeGoal` before stating the loop objective. See [Operate](operate.md#resume).
 
-## Operator Handoff
+## Resume handoff
 
 The compact state summary for resumed Codex work. It carries the research-goal line, next action, blocker, and command selected from compact loop governance so a new session can continue without turning the latest prompt into the research goal. See [Operate](operate.md#resume).
 
@@ -76,7 +76,7 @@ Evidence-loss classification for packets that retrieved data but failed to carry
 
 ## Goal Frame Mismatch
 
-A session-forensics decision signal for moments when the user corrects Codex for treating an operator prompt as the Autoresearch goal. It creates a bounded-next capsule so the next session must restate the durable goal and avoid broad packet work until the handoff is clear. See [Operate](operate.md#operator-checklist).
+A session-forensics decision signal for moments when the user corrects Codex for treating a chat prompt as the Autoresearch goal. It creates a bounded-next capsule so the next session must restate the durable goal and avoid broad packet work until the handoff is clear. See [Operate](operate.md#operator-checklist).
 
 ## Evidence Status
 
@@ -115,6 +115,42 @@ See [Start](start.md#session-files).
 ## Finalization
 
 The process of extracting useful kept commits from noisy loop history into clean, reviewable branches. Preview is read-only; branch creation requires approval. See [Finish](finish.md).
+
+## State fields
+
+Compact-state and report readouts expose many internal labels. You rarely need them all at once. Use this glossary when `state --compact`, `state --report`, or the dashboard names a field you do not recognize.
+
+| Field | What it tells you |
+| --- | --- |
+| `goalFrame` | Durable research goal vs the latest prompt; whether the live prompt matches, diverges, or is missing |
+| `goalContract` | Authoritative goal, benchmark goal, finalization claim, mismatch status, recovery command |
+| `operatorHandoff` | Resume summary: goal line, next action, blocker, command from loop governance |
+| `operatorChecklist` | One command, one safety reason, one blocker, one evidence role, one source — the shortest safe continuation |
+| `loopContract` | Whether another packet is allowed; may route to repair, segment, or finalization instead |
+| `sessionDecisionCapsule` | Imported carry-forward note from `session-forensics`; can block generic `next` until acknowledged |
+| `decisionEnvelope` / `resumeAudit` | Resume contract: one authoritative next action after segment, drift, and readiness checks |
+| `runtimeProvenance` | Source checkout vs installed plugin runtime — are you looking at live behavior? |
+| `runtimeDriftSummary` | Short drift verdict from provenance checks |
+| `gateQuality` | Whether trust gates (benchmark, Git, runtime) are passing |
+| `preflight` | Resource and process checks before expensive work |
+| `resourcePreflight` | Active-process, wall-clock, output-size, and stale-process limits |
+| `sourceCleanliness` | `source-dirty` vs `session-artifacts-dirty` — which Git cleanup is needed |
+| `evidenceMaturity` | Whether accepted evidence supports a broad claim or only diagnostic wording |
+| `packetDiagnostics` | Evidence-loss signals: missing citations, failed synthesis, benchmark failure masked as success |
+| `portfolioRecommendation` | When to pivot, finalize, scout, or start a new segment |
+| `laneLifecycle` | Status of parallel scout/implementation lanes |
+| `laneOrchestration` | Scout, implementation, review, and finalization lane routing for broad failures |
+| `fanoutProvenance` | Whether the active segment has a matching `research-fanout` plan |
+| `finalizationRunway` | Review-branch stage: preview, local-only, PR, CI, merge, cleanup-ready |
+| `finalizationPressure` | Kept-commit backlog pushing toward `finalize-preview` |
+| `operatorReadout` | Canonical next action, blocker, warnings, dashboard boundary |
+| `approvalLedger` | Scoped human approvals with gate, scope, expiry, and evidence |
+| `scaffoldHealth` | Wrapper self-loops, missing commit paths, index locks |
+| `researchIntegrity` | Whether a metric is promotable or still dev-only / exploratory |
+| `metricSemanticsWarning` | Active and historical bests may not be comparable across segments |
+| `qualityRound` | `closed`, `freshRoundSuggested`, plateau reasons for quality-gap loops |
+
+Symptom-first guidance for resume lives in [Operate](operate.md#resume). Cross-surface contracts live in [Control plane](control-plane.md).
 
 ---
 

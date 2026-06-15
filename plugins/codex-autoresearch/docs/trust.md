@@ -2,7 +2,7 @@
 
 Autoresearch is only valuable when evidence stays honest. Otherwise it is just a very elaborate way to lie to yourself with better formatting.
 
-## Metric Integrity
+## Metric integrity
 
 Benchmarks must print:
 
@@ -27,9 +27,9 @@ Use `measure` for non-promotional evidence: baselines, no-change checks, environ
 - **metric parsing**: whether `METRIC <primary>=<number>` was parsed
 - **research integrity**: whether the evidence is promotable or merely local/dev evidence
 
-Parsing a metric is not enough. Perfect score-like metrics, dev-only bests, missing holdout/repeat guards, stale cache artifacts, failed repeats, contamination notes, and cache replay warnings should block promotion until the benchmark is broadened or a fresh segment records stronger metadata.
+Parsing a metric is not enough. Perfect score-like metrics, dev-only bests, missing holdout/repeat guards, stale cache artifacts, failed repeats, and contamination notes should block promotion until the benchmark is broadened or a fresh segment records stronger metadata.
 
-## Scaffold Health
+## Scaffold health
 
 `state`, `doctor`, `guide`, and the dashboard expose `scaffoldHealth`.
 
@@ -40,139 +40,88 @@ Treat these as setup blockers:
 - missing or stale `commitPaths` / `revertPaths`
 - Git index locks, including lock age and retry guidance
 
-Fix the broken layer before the first packet or before `log keep`. A missing path should fail during doctor/setup, not during `git add` after trust has already been granted.
+Fix the broken layer before the first packet or before `log keep`.
 
-## Stale Packets
+## Stale packets
 
-Log from `--from-last` only while the packet is fresh against:
+Log from `--from-last` only while the packet is fresh against ledger segment, config, metric, command policy, working directory, and Git/file fingerprint.
 
-- ledger segment and run count
-- config and metric
-- command and checks policy
-- working directory
-- Git/file fingerprint
-
-If anything changed, rerun `next` before logging. If the data came from a raw `run` probe and you still want it in the ledger, log it explicitly with `--metric <value> --status measure`.
+If anything changed, rerun `next` before logging. If the data came from a raw `run` probe, log explicitly with `--metric <value> --status measure`.
 
 When a `keep` has no source changes, record it as no-change evidence. Do not borrow an old `HEAD` and dress it up as a new result.
 
-Fresh packets also carry a packet evidence bundle: packet id, command identity, command execution boundary, timeout, exit status, bounded stdout/stderr tails, parsed metrics, artifacts, checks result, and a freshness fingerprint. Use that bundle to review what actually ran; do not infer promotion readiness from "a metric was parsed."
+Fresh packets carry a packet evidence bundle: packet id, command identity, timeout, exit status, bounded stdout/stderr tails, parsed metrics, artifacts, checks result, and freshness fingerprint.
 
-## Benchmark Drift
+## Benchmark drift
 
-`doctor --check-benchmark` compares the current command output against the configured primary metric and can warn when current output is far worse than the historical best.
+`doctor --check-benchmark` compares current output against the configured primary metric and can warn when current output is far worse than the historical best. Treat the old best as historical evidence until a fresh packet confirms it.
 
-When that happens, treat the old best as historical evidence. Do not claim it is current runtime proof until a fresh packet confirms it.
+## Runtime provenance and packet diagnostics
 
-## Runtime Provenance And Packet Diagnostics
+Runtime provenance is a trust gate. Read it before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence.
 
-Runtime provenance is a trust gate, not decoration. Read `runtimeProvenance` and `runtimeDriftSummary` before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence; inspect the active runtime path/version and built-entrypoint fingerprint before saying the behavior is live. If installed runtime or fingerprint evidence cannot be inspected, call it unavailable instead of fresh.
+Packet diagnostics classify evidence loss: failed citation carry, lost claims during synthesis, missed quality scores, or sufficiency marked while the benchmark failed. Diagnostic evidence explains the next fix; it is not a product win.
 
-Packet diagnostics are also trust gates. Read `packetDiagnostics` before rerunning or promoting a packet that lost evidence. A packet that retrieved evidence but failed citation carry, lost claims during synthesis, missed a quality score, or marked itself sufficient while the benchmark failed is diagnostic evidence. It can explain the next fix, but it is not a product win.
-
-## Promotion Evidence
+## Promotion evidence
 
 State and dashboard readouts separate local development evidence from promotion-grade evidence.
 
-Common labels:
-
-- `exploratory`: valid local evidence that still needs repeat, breadth, holdout, or a promotion gate
-- `dev_best`: interesting local best, not promotion evidence
-- `pending_repeat`: first-pass win awaiting repeat
-- `repeated`: repeat evidence exists but promotion may still need breadth or holdout context
-- `holdout`: holdout evidence exists for the current gate
-- `promotion_eligible`: run includes explicit promotion metadata
-- `invalidated`: later ASI or status invalidated the evidence
-- `historical`: useful context from an earlier segment
-- `blocked`: evidence cannot support the next claim
+| Label | Meaning |
+| --- | --- |
+| `exploratory` | Valid local evidence needing repeat, breadth, holdout, or promotion gate |
+| `dev_best` | Interesting local best, not promotion evidence |
+| `pending_repeat` | First-pass win awaiting repeat |
+| `repeated` | Repeat exists; promotion may still need breadth or holdout |
+| `holdout` | Holdout evidence exists for the current gate |
+| `promotion_eligible` | Run includes explicit promotion metadata |
+| `invalidated` | Later ASI or status invalidated the evidence |
+| `historical` | Useful context from an earlier segment |
+| `blocked` | Evidence cannot support the next claim |
 
 If ASI says to stop, broaden validation, rerun on holdout, or invalidate a family, honor that over remaining iteration budget.
 
-## Benchmark Overfit And Steering
+## Benchmark overfit and steering
 
-Autoresearch can make a benchmark look cleaner while the actual product gets
-less honest. This is the trap: the numbers improve, the report gets prettier,
-and the real claim quietly shrinks to "we learned the test."
+Autoresearch can make a benchmark look cleaner while the actual product gets less honest. Treat a result as benchmark-shaped when the implementation or harness adds task-family detectors, protected probes, static citations, manifest edits, or scorer changes keyed to the benchmark row.
 
-Treat a result as benchmark-shaped when the implementation or harness adds any
-of these to make a known row pass:
+Those changes can still be useful diagnostics. Log them as `measure` with provisional wording, or start a new segment when the benchmark contract changed. Do not promote them as a product win until holdout, repeat, breadth, or an explicit promotion gate covers the broader claim.
 
-- task-family detectors for one named library, framework, fixture, repo, or
-  manifest task
-- protected probes built from expected files, expected symbols, expected claims,
-  or exact answer anchors
-- static citations for exact benchmark paths that normal retrieval did not find
-- benchmark manifest edits that change what "correct" means
-- scorer changes that make the current failing family cheaper to pass without a
-  separate holdout or repeat
+`session-forensics` treats explicit overfit and row-specific steering as a decision-capsule blocker. Resolve by separating harness-quality changes from row-specific repairs and planning holdout or breadth validation.
 
-Those changes can still be useful. They are diagnostics and harness learning,
-not product proof. Log them as `measure` with provisional or diagnostic wording,
-or start a new segment when the benchmark contract changed. Do not promote them
-as a product, language, retrieval, ranking, or performance win until a fresh
-holdout, repeat, breadth run, or explicit promotion gate covers the broader
-claim.
+Generic harness improvements (cost accounting, provenance capture, manifest-quality scoring) support a harness-quality claim — keep that separate from "the product won this language/task."
 
-`session-forensics` treats explicit overfit, row-specific steering, protected
-probe, static-citation, and benchmark-specific feedback as a decision-capsule
-blocker. Resolve that blocker by separating harness-quality changes from
-row-specific repairs, downgrading the affected evidence, and planning holdout or
-breadth validation before promotion.
+## Claim coverage
 
-Planning that validation is not product proof. Finalization remains blocked
-until the holdout, repeat, breadth run, or promotion gate is actually logged and
-passes for the claim being promoted.
+Accepted evidence is not automatically shippable evidence.
 
-`evidenceMaturity` repeats that rule in compact state and recommendations. If
-the accepted evidence only supports a diagnostic or provisional claim, report
-that weaker claim rather than broad superiority.
+| Status | Meaning |
+| --- | --- |
+| `experimental` | Useful local evidence; product claim not covered |
+| `development` | Some proof exists; required proof still missing |
+| `product_grade` | Required proof present for the active claim |
+| `missing_required_proof` | Named proof labels must be added before product-grade finalization |
 
-The command response is compact by default so importing a large session does not
-repeat the same output-budget failure. Use `--json-full` or `--verbose` only
-when direct JSON consumers need `commandClasses` or ungrouped command, product,
-or workflow signal arrays; the capsule artifacts still carry the durable
-evidence. Copyable next commands should use the active plugin launcher with the
-target repo passed through `--cwd`, not a target-repo-local
-`scripts/autoresearch.mjs` path.
+For retrieval, search, ranking, lazy behavior, or performance claims, product-grade coverage usually needs accuracy or ranking proof plus behavior proof under the claimed mode.
 
-Generic harness improvements are different. Cost accounting, packet-first
-gates, baseline reuse, provenance capture, command classification, source-read
-accounting, and manifest-quality scoring can support a harness-quality claim.
-Keep that claim separate from "the product won this language/task." One is
-plumbing. The other needs proof outside the row it just learned.
+If claim coverage is missing, use experimental or development wording. Finalization preview can package a review branch but must not describe the work as shippable product proof.
 
-## Claim Coverage
+## Benchmark guardrails
 
-Accepted evidence is not automatically shippable evidence. Claim coverage describes whether the current accepted evidence proves the claim the operator is about to make.
+`protectedBenchmarkPaths` records project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after baseline snapshot, or resolve outside the working directory.
 
-Vocabulary:
+Keep protected paths tight. Very large or deep folders can make `next` refuse when freshness cannot be proven.
 
-- `experimental`: useful local or exploratory evidence exists, but the product claim is not covered.
-- `development`: some claim proof exists, but required proof is still missing.
-- `product_grade`: required proof is present for the active claim.
-- `missing_required_proof`: the named proof labels that must be added before product-grade finalization.
-
-For retrieval, search, ranking, lazy behavior, or performance claims, product-grade claim coverage usually needs accuracy or ranking proof plus behavior proof under the claimed mode. Examples include recall, MRR, hit@k, ranking quality, lazy behavior, sidecar safety, and docs or tests that keep the behavior from drifting.
-
-If claim coverage is missing, use experimental primitive or development wording. Finalization preview can still package a review branch, but it must not describe the work as shippable, merge-ready product proof.
-
-## Benchmark Guardrails
-
-`protectedBenchmarkPaths` records the project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after the baseline snapshot, or resolve outside the working directory through symlinks. Intentional benchmark changes should start a new segment or promotion gate so old and new evidence are not mixed.
-
-Keep protected paths tight. Directory snapshots are bounded. Very large or deep generated, cache, fixture, or data folders can make `next` refuse when freshness cannot be proven. Prefer a small manifest, fixture list, or benchmark contract file that represents the measurement surface.
-
-Secondary metric constraints add explicit tradeoff checks without replacing the primary metric contract:
+Secondary metric constraints add explicit tradeoff checks:
 
 ```bash
 node scripts/autoresearch.mjs config --cwd <project> --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
 ```
 
-Supported thresholds are numeric values, `baseline`, `baseline * N`, `N * baseline`, and `baseline +/- N`. Advisory constraints record pass/fail/unavailable status. Blocking constraints keep the primary packet evidence but make violating keeps provisional and non-promotable until the constraint is satisfied or the operator intentionally changes the rule.
+Supported thresholds: numeric values, `baseline`, `baseline * N`, `N * baseline`, `baseline +/- N`. Blocking constraints make violating keeps provisional and non-promotable.
 
-This is not Pareto optimization. Autoresearch still chooses by one primary `METRIC name=value`; constraints are guardrails for known secondary risks.
+This is not Pareto optimization. Autoresearch still chooses by one primary `METRIC name=value`; constraints guard known secondary risks.
 
-## Git Safety
+## Git safety
 
 - Check Git before setup, logging, discard cleanup, or finalization.
 - Configure `commitPaths` for kept results in Git repos.
@@ -182,7 +131,7 @@ This is not Pareto optimization. Autoresearch still chooses by one primary `METR
 
 `doctor` and `state --compact` warn when the worktree is dirty or configured commit paths are missing.
 
-## Live Versus Static
+## Live versus static
 
 Live:
 
@@ -198,7 +147,7 @@ node scripts/autoresearch.mjs export --cwd <project>
 
 Static exports are review snapshots. They are not proof of current packet freshness and should not expose live mutation controls.
 
-## Command Gate
+## Command gate
 
 Command-bearing setup and inspection paths require deliberate approval before materializing custom commands:
 
@@ -206,33 +155,27 @@ Command-bearing setup and inspection paths require deliberate approval before ma
 - `benchmark_command`
 - `checks_command`
 - `model_command`
-- setup guidance materialized from external recipe catalogs, admitted with `--trust-catalog`
+- setup guidance from external recipe catalogs (with `--trust-catalog`)
 
 Prefer project-local `autoresearch.sh` or `autoresearch.ps1` scripts when possible.
 
-Autoresearch does not sandbox benchmark or checks commands. Approved commands run as local shell processes with the current user's permissions, environment access, and filesystem reach from the target working directory. Packet evidence, `state --report`, the dashboard trust state, and `doctor --check-benchmark --explain` can surface this as `commandExecutionBoundary: not_sandboxed` when command-bearing evidence exists.
+Autoresearch does not sandbox benchmark or checks commands. Approved commands run as local shell processes with the current user's permissions. Review generated commands, keep secrets out of command lines and output, and prefer `--command-file` and `--packet-env-file` for fragile setup.
 
-Review generated commands before running them, keep secrets out of command lines and benchmark output, and use project-local wrappers when the command needs careful environment setup. Prefer `--command-file` and `--packet-env-file` for commands or environment overrides that would otherwise need fragile inline quoting.
+`run` and `next` default to `--packet-env-mode inherit`. Use `--packet-env-mode minimal` for a smaller environment (PATH, SystemRoot, TEMP, TMP plus explicit packet env keys).
 
-`run` and `next` default to `--packet-env-mode inherit`, which preserves the current process environment and overlays keys from `--packet-env-file`. Use `--packet-env-mode minimal` when you want a smaller environment: Autoresearch keeps only `PATH`, `SystemRoot`, `TEMP`, and `TMP` from the parent process, then overlays explicit packet env file keys. Packet evidence records the mode and explicit key names, not env values.
+Evidence redaction is best-effort, not a confidentiality guarantee. Keep sensitive data out of benchmark output and ASI in the first place.
 
-Evidence redaction is best-effort, not a confidentiality guarantee. CLI JSON responses, dashboard payloads, ledger debug views, and packet evidence paths try to scrub common secrets, credentials, env-file references, home paths, and local/network paths in evidence-bearing fields, but sensitive data should not be emitted into Autoresearch evidence in the first place.
+The served dashboard binds to loopback, rejects wrong-port `Host` headers, sends no-store headers, and keeps the raw ledger endpoint disabled unless `--debug-ledger` is explicitly used.
 
-The served dashboard binds to loopback and rejects non-loopback or wrong-port `Host` headers. It also sends no-store and defensive browser headers. The raw `autoresearch.jsonl` endpoint remains disabled unless the server is started with `--debug-ledger`, and the debug ledger is bounded to the visible live ledger window before being redacted line by line.
+Partial-result salvage reads only in-workdir artifacts. Oversized or malformed artifacts are skipped; salvaged rows remain diagnostic `measure` evidence only.
 
-Partial-result salvage reads only artifacts that stay inside the working directory lexically and by realpath. Oversized artifacts are skipped, excessive rows are capped with an `artifact_rows_truncated` notice, malformed or missing artifacts are reported as skipped artifacts, and any salvaged row remains diagnostic `measure` evidence only.
+## Privacy and local data
 
-Trusted external recipes store catalog provenance in session config. `doctor` and `next` revalidate that provenance and block when the recipe or catalog has drifted, cannot be fetched, or no longer matches the trusted hash.
+Autoresearch has no hosted backend. Session files, dashboard exports, ASI, packet evidence, and artifact indexes are local project records unless your commands, Git workflow, or external services move them elsewhere.
 
-## Privacy And Local Data
+See [Privacy](privacy.md) and [Terms](terms.md) for the user-facing policy surfaces.
 
-Autoresearch has no hosted backend of its own. Session files, dashboard exports, ASI, packet evidence, benchmark output tails, and artifact indexes are local project records unless your own commands, Git workflow, Codex environment, or external services move them elsewhere.
-
-Treat `autoresearch.jsonl`, `autoresearch.md`, `autoresearch.research/**`, `autoresearch-dashboard.html`, and generated finalization previews as potentially sensitive. They may include command names, relative paths, metric values, summaries of attempted work, and artifact references. Keep secrets and private data out of benchmark output and ASI; do not rely on redaction as a security boundary.
-
-See [Privacy](privacy.md) and [Terms](terms.md) for the user-facing policy surfaces that match this trust model.
-
-## Corrupt Or Partial State
+## Corrupt or partial state
 
 If `autoresearch.jsonl` is corrupt, surface the failing file and line. Do not silently continue from a partial ledger.
 

@@ -2,6 +2,8 @@
 
 This repository is a wrapper for the Codex Autoresearch plugin. The active package root is `plugins/codex-autoresearch`.
 
+Doc voice and audience rules: [STYLE.md](STYLE.md).
+
 ## Repo Shape
 
 - Root `README.md` is the public front door.

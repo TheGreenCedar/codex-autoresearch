@@ -2,11 +2,11 @@
 
 Codex Autoresearch is easiest to understand as a few small loops: setup, packet, governance, research fanout, and finalization.
 
-## First Five Minutes
+## First five minutes
 
 ```mermaid
 flowchart TD
-  A["Human prompt"] --> B["prompt-plan or onboarding-packet"]
+  A["Your prompt"] --> B["prompt-plan or onboarding-packet"]
   B --> C{"Enough setup detail?"}
   C -- "No" --> D["Ask only for missing essentials"]
   C -- "Yes" --> E["setup or setup-plan"]
@@ -26,7 +26,7 @@ flowchart TD
   N -- "No" --> O["finalize-preview or report blocker"]
 ```
 
-## Prompt To Loop
+## Prompt to loop
 
 ```mermaid
 flowchart LR
@@ -43,7 +43,7 @@ flowchart LR
   U --> O["Read-only setup command and next safe action"]
 ```
 
-## Active Packet Loop
+## Active packet loop
 
 ```mermaid
 stateDiagram-v2
@@ -63,7 +63,7 @@ stateDiagram-v2
   Finalize --> [*]
 ```
 
-## Parallel Research Lanes
+## Parallel research lanes
 
 ```mermaid
 flowchart TD
@@ -79,29 +79,33 @@ flowchart TD
   H --> J["Run one measured packet"]
 ```
 
-## Quality-Gap Research
+## Quality-gap research
 
 ```mermaid
 flowchart TD
   A["Broad product/docs/UX prompt"] --> B["research-setup"]
   B --> C["brief, sources, synthesis"]
-  C --> D["filter hallucinations"]
+  C --> D["filter weak claims"]
   D --> E["quality-gaps.md"]
   E --> F["quality_gap benchmark"]
   F --> G{"quality_gap = 0?"}
   G -- "No" --> H["Implement or reject accepted gaps"]
   H --> F
-  G -- "Yes" --> I["Round complete, not discovery complete"]
+  G -- "Yes" --> I["Round complete — see Concepts"]
 ```
 
-## Dashboard Reading Order
+## Dashboard reading order
 
 ```mermaid
 flowchart LR
   A["Decision envelope"] --> B["Trust blockers"]
   B --> C["Run chart and readiness strip"]
-  C --> D["Operator checklist"]
+  C --> D["Resume checklist"]
   D --> E["Runtime provenance and packet diagnostics"]
   E --> F["Strategy lanes and watchdog"]
   F --> G["Ledger and finalization"]
 ```
+
+---
+
+Previous: [Recipes](recipes.md) · Next: [Architecture](architecture.md).

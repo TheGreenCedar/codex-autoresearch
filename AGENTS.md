@@ -3,6 +3,7 @@
 ## First Principles
 
 - Optimize for evidence, resumability, and small reviewable diffs.
+- Keep human docs for humans and agent contracts for Codex. Root `README.md` and `docs/*` (except maintainers, architecture, control-plane) speak to **you** — outcomes first. `SKILL.md` and `references/*` speak to Codex with executable steps. See `plugins/codex-autoresearch/docs/STYLE.md`.
 - Treat this file as repo-local operating guidance for Codex. Keep it practical and current; move long procedures into `plugins/codex-autoresearch/docs/` or the plugin skill.
 - Identify the owning repo/package before running Git, installs, builds, tests, release commands, or Autoresearch commands. This wrapper root is not the package root.
 - Use the repo-local source checkout for Autoresearch work in this repo before trusting a globally installed or marketplace-cache copy.
@@ -11,7 +12,7 @@
 ## Repository Shape
 
 - The active product package lives in `plugins/codex-autoresearch`.
-- The root `README.md` is the public front door. Keep it friendly for users evaluating or installing the plugin; do not put AI/operator self-instructions there.
+- The root `README.md` is the public front door. Keep it friendly for users evaluating or installing the plugin; do not put Codex self-instructions or agent checklists there.
 - The root `CHANGELOG.md` is the release-note surface for user-facing behavior, docs, skill, command-surface, dashboard, migration, or version changes.
 - The main Codex-facing skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`. It is the single skill surface; do not revive old dashboard/finalizer subskills or slash-command docs.
 - Topic docs live under `plugins/codex-autoresearch/docs/`. Use docs for durable workflow detail, not ad hoc notes in chat.
