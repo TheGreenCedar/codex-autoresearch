@@ -339,6 +339,28 @@ test("best kept incumbent is preserved when active families are trimmed", () => 
   assert.equal(memory.diversityGuidance.nextActionHint, "stress the best path");
 });
 
+test("experiment memory handles large repeated families without losing summaries", () => {
+  const runs = [kept(1, 100, "Baseline family", { family: "baseline", evidence: "seconds=100" })];
+  for (let run = 2; run <= 1001; run += 1) {
+    runs.push(
+      rejected(run, 100 + (run % 7), `large family retry ${run}`, {
+        family: "large-family",
+        hypothesis: `large family retry ${run}`,
+        rollback_reason: "regressed",
+      }),
+    );
+  }
+
+  const memory = buildExperimentMemory({ runs, direction: "lower" });
+  const largeFamily = memory.families.find((family) => family.label === "large-family");
+
+  assert.equal(memory.summary.families, 2);
+  assert.equal(largeFamily?.runs, 1000);
+  assert.equal(largeFamily?.failedRuns.length, 1000);
+  assert.equal(largeFamily?.exhausted, true);
+  assert.equal(memory.exhaustedFamilies[0].family, "large-family");
+});
+
 function kept(run, metric, description, asi = {}, evidenceStatus = "accepted") {
   return { run, metric, description, status: "keep", evidenceStatus, asi };
 }
