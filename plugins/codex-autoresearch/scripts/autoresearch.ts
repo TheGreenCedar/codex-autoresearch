@@ -18,16 +18,20 @@ import {
   stripDashboardExportCommandFields,
   stripDashboardGuidanceCommandFields,
 } from "../lib/dashboard-command-safety.js";
+import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
 import { createDashboardCommands } from "../lib/commands/dashboard.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
+import { buildNextPacketId } from "../lib/commands/next.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
+import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
+import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import {
   defaultCommandShell,
   normalizeCommandShell,
@@ -49,14 +53,11 @@ import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 import {
-  approvalRequirementsFromLaneResults,
-  approvalRequirementFromLane,
-  buildApprovalLedgerStatus,
-  dedupeApprovalRequirements,
-} from "../lib/approval-ledger.js";
-import { classifyEvidenceMaturity, runsFromState } from "../lib/evidence-maturity.js";
-import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
-import { buildResourcePreflight, resourceBudgetFromConfig } from "../lib/process-governor.js";
+  buildCheapFinalizationPressure,
+  buildSessionReadModel,
+  buildSessionReadModelState,
+  statusCountsFromState,
+} from "../lib/session-read-model.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
   buildProtectedBenchmarkGuard,
@@ -82,6 +83,7 @@ import {
   artifactEvidenceList,
   artifactList,
   defaultEvidenceStatusForRun,
+  isAcceptedCurrentRun,
 } from "../lib/evidence-registry.js";
 import { resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
@@ -132,8 +134,10 @@ import {
   FAILURE_STATUSES,
   appendJsonl,
   buildDecisionEnvelope,
+  createSessionReadCache,
   finiteMetric,
   currentState,
+  loadSessionRecords,
   loadSessionState,
   listOption,
   readJsonl,
@@ -211,6 +215,8 @@ const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
+const DIRECTORY_FINGERPRINT_ENTRY_LIMIT = 500;
+const DIRECTORY_FINGERPRINT_DEPTH_LIMIT = 6;
 const COMMAND_EXECUTION_BOUNDARY = {
   mode: "not_sandboxed",
   note: "Benchmark and checks commands run as local shell commands with the current user's permissions.",
@@ -228,6 +234,7 @@ const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
 const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
 const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
 const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
+const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = 5000;
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
@@ -241,6 +248,7 @@ const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
 const { exportDashboard, serveDashboard } = createDashboardCommands({
   boolOption,
   buildDriftReport,
+  createSessionReadCache,
   dashboardCommands,
   dashboardHtml,
   dashboardSettings,
@@ -489,11 +497,12 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
       normalized.startsWith("../") ||
       normalized.includes("/../") ||
       normalized === ".." ||
+      normalized.startsWith(":") ||
       normalized.startsWith(".git/") ||
       normalized === ".git"
     ) {
       throw new Error(
-        `${optionName} must contain project-relative paths that do not escape the working directory: ${item}`,
+        `${optionName} must contain literal project-relative paths that do not escape the working directory or use Git pathspec magic: ${item}`,
       );
     }
     return normalized.replace(/\/$/, "");
@@ -681,6 +690,7 @@ function firstRunChecklist({
 
 async function setupPlan(args: any) {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const readCache = args.readCache;
   const catalogOptions = { catalogBaseDir: sessionCwd };
   const requestedRecipe = args.recipe_id ?? args.recipeId ?? args.recipe;
   const storedRecipe = config?.recipeId;
@@ -695,7 +705,7 @@ async function setupPlan(args: any) {
   } else {
     recommended = await recommendRecipe(workDir);
   }
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, readCache);
   const hasDefaultBenchmarkCommand = await defaultBenchmarkCommandExists(workDir);
   const planArgs = await withRecipeDefaults({
     ...args,
@@ -2104,8 +2114,16 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
   const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
   const canonicalNextAction = state.canonicalNextAction || null;
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunLogStatus = lastRun
+    ? lastRun.decision?.safeSuggestedStatus ||
+      lastRun.decision?.suggestedStatus ||
+      (lastRun.decision?.allowedStatuses?.length === 1 ? lastRun.decision.allowedStatuses[0] : "")
+    : "";
   const stage =
-    canonicalNextAction?.kind ||
+    compactGuidedStage(canonicalNextAction?.kind) ||
     (state.runs === 0 ? "needs-baseline" : state.limitReached ? "limit-reached" : "ready");
   const nextAction =
     canonicalNextAction?.reason || state.nextAction || "Continue from compact state.";
@@ -2129,8 +2147,43 @@ async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
       state: state.commands?.state || "",
       primary: canonicalNextAction?.command || state.commands?.state || "",
     },
+    lastRun: lastRun
+      ? {
+          ok: lastRun.ok,
+          allowedStatuses: lastRun.decision?.allowedStatuses || [],
+          suggestedStatus: lastRun.decision?.suggestedStatus || "",
+          rawSuggestedStatus: lastRun.decision?.rawSuggestedStatus || "",
+          safeSuggestedStatus: lastRun.decision?.safeSuggestedStatus || lastRunLogStatus,
+          statusGuidance: lastRun.decision?.statusGuidance || "",
+          asiTemplate: lastRun.decision?.asiTemplate || {},
+          metric: lastRun.decision?.metric ?? null,
+          packetEvidence: lastRun.packetEvidence || null,
+          path: lastRun.lastRunPath || "",
+          fingerprint: lastRunFingerprint,
+          freshness: lastRunFreshness,
+        }
+      : null,
     settings: dashboardSettings(config),
   };
+}
+
+function compactGuidedStage(kind: unknown): string {
+  switch (String(kind || "")) {
+    case "baseline":
+      return "needs-baseline";
+    case "benchmark-command":
+      return "needs-benchmark-command";
+    case "log-decision":
+      return "needs-log-decision";
+    case "setup":
+      return "needs-setup";
+    case "stale-packet":
+      return "stale-last-run";
+    case "segment-transition":
+      return "limit-reached";
+    default:
+      return String(kind || "");
+  }
 }
 
 async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
@@ -3720,13 +3773,6 @@ async function writePendingLogTransaction(workDir: string, inGit: boolean, recei
   return receiptPath;
 }
 
-async function clearPendingLogTransaction(receiptPath: string | null) {
-  if (!receiptPath) return;
-  await fsp.unlink(receiptPath).catch((error: any) => {
-    if (error?.code !== "ENOENT") throw error;
-  });
-}
-
 async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
   const warnings = [];
   for (const receiptPath of await pendingLogTransactionCandidatePaths(workDir, inGit)) {
@@ -3931,6 +3977,16 @@ async function scopedFileFingerprints(workDir: string, paths: any[] = []) {
     .sort((a: any, b: any) => a.localeCompare(b));
   const fingerprints = [];
   for (const file of files) {
+    if (fingerprints.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
+      fingerprints.push({
+        path: "<scoped-files>",
+        truncated: true,
+        reason: "scoped_file_entry_limit",
+        maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
+        totalFiles: files.length,
+      });
+      break;
+    }
     const filePath = path.join(workDir, file);
     try {
       const bytes = await fsp.readFile(filePath);
@@ -3966,7 +4022,18 @@ function dirtyPathsFromStatus(statusShort: string) {
 
 async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
   const fingerprints = [];
-  for (const file of [...new Set(paths)].sort((a: any, b: any) => a.localeCompare(b))) {
+  const uniquePaths = [...new Set(paths)].sort((a: any, b: any) => a.localeCompare(b));
+  for (const file of uniquePaths) {
+    if (fingerprints.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
+      fingerprints.push({
+        path: "<dirty-files>",
+        truncated: true,
+        reason: "dirty_file_entry_limit",
+        maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
+        totalFiles: uniquePaths.length,
+      });
+      break;
+    }
     const filePath = path.join(workDir, file);
     try {
       const stats = await fsp.lstat(filePath);
@@ -3998,15 +4065,37 @@ async function directoryFingerprints(workDir: string, rootPath: string) {
   const relativeRoot = path.relative(base, root);
   if (relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) return [];
   const entries: LooseObject[] = [];
-  async function visit(relativeDir: any) {
+  let truncated = false;
+  const markTruncated = (relativePath: string, reason: string) => {
+    if (truncated) return;
+    truncated = true;
+    entries.push({
+      path: relativePath,
+      truncated: true,
+      reason,
+      maxDepth: DIRECTORY_FINGERPRINT_DEPTH_LIMIT,
+      maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
+    });
+  };
+  async function visit(relativeDir: any, depth = 0) {
+    if (truncated) return;
+    if (depth > DIRECTORY_FINGERPRINT_DEPTH_LIMIT) {
+      markTruncated(relativeDir, "directory_depth_limit");
+      return;
+    }
     const absoluteDir = path.join(workDir, relativeDir);
     const dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
     for (const dirent of dirents.sort((a: any, b: any) => a.name.localeCompare(b.name))) {
+      if (entries.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
+        markTruncated(relativeDir, "directory_entry_limit");
+        return;
+      }
       const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
       const absolutePath = path.join(workDir, relativePath);
       if (dirent.isDirectory()) {
         entries.push({ path: relativePath, directory: true });
-        await visit(relativePath);
+        await visit(relativePath, depth + 1);
+        if (truncated) return;
       } else if (dirent.isSymbolicLink()) {
         entries.push({ path: relativePath, symlink: await fsp.readlink(absolutePath) });
       } else if (dirent.isFile()) {
@@ -5074,13 +5163,14 @@ function dashboardSafeGuidanceText(value: unknown): string {
 }
 
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
+  const readCache = context.readCache || createSessionReadCache();
   const qualityGap = await currentQualityGapSummary(workDir);
-  const state = currentState(workDir);
+  const state = loadSessionState(workDir, readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warnings = context.suppressEnvironmentWarnings
     ? []
-    : await operatorWarningsForWorkDir(workDir);
+    : await operatorWarningsForWorkDir(workDir, state);
   const settings = dashboardSettings(config, context);
   const drift =
     context.runtimeDrift ||
@@ -5093,12 +5183,12 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       probeFailed: true,
       warnings: [error.message],
     })));
-  const finalizePreview = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
-    ok: false,
-    ready: false,
-    warnings: [error.message],
-    nextAction: "Fix finalization preview errors before relying on review readiness.",
-  }));
+  const finalizePreview = await finalizationPressureForWorkDir({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails: warnings,
+  });
   const effectiveFinalizePreview = context.suppressEnvironmentWarnings
     ? suppressEnvironmentWarningsFromPreview(finalizePreview)
     : finalizePreview;
@@ -5107,30 +5197,35 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const continuation = loopContinuation(workDir, state, config, "dashboard");
-  const setupPlanResult = await setupPlan({ cwd: workDir }).catch((error: any) => ({
+  const setupPlanResult = await setupPlan({ cwd: workDir, readCache }).catch((error: any) => ({
     ok: false,
     warnings: [error.message],
   }));
-  const guidedSetupResult = await guidedSetup({ cwd: workDir }).catch((error: any) => ({
+  const guidedSetupArgs =
+    context.deliveryMode === "live-server"
+      ? { cwd: workDir, compact: true, readCache }
+      : { cwd: workDir, readCache };
+  const guidedSetupResult = await guidedSetup(guidedSetupArgs).catch((error: any) => ({
     ok: false,
     warnings: [error.message],
   }));
   const dashboardSetupPlan = stripDashboardCommandGuidance(setupPlanResult);
   const dashboardGuidedSetup = stripDashboardCommandGuidance(guidedSetupResult);
+  const records = loadSessionRecords(workDir, readCache);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
     config,
     settings,
+    records,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-  const records = readJsonl(workDir);
   const laneLifecycle = buildLaneLifecycle({
     state,
     records,
     fanoutPlan,
     parallelLanes,
-    laneResults: latestLaneResults(workDir, state.segment),
+    laneResults: orchestration.laneResults,
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
@@ -5155,8 +5250,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       warningDetails: warnings,
     }),
   );
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -5165,7 +5260,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -5198,7 +5293,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     best: state.best,
     current: state.current,
   });
-  const controlPlane = buildControlPlaneContracts({
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
@@ -5207,7 +5302,17 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     parallelLanes,
     workflowFriction,
     finalization: effectiveFinalizePreview,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
+  const controlPlane = readModel.controlPlane;
   const commands = dashboardCommands(workDir, qualityGap);
   const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
   const canonicalCommandHints = {
@@ -5282,10 +5387,13 @@ function stripDashboardCommandGuidance(value: any): any {
   });
 }
 
-async function operatorWarningsForWorkDir(workDir: string) {
+async function operatorWarningsForWorkDir(
+  workDir: string,
+  stateOverride: LooseObject | null = null,
+) {
   const inGit = await insideGitRepo(workDir);
   const config = readConfig(workDir);
-  const state = currentState(workDir);
+  const state = stateOverride || currentState(workDir);
   const warnings = [];
   warnings.push(...(await pendingLogTransactionWarnings(workDir, inGit)));
   if (inGit) {
@@ -5478,16 +5586,13 @@ async function runExperiment(args: LooseObject) {
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
-  const resourcePreflight = buildResourcePreflight({
+  const resourcePreflight = assertRunResourcePreflight({
     command,
+    config,
     entries: readJsonl(workDir),
-    budgets: resourceBudgetFromConfig(config),
   });
-  if (!resourcePreflight.canStart) {
-    throw new Error(`Resource preflight blocked packet start: ${resourcePreflight.nextAction}`);
-  }
   let progressSnapshot = createProgressSnapshot({
-    packetId: `packet-${state.results.length + 1}-active`,
+    packetId: buildActiveRunPacketId(state.results.length + 1),
     command,
     startedAt: new Date().toISOString(),
     timeoutSeconds,
@@ -5893,6 +5998,7 @@ async function logExperiment(args: any) {
   let revertMessage = "";
   let pendingLogReceiptPath: string | null = null;
   let pendingLogReceiptWarning = "";
+  const logWarnings: string[] = [];
 
   if (status === "keep" && inGit) {
     if (explicitCommit) {
@@ -6047,20 +6153,30 @@ async function logExperiment(args: any) {
   );
   appendJsonl(workDir, experiment);
   if (pendingLogReceiptPath) {
-    try {
-      await clearPendingLogTransaction(pendingLogReceiptPath);
-    } catch (error: unknown) {
-      pendingLogReceiptWarning = `Pending receipt cleanup failed: ${errorMessage(error)}.`;
+    const cleanupWarning = await clearPendingLogTransactionWithWarning(
+      pendingLogReceiptPath,
+      undefined,
+      { workDir },
+    );
+    if (cleanupWarning) {
+      pendingLogReceiptWarning = cleanupWarning;
+      logWarnings.push(pendingLogReceiptWarning);
     }
   }
   if (lastPacket) await deleteLastRunPacket(workDir);
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
-  await appendSessionRunNote(workDir, experiment, stateAfter, {
-    gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
-    revertMessage,
-  });
+  try {
+    await appendSessionRunNote(workDir, experiment, stateAfter, {
+      gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
+      revertMessage,
+    });
+  } catch (error: unknown) {
+    logWarnings.push(
+      `Run was durably logged to autoresearch.jsonl, but autoresearch.md could not be updated: ${errorMessage(error)}.`,
+    );
+  }
   return {
     ok: true,
     workDir,
@@ -6071,7 +6187,8 @@ async function logExperiment(args: any) {
     limit,
     git: gitMessage,
     revert: revertMessage,
-    recovery: pendingLogReceiptWarning,
+    recovery: logWarnings.join(" "),
+    warnings: logWarnings,
     lastRunCleared: Boolean(lastPacket),
     continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
@@ -6121,18 +6238,36 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const staticExport =
     meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
   const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
-  const dataForClient = redactEvidenceObject(
-    staticExport ? stripDashboardCommandFields(entries) : entries,
-    dashboardContext,
-  );
-  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
-  const metaForClient = stripDashboardCommandFields(meta);
   const publicExport = Boolean(
     meta.publicExport ||
     meta.showcaseMode ||
     meta.settings?.publicExport ||
     meta.settings?.showcaseMode,
   );
+  const entriesForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
+  const boundedEntries = staticExport
+    ? boundDashboardStaticExportEntries(entriesForClient)
+    : {
+        entries: entriesForClient,
+        truncated: false,
+        omittedEntries: 0,
+        maxEntries: Array.isArray(entriesForClient) ? entriesForClient.length : 0,
+      };
+  const dataForClient = redactEvidenceObject(
+    publicExport ? scrubDashboardPublicExport(boundedEntries.entries) : boundedEntries.entries,
+    dashboardContext,
+  );
+  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
+  const metaForClient = stripDashboardCommandFields({
+    ...meta,
+    ledgerBounds: staticExport
+      ? {
+          truncated: boundedEntries.truncated,
+          omittedEntries: boundedEntries.omittedEntries,
+          maxEntries: boundedEntries.maxEntries,
+        }
+      : undefined,
+  });
   const metaData = JSON.stringify(
     redactEvidenceObject(
       publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
@@ -6162,6 +6297,18 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
     .replace(DASHBOARD_META_PLACEHOLDER, () => metaData)
     .replace(DASHBOARD_CSS_PLACEHOLDER, () => dashboardCss)
     .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
+}
+
+function boundDashboardStaticExportEntries(entries: any[]): {
+  entries: any[];
+  maxEntries: number;
+  omittedEntries: number;
+  truncated: boolean;
+} {
+  return boundDashboardLedgerEntries(
+    Array.isArray(entries) ? entries : [],
+    DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES,
+  );
 }
 
 function readDashboardBuildAsset(fileName: string) {
@@ -6334,6 +6481,7 @@ function redactRunPacketProcessEvidence(
   if (value.stdoutTail) value.stdoutTail = redactEvidenceText(value.stdoutTail, context);
   if (value.stderrTail) value.stderrTail = redactEvidenceText(value.stderrTail, context);
   redactProgressEvidence(value.progress, context);
+  redactProgressEvidence(value.progressSnapshot, context);
   if (value.commandDiagnostics) {
     value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
   }
@@ -6372,6 +6520,86 @@ function redactBenchmarkContractForStorage(
   }
   if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
   if (value.envFile) value.envFile = "<env-file>";
+}
+
+const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
+  "latestOutputTail",
+  "outputPreview",
+  "outputTail",
+  "stderrTail",
+  "stdoutTail",
+  "tailOutput",
+]);
+
+function redactCliResponseForOutput<T>(result: T): T {
+  const cloned = JSON.parse(JSON.stringify(result ?? null));
+  redactCliResponseNode(cloned, { workDir: inferCliResponseWorkDir(cloned) });
+  return cloned as T;
+}
+
+function redactCliResponseNode(value: unknown, context: LooseObject): void {
+  if (Array.isArray(value)) {
+    for (const item of value) redactCliResponseNode(item, context);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const node = value as LooseObject;
+  const localContext = { ...context, workDir: inferCliResponseWorkDir(node, context.workDir) };
+  if (looksLikeProcessEvidence(node)) redactRunPacketProcessEvidence(node, localContext);
+  if (node.packetEvidence) {
+    node.packetEvidence = redactEvidenceObject(node.packetEvidence, localContext);
+    redactProgressEvidence(node.packetEvidence.progressSnapshot, localContext);
+  }
+  if (node.history) {
+    if (node.history.command) {
+      node.history.command = redactCommandDisplay(node.history.command, localContext);
+    }
+    redactBenchmarkContractForStorage(node.history.benchmarkContract, localContext);
+  }
+  redactBenchmarkContractForStorage(node.benchmarkContract, localContext);
+
+  for (const [key, child] of Object.entries(node)) {
+    if (typeof child === "string") {
+      if (key === "commandFile") {
+        node[key] = redactPathDisplay(child, localContext.workDir);
+        continue;
+      }
+      if (key === "envFile" && child) {
+        node[key] = "<env-file>";
+        continue;
+      }
+      if (CLI_RESPONSE_TEXT_EVIDENCE_KEYS.has(key)) {
+        node[key] = redactEvidenceText(child, localContext);
+        continue;
+      }
+    }
+    redactCliResponseNode(child, localContext);
+  }
+}
+
+function inferCliResponseWorkDir(value: unknown, fallback = ""): string {
+  if (!value || typeof value !== "object") return fallback;
+  const node = value as LooseObject;
+  const candidates = [
+    node.workDir,
+    node.history?.workDir,
+    node.run?.workDir,
+    node.doctor?.workDir,
+    node.settings?.workDir,
+  ];
+  const found = candidates.find((candidate) => typeof candidate === "string" && candidate);
+  return found ? path.resolve(String(found)) : fallback;
+}
+
+function looksLikeProcessEvidence(value: LooseObject): boolean {
+  return Boolean(
+    Object.hasOwn(value, "tailOutput") ||
+    Object.hasOwn(value, "stdoutTail") ||
+    Object.hasOwn(value, "stderrTail") ||
+    Object.hasOwn(value, "progressSnapshot") ||
+    Object.hasOwn(value, "commandDiagnostics") ||
+    (Object.hasOwn(value, "exitCode") && Object.hasOwn(value, "command")),
+  );
 }
 
 async function readLastRunPacket(workDir: string) {
@@ -6498,6 +6726,18 @@ async function lastRunPacketFreshness(workDir: string, packet: any) {
           "Last-run packet is stale: Git dirty state changed since the packet was created. Run next again before logging.",
       };
     }
+    if (
+      gitSnapshotContainsDirtyFingerprintTruncation(expectedGit) ||
+      gitSnapshotContainsDirtyFingerprintTruncation(actualGit)
+    ) {
+      return {
+        fresh: false,
+        expectedGit,
+        actualGit,
+        reason:
+          "Last-run packet is stale: dirty file fingerprints were truncated before freshness could be proven. Clean or narrow the dirty tree, then run next again before logging.",
+      };
+    }
     if (expectedGit.fileFingerprints?.length || actualGit.fileFingerprints?.length) {
       const expectedFiles = JSON.stringify(expectedGit.fileFingerprints || []);
       const actualFiles = JSON.stringify(actualGit.fileFingerprints || []);
@@ -6534,6 +6774,18 @@ async function lastRunPacketFreshness(workDir: string, packet: any) {
     git: packet.history?.git || null,
     reason: "Last-run packet matches the current ledger.",
   };
+}
+
+function fingerprintsContainTruncation(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((item) => fingerprintsContainTruncation(item));
+  if (!value || typeof value !== "object") return false;
+  const record = value as LooseObject;
+  if (record.truncated === true) return true;
+  return Object.values(record).some((item) => fingerprintsContainTruncation(item));
+}
+
+function gitSnapshotContainsDirtyFingerprintTruncation(git: LooseObject): boolean {
+  return fingerprintsContainTruncation(git.dirtyFileFingerprints);
 }
 
 function lastRunConfigSnapshot(config: LooseObject = {}) {
@@ -6591,12 +6843,13 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const compact = boolOption(args.compact, false);
   const report = boolOption(args.report, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
+  const readCache = args.readCache || createSessionReadCache();
   if (compact || report) {
     const compactState = await publicCompactState({
       workDir,
       config,
       codexGoalObjective,
-      readCache: args.readCache,
+      readCache,
     });
     if (!report) return compactState;
     const response: LooseObject = {
@@ -6608,28 +6861,29 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     return response;
   }
 
-  const state = loadSessionState(workDir, args.readCache);
-  const records = readJsonl(workDir);
+  const state = loadSessionState(workDir, readCache);
+  const records = loadSessionRecords(workDir, readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const warningDetails = await operatorWarningsForWorkDir(workDir);
+  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const qualityGap = await currentQualityGapSummary(workDir);
-  const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
-    ok: false,
-    ready: false,
-    warnings: [error.message],
-    nextAction: "Fix finalization preview errors before relying on review readiness.",
-  }));
+  const finalization = await finalizationPressureForWorkDir({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails,
+  });
   const settings = dashboardSettings(config);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
     config,
     settings,
+    records,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const laneLifecycle = buildLaneLifecycle({
@@ -6637,7 +6891,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     records,
     fanoutPlan,
     parallelLanes,
-    laneResults: latestLaneResults(workDir, state.segment),
+    laneResults: orchestration.laneResults,
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
@@ -6661,8 +6915,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     scaffoldHealth,
     warningDetails,
   });
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -6672,7 +6926,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -6705,7 +6959,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     best: state.best,
     current: state.current,
   });
-  const controlPlane = buildControlPlaneContracts({
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
@@ -6714,13 +6968,19 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     parallelLanes,
     workflowFriction,
     finalization,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
-  const statusCounts = Object.fromEntries(
-    [...STATUS_VALUES].map((status: string) => [
-      status,
-      state.current.filter((run: any) => run.status === status).length,
-    ]),
-  );
+  const controlPlane = readModel.controlPlane;
+  const statusCounts = readModel.statusCounts;
   const continuation = loopContinuation(workDir, state, config, "state");
   const stateCommands = {
     ...continuation.commands,
@@ -6821,8 +7081,9 @@ async function publicCompactState({
   codexGoalObjective?: unknown;
   readCache?: unknown;
 }): Promise<LooseObject> {
-  const state = loadSessionState(workDir, readCache as any);
-  const records = readJsonl(workDir);
+  const effectiveReadCache = (readCache || createSessionReadCache()) as any;
+  const state = loadSessionState(workDir, effectiveReadCache);
+  const records = loadSessionRecords(workDir, effectiveReadCache);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -6830,13 +7091,14 @@ async function publicCompactState({
   const qualityGap = await currentQualityGapSummary(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const warningDetails = await operatorWarningsForWorkDir(workDir);
+  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
   const settings = dashboardSettings(config);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
     config,
     settings,
+    records,
   });
   const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
   const laneLifecycle = buildLaneLifecycle({
@@ -6844,7 +7106,7 @@ async function publicCompactState({
     records,
     fanoutPlan,
     parallelLanes,
-    laneResults: latestLaneResults(workDir, state.segment),
+    laneResults: orchestration.laneResults,
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
@@ -6868,8 +7130,8 @@ async function publicCompactState({
     scaffoldHealth,
     warningDetails,
   });
-  const stateWithQualityGap = {
-    ...state,
+  const stateWithQualityGap = buildSessionReadModelState({
+    state,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -6879,8 +7141,19 @@ async function publicCompactState({
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  };
+  });
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails,
+    recipes: recipeSummaries,
+  });
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
@@ -6897,33 +7170,39 @@ async function publicCompactState({
     best: state.best,
     current: state.current,
   });
-  const statusCounts = Object.fromEntries(
-    [...STATUS_VALUES].map((status: string) => [
-      status,
-      state.current.filter((run: any) => run.status === status).length,
-    ]),
-  );
+  const statusCounts = statusCountsFromState(state);
   const continuation = loopContinuation(workDir, state, config, "state");
   const compactCommands = {
     ...continuation.commands,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
-  const finalization = await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
-    ok: false,
-    ready: false,
-    warnings: [error.message],
-    nextAction: "Fix finalization preview errors before relying on review readiness.",
-  }));
-  const controlPlane = buildControlPlaneContracts({
+  const finalization = await finalizationPressureForWorkDir({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails,
+  });
+  const readModel = buildSessionReadModel({
     workDir,
     config,
     state,
     records,
     codexGoalObjective,
     parallelLanes,
-    workflowFriction: [],
+    workflowFriction,
     finalization,
+    commands: continuationCommands(workDir),
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: guidance.preflight,
   });
+  const controlPlane = readModel.controlPlane;
   const decisionEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: {
@@ -6941,7 +7220,7 @@ async function publicCompactState({
       finalization,
       experimentEconomics,
       salvageCandidates: partialResults.candidates,
-      workflowFriction: [],
+      workflowFriction,
       experimentMemory: memory,
       watchdog: watchdogSummary,
     }),
@@ -7000,7 +7279,7 @@ async function publicCompactState({
     portfolioRecommendation,
     experimentEconomics,
     partialResults,
-    workflowFriction: [],
+    workflowFriction,
     ...controlPlane,
     codexGoalObjective,
     resumeAudit: decisionEnvelope,
@@ -7009,77 +7288,36 @@ async function publicCompactState({
   });
 }
 
-function buildControlPlaneContracts({
+async function finalizationPressureForWorkDir({
   workDir,
-  config,
   state,
-  records,
-  codexGoalObjective,
-  parallelLanes,
-  workflowFriction = [],
-  finalization = null,
+  qualityGap,
+  warningDetails,
 }: {
   workDir: string;
-  config: LooseObject;
   state: LooseObject;
-  records: LooseObject[];
-  codexGoalObjective?: unknown;
-  parallelLanes?: unknown[];
-  workflowFriction?: unknown[];
-  finalization?: LooseObject | null;
-}): LooseObject {
-  const commands = continuationCommands(workDir);
-  const goalContract = buildGoalContract({
-    autoresearchGoal: state.config?.goal || config.goal,
-    codexGoalObjective,
-    benchmarkGoal: config.benchmarkGoal || state.config?.benchmarkGoal || state.config?.goal,
-    finalizationClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.finalizationClaim,
-    recoveryCommand: commands.codexGoalBrief || commands.state,
-  });
-  const approvalRequirements = dedupeApprovalRequirements([
-    ...(Array.isArray(parallelLanes) ? parallelLanes : [])
-      .map(approvalRequirementFromLane)
-      .filter((requirement): requirement is NonNullable<typeof requirement> =>
-        Boolean(requirement),
-      ),
-    ...approvalRequirementsFromLaneResults(records),
-  ]);
-  const approvalLedger = buildApprovalLedgerStatus({
-    entries: records,
-    required: approvalRequirements,
-  });
-  const resourcePreflight = buildResourcePreflight({
-    entries: records,
-    budgets: resourceBudgetFromConfig(config),
-  });
-  const evidenceMaturity = classifyEvidenceMaturity({
-    runs: runsFromState(state),
-    requestedClaim:
-      config.finalizationClaim ||
-      state.config?.finalizationClaim ||
-      finalization?.summary ||
-      finalization?.productGradeSummary,
-  });
-  const laneOrchestration = planFailureRecoveryLanes({
-    signals: [
-      ...(Array.isArray(workflowFriction) ? workflowFriction : []),
-      ...(Array.isArray(state.sessionDecisionCapsule?.productSignals)
-        ? state.sessionDecisionCapsule.productSignals
-        : []),
-    ],
-    writeScope: config.commitPaths || [],
-  });
-  return {
-    goalContract,
-    approvalLedger,
-    resourcePreflight,
-    evidenceMaturity,
-    laneOrchestration,
-    finalizationRunway: finalization?.finalizationRunway || finalization?.runway || null,
-  };
+  qualityGap: LooseObject | null;
+  warningDetails: LooseObject[];
+}): Promise<LooseObject> {
+  const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
+  if (!hasFinalizationEvidence(state)) return cheap;
+  return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+    ...cheap,
+    ok: false,
+    ready: false,
+    warnings: [...(cheap.warnings || []), error.message],
+    nextAction:
+      cheap.nextAction || "Fix finalization preview errors before relying on review readiness.",
+  }));
+}
+
+function hasFinalizationEvidence(state: LooseObject): boolean {
+  const runs = Array.isArray(state.results)
+    ? state.results
+    : Array.isArray(state.current)
+      ? state.current
+      : [];
+  return runs.some((run: LooseObject) => isAcceptedCurrentRun(run));
 }
 
 function compactPublicState(state: LooseObject) {
@@ -7709,8 +7947,8 @@ function loopBudgetRemainingText(limit: LooseObject): string {
     : "the loop is still active";
 }
 
-function resolveFanoutForSegment(workDir: string, segment: number) {
-  const entry = [...readJsonl(workDir)]
+function resolveFanoutForSegment(workDir: string, segment: number, records?: LooseObject[] | null) {
+  const entry = [...recordsOrReadJsonl(workDir, records)]
     .reverse()
     .find(
       (item: any) =>
@@ -7781,12 +8019,14 @@ function buildParallelOrchestrationContext({
   config,
   settings = {},
   memory = null,
+  records = null,
 }: {
   workDir: string;
   state: LooseObject;
   config: LooseObject;
   settings?: LooseObject;
   memory?: LooseObject | null;
+  records?: LooseObject[] | null;
 }) {
   const resolvedMemory =
     memory ||
@@ -7795,8 +8035,8 @@ function buildParallelOrchestrationContext({
       direction: state.config.bestDirection,
       settings: Object.keys(settings).length ? settings : dashboardSettings(config),
     });
-  const { fanoutPlan, fanoutProvenance } = resolveFanoutForSegment(workDir, state.segment);
-  const laneResults = latestLaneResults(workDir, state.segment);
+  const { fanoutPlan, fanoutProvenance } = resolveFanoutForSegment(workDir, state.segment, records);
+  const laneResults = latestLaneResults(workDir, state.segment, records);
   const baseLanes = buildParallelLanes({
     memory: resolvedMemory,
     fanoutPlan,
@@ -7957,11 +8197,19 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
   };
 }
 
-function latestLaneResults(workDir: string, segment: number | null = null) {
-  return readJsonl(workDir).filter(
+function latestLaneResults(
+  workDir: string,
+  segment: number | null = null,
+  records?: LooseObject[] | null,
+) {
+  return recordsOrReadJsonl(workDir, records).filter(
     (entry: any) =>
       entry?.type === "lane_result" && (segment == null || Number(entry.segment) === segment),
   );
+}
+
+function recordsOrReadJsonl(workDir: string, records?: LooseObject[] | null): LooseObject[] {
+  return Array.isArray(records) ? records : readJsonl(workDir);
 }
 
 function normalizeLaneMode(value: unknown, fallback: string) {
@@ -8885,7 +9133,7 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .digest("hex");
   const artifacts = artifactList(run.artifacts, run.workDir);
   const taskArtifacts = await taskArtifactsForRun(run);
-  const packetId = `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`;
+  const packetId = buildNextPacketId(history, fingerprint);
   return {
     packetId,
     cwd: redactPathDisplay(run.workDir, run.workDir),
@@ -9261,6 +9509,32 @@ async function nextExperiment(args: any) {
       }),
     };
   }
+  const preRunGit = await lastRunGitSnapshot(workDir, config).catch((error: any) => ({
+    inside: null as boolean | null,
+    error: error.message || String(error),
+  }));
+  if (gitSnapshotContainsDirtyFingerprintTruncation(preRunGit)) {
+    await deleteActiveProgressSnapshot(workDir).catch(() => {});
+    const nextAction =
+      "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.";
+    return {
+      ok: false,
+      workDir,
+      refused: true,
+      code: "next_blocked_by_truncated_fingerprints",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+      git: preRunGit,
+      nextAction,
+      clearingCondition:
+        "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
+      commandHint: continuationCommands(workDir).state,
+      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
+        stopReason: nextAction,
+      }),
+    };
+  }
   const run = await runExperiment(args);
   const stateBeforeLog = currentState(run.workDir);
   const memory = buildExperimentMemory({
@@ -9489,22 +9763,23 @@ async function executeAutoresearchCli(
   const args = parseCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
-    writeStdout(usage({ all: boolOption(args.all, false) }));
+    writeStdout(
+      usage({
+        all:
+          boolOption(args.all, false) ||
+          command === "finalize-current-tree" ||
+          (command === "help" && args._[1] === "finalize-current-tree"),
+      }),
+    );
     return;
   }
   const handlers = createCliCommandHandlers({
     benchmarkInspect,
     benchmarkLint,
     checksInspect,
-    buildDriftReport,
-    buildDashboardViewModel,
     clearSession,
     codexGoalBrief,
     configureSession,
-    dashboardCommands,
-    dashboardHtml,
-    dashboardSettings,
-    dashboardViewModel,
     doctorHooks,
     doctorSession,
     exportDashboard,
@@ -9522,18 +9797,14 @@ async function executeAutoresearchCli(
     onboardingPacket,
     parseJsonOption,
     partialResultsCommand,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
     promoteGate,
     promptPlan,
     publicState,
     recommendNext,
     sessionForensics,
-    readJsonl,
     recipeCommand,
     researchFanout,
     laneRunner,
-    resolveWorkDir,
     runExperiment,
     serveDashboard,
     setupPlan,
@@ -9545,7 +9816,7 @@ async function executeAutoresearchCli(
     writeStdout(outcome.text);
     return;
   }
-  writeStdout(JSON.stringify(outcome.result, null, 2));
+  writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
   if (outcome.keepAlive) return await new Promise(() => {});
 }
 
