@@ -498,7 +498,7 @@ const checks = [
           "@Codex Autoresearch plan a measured loop from this prompt.",
           "@Codex Autoresearch serve the live dashboard when useful.",
         ]) &&
-        manifest.interface?.longDescription?.includes("one skill surface")
+        manifest.interface?.longDescription?.includes("one guided workflow")
         ? pass()
         : fail("Default prompts should be concise plugin-level starters.");
     },

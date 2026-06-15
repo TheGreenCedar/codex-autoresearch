@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "Codex Autoresearch",
     "shortDescription": "Run measured Codex loops with local evidence",
-    "longDescription": "Codex Autoresearch gives Codex one skill surface for bounded measured loops: define the goal and scope, validate benchmark output, keep local evidence, resume context across sessions, inspect progress in a read-only live readout, and preview reviewable branches after user approval.",
+    "longDescription": "Codex Autoresearch gives Codex one guided workflow for bounded measured loops: define the goal and scope, validate benchmark output, keep local evidence, resume context across sessions, inspect progress in a read-only live readout, and preview reviewable branches after user approval.",
     "developerName": "Albert Najjar",
     "category": "Coding",
     "capabilities": ["Interactive", "Read", "Write"],

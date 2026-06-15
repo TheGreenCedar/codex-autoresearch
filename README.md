@@ -27,7 +27,7 @@ Broad prompts work, with a caveat: they are discovery mode, not the ideal way to
 
 ```text
 /goal @Codex Autoresearch keep reducing bugs in the codebase, starting with
-the most obvious low hanging fruits. Run at most 5 packets or 30 minutes,
+the most obvious low hanging fruits. Run at most 5 attempts or 30 minutes,
 stop if checks fail twice, and report the best kept change.
 ```
 
@@ -50,7 +50,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one measured packet, and recording the evidence. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
+Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one measured benchmark experiment, and recording the evidence. Ask for the live dashboard when you want a visual readout or need fresh run state in the browser.
 
 Autoresearch stores its loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
 
@@ -98,16 +98,16 @@ Codex Autoresearch helps Codex:
 
 1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface
 2. verify the benchmark contract and optional checks with `doctor`
-3. run one measured packet with `next`
+3. run one measured benchmark experiment with `next`
 4. record the result and evidence for the next decision
-5. inspect the compact state before spending another packet
+5. inspect the compact state before spending another run
 6. preview finalization into reviewable branches when the kept evidence is ready
 
 That happy path is the default help surface. `serve` is an optional live dashboard handoff and is listed in the full help. Advanced diagnostics such as `prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, and `export` are still available with `--help --all` when a run needs deeper repair, dashboard inspection, forensics, or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
-A packet is one measured experiment cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
+A benchmark experiment is one measured cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
 
 Autoresearch keeps structured session context with the hypothesis, evidence, next action hint, and relevant risk notes. It tells the next Codex session what happened, what was learned, and which path deserves the next attempt.
 
@@ -119,7 +119,7 @@ node plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd <project> -
 
 From inside `plugins/codex-autoresearch`, the shorter `node scripts/autoresearch.mjs ...` form is equivalent.
 
-It returns `report.text` for a one-screen readout and `report.json` for automation. Blockers outrank packet recommendations, and missing dashboard liveness includes the command to serve or verify the dashboard instead of pretending a stale view is live.
+It returns `report.text` for a one-screen readout and `report.json` for automation. Blockers outrank run recommendations, and missing dashboard liveness includes the command to serve or verify the dashboard instead of pretending a stale view is live.
 
 ## When to use it
 
@@ -151,7 +151,7 @@ Protected benchmark folders use bounded recursive snapshots, not unbounded hashi
 
 ## Dashboard
 
-Ask Codex to serve the dashboard when you want a live visual readout, packet freshness matters, or a stale/static export is confusing the decision.
+Ask Codex to serve the dashboard when you want a live visual readout, run freshness matters, or a stale/static export is confusing the decision.
 
 The dashboard answers three questions:
 
@@ -159,7 +159,7 @@ The dashboard answers three questions:
 2. What is the next safe action?
 3. What blocks trust?
 
-Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, packet diagnostics, finalization readiness, evidence history, and handoff details.
+Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, run diagnostics, finalization readiness, evidence history, and handoff details.
 
 Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
 
