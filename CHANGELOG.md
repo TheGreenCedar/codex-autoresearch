@@ -12,6 +12,12 @@ This project uses a root-only changelog because the root README is the public do
 - Documentation rewrite: plain-warm senior-engineer voice, clearer audience split between human docs and agent contracts, restructured docs index, and `concepts.md#state-fields` glossary for compact-state labels.
 - Removed brittle doc-copy test gates (`ax-ux-golden-path`, `full-product-docs`, `loop-governance-docs`) and relaxed README phrase assertions in product tests.
 
+## 2.3.7 - 2026-06-15
+
+### Fixed
+
+- Dashboard readouts now keep the packet trend chart first; the next-action rail and readiness signals render below the chart instead of above or inside it.
+
 ## 2.3.6 - 2026-06-15
 
 ### Changed
