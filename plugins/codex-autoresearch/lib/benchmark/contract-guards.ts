@@ -39,6 +39,15 @@ export interface ProtectedBenchmarkGuard {
 }
 
 const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);
+const PROTECTED_BENCHMARK_SNAPSHOT_ENTRY_LIMIT = 500;
+const PROTECTED_BENCHMARK_SNAPSHOT_DEPTH_LIMIT = 6;
+
+interface ProtectedSnapshotBudget {
+  entries: number;
+  maxDepth: number;
+  maxEntries: number;
+  truncated: boolean;
+}
 
 export function protectedBenchmarkPathsFromConfig(config: UnknownRecord = {}): string[] {
   return normalizeProtectedBenchmarkPaths(
@@ -73,6 +82,12 @@ export async function buildProtectedBenchmarkSnapshot({
   const files: UnknownRecord[] = [];
   const quarantined: UnknownRecord[] = [];
   const warnings: string[] = [];
+  const budget: ProtectedSnapshotBudget = {
+    entries: 0,
+    maxDepth: PROTECTED_BENCHMARK_SNAPSHOT_DEPTH_LIMIT,
+    maxEntries: PROTECTED_BENCHMARK_SNAPSHOT_ENTRY_LIMIT,
+    truncated: false,
+  };
   try {
     configured = normalizeProtectedBenchmarkPaths(paths);
   } catch (error) {
@@ -92,7 +107,9 @@ export async function buildProtectedBenchmarkSnapshot({
       files,
       quarantined,
       warnings,
+      budget,
     });
+    if (budget.truncated) break;
   }
   return snapshotFromParts({ configured, capturedAt, files, quarantined, warnings });
 }
@@ -333,6 +350,7 @@ async function collectProtectedPath({
   files,
   quarantined,
   warnings,
+  budget,
 }: {
   workDir: string;
   workDirReal: string;
@@ -340,6 +358,7 @@ async function collectProtectedPath({
   files: UnknownRecord[];
   quarantined: UnknownRecord[];
   warnings: string[];
+  budget: ProtectedSnapshotBudget;
 }) {
   const absolutePath = path.resolve(workDir, relativePath);
   if (!isPathInside(workDir, absolutePath)) {
@@ -354,7 +373,13 @@ async function collectProtectedPath({
   }
   const lstat = await lstatOrNull(absolutePath);
   if (!lstat) {
-    files.push({ path: relativePath, missing: true });
+    recordProtectedFile({
+      files,
+      record: { path: relativePath, missing: true },
+      budget,
+      quarantined,
+      warnings,
+    });
     return;
   }
   if (
@@ -368,7 +393,17 @@ async function collectProtectedPath({
   )
     return;
   if (lstat.isDirectory()) {
-    files.push({ path: relativePath, directory: true });
+    if (
+      !recordProtectedFile({
+        files,
+        record: { path: relativePath, directory: true },
+        budget,
+        quarantined,
+        warnings,
+      })
+    ) {
+      return;
+    }
     await collectProtectedDirectory({
       workDir,
       workDirReal,
@@ -376,10 +411,12 @@ async function collectProtectedPath({
       files,
       quarantined,
       warnings,
+      budget,
+      depth: 0,
     });
     return;
   }
-  await collectProtectedLeaf({ absolutePath, relativePath, files, quarantined, warnings });
+  await collectProtectedLeaf({ absolutePath, relativePath, files, quarantined, warnings, budget });
 }
 
 async function collectProtectedDirectory({
@@ -389,6 +426,8 @@ async function collectProtectedDirectory({
   files,
   quarantined,
   warnings,
+  budget,
+  depth,
 }: {
   workDir: string;
   workDirReal: string;
@@ -396,10 +435,25 @@ async function collectProtectedDirectory({
   files: UnknownRecord[];
   quarantined: UnknownRecord[];
   warnings: string[];
+  budget: ProtectedSnapshotBudget;
+  depth: number;
 }) {
+  if (budget.truncated) return;
+  if (depth >= budget.maxDepth) {
+    quarantineSnapshotLimit({
+      relativePath,
+      reason: "protected_benchmark_depth_limit",
+      detail: `protected benchmark snapshot exceeded directory depth limit ${budget.maxDepth}`,
+      budget,
+      quarantined,
+      warnings,
+    });
+    return;
+  }
   const absoluteDir = path.resolve(workDir, relativePath);
   const entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (budget.truncated) return;
     const childRelative = slashPath(path.join(relativePath, entry.name));
     const childAbsolute = path.resolve(workDir, childRelative);
     if (
@@ -414,7 +468,17 @@ async function collectProtectedDirectory({
       continue;
     }
     if (entry.isDirectory()) {
-      files.push({ path: childRelative, directory: true });
+      if (
+        !recordProtectedFile({
+          files,
+          record: { path: childRelative, directory: true },
+          budget,
+          quarantined,
+          warnings,
+        })
+      ) {
+        return;
+      }
       await collectProtectedDirectory({
         workDir,
         workDirReal,
@@ -422,6 +486,8 @@ async function collectProtectedDirectory({
         files,
         quarantined,
         warnings,
+        budget,
+        depth: depth + 1,
       });
     } else {
       await collectProtectedLeaf({
@@ -430,6 +496,7 @@ async function collectProtectedDirectory({
         files,
         quarantined,
         warnings,
+        budget,
       });
     }
   }
@@ -478,19 +545,28 @@ async function collectProtectedLeaf({
   files,
   quarantined,
   warnings,
+  budget,
 }: {
   absolutePath: string;
   relativePath: string;
   files: UnknownRecord[];
   quarantined: UnknownRecord[];
   warnings: string[];
+  budget: ProtectedSnapshotBudget;
 }) {
+  if (budget.truncated) return;
   const lstat = await fsp.lstat(absolutePath);
   if (lstat.isSymbolicLink()) {
     const target = await fsp.readlink(absolutePath);
     const stat = await fsp.stat(absolutePath);
     if (stat.isFile()) {
-      files.push({ path: relativePath, symlink: target, hash: await fileHash(absolutePath) });
+      recordProtectedFile({
+        files,
+        record: { path: relativePath, symlink: target, hash: await fileHash(absolutePath) },
+        budget,
+        quarantined,
+        warnings,
+      });
     } else if (stat.isDirectory()) {
       quarantine({
         path: relativePath,
@@ -501,15 +577,62 @@ async function collectProtectedLeaf({
         warnings,
       });
     } else {
-      files.push({ path: relativePath, symlink: target, type: fileType(stat) });
+      recordProtectedFile({
+        files,
+        record: { path: relativePath, symlink: target, type: fileType(stat) },
+        budget,
+        quarantined,
+        warnings,
+      });
     }
     return;
   }
   if (lstat.isFile()) {
-    files.push({ path: relativePath, hash: await fileHash(absolutePath) });
+    recordProtectedFile({
+      files,
+      record: { path: relativePath, hash: await fileHash(absolutePath) },
+      budget,
+      quarantined,
+      warnings,
+    });
   } else {
-    files.push({ path: relativePath, type: fileType(lstat) });
+    recordProtectedFile({
+      files,
+      record: { path: relativePath, type: fileType(lstat) },
+      budget,
+      quarantined,
+      warnings,
+    });
   }
+}
+
+function recordProtectedFile({
+  files,
+  record,
+  budget,
+  quarantined,
+  warnings,
+}: {
+  files: UnknownRecord[];
+  record: UnknownRecord;
+  budget: ProtectedSnapshotBudget;
+  quarantined: UnknownRecord[];
+  warnings: string[];
+}): boolean {
+  if (budget.entries >= budget.maxEntries) {
+    quarantineSnapshotLimit({
+      relativePath: String(record.path || "<unknown>"),
+      reason: "protected_benchmark_entry_limit",
+      detail: `protected benchmark snapshot exceeded entry limit ${budget.maxEntries}`,
+      budget,
+      quarantined,
+      warnings,
+    });
+    return false;
+  }
+  budget.entries += 1;
+  files.push(record);
+  return true;
 }
 
 async function fileHash(filePath: string): Promise<string> {
@@ -648,6 +771,32 @@ async function realPathOrResolved(filePath: string): Promise<string> {
   } catch {
     return path.resolve(filePath);
   }
+}
+
+function quarantineSnapshotLimit({
+  relativePath,
+  reason,
+  detail,
+  budget,
+  quarantined,
+  warnings,
+}: {
+  relativePath: string;
+  reason: string;
+  detail: string;
+  budget: ProtectedSnapshotBudget;
+  quarantined: UnknownRecord[];
+  warnings: string[];
+}) {
+  if (budget.truncated) return;
+  budget.truncated = true;
+  quarantine({
+    path: relativePath,
+    reason,
+    detail,
+    quarantined,
+    warnings,
+  });
 }
 
 function quarantine({

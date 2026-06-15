@@ -161,6 +161,30 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
   });
 });
 
+test("protected benchmark guard quarantines oversized directory snapshots", async () => {
+  await withTempDir("protected-benchmark-oversized-dir", async (dir) => {
+    const fixturesDir = path.join(dir, "fixtures");
+    await mkdir(fixturesDir, { recursive: true });
+    for (let index = 0; index < 501; index += 1) {
+      await writeFile(path.join(fixturesDir, `row-${String(index).padStart(3, "0")}.txt`), "x\n");
+    }
+
+    const guard = await buildProtectedBenchmarkGuard({
+      workDir: dir,
+      config: { protectedBenchmarkPaths: ["fixtures"] },
+      state: { current: [] },
+    });
+
+    assert.equal(guard.ok, false);
+    assert.equal(guard.status, "quarantined");
+    assert.match(
+      JSON.stringify(guard.current?.quarantined || []),
+      /protected_benchmark_entry_limit/,
+    );
+    assert.match(guard.message, /quarantined/i);
+  });
+});
+
 test("protected benchmark guard quarantines symlink realpath escapes", async (t) => {
   await withTempDir("protected-benchmark-symlink", async (dir) => {
     const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);

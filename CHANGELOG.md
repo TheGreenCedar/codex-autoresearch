@@ -6,6 +6,24 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.3.4 - 2026-06-15
+
+### Changed
+
+- Partial-result salvage now byte-caps and row-caps artifacts, reports unsafe
+  artifact notices, and keeps salvaged rows diagnostic-only.
+- Hardened CLI and dashboard evidence redaction for response payloads, env-file
+  references, common secret-key variants, home paths, and network paths.
+
+### Fixed
+
+- Rejected Git pathspec magic in keep, discard, and finalizer path inputs before
+  Git can expand them beyond the intended scope.
+- Guarded finalizer recursive removal against linked parent directories that
+  resolve outside the working directory.
+- `next` now refuses before benchmark execution when dirty Git fingerprint
+  evidence would be truncated.
+
 ## 2.3.3 - 2026-06-15
 
 ### Changed
