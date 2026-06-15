@@ -105,7 +105,7 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
   ]);
 });
 
-test("public docs and plugin metadata keep guarded autoresearch wording", () => {
+test("public docs and plugin metadata keep customer-facing autoresearch wording", () => {
   const repoRoot = path.resolve(pluginRoot, "..", "..");
   const readRepoFile = (relativePath: string) =>
     readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -115,20 +115,33 @@ test("public docs and plugin metadata keep guarded autoresearch wording", () => 
     readRepoFile("plugins/codex-autoresearch/.codex-plugin/plugin.json"),
   );
 
-  assert.match(
-    readme,
-    /logs keep, discard, measure, crash, and checks_failed decisions with evidence/,
+  const publicCopy = [readme, pluginJson.description, pluginJson.interface.longDescription].join(
+    "\n",
   );
+
+  assert.match(readme, /bounded benchmark experiments/);
+  assert.match(readme, /local evidence trail/);
+  assert.match(readme, /context-resumable state/);
+  assert.match(readme, /reviewable branch previews/);
   assert.match(readme, /marketplace remove` removes the source marketplace registration/);
   assert.match(readme, /Prefer the plugin UI for installed-plugin refresh\/uninstall actions/);
   assert.equal(
     packageJson.description,
     "Codex plugin for bounded, measured benchmark and optimization loops.",
   );
-  assert.match(pluginJson.description, /measured autoresearch loops/);
-  assert.match(pluginJson.description, /live readout/);
+  assert.match(pluginJson.description, /Measured Codex loops/);
+  assert.match(pluginJson.description, /local evidence/);
+  assert.match(pluginJson.description, /reviewable branch previews/);
+  assert.match(pluginJson.interface.longDescription, /benchmark output/);
+  assert.match(pluginJson.interface.longDescription, /local evidence/);
   assert.match(pluginJson.interface.longDescription, /read-only live readout/);
-  assert.match(pluginJson.interface.longDescription, /after operator approval/);
+  assert.match(pluginJson.interface.longDescription, /after user approval/);
+
+  assert.doesNotMatch(publicCopy, /logs keep, discard, measure, crash, and checks_failed/i);
+  assert.doesNotMatch(publicCopy, /log decisions/i);
+  assert.doesNotMatch(publicCopy, /keep\/discard\/measure\/crash\/checks_failed/i);
+  assert.doesNotMatch(publicCopy, /\bASI\b/);
+  assert.doesNotMatch(publicCopy, /promotion labels/i);
 });
 
 test("check phase selection succeeds for clean injected source hygiene only", async () => {

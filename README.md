@@ -9,11 +9,11 @@
 
 Codex Autoresearch helps Codex turn "make this better" into a measured loop.
 
-Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded experiment packets, logs keep, discard, measure, crash, and checks_failed decisions with evidence, preserves ASI and metrics across context loss, and previews useful kept changes as reviewable branches.
+Give Codex a goal, a benchmark, and the files it may edit. Codex Autoresearch runs bounded benchmark experiments, keeps a local evidence trail, preserves context-resumable state, and creates reviewable branch previews for useful changes.
 
 ![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
-Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts the measured-loop idea for Codex plugin workflows, repo-local benchmarks, durable session files, an evidence trail, live readouts, and reviewable finalization previews.
+Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts measured improvement loops for Codex: local benchmarks, durable state, live readouts, and reviewable branch previews.
 
 ## Try it
 
@@ -50,7 +50,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one packet, and logging the result with experiment details. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
+Codex should start by checking Git state, identifying the target package, creating or resuming the session, verifying the benchmark, running one measured packet, and recording the evidence. Ask for the live dashboard when you want a visual readout or need fresh packet state in the browser.
 
 Autoresearch stores its loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
 
@@ -99,7 +99,7 @@ Codex Autoresearch helps Codex:
 1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface
 2. verify the benchmark contract and optional checks with `doctor`
 3. run one measured packet with `next`
-4. log the result as `keep`, `discard`, `measure`, `crash`, or `checks_failed`
+4. record the result and evidence for the next decision
 5. inspect the compact state before spending another packet
 6. preview finalization into reviewable branches when the kept evidence is ready
 
@@ -107,9 +107,9 @@ That happy path is the default help surface. `serve` is an optional live dashboa
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
-A packet is one measured experiment cycle: make a scoped change, run the benchmark, inspect the metric, and log the decision.
+A packet is one measured experiment cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
 
-ASI means Accumulated Structured Intelligence. It is the structured memory attached to each packet decision: hypothesis, evidence, rollback reason, next action hint, and optional lane, family, or risk metadata. It tells the next Codex session what happened, what was learned, and which path deserves the next attempt.
+Autoresearch keeps structured session context with the hypothesis, evidence, next action hint, and relevant risk notes. It tells the next Codex session what happened, what was learned, and which path deserves the next attempt.
 
 For terminal-first resumes, ask for the compact report:
 
@@ -159,7 +159,7 @@ The dashboard answers three questions:
 2. What is the next safe action?
 3. What blocks trust?
 
-Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, packet diagnostics, finalization readiness, ledger entries, ASI, and handoff packets.
+Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, packet diagnostics, finalization readiness, evidence history, and handoff details.
 
 Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface.
 
@@ -180,10 +180,10 @@ Ask the plugin to finalize once a loop has useful kept work mixed with explorato
 
 Finalization should:
 
-1. select only accepted/current kept evidence
+1. select only approved current evidence
 2. exclude session artifacts from review branches unless requested
-3. keep rejected, provisional, superseded, or quarantined evidence audit-visible but out of review branches
-4. block later-discarded, invalidated, or reverted keeps
+3. keep exploratory or superseded evidence audit-visible but out of review branches
+4. block evidence that was later invalidated or reverted
 5. show dirty-tree, overlap, semantic-safety, and final-tree coverage warnings
 6. prepare clean review branches or a current-final-tree plan
 7. preserve metric evidence and verification commands

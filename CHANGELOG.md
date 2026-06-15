@@ -10,9 +10,9 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
-- Public README, package metadata, plugin metadata, trust docs, and the
-  Codex-facing skill now use guarded language for measured loops, live readouts,
-  approved finalization, uninstall scope, and all packet decision classes.
+- Public README, package metadata, plugin metadata, and trust docs now use
+  clearer customer-facing language for measured loops, live readouts, approved
+  finalization, uninstall scope, and packet outcomes.
 - The public docs map now separates first-run operation, trust,
   troubleshooting, architecture, and maintainer surfaces.
 
