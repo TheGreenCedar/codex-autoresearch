@@ -4,6 +4,16 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+## Unreleased
+
+## 2.3.1 - 2026-06-15
+
+### Changed
+
+- Added reusable workflow policy validation and tightened CI/release launcher
+  smoke coverage for the Codex Autoresearch package.
+- Stabilized compiled CLI test sharding by reducing the CLI shard worker count.
+
 ## 2.3.0
 
 ### Changed
