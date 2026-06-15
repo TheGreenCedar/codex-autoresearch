@@ -6,6 +6,22 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+## 2.3.3 - 2026-06-15
+
+### Changed
+
+- Bounded long live dashboard ledger payloads with config continuity, chart
+  downsampling, and compact view-model transport.
+- Updated dashboard readout copy and refreshed the public live-readout
+  screenshot, checked-in dashboard bundle, and showcase export.
+- Served dashboard refreshes now retry one structured retryable view-model
+  conflict before reporting a live refresh failure.
+
+### Fixed
+
+- Live dashboard pages now start from the served `/view-model.json` payload
+  when bootstrapped empty instead of retaining demo data.
+
 ## 2.3.2 - 2026-06-15
 
 ### Changed

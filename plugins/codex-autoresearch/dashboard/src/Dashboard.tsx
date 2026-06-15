@@ -131,7 +131,11 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
         </section>
 
-        <Ledger session={session} readout={readout} />
+        <Ledger
+          session={session}
+          readout={readout}
+          ledgerBounds={meta.ledgerBounds || viewModel.ledgerBounds}
+        />
 
         {auditView ? (
           <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">

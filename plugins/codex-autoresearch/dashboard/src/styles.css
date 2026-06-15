@@ -1016,6 +1016,8 @@ p {
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
+  min-width: 0;
+  overflow-wrap: anywhere;
   text-align: right;
 }
 
@@ -1218,6 +1220,29 @@ p {
   border-radius: 12px;
   background: var(--surface-2);
   padding: 6px 4px 0;
+}
+
+.chart-empty-state {
+  position: absolute;
+  inset: 6px 4px 0;
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.chart-empty-state strong {
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.chart-empty-state span {
+  font-size: 12px;
+  font-weight: 750;
 }
 
 .chart-bg {
@@ -1736,8 +1761,8 @@ p {
 /* Toast Notification */
 .toast-container {
   position: fixed;
-  top: 20px;
   right: 20px;
+  bottom: 20px;
   z-index: 10000;
   display: flex;
   flex-direction: column;
@@ -1761,7 +1786,7 @@ p {
     var(--shadow);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  transform: translateY(-20px);
+  transform: translateY(20px);
   opacity: 0;
   animation: slide-in-toast 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   transition:
@@ -1814,6 +1839,20 @@ p {
 .toast-close:hover {
   background: var(--soft-line);
   color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .toast-container {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+  }
+
+  .toast {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 @keyframes slide-in-toast {
