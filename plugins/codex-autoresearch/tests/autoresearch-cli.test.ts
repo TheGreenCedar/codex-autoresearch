@@ -7696,7 +7696,15 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
     ]);
     await writeFile(path.join(dir, "tracked.txt"), "experiment\n", "utf8");
     const gapsPath = path.join(dir, "autoresearch.research", "study", "quality-gaps.md");
+    const dashboardPath = path.join(dir, "autoresearch-dashboard.html");
+    const evidencePath = path.join(dir, "target", "autoresearch", "evidence.json");
+    const cachePath = path.join(dir, ".autoresearch-cache", "packet.json");
     await writeFile(gapsPath, "- [ ] Preserve this scratchpad\n", "utf8");
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"kept":true}\n', "utf8");
+    await mkdir(path.dirname(cachePath), { recursive: true });
+    await writeFile(cachePath, '{"cached":true}\n', "utf8");
+    await writeFile(dashboardPath, "<!doctype html><title>Autoresearch</title>\n", "utf8");
 
     const result = await runCli([
       "log",
@@ -7714,6 +7722,12 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
 
     assert.equal(await readFile(path.join(dir, "tracked.txt"), "utf8"), "base\n");
     assert.equal(await readFile(gapsPath, "utf8"), "- [ ] Preserve this scratchpad\n");
+    assert.equal(
+      await readFile(dashboardPath, "utf8"),
+      "<!doctype html><title>Autoresearch</title>\n",
+    );
+    assert.equal(await readFile(evidencePath, "utf8"), '{"kept":true}\n');
+    assert.equal(await readFile(cachePath, "utf8"), '{"cached":true}\n');
   });
 });
 

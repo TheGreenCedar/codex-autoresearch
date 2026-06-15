@@ -206,6 +206,8 @@ const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
   "autoresearch.ideas.md text eol=lf",
 ].join("\n");
 const RESEARCH_DIR = "autoresearch.research";
+const AUTORESEARCH_OWNED_FILES = ["autoresearch-dashboard.html"];
+const AUTORESEARCH_OWNED_DIRS = [RESEARCH_DIR, "target/autoresearch", ".autoresearch-cache"];
 
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
@@ -3900,10 +3902,8 @@ function isAutoresearchOwnedDirtyPath(relativePath: string) {
   const normalized = normalizeGitStatusPath(relativePath);
   return (
     SESSION_FILES.includes(normalized) ||
-    normalized === "autoresearch-dashboard.html" ||
-    normalized.startsWith(`${RESEARCH_DIR}/`) ||
-    normalized.startsWith("target/autoresearch/") ||
-    normalized.startsWith(".autoresearch-cache/")
+    AUTORESEARCH_OWNED_FILES.includes(normalized) ||
+    AUTORESEARCH_OWNED_DIRS.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`))
   );
 }
 
@@ -4296,17 +4296,20 @@ function protectedBenchmarkGuardError(guard: LooseObject) {
 
 async function preserveSessionFiles(workDir: string) {
   const saved = new Map();
-  for (const file of SESSION_FILES) {
+  for (const file of [...SESSION_FILES, ...AUTORESEARCH_OWNED_FILES]) {
     const filePath = path.join(workDir, file);
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       saved.set(file, { type: "file", bytes: fs.readFileSync(filePath) });
     }
   }
-  const researchPath = path.join(workDir, RESEARCH_DIR);
-  if (fs.existsSync(researchPath) && fs.statSync(researchPath).isDirectory()) {
+  for (const dir of AUTORESEARCH_OWNED_DIRS) {
+    const researchPath = path.join(workDir, dir);
+    if (!fs.existsSync(researchPath) || !fs.statSync(researchPath).isDirectory()) {
+      continue;
+    }
     const tempPath = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-preserve-"));
     fs.cpSync(researchPath, tempPath, { recursive: true });
-    saved.set(RESEARCH_DIR, { type: "dir", tempPath });
+    saved.set(dir, { type: "dir", tempPath });
   }
   return saved;
 }

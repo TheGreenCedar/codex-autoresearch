@@ -12,6 +12,12 @@ This project uses a root-only changelog because the root README is the public do
 - Documentation rewrite: plain-warm senior-engineer voice, clearer audience split between human docs and agent contracts, restructured docs index, and `concepts.md#state-fields` glossary for compact-state labels.
 - Removed brittle doc-copy test gates (`ax-ux-golden-path`, `full-product-docs`, `loop-governance-docs`) and relaxed README phrase assertions in product tests.
 
+## 2.3.8 - 2026-06-15
+
+### Fixed
+
+- Broad discard cleanup now preserves dashboard exports, `target/autoresearch/`, and `.autoresearch-cache/` before removing Autoresearch-owned dirty paths.
+
 ## 2.3.7 - 2026-06-15
 
 ### Fixed
