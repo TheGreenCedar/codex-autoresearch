@@ -101,8 +101,8 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
   }),
   "decision-capsule": actionMetadata({
     label: "Resolve decision capsule",
-    commandLabel: "Capsule",
-    safeAction: "decision-capsule",
+    commandLabel: "Recommend",
+    safeAction: "recommend-next",
     fallbackKeys: ["benchmarkLint", "recommendNext", "state"],
   }),
   "context-distillation": actionMetadata({
