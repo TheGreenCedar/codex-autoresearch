@@ -58,6 +58,7 @@ import {
   resolveSafeResearchPath,
   validateResearchSlug,
 } from "../lib/research-path-guard.js";
+import { isPathInside } from "../lib/path-containment.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import {
@@ -407,6 +408,13 @@ test("research path guard rejects unsafe slugs and out-of-root paths", async () 
       () => assertInsideResearchRoot(safe.root, path.join(dir, "outside.md")),
       /escapes/,
     );
+  });
+});
+
+test("path containment treats dot-prefixed child names as inside", async () => {
+  await withTempDir("path-containment", async (dir) => {
+    assert.equal(isPathInside(dir, path.join(dir, "..artifact", "evidence.json")), true);
+    assert.equal(isPathInside(dir, path.join(dir, "..", "outside.json")), false);
   });
 });
 

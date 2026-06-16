@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.3.12",
+  "version": "2.3.14",
   "private": true,
   "description": "Codex plugin for bounded, measured benchmark and optimization loops.",
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
@@ -27,7 +27,7 @@
   "type": "module",
   "scripts": {
     "build:node": "tsdown --config tsdown.config.ts",
-    "build:dashboard": "vite build --config vite.dashboard.config.ts",
+    "build:dashboard": "vite build --config vite.dashboard.config.ts && node scripts/normalize-dashboard-build.mjs",
     "build": "run-s build:node build:dashboard",
     "command-surface-map": "npm run build:node && node dist/scripts/command-surface-map.mjs",
     "dev:dashboard": "vite --config vite.dashboard.config.ts --host 127.0.0.1",

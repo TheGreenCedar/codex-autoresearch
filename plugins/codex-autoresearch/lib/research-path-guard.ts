@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { isPathInside } from "./path-containment.js";
 import { RESEARCH_DIR } from "./session-core.js";
 
 export interface SafeResearchPath {
@@ -79,11 +80,4 @@ async function realPathOrResolved(value: string): Promise<string> {
   } catch {
     return path.resolve(value);
   }
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
 }

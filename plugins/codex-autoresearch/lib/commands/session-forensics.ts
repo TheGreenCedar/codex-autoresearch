@@ -1,6 +1,7 @@
 import path from "node:path";
 import { readoutFallbackCommand } from "../action-metadata.js";
 import { writeContextCapsule } from "../context-capsule.js";
+import { isPathInside } from "../path-containment.js";
 import { parseSessionForensics } from "../session-forensics.js";
 import type { SessionDecisionCapsule } from "../session-decision-capsule.js";
 
@@ -254,11 +255,6 @@ function compactSignals(signals: unknown, limit = 12): LooseObject[] {
     });
   }
   return [...byKind.values()].slice(0, limit);
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function displayPathForWorkDir(workDir: string, target: string): string {

@@ -16,11 +16,11 @@ node scripts/autoresearch.mjs doctor hooks
 
 ## Useful hook ideas
 
-Codex Goal mode:
+Goal-aware reminders:
 
-- run `codex-goal-brief --cwd <project>` when you explicitly want Goal mode
-- pass any `get_goal` output into `--codex-goal-objective` and `--codex-goal-status`
-- use `completionAudit` before any parent agent calls `update_goal(status="complete")`
+- run `codex-goal-brief --cwd <project>` when a run has a durable goal
+- pass the current goal objective and status into the command when available
+- complete the loop audit before reporting a goal as done
 - keep Codex Goal state in Codex; do not read private Codex SQLite or pretend the plugin can mutate thread goals
 
 `SessionStart`:
@@ -39,9 +39,9 @@ Codex Goal mode:
 `Stop`:
 
 - warn when `autoresearch.last-run.json` exists
-- warn when continuation says `forbidFinalAnswer`
+- warn when continuation says the loop is still active
 - suggest `state --compact` before final reporting
-- suggest `codex-goal-brief --cwd <project>` before completing a parent Codex Goal
+- suggest `codex-goal-brief --cwd <project>` before reporting goal completion
 
 ## Limits
 
