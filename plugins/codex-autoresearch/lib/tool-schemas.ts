@@ -5,6 +5,7 @@ import {
   UNSAFE_COMMAND_PROPERTY,
   toolArgumentsContainUnsafeCommand,
 } from "./tool-unsafe-command-gate.js";
+import { toolNameForCliCommand } from "./tool-registry.js";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -692,42 +693,6 @@ export const toolSchemas = applyToolContracts([
   },
 ]);
 
-const CLI_COMMAND_TO_TOOL: Record<string, string> = {
-  setup: "setup_session",
-  "setup-plan": "setup_plan",
-  guide: "guided_setup",
-  "prompt-plan": "prompt_plan",
-  "onboarding-packet": "onboarding_packet",
-  "recommend-next": "recommend_next",
-  "codex-goal-brief": "codex_goal_bridge",
-  "session-forensics": "session_forensics",
-  recipes: "list_recipes",
-  "research-setup": "setup_research_session",
-  "research-fanout": "research_fanout",
-  "lane-runner": "lane_runner",
-  config: "configure_session",
-  "quality-gap": "measure_quality_gap",
-  "gap-candidates": "gap_candidates",
-  "finalize-preview": "finalize_preview",
-  "finalize-current-tree": "finalize_current_tree",
-  integrations: "integrations",
-  init: "init_experiment",
-  run: "run_experiment",
-  next: "next_experiment",
-  "partial-results": "partial_results",
-  log: "log_experiment",
-  state: "read_state",
-  doctor: "doctor_session",
-  "benchmark-lint": "benchmark_lint",
-  "benchmark-inspect": "benchmark_inspect",
-  "checks-inspect": "checks_inspect",
-  "new-segment": "new_segment",
-  "promote-gate": "promote_gate",
-  export: "export_dashboard",
-  serve: "serve_dashboard",
-  clear: "clear_session",
-};
-
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
   allow_non_git_command: "allowNonGitCommand",
@@ -854,7 +819,7 @@ export function normalizeRuntimeToolArguments(name: string, args: ToolArgs = {})
 }
 
 export function normalizeCliCommandArguments(command: string, args: ToolArgs = {}): ToolArgs {
-  const toolName = CLI_COMMAND_TO_TOOL[command];
+  const toolName = toolNameForCliCommand(command);
   if (!toolName) return args || {};
   return normalizeRuntimeToolArguments(toolName, args);
 }

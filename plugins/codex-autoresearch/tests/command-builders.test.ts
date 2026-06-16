@@ -144,6 +144,30 @@ test("CLI arg parser preserves camel aliases and passthrough args", () => {
   assert.equal(parsed.jsonFull, true);
 });
 
+test("CLI arg parser covers finalizer positional mode and flags", () => {
+  const plan = parseCliArgs([
+    "plan",
+    "--cwd",
+    "C:\\repo",
+    "--output=groups.json",
+    "--goal",
+    "speed-loop",
+    "--trunk",
+    "dev",
+    "--collapse-overlap",
+  ]);
+  const apply = parseCliArgs(["--cwd", "C:\\repo", "groups.json"]);
+
+  assert.deepEqual(plan._, ["plan"]);
+  assert.equal(plan.cwd, "C:\\repo");
+  assert.equal(plan.output, "groups.json");
+  assert.equal(plan.goal, "speed-loop");
+  assert.equal(plan.trunk, "dev");
+  assert.equal(plan.collapseOverlap, true);
+  assert.deepEqual(apply._, ["groups.json"]);
+  assert.equal(apply.cwd, "C:\\repo");
+});
+
 test("CLI option helpers preserve loose command input behavior", () => {
   assert.deepEqual(parseJsonOption('{"metric":1}', null), { metric: 1 });
   assert.equal(parseJsonOption("", "fallback"), "fallback");
