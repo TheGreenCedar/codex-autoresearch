@@ -2,7 +2,13 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runShell as runBoundedShell } from "./runner.js";
-import { parseQualityGaps, researchDirPath, safeSlug, RESEARCH_DIR } from "./session-core.js";
+import {
+  parseQualityGapItems,
+  parseQualityGaps,
+  researchDirPath,
+  safeSlug,
+  RESEARCH_DIR,
+} from "./session-core.js";
 
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
@@ -159,6 +165,22 @@ export function researchRoundGuidance() {
     ],
     stopRule:
       "Stop only after a fresh research round yields no credible high-impact candidates, all accepted gaps are closed or explicitly rejected, and checks pass.",
+  };
+}
+
+export async function currentQualityGapSummary(workDir: string) {
+  const candidate = activeQualityGapSlugCandidatesSync(workDir)[0];
+  if (!candidate) return null;
+  const text = await readIfExists(candidate.qualityGapsPath);
+  const counts = parseQualityGaps(text);
+  const items = parseQualityGapItems(text);
+  return {
+    slug: candidate.slug,
+    path: candidate.qualityGapsPath,
+    ...counts,
+    openItems: items.open,
+    closedItems: items.closed,
+    roundGuidance: researchRoundGuidance(),
   };
 }
 

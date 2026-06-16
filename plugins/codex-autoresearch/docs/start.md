@@ -91,6 +91,14 @@ The primary metric still drives the loop. Blocking secondary constraints turn vi
 
 For retrieval, search, ranking, accessibility, safety, or speed work that can break correctness, add a quality constraint or checks command before treating a speed win as product-grade.
 
+In Git repositories, set the commit and revert scope before the first packet that might become a keep:
+
+```bash
+node scripts/autoresearch.mjs config --cwd <project> --commit-paths "src/hot-path.ts,tests/hot-path.test.ts" --revert-paths "src/hot-path.ts,tests/hot-path.test.ts"
+```
+
+Use `log --commit-paths ...` for a one-off keep when you cannot set durable scope yet. Leave scope empty only when every dirty source file belongs to the packet and you are intentionally using `--allow-add-all`.
+
 Use `recommend-next --compact` when you want exactly one safe next action:
 
 ```bash
@@ -133,7 +141,7 @@ node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure -
 Before any mutating log, keep, discard, or revert-producing command, check Git state and scope:
 
 - `git status --short` has no unrelated source changes mixed into the packet.
-- `commitPaths` and `revertPaths` point only at files owned by the experiment.
+- `commitPaths` and `revertPaths` point only at files owned by the experiment, or the mutating `log` call passes explicit `--commit-paths` / `--revert-paths`.
 - protected benchmark paths are clean unless you are intentionally starting a new segment.
 - `state --compact` or `doctor --explain` does not show stale packet, dirty source, runtime drift, pending transaction, or finalization blocker that changes the decision.
 

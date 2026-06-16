@@ -60,7 +60,7 @@ Ask for the live dashboard in a side chat when you want a visual readout or need
 
 Your unit tests take too long. You want wall-clock seconds, not a gut feeling. You give Codex a tight scope — test runner config and helpers only — and a benchmark like `npm test -- --runInBand` with seconds as the metric.
 
-Codex sets up the loop, runs `doctor` to verify the benchmark contract, then runs measured experiments: change something scoped, run the benchmark, log the result, check state before the next attempt. When a change sticks, `finalize-preview` prepares a review branch with the metric evidence attached.
+Codex sets up the loop, runs `doctor` to verify the benchmark contract, then runs measured experiments: change something scoped, run the benchmark, log the result, check state before the next attempt. When a change sticks, `finalize-preview` checks whether the evidence is ready for review branch creation.
 
 The payoff is a kept change you can inspect and merge — not "Codex said it's faster." See [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md) for the full narrated loop.
 
@@ -103,7 +103,7 @@ Autoresearch helps you:
 3. run one measured benchmark experiment with `next`
 4. record the result and evidence for the next decision
 5. inspect compact state before spending another run
-6. preview finalization into reviewable branches when kept evidence is ready
+6. preview finalization readiness before creating reviewable branches
 
 `serve` is an optional live dashboard handoff. Advanced diagnostics (`prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, `export`) are available with `--help --all` when a run needs deeper repair or recovery.
 
@@ -148,7 +148,7 @@ Yes, for optimization loops. The plugin can help you create one. You define the 
 
 ### Will it change the git history without my approval?
 
-Kept work uses scoped commit paths you configure. Finalization prepares review branches; you approve merges. Discard cleanup respects scoped revert paths. See [Trust](plugins/codex-autoresearch/docs/trust.md).
+Kept work uses scoped commit paths you configure. Finalization starts with a read-only preview; approved finalizer commands create review branches, and you approve merges. Discard cleanup respects scoped revert paths. See [Trust](plugins/codex-autoresearch/docs/trust.md).
 
 ### What if Codex goes in circles?
 

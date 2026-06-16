@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Activity } from "lucide-react";
 import { buildChart } from "../model";
 import type { DashboardReadout, SessionSegment } from "../types";
 import { useUrlParam } from "../hooks/useUrlState";
@@ -75,10 +74,7 @@ export function TrendPanel({
     >
       <div className="panel-head">
         <div>
-          <p className="eyebrow">
-            <Activity aria-hidden="true" size={14} />
-            Evidence trail
-          </p>
+          <p className="eyebrow">Evidence trail</p>
           <h2>Packet trend</h2>
         </div>
         <ChartControls

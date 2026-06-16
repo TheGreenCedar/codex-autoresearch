@@ -14,12 +14,15 @@ import {
   buildServeRegistryHealthInput,
   readServeRegistry,
 } from "../lib/dashboard-server-registry.js";
+import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
+import { dashboardHtml, dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import {
-  stripDashboardExportCommandFields,
-  stripDashboardGuidanceCommandFields,
-} from "../lib/dashboard-command-safety.js";
-import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
-import { createDashboardCommands } from "../lib/commands/dashboard.js";
+  buildDashboardCommands,
+  buildDashboardSettings as dashboardSettings,
+  createDashboardCommands,
+  operationProgress,
+} from "../lib/commands/dashboard.js";
+import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { createInspectCommands } from "../lib/commands/inspect.js";
 import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
 import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
@@ -46,6 +49,16 @@ import {
   resolveActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
+import {
+  boolOption,
+  enumOption,
+  nonNegativeIntegerOption,
+  numberOption,
+  parseCliArgs,
+  parseJsonFileOption,
+  parseJsonOption,
+  positiveIntegerOption,
+} from "../lib/cli/args.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
@@ -102,8 +115,9 @@ import {
   benchmarkContractDiagnostics,
 } from "../lib/packet-diagnostics.js";
 import {
+  activeQualityGapSlugCandidatesSync,
+  currentQualityGapSummary,
   gapCandidates as buildGapCandidates,
-  researchRoundGuidance,
   resolveResearchSlugForQualityGapSync,
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
@@ -134,12 +148,17 @@ import {
   FAILURE_STATUSES,
   appendJsonl,
   buildDecisionEnvelope,
+  computeConfidence,
   createSessionReadCache,
   finiteMetric,
   currentState,
+  isBetter,
   loadSessionRecords,
   loadSessionState,
   listOption,
+  pathExists,
+  parseQualityGapItems,
+  parseQualityGaps,
   readJsonl,
   safeSlug,
   iterationLimitInfo,
@@ -159,7 +178,6 @@ import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.j
 import { indexTaskArtifacts } from "../lib/task-artifact-indexer.js";
 
 type LooseObject = Record<string, any>;
-type CliArgs = LooseObject & { _: string[] };
 type WorkDirResolution = {
   config: LooseObject;
   sessionCwd: string;
@@ -230,13 +248,6 @@ const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
-const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
-const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
-const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
-const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
-const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
-const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
-const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = 5000;
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
@@ -340,120 +351,6 @@ function usage(options: { all?: boolean } = {}) {
   return renderCliHelp(options);
 }
 
-function parseCliArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { _: [] };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--") {
-      out._.push(...argv.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("--")) {
-      out._.push(arg);
-      continue;
-    }
-    const equalsAt = arg.indexOf("=");
-    const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
-    const key = rawKey.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
-    if (equalsAt > 2) {
-      out[key] = arg.slice(equalsAt + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next == null || next.startsWith("--")) {
-      out[key] = true;
-    } else {
-      out[key] = next;
-      i += 1;
-    }
-  }
-  return out;
-}
-
-function parseJsonOption(value: unknown, fallback: unknown): any {
-  if (value == null || value === "") return fallback;
-  if (typeof value === "object") return value;
-  try {
-    return JSON.parse(String(value));
-  } catch (error) {
-    const parseError = error as Error;
-    throw new Error(`Invalid JSON option: ${parseError.message}`);
-  }
-}
-
-async function parseJsonFileOption(
-  filePath: string | null | undefined,
-  workDir: string,
-  optionName: string,
-): Promise<any> {
-  if (filePath == null || filePath === "") return null;
-  const input = String(filePath);
-  const resolved = path.isAbsolute(input) ? input : path.join(workDir, input);
-  try {
-    return parseJsonOption(await fsp.readFile(resolved, "utf8"), {});
-  } catch (error) {
-    const parseError = error as Error;
-    throw new Error(`${optionName} must point to a valid JSON file: ${parseError.message}`);
-  }
-}
-
-function numberOption(value: unknown, fallback: number): number;
-function numberOption(value: unknown, fallback: null): number | null;
-function numberOption(value: unknown, fallback: number | null): number | null;
-function numberOption(value: unknown, fallback: number | null): number | null {
-  if (value == null || value === "") return fallback;
-  if (typeof value === "boolean") throw new Error(`Expected a number, got ${value}`);
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
-  return parsed;
-}
-
-function positiveIntegerOption(
-  value: unknown,
-  fallback: number | null,
-  optionName: string,
-): number | null {
-  const parsed = numberOption(value, fallback);
-  if (parsed == null) return parsed;
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${optionName} must be a positive integer. Got ${value}`);
-  }
-  return parsed;
-}
-
-function nonNegativeIntegerOption(
-  value: unknown,
-  fallback: number | null,
-  optionName: string,
-): number | null {
-  const parsed = numberOption(value, fallback);
-  if (parsed == null) return parsed;
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error(`${optionName} must be a non-negative integer. Got ${value}`);
-  }
-  return parsed;
-}
-
-function boolOption(value: unknown, fallback = false): boolean {
-  if (value == null || value === "") return fallback;
-  if (typeof value === "boolean") return value;
-  return ["1", "true", "yes", "y"].includes(String(value).toLowerCase());
-}
-
-function enumOption<T extends string>(
-  value: unknown,
-  allowed: Set<T>,
-  fallback: T | null,
-  optionName: string,
-): T | null {
-  if (value == null || value === "") return fallback;
-  const normalized = String(value).toLowerCase() as T;
-  if (!allowed.has(normalized)) {
-    throw new Error(`${optionName} must be one of ${[...allowed].join(", ")}. Got ${value}`);
-  }
-  return normalized as T;
-}
-
 function evidenceStatusOption(value: unknown, status: string) {
   return enumOption(
     value,
@@ -517,15 +414,6 @@ function resolveOutputInside(workDir: string, output: string) {
     throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
   }
   return resolved.absolutePath;
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fsp.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -3359,28 +3247,6 @@ function renderResearchFile(fileName: string, args: any, slug: string) {
   throw new Error(`Unknown research file template: ${fileName}`);
 }
 
-function parseQualityGaps(text: string) {
-  const items = parseQualityGapItems(text);
-  return {
-    open: items.open.length,
-    closed: items.closed.length,
-    total: items.open.length + items.closed.length,
-  };
-}
-
-function parseQualityGapItems(text: string) {
-  const open = [];
-  const closed = [];
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
-    if (!match) continue;
-    const item = match[2].trim();
-    if (match[1].toLowerCase() === "x") closed.push(item);
-    else open.push(item);
-  }
-  return { open, closed };
-}
-
 async function writeSessionFile(filePath: string, content: any, options: LooseObject = {}) {
   const exists = await pathExists(filePath);
   if (exists && !options.overwrite) return { path: filePath, action: "kept" };
@@ -3389,49 +3255,6 @@ async function writeSessionFile(filePath: string, content: any, options: LooseOb
     await fsp.chmod(filePath, 0o755).catch(() => {});
   }
   return { path: filePath, action: exists ? "overwritten" : "created" };
-}
-
-function bestMetric(runs: any[], direction: any) {
-  let best = null;
-  for (const run of runs) {
-    const metric = finiteMetric(run.metric);
-    if (metric == null) continue;
-    if (best == null || isBetter(metric, best, direction)) best = metric;
-  }
-  return best;
-}
-
-function bestKeptMetric(runs: any[], direction: any) {
-  return bestMetric(
-    runs.filter((run: any) => run.status === "keep"),
-    direction,
-  );
-}
-
-function isBetter(value: any, current: any, direction: any) {
-  return direction === "higher" ? value > current : value < current;
-}
-
-function median(values: any) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a: any, b: any) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
-
-function computeConfidence(runs: any[], direction: any) {
-  const values = runs
-    .filter(isBaselineEligibleMetricRun)
-    .map((run: any) => finiteMetric(run.metric))
-    .filter((value): value is number => value != null);
-  if (values.length < 3) return null;
-  const baseline = values[0];
-  const best = bestKeptMetric(runs, direction);
-  if (best == null || best === baseline) return null;
-  const med = median(values);
-  const mad = median(values.map((value: any) => Math.abs(value - med)));
-  if (mad === 0) return null;
-  return Math.abs(best - baseline) / mad;
 }
 
 function metricParseSource(result: any) {
@@ -5030,40 +4853,6 @@ async function measureQualityGap(args: any) {
   };
 }
 
-async function currentQualityGapSummary(workDir: string) {
-  const researchRoot = path.join(workDir, RESEARCH_DIR);
-  if (!(await pathExists(researchRoot))) return null;
-  const entries = await fsp.readdir(researchRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const slug = entry.name;
-    const gapsPath = path.join(researchRoot, slug, "quality-gaps.md");
-    if (!(await pathExists(gapsPath))) continue;
-    const text = await fsp.readFile(gapsPath, "utf8");
-    const counts = parseQualityGaps(text);
-    const items = parseQualityGapItems(text);
-    return {
-      slug,
-      path: gapsPath,
-      ...counts,
-      openItems: items.open,
-      closedItems: items.closed,
-      roundGuidance: researchRoundGuidance(),
-    };
-  }
-  return null;
-}
-
-function dashboardSettings(config: any, extra: LooseObject = {}) {
-  return {
-    autonomyMode: config.autonomyMode || "guarded",
-    checksPolicy: config.checksPolicy || "always",
-    keepPolicy: config.keepPolicy || "primary-only",
-    recipeId: config.recipeId || "",
-    ...extra,
-  };
-}
-
 async function decisionGuidance({
   workDir,
   config,
@@ -5163,16 +4952,6 @@ function dashboardSafeRuntimeHint(runtimeDriftSummary: LooseObject): string {
     return "Installed runtime is missing; inspect or refresh the runtime with the CLI before acting.";
   }
   return "Runtime drift evidence is unavailable; inspect the runtime with the CLI before acting.";
-}
-
-function dashboardSafeGuidanceText(value: unknown): string {
-  const text = String(value ?? "").trim();
-  if (!/autoresearch\.mjs|benchmark-lint|doctor --cwd/i.test(text)) return text;
-  if (/runtime/i.test(text)) return "Inspect runtime drift with the CLI before acting.";
-  if (/benchmark|metric|setup|gate/i.test(text)) {
-    return "Run the CLI benchmark or doctor check before trusting the next packet.";
-  }
-  return "Use the CLI check before continuing.";
 }
 
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
@@ -5856,35 +5635,6 @@ function progressStage(
   };
 }
 
-function operationProgress({
-  stage,
-  label,
-  startedAt,
-  status = "completed",
-  outputTail = "",
-}: LooseObject): LooseObject {
-  const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
-  return {
-    mode: "synchronous",
-    status,
-    cancellable: false,
-    cancelStatus: "not_requested",
-    elapsedSeconds: durationSeconds,
-    stages: [
-      {
-        stage,
-        label,
-        status,
-        durationSeconds,
-        exitCode: null,
-        timedOut: false,
-        outputTail,
-      },
-    ],
-    latestOutputTail: outputTail,
-  };
-}
-
 async function logExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const existingPendingReceipts = await pendingLogTransactionWarnings(workDir);
@@ -6245,149 +5995,6 @@ async function clearSession(args: any) {
     deleted,
     missing,
   };
-}
-
-function dashboardHtml(entries: any[], meta: LooseObject = {}) {
-  const staticExport =
-    meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
-  const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
-  const publicExport = Boolean(
-    meta.publicExport ||
-    meta.showcaseMode ||
-    meta.settings?.publicExport ||
-    meta.settings?.showcaseMode,
-  );
-  const entriesForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
-  const boundedEntries = staticExport
-    ? boundDashboardStaticExportEntries(entriesForClient)
-    : {
-        entries: entriesForClient,
-        truncated: false,
-        omittedEntries: 0,
-        maxEntries: Array.isArray(entriesForClient) ? entriesForClient.length : 0,
-      };
-  const dataForClient = redactEvidenceObject(
-    publicExport ? scrubDashboardPublicExport(boundedEntries.entries) : boundedEntries.entries,
-    dashboardContext,
-  );
-  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
-  const metaForClient = stripDashboardCommandFields({
-    ...meta,
-    ledgerBounds: staticExport
-      ? {
-          truncated: boundedEntries.truncated,
-          omittedEntries: boundedEntries.omittedEntries,
-          maxEntries: boundedEntries.maxEntries,
-        }
-      : undefined,
-  });
-  const metaData = JSON.stringify(
-    redactEvidenceObject(
-      publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
-      dashboardContext,
-    ),
-  ).replace(/</g, "\\u003c");
-  const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
-  if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
-    throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
-  }
-  if (
-    !template.includes(DASHBOARD_APP_PLACEHOLDER) ||
-    !template.includes(DASHBOARD_CSS_PLACEHOLDER)
-  ) {
-    throw new Error("Dashboard template is missing React build placeholders.");
-  }
-  const dashboardApp = readDashboardBuildAsset("dashboard-app.js").replace(
-    /<\/script/gi,
-    "<\\/script",
-  );
-  const dashboardCss = readDashboardBuildAsset("dashboard-app.css").replace(
-    /<\/style/gi,
-    "<\\/style",
-  );
-  return template
-    .replace(DASHBOARD_DATA_PLACEHOLDER, () => data)
-    .replace(DASHBOARD_META_PLACEHOLDER, () => metaData)
-    .replace(DASHBOARD_CSS_PLACEHOLDER, () => dashboardCss)
-    .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
-}
-
-function boundDashboardStaticExportEntries(entries: any[]): {
-  entries: any[];
-  maxEntries: number;
-  omittedEntries: number;
-  truncated: boolean;
-} {
-  return boundDashboardLedgerEntries(
-    Array.isArray(entries) ? entries : [],
-    DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES,
-  );
-}
-
-function readDashboardBuildAsset(fileName: string) {
-  const filePath = path.join(DASHBOARD_BUILD_DIR, fileName);
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
-      throw new Error(
-        `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`,
-      );
-    }
-    throw error;
-  }
-}
-
-function stripDashboardCommandFields(value: any): any {
-  return stripDashboardExportCommandFields(value, { stringScrubber: dashboardSafeGuidanceText });
-}
-
-function scrubDashboardPublicExport(value: any): any {
-  if (Array.isArray(value)) return value.map((item: any) => scrubDashboardPublicExport(item));
-  if (typeof value === "string") return scrubDashboardPublicExportString(value);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]: [string, unknown]) => {
-      if (key === "dirtyFiles") return [key, scrubDashboardPublicExportDirtyFiles()];
-      if (isDashboardPublicExportPathList(key, item)) {
-        return [key, []];
-      }
-      return [key, scrubDashboardPublicExport(item)];
-    }),
-  );
-}
-
-function isDashboardPublicExportPathList(key: string, value: unknown) {
-  return (
-    (key === "files" || key.endsWith("Files")) &&
-    Array.isArray(value) &&
-    value.every((entry) => typeof entry === "string")
-  );
-}
-
-function scrubDashboardPublicExportDirtyFiles() {
-  return {
-    sessionArtifacts: [],
-    scopedExperimentFiles: [],
-    unrelatedFiles: [],
-  };
-}
-
-function scrubDashboardPublicExportString(value: any) {
-  const placeholders = [
-    [PLUGIN_ROOT, "<plugin-root>"],
-    [REPO_ROOT, "<repo-root>"],
-    [process.execPath, "node"],
-  ];
-  let scrubbed = value;
-  for (const [needle, replacement] of placeholders) {
-    if (!needle) continue;
-    scrubbed = scrubbed.replaceAll(String(needle), replacement);
-    scrubbed = scrubbed.replaceAll(String(needle).replaceAll("\\", "/"), replacement);
-  }
-  return scrubbed
-    .replace(/[A-Za-z]:\\[^\r\n"]+/g, "<local-path>")
-    .replace(/[A-Za-z]:\/[^\r\n" ]+/g, "<local-path>");
 }
 
 async function resolveLastRunPath(workDir: string) {
@@ -7711,43 +7318,12 @@ async function dashboardHealthForWorkDir(workDir: string): Promise<LooseObject> 
 }
 
 function dashboardCommands(workDir: string, qualityGap: any = null) {
-  const cwd = shellQuote(workDir);
-  const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
-  const researchSlug = qualityGap?.slug || currentQualityGapSlug(workDir) || "research";
-  return [
-    { label: "State", command: `node ${script} state --cwd ${cwd} --report` },
-    {
-      label: "Onboarding packet",
-      command: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
-    },
-    { label: "Recommend next", command: `node ${script} recommend-next --cwd ${cwd} --compact` },
-    { label: "Codex Goal brief", command: `node ${script} codex-goal-brief --cwd ${cwd}` },
-    { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
-    {
-      label: "Doctor",
-      command: `node ${script} doctor --cwd ${cwd} --explain`,
-    },
-    { label: "Benchmark inspect", command: `node ${script} benchmark-inspect --cwd ${cwd}` },
-    { label: "Checks inspect", command: `node ${script} checks-inspect --cwd ${cwd}` },
-    {
-      label: "Partial results",
-      command: `node ${script} partial-results --cwd ${cwd} --from-last`,
-    },
-    {
-      label: "Quality gap",
-      command: `node ${script} quality-gap --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}`,
-    },
-    {
-      label: "Gap candidates",
-      command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(researchSlug)}`,
-    },
-    { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
-    { label: "New segment", command: `node ${script} new-segment --cwd ${cwd} --dry-run` },
-    {
-      label: "Promote gate",
-      command: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
-    },
-  ];
+  return buildDashboardCommands({
+    researchSlug: qualityGap?.slug || currentQualityGapSlug(workDir) || "research",
+    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    shellQuote,
+    workDir,
+  });
 }
 
 function runtimeProvenance(drift: LooseObject | null = null) {
@@ -8483,32 +8059,12 @@ async function researchFanout(args: LooseObject) {
 }
 
 function continuationCommands(workDir: string) {
-  const cwd = shellQuote(workDir);
-  const script = shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"));
-  return {
-    state: `node ${script} state --cwd ${cwd}`,
-    next: `node ${script} next --cwd ${cwd} --compact`,
-    nextFull: `node ${script} next --cwd ${cwd}`,
-    keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
-    measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
-    discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
-    partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
-    laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,
-    gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${shellQuote(currentQualityGapSlug(workDir) || "research")}`,
-    liveDashboard: `node ${script} serve --cwd ${cwd}`,
-    exportDashboard: `node ${script} export --cwd ${cwd}`,
-    extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
-    onboardingPacket: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
-    recommendNext: `node ${script} recommend-next --cwd ${cwd} --compact`,
-    codexGoalBrief: `node ${script} codex-goal-brief --cwd ${cwd}`,
-    benchmarkInspect: `node ${script} benchmark-inspect --cwd ${cwd}`,
-    benchmarkLint: `node ${script} benchmark-lint --cwd ${cwd}`,
-    checksInspect: `node ${script} checks-inspect --cwd ${cwd} --command "replace with exact checks command"`,
-    newSegmentDryRun: `node ${script} new-segment --cwd ${cwd} --dry-run`,
-    promoteGateDryRun: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
-    finalizePreview: `node ${script} finalize-preview --cwd ${cwd}`,
-    finalizeCurrentTree: `node ${script} finalize-current-tree --cwd ${cwd} --exclude-session-artifacts`,
-  };
+  return buildContinuationCommands({
+    researchSlug: currentQualityGapSlug(workDir) || "research",
+    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    shellQuote,
+    workDir,
+  });
 }
 
 function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
@@ -8542,18 +8098,7 @@ function commandLookupObject(commands: unknown): LooseObject {
 }
 
 function currentQualityGapSlug(workDir: string) {
-  const researchRoot = path.join(workDir, RESEARCH_DIR);
-  try {
-    for (const entry of fs
-      .readdirSync(researchRoot, { withFileTypes: true })
-      .sort((a: any, b: any) => a.name.localeCompare(b.name))) {
-      if (!entry.isDirectory()) continue;
-      if (fs.existsSync(path.join(researchRoot, entry.name, "quality-gaps.md"))) return entry.name;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  return activeQualityGapSlugCandidatesSync(workDir)[0]?.slug || null;
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {

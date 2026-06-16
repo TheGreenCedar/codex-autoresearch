@@ -17,11 +17,12 @@ import {
   REPORT_DIRNAME,
   isAutoresearchSessionArtifact,
 } from "../lib/session-artifacts.js";
+import { parseCliArgs, type ParsedCliArgs } from "../lib/cli/args.js";
 
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
-type CliArgs = LooseObject & { _: string[] };
+type CliArgs = ParsedCliArgs & LooseObject;
 type RunEntry = LooseObject & {
   commit?: string;
   description?: string;
@@ -121,36 +122,6 @@ groups.json:
   ]
 }
 `;
-}
-
-function parseCliArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { _: [] };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--") {
-      out._.push(...argv.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("--")) {
-      out._.push(arg);
-      continue;
-    }
-    const equalsAt = arg.indexOf("=");
-    const rawKey = equalsAt > 2 ? arg.slice(2, equalsAt) : arg.slice(2);
-    const key = rawKey.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
-    if (equalsAt > 2) {
-      out[key] = arg.slice(equalsAt + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next == null || next.startsWith("--")) {
-      out[key] = true;
-    } else {
-      out[key] = next;
-      i += 1;
-    }
-  }
-  return out;
 }
 
 function resolveFinalizerCwd(args: CliArgs): string {
@@ -1153,7 +1124,7 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
 }
 
 async function main() {
-  const cli = parseCliArgs(process.argv.slice(2));
+  const cli = parseCliArgs(process.argv.slice(2)) as CliArgs;
   const command = cli._[0];
   const file = command;
   if (!file || file === "--help" || file === "-h") {
