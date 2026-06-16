@@ -70,6 +70,27 @@ export interface CompactStateBuilderInput {
   metricSemanticsWarning?: unknown;
 }
 
+const OPTIONAL_COMPACT_STATE_FIELDS = [
+  "runtimeProvenance",
+  "runtimeDriftSummary",
+  "dashboardHealth",
+  "sourceCleanliness",
+  "gateQuality",
+  "preflight",
+  "portfolioRecommendation",
+  "loopContract",
+  "approvalLedger",
+  "resourcePreflight",
+  "evidenceMaturity",
+  "laneOrchestration",
+  "finalizationRunway",
+  "operatorReadout",
+  "laneLifecycle",
+  "packetDiagnostics",
+  "commandExecutionBoundary",
+  "metricSemanticsWarning",
+] as const satisfies readonly (keyof CompactStateBuilderInput)[];
+
 export interface CompactStateResponse {
   ok: boolean;
   workDir: string;
@@ -193,24 +214,9 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     canonicalNextAction: input.canonicalNextAction ?? null,
   };
 
-  copyIfProvided(response, "runtimeProvenance", input.runtimeProvenance);
-  copyIfProvided(response, "runtimeDriftSummary", input.runtimeDriftSummary);
-  copyIfProvided(response, "dashboardHealth", input.dashboardHealth);
-  copyIfProvided(response, "sourceCleanliness", input.sourceCleanliness);
-  copyIfProvided(response, "gateQuality", input.gateQuality);
-  copyIfProvided(response, "preflight", input.preflight);
-  copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
-  copyIfProvided(response, "loopContract", input.loopContract);
-  copyIfProvided(response, "approvalLedger", input.approvalLedger);
-  copyIfProvided(response, "resourcePreflight", input.resourcePreflight);
-  copyIfProvided(response, "evidenceMaturity", input.evidenceMaturity);
-  copyIfProvided(response, "laneOrchestration", input.laneOrchestration);
-  copyIfProvided(response, "finalizationRunway", input.finalizationRunway);
-  copyIfProvided(response, "operatorReadout", input.operatorReadout);
-  copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
-  copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
-  copyIfProvided(response, "commandExecutionBoundary", input.commandExecutionBoundary);
-  copyIfProvided(response, "metricSemanticsWarning", input.metricSemanticsWarning);
+  for (const field of OPTIONAL_COMPACT_STATE_FIELDS) {
+    copyIfProvided(response, field, input[field]);
+  }
 
   return response;
 }

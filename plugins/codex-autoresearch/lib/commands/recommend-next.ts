@@ -93,6 +93,24 @@ const COMPACT_AVOIDS =
 const COMPACT_PROOF =
   "The primary command comes from compact canonical next action, falling back to compact state.";
 const COMPACT_HANDOFF_BUDGET = 7_000;
+const OPTIONAL_RECOMMEND_NEXT_FIELDS = [
+  "compactState",
+  "operatorChecklist",
+  "runtimeProvenance",
+  "loopContract",
+  "approvalLedger",
+  "resourcePreflight",
+  "evidenceMaturity",
+  "laneOrchestration",
+  "finalizationRunway",
+  "operatorReadout",
+  "laneLifecycle",
+  "packetDiagnostics",
+  "portfolioRecommendation",
+  "sessionDecisionCapsule",
+  "evidenceNotes",
+  "frictionSignals",
+] as const satisfies readonly (keyof RecommendNextResponseInput)[];
 
 export function buildRecommendNextResponse(
   input: RecommendNextResponseInput,
@@ -112,22 +130,9 @@ export function buildRecommendNextResponse(
     decisionEnvelope: input.decisionEnvelope ?? input.resumeAudit ?? null,
   };
 
-  copyIfProvided(response, "compactState", input.compactState);
-  copyIfProvided(response, "operatorChecklist", input.operatorChecklist);
-  copyIfProvided(response, "runtimeProvenance", input.runtimeProvenance);
-  copyIfProvided(response, "loopContract", input.loopContract);
-  copyIfProvided(response, "approvalLedger", input.approvalLedger);
-  copyIfProvided(response, "resourcePreflight", input.resourcePreflight);
-  copyIfProvided(response, "evidenceMaturity", input.evidenceMaturity);
-  copyIfProvided(response, "laneOrchestration", input.laneOrchestration);
-  copyIfProvided(response, "finalizationRunway", input.finalizationRunway);
-  copyIfProvided(response, "operatorReadout", input.operatorReadout);
-  copyIfProvided(response, "laneLifecycle", input.laneLifecycle);
-  copyIfProvided(response, "packetDiagnostics", input.packetDiagnostics);
-  copyIfProvided(response, "portfolioRecommendation", input.portfolioRecommendation);
-  copyIfProvided(response, "sessionDecisionCapsule", input.sessionDecisionCapsule);
-  copyIfProvided(response, "evidenceNotes", input.evidenceNotes);
-  copyIfProvided(response, "frictionSignals", input.frictionSignals);
+  for (const field of OPTIONAL_RECOMMEND_NEXT_FIELDS) {
+    copyIfProvided(response, field, input[field]);
+  }
 
   return response;
 }

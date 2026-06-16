@@ -1,4 +1,4 @@
-import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
+import { isUnknownRecord } from "./types/json.js";
 
 export interface ApprovalRecord {
   approved: boolean;
@@ -231,8 +231,4 @@ export function approvalRequirementFromLane(lane: unknown): ApprovalRequirement 
     scope: id,
     action: "Approve big-idea lane before implementation or measured packets.",
   };
-}
-
-export function unknownRecordEntries(value: unknown): UnknownRecord[] {
-  return Array.isArray(value) ? value.filter(isUnknownRecord) : [];
 }
