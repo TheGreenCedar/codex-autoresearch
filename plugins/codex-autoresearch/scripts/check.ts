@@ -1144,11 +1144,44 @@ async function runSourceCheckoutLauncherCheck() {
     return false;
   }
 
+  const runtimeDocs = await sourceRuntimeDocsProblems();
+  if (runtimeDocs.length) {
+    console.log("ok source-launcher-files");
+    console.log("ok source-launcher-committable");
+    console.log("ok source-dist-untracked");
+    console.log("ok source-dist-ignored");
+    console.log("fail source-runtime-docs");
+    console.log(indent(runtimeDocs.join("\n")));
+    return false;
+  }
+
   console.log("ok source-launcher-files");
   console.log("ok source-launcher-committable");
   console.log("ok source-dist-untracked");
   console.log("ok source-dist-ignored");
+  console.log("ok source-runtime-docs");
   return true;
+}
+
+async function sourceRuntimeDocsProblems(): Promise<string[]> {
+  const requiredDocs: Array<[string, string[]]> = [
+    ["docs/maintainers.md", ["dist/", "bootstrap-runtime", "Installed cache drift"]],
+    ["docs/troubleshooting.md", ["Source checkout missing `dist/`", "Installed runtime drift"]],
+  ];
+  const problems: string[] = [];
+  for (const [file, expected] of requiredDocs) {
+    let content = "";
+    try {
+      content = await fsp.readFile(path.join(ROOT, file), "utf8");
+    } catch (error) {
+      problems.push(`${file} could not be read: ${String(error)}`);
+      continue;
+    }
+    for (const text of expected) {
+      if (!content.includes(text)) problems.push(`${file} should mention ${text}`);
+    }
+  }
+  return problems;
 }
 
 function runCommand(

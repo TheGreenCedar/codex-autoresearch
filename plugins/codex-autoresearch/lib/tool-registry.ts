@@ -1,4 +1,6 @@
-type LooseObject = Record<string, any>;
+import { type UnknownRecord } from "./types/json.js";
+
+type LooseObject = UnknownRecord;
 export type ActionPolicy =
   | "read"
   | "preview"
@@ -93,7 +95,7 @@ const toolNameByCliCommand: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries(TOOL_REGISTRY.map((tool) => [tool.cliCommand, tool.name])),
 );
 
-export function toolMetadata(name: string): LooseObject | null {
+export function toolMetadata(name: string): ToolRegistryEntry | null {
   return toolRegistry[name] || null;
 }
 

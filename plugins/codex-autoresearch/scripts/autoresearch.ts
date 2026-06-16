@@ -14,11 +14,8 @@ import {
   buildServeRegistryHealthInput,
   readServeRegistry,
 } from "../lib/dashboard-server-registry.js";
-import {
-  stripDashboardExportCommandFields,
-  stripDashboardGuidanceCommandFields,
-} from "../lib/dashboard-command-safety.js";
-import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
+import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
+import { dashboardHtml, dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import {
   buildDashboardCommands,
   buildDashboardSettings as dashboardSettings,
@@ -251,13 +248,6 @@ const OUTPUT_MAX_BYTES = 8192;
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
-const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
-const DASHBOARD_BUILD_DIR = path.join(PLUGIN_ROOT, "assets", "dashboard-build");
-const DASHBOARD_DATA_PLACEHOLDER = "__AUTORESEARCH_DATA_PAYLOAD__";
-const DASHBOARD_META_PLACEHOLDER = "__AUTORESEARCH_META_PAYLOAD__";
-const DASHBOARD_APP_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_APP__";
-const DASHBOARD_CSS_PLACEHOLDER = "__AUTORESEARCH_DASHBOARD_CSS__";
-const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = 5000;
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
@@ -4964,16 +4954,6 @@ function dashboardSafeRuntimeHint(runtimeDriftSummary: LooseObject): string {
   return "Runtime drift evidence is unavailable; inspect the runtime with the CLI before acting.";
 }
 
-function dashboardSafeGuidanceText(value: unknown): string {
-  const text = String(value ?? "").trim();
-  if (!/autoresearch\.mjs|benchmark-lint|doctor --cwd/i.test(text)) return text;
-  if (/runtime/i.test(text)) return "Inspect runtime drift with the CLI before acting.";
-  if (/benchmark|metric|setup|gate/i.test(text)) {
-    return "Run the CLI benchmark or doctor check before trusting the next packet.";
-  }
-  return "Use the CLI check before continuing.";
-}
-
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
   const readCache = context.readCache || createSessionReadCache();
   const qualityGap = await currentQualityGapSummary(workDir);
@@ -6015,150 +5995,6 @@ async function clearSession(args: any) {
     deleted,
     missing,
   };
-}
-
-function dashboardHtml(entries: any[], meta: LooseObject = {}) {
-  const offlineExport = ["static-export", "showcase"].includes(
-    String(meta.deliveryMode || meta.settings?.deliveryMode || ""),
-  );
-  const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
-  const publicExport = Boolean(
-    meta.publicExport ||
-    meta.showcaseMode ||
-    meta.settings?.publicExport ||
-    meta.settings?.showcaseMode,
-  );
-  const entriesForClient = offlineExport ? stripDashboardCommandFields(entries) : entries;
-  const boundedEntries = offlineExport
-    ? boundDashboardStaticExportEntries(entriesForClient)
-    : {
-        entries: entriesForClient,
-        truncated: false,
-        omittedEntries: 0,
-        maxEntries: Array.isArray(entriesForClient) ? entriesForClient.length : 0,
-      };
-  const dataForClient = redactEvidenceObject(
-    publicExport ? scrubDashboardPublicExport(boundedEntries.entries) : boundedEntries.entries,
-    dashboardContext,
-  );
-  const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
-  const metaForClient = stripDashboardCommandFields({
-    ...meta,
-    ledgerBounds: offlineExport
-      ? {
-          truncated: boundedEntries.truncated,
-          omittedEntries: boundedEntries.omittedEntries,
-          maxEntries: boundedEntries.maxEntries,
-        }
-      : undefined,
-  });
-  const metaData = JSON.stringify(
-    redactEvidenceObject(
-      publicExport ? scrubDashboardPublicExport(metaForClient) : metaForClient,
-      dashboardContext,
-    ),
-  ).replace(/</g, "\\u003c");
-  const template = fs.readFileSync(DASHBOARD_TEMPLATE_PATH, "utf8");
-  if (!template.includes(DASHBOARD_DATA_PLACEHOLDER)) {
-    throw new Error(`Dashboard template is missing ${DASHBOARD_DATA_PLACEHOLDER}`);
-  }
-  if (
-    !template.includes(DASHBOARD_APP_PLACEHOLDER) ||
-    !template.includes(DASHBOARD_CSS_PLACEHOLDER)
-  ) {
-    throw new Error("Dashboard template is missing React build placeholders.");
-  }
-  const dashboardApp = readDashboardBuildAsset("dashboard-app.js").replace(
-    /<\/script/gi,
-    "<\\/script",
-  );
-  const dashboardCss = readDashboardBuildAsset("dashboard-app.css").replace(
-    /<\/style/gi,
-    "<\\/style",
-  );
-  return template
-    .replace(DASHBOARD_DATA_PLACEHOLDER, () => data)
-    .replace(DASHBOARD_META_PLACEHOLDER, () => metaData)
-    .replace(DASHBOARD_CSS_PLACEHOLDER, () => dashboardCss)
-    .replace(DASHBOARD_APP_PLACEHOLDER, () => dashboardApp);
-}
-
-function boundDashboardStaticExportEntries(entries: any[]): {
-  entries: any[];
-  maxEntries: number;
-  omittedEntries: number;
-  truncated: boolean;
-} {
-  return boundDashboardLedgerEntries(
-    Array.isArray(entries) ? entries : [],
-    DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES,
-  );
-}
-
-function readDashboardBuildAsset(fileName: string) {
-  const filePath = path.join(DASHBOARD_BUILD_DIR, fileName);
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
-      throw new Error(
-        `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`,
-      );
-    }
-    throw error;
-  }
-}
-
-function stripDashboardCommandFields(value: any): any {
-  return stripDashboardExportCommandFields(value, { stringScrubber: dashboardSafeGuidanceText });
-}
-
-function scrubDashboardPublicExport(value: any): any {
-  if (Array.isArray(value)) return value.map((item: any) => scrubDashboardPublicExport(item));
-  if (typeof value === "string") return scrubDashboardPublicExportString(value);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]: [string, unknown]) => {
-      if (key === "dirtyFiles") return [key, scrubDashboardPublicExportDirtyFiles()];
-      if (isDashboardPublicExportPathList(key, item)) {
-        return [key, []];
-      }
-      return [key, scrubDashboardPublicExport(item)];
-    }),
-  );
-}
-
-function isDashboardPublicExportPathList(key: string, value: unknown) {
-  return (
-    (key === "files" || key.endsWith("Files")) &&
-    Array.isArray(value) &&
-    value.every((entry) => typeof entry === "string")
-  );
-}
-
-function scrubDashboardPublicExportDirtyFiles() {
-  return {
-    sessionArtifacts: [],
-    scopedExperimentFiles: [],
-    unrelatedFiles: [],
-  };
-}
-
-function scrubDashboardPublicExportString(value: any) {
-  const placeholders = [
-    [PLUGIN_ROOT, "<plugin-root>"],
-    [REPO_ROOT, "<repo-root>"],
-    [process.execPath, "node"],
-  ];
-  let scrubbed = value;
-  for (const [needle, replacement] of placeholders) {
-    if (!needle) continue;
-    scrubbed = scrubbed.replaceAll(String(needle), replacement);
-    scrubbed = scrubbed.replaceAll(String(needle).replaceAll("\\", "/"), replacement);
-  }
-  return scrubbed
-    .replace(/[A-Za-z]:\\[^\r\n"]+/g, "<local-path>")
-    .replace(/[A-Za-z]:\/[^\r\n" ]+/g, "<local-path>");
 }
 
 async function resolveLastRunPath(workDir: string) {

@@ -7790,7 +7790,13 @@ test("tool schemas expose guidance and output contracts", async () => {
   const [
     { toolSchemas },
     { validateToolContracts },
-    { actionPolicyForTool, cliCommandForTool, toolMutates, validateToolRegistry },
+    {
+      actionPolicyForTool,
+      cliCommandForTool,
+      toolMutates,
+      toolNameForCliCommand,
+      validateToolRegistry,
+    },
   ] = await Promise.all([
     import("../lib/tool-schemas.js"),
     import("../lib/tool-contracts.js"),
@@ -7934,6 +7940,9 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(cliCommandForTool("next_experiment"), "next");
   assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
+  assert.equal(toolNameForCliCommand("next"), "next_experiment");
+  assert.equal(toolNameForCliCommand("research-fanout"), "research_fanout");
+  assert.equal(toolNameForCliCommand("checks-inspect"), "checks_inspect");
   assert.equal(toolMutates("next_experiment"), true);
   assert.equal(toolMutates("research_fanout"), false);
   assert.equal(actionPolicyForTool("research_fanout"), "read");
