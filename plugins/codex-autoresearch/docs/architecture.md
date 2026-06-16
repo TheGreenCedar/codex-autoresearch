@@ -43,7 +43,7 @@ flowchart TD
   ViewModel --> Server["Live readout server"]
 ```
 
-The dashboard is a readout, not a control plane. It shows next action, blockers, lanes, runtime provenance, packet diagnostics, and finalization pressure — but setup, packets, logging, and finalization stay in the CLI.
+The dashboard is a readout, not a control plane. It shows next action, blockers, lanes, runtime provenance, packet diagnostics, and finalization pressure. Use the CLI for setup, packet runs, logging, gap review, export, and finalization.
 
 ## Trust boundary
 

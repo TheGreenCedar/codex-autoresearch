@@ -20,7 +20,7 @@ A chapter of an autoresearch session. When a session is maxed, stale, or enterin
 
 ## Continuation
 
-The state returned after logging a packet. Contains `shouldContinue` (whether the loop should keep running) and `forbidFinalAnswer` (whether the agent must continue instead of returning a final report). See [Operate](operate.md#packet-loop).
+The state returned after logging a packet. It tells you whether the loop should keep running and whether completion is blocked until the next loop action is taken. See [Operate](operate.md#packet-loop).
 
 ## Resume checklist
 

@@ -116,7 +116,7 @@ Static exports are offline snapshots:
 node scripts/autoresearch.mjs export --cwd <project>
 ```
 
-If you need fresh state, serve a fresh dashboard. Use the CLI for setup, packet runs, logging, gap review, export, and finalization. The dashboard is read-only — see [Architecture](architecture.md).
+The dashboard is a read-only visual aid; setup, packet runs, logging, and finalization stay in the CLI. See [Architecture](architecture.md#dashboard-boundary).
 
 The process-hygiene panel reports what the snapshot can actually know. It cannot enumerate random old localhost servers outside the current process; that gap is labeled instead of faked.
 
@@ -181,7 +181,7 @@ Statuses:
 
 Logged runs carry an evidence status. Defaults: `accepted` for `keep`, `provisional` for `measure`, `rejected` for discard/crash/check failures. Override with `--evidence-status` only when the evidence role really differs.
 
-After logging, read the continuation result. If `shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance. If `forbidFinalAnswer` is true, continue with progress updates instead of returning a final report.
+After logging, read the continuation result. If the continuation says the loop is still active, continue the loop before treating the run as complete. Choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
 
 ## Parallel research lanes
 
