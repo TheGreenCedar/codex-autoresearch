@@ -1854,6 +1854,13 @@ test("showcase export scrubs local paths from embedded ledger entries", async ()
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.doesNotMatch(dashboard, /D:\\\\Sensitive\\\\client/);
     assert.match(dashboard, /local-path/);
+    const metaMatch = dashboard.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+    assert.ok(metaMatch);
+    const meta = JSON.parse(metaMatch[1]);
+    assert.equal(meta.publicExport, true);
+    assert.equal(meta.showcaseMode, true);
+    assert.equal(meta.settings.publicExport, true);
+    assert.equal(meta.settings.showcaseMode, true);
   });
 });
 

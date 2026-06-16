@@ -68,7 +68,7 @@ const requiredRootIgnoreSentinels = [
   ["docs/superpowers/plans/", "docs/superpowers/plans/__codex_check__"],
 ];
 
-const dashboardBuildDependencies = ["lucide-react", "react", "react-dom", "recharts"];
+const dashboardBuildDependencies = ["react", "react-dom", "recharts"];
 
 interface PackageEntry {
   path?: string;

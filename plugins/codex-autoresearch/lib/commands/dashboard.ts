@@ -11,6 +11,12 @@ import { compactDashboardTransportViewModel } from "../dashboard-transport.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 
 type LooseObject = Record<string, any>;
+type DashboardCommandListOptions = {
+  researchSlug?: string;
+  scriptPath: string;
+  shellQuote: (value: string) => string;
+  workDir: string;
+};
 
 export interface DashboardCommandDeps {
   boolOption: (value: unknown, fallback: boolean) => boolean;
@@ -33,6 +39,90 @@ export interface DashboardCommandDeps {
   serveAutoresearch: (options: LooseObject) => Promise<LooseObject>;
   shellQuote: (value: string) => string;
   writeFile: typeof fsp.writeFile;
+}
+
+export function buildDashboardSettings(config: LooseObject, extra: LooseObject = {}): LooseObject {
+  return {
+    autonomyMode: config.autonomyMode || "guarded",
+    checksPolicy: config.checksPolicy || "always",
+    keepPolicy: config.keepPolicy || "primary-only",
+    recipeId: config.recipeId || "",
+    ...extra,
+  };
+}
+
+export function operationProgress({
+  stage,
+  label,
+  startedAt,
+  status = "completed",
+  outputTail = "",
+}: LooseObject): LooseObject {
+  const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+  return {
+    mode: "synchronous",
+    status,
+    cancellable: false,
+    cancelStatus: "not_requested",
+    elapsedSeconds: durationSeconds,
+    stages: [
+      {
+        stage,
+        label,
+        status,
+        durationSeconds,
+        exitCode: null,
+        timedOut: false,
+        outputTail,
+      },
+    ],
+    latestOutputTail: outputTail,
+  };
+}
+
+export function buildDashboardCommands({
+  researchSlug = "research",
+  scriptPath,
+  shellQuote,
+  workDir,
+}: DashboardCommandListOptions): LooseObject[] {
+  const cwd = shellQuote(workDir);
+  const script = shellQuote(scriptPath);
+  const slug = shellQuote(researchSlug);
+  return [
+    { label: "State", command: `node ${script} state --cwd ${cwd} --report` },
+    {
+      label: "Onboarding packet",
+      command: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
+    },
+    { label: "Recommend next", command: `node ${script} recommend-next --cwd ${cwd} --compact` },
+    { label: "Codex Goal brief", command: `node ${script} codex-goal-brief --cwd ${cwd}` },
+    { label: "Setup plan", command: `node ${script} setup-plan --cwd ${cwd}` },
+    {
+      label: "Doctor",
+      command: `node ${script} doctor --cwd ${cwd} --explain`,
+    },
+    { label: "Benchmark inspect", command: `node ${script} benchmark-inspect --cwd ${cwd}` },
+    { label: "Checks inspect", command: `node ${script} checks-inspect --cwd ${cwd}` },
+    {
+      label: "Partial results",
+      command: `node ${script} partial-results --cwd ${cwd} --from-last`,
+    },
+    {
+      label: "Quality gap",
+      command: `node ${script} quality-gap --cwd ${cwd} --research-slug ${slug}`,
+    },
+    {
+      label: "Gap candidates",
+      command: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${slug}`,
+    },
+    { label: "Finalize preview", command: `node ${script} finalize-preview --cwd ${cwd}` },
+    { label: "New segment", command: `node ${script} new-segment --cwd ${cwd} --dry-run` },
+    {
+      label: "Promote gate",
+      command: `node ${script} promote-gate --cwd ${cwd} --reason "describe promoted measurement" --dry-run`,
+    },
+  ];
 }
 
 export function createDashboardCommands(deps: DashboardCommandDeps) {
@@ -70,6 +160,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       runtimeDrift,
       dashboardServerRegistry,
       publicExport: showcaseExport,
+      showcaseMode: showcaseExport,
       suppressEnvironmentWarnings: showcaseExport,
     };
     const rawViewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
@@ -91,6 +182,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       settings: deps.dashboardSettings(config, dashboardContext),
       viewModel,
       publicExport: showcaseExport,
+      showcaseMode: showcaseExport,
     });
     emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
     await deps.writeFile(output, html, "utf8");

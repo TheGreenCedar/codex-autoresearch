@@ -24,7 +24,7 @@ The state returned after logging a packet. It tells you whether the loop should 
 
 ## Resume checklist
 
-A compact handoff from `recommend-next --compact --operator-checklist`. It names one command, one safety reason, one blocker, one evidence role, and one source so a resumed Codex session can continue without re-deciding the whole loop. See [Operate](operate.md#operator-checklist).
+A compact handoff from `recommend-next --compact --operator-checklist`. It names one command, one safety reason, one blocker, one evidence role, and one source so a resumed Codex session can continue without re-deciding the whole loop. See [Operate](operate.md#resume-checklist).
 
 ## Goal Frame
 
@@ -36,7 +36,7 @@ The compact state summary for resumed Codex work. It carries the research-goal l
 
 ## Loop Contract
 
-The governance readout that decides whether another packet is allowed. It can route to setup repair, context distillation, lane cleanup, runtime provenance, packet diagnostics, finalization, segment transition, or a fresh packet. See [Operate](operate.md#operator-checklist).
+The governance readout that decides whether another packet is allowed. It can route to setup repair, context distillation, lane cleanup, runtime provenance, packet diagnostics, finalization, segment transition, or a fresh packet. See [Operate](operate.md#resume-checklist).
 
 ## Watchdog
 
@@ -76,7 +76,7 @@ Evidence-loss classification for packets that retrieved data but failed to carry
 
 ## Goal Frame Mismatch
 
-A session-forensics decision signal for moments when the user corrects Codex for treating a chat prompt as the Autoresearch goal. It creates a bounded-next capsule so the next session must restate the durable goal and avoid broad packet work until the handoff is clear. See [Operate](operate.md#operator-checklist).
+A session-forensics decision signal for moments when the user corrects Codex for treating a chat prompt as the Autoresearch goal. It creates a bounded-next capsule so the next session must restate the durable goal and avoid broad packet work until the handoff is clear. See [Operate](operate.md#resume-checklist).
 
 ## Evidence Status
 

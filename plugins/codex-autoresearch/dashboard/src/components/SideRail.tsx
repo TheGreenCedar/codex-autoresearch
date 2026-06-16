@@ -21,7 +21,7 @@ export function SideRail({ live, showcase }: { live: boolean; showcase: boolean 
       </nav>
       <div className="side-status">
         <span>
-          <span className="live-dot" />
+          <span className="live-dot" aria-hidden="true" />
           {status}
         </span>
         <strong id="side-mode-detail">{detail}</strong>

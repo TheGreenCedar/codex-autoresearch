@@ -1330,16 +1330,26 @@ export function iterationLimitInfo(state: SessionState, runtimeConfig: LooseObje
   };
 }
 
-export function parseQualityGaps(text: string) {
-  let open = 0;
-  let closed = 0;
+export function parseQualityGapItems(text: string) {
+  const open: string[] = [];
+  const closed: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*-\s*\[([ xX])\]\s+\S/);
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
     if (!match) continue;
-    if (match[1].toLowerCase() === "x") closed += 1;
-    else open += 1;
+    const item = match[2].trim();
+    if (match[1].toLowerCase() === "x") closed.push(item);
+    else open.push(item);
   }
-  return { open, closed, total: open + closed };
+  return { open, closed };
+}
+
+export function parseQualityGaps(text: string) {
+  const items = parseQualityGapItems(text);
+  return {
+    open: items.open.length,
+    closed: items.closed.length,
+    total: items.open.length + items.closed.length,
+  };
 }
 
 export function researchSlugFromArgs(args: LooseObject): string {

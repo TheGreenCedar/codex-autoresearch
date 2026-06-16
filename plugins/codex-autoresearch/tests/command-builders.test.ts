@@ -11,7 +11,10 @@ import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import { buildNextPacketId } from "../lib/commands/next.js";
 import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
+import { buildContinuationCommands } from "../lib/commands/continuation.js";
+import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/dashboard.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
 
 test("command rendering quotes hostile benchmark args for the selected shell", () => {
@@ -84,6 +87,69 @@ test("run command helper blocks packets when resource budgets are exhausted", ()
 test("next command helper builds stable packet evidence ids", () => {
   assert.equal(buildNextPacketId({ nextRun: 7 }, "abcdef1234567890"), "packet-7-abcdef123456");
   assert.equal(buildNextPacketId({}, "1234567890abcdef"), "packet-next-1234567890ab");
+});
+
+test("dashboard command helper builds read-only continuation commands", () => {
+  const commands = buildDashboardCommands({
+    researchSlug: "review round",
+    scriptPath: "/tmp/plugin/scripts/autoresearch.mjs",
+    shellQuote: JSON.stringify,
+    workDir: "/tmp/project",
+  });
+
+  assert.equal(
+    commands[0].command,
+    'node "/tmp/plugin/scripts/autoresearch.mjs" state --cwd "/tmp/project" --report',
+  );
+  assert.ok(commands.some((command) => command.command.includes("finalize-preview")));
+  assert.ok(commands.some((command) => command.command.includes('--research-slug "review round"')));
+});
+
+test("continuation command helper quotes cwd and quality-gap slug", () => {
+  const commands = buildContinuationCommands({
+    researchSlug: "review round",
+    scriptPath: "/tmp/plugin/scripts/autoresearch.mjs",
+    shellQuote: JSON.stringify,
+    workDir: "/tmp/project",
+  });
+
+  assert.equal(
+    commands.state,
+    'node "/tmp/plugin/scripts/autoresearch.mjs" state --cwd "/tmp/project"',
+  );
+  assert.match(commands.gapCandidates, /--research-slug "review round"/);
+});
+
+test("dashboard settings preserve policy defaults with overrides", () => {
+  assert.deepEqual(buildDashboardSettings({ keepPolicy: "primary-or-risk-reduction" }), {
+    autonomyMode: "guarded",
+    checksPolicy: "always",
+    keepPolicy: "primary-or-risk-reduction",
+    recipeId: "",
+  });
+  assert.equal(buildDashboardSettings({}, { publicExport: true }).publicExport, true);
+});
+
+test("CLI arg parser preserves camel aliases and passthrough args", () => {
+  const parsed = parseCliArgs([
+    "next",
+    "--working-dir=C:\\repo",
+    "--json-full",
+    "--",
+    "--not-an-option",
+  ]);
+
+  assert.deepEqual(parsed._, ["next", "--not-an-option"]);
+  assert.equal(parsed.workingDir, "C:\\repo");
+  assert.equal(parsed.jsonFull, true);
+});
+
+test("CLI option helpers preserve loose command input behavior", () => {
+  assert.deepEqual(parseJsonOption('{"metric":1}', null), { metric: 1 });
+  assert.equal(parseJsonOption("", "fallback"), "fallback");
+  assert.equal(numberOption("2.5", 0), 2.5);
+  assert.equal(boolOption("yes"), true);
+  assert.throws(() => numberOption(true, 0), /Expected a number/);
 });
 
 if (process.platform === "win32") {

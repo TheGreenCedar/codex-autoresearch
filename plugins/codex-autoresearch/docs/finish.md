@@ -86,6 +86,14 @@ Review the plan before mutation: source branch, `HEAD`, merge base, planned file
 
 ## Create branches
 
+After preview and approval, create the planned review branches from the reviewed plan file:
+
+```bash
+node scripts/finalize-autoresearch.mjs --cwd <project> <groups.json>
+```
+
+`<groups.json>` is the path produced by `plan`. Rerun `plan` first if the source branch, trunk, merge base, kept commits, or dirty-tree state changed after review.
+
 Ask for approval before branch creation unless you already approved finalization.
 
 After branch creation, verify:
