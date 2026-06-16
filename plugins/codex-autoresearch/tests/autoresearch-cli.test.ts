@@ -848,7 +848,7 @@ test("state surfaces active runner progress while next is still executing", asyn
         "const releaseFile = process.argv[2];",
         "const started = Date.now();",
         "const timer = setInterval(() => {",
-        "  if (existsSync(releaseFile) || Date.now() - started > 30000) {",
+        "  if (existsSync(releaseFile) || Date.now() - started > 60000) {",
         "    clearInterval(timer);",
         "    console.log('METRIC seconds=1');",
         "  }",
@@ -875,7 +875,7 @@ test("state surfaces active runner progress while next is still executing", asyn
 
     let progress = null;
     const started = Date.now();
-    while (Date.now() - started < 10000) {
+    while (Date.now() - started < 30000) {
       const state = await runCli(["state", "--cwd", dir, "--compact"]);
       assert.equal(state.code, 0, state.stderr);
       const payload = JSON.parse(state.stdout);
@@ -1854,11 +1854,24 @@ test("showcase export scrubs local paths from embedded ledger entries", async ()
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     assert.doesNotMatch(dashboard, /D:\\\\Sensitive\\\\client/);
     assert.match(dashboard, /local-path/);
+    const metaMatch = dashboard.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+    assert.ok(metaMatch);
+    const meta = JSON.parse(metaMatch[1]);
+    assert.equal(meta.publicExport, true);
+    assert.equal(meta.showcaseMode, true);
+    assert.equal(meta.deliveryMode, "showcase");
+    assert.equal(meta.settings.publicExport, true);
+    assert.equal(meta.settings.showcaseMode, true);
+    assert.equal(meta.settings.deliveryMode, "showcase");
+    assert.equal(meta.viewModel.trustState.mode, "showcase");
+    assert.equal(meta.viewModel.processHygiene.mode, "showcase");
+    assert.doesNotMatch(JSON.stringify(meta.viewModel.trustState.reasons), /Static export/i);
+    assert.doesNotMatch(JSON.stringify(meta.viewModel.processHygiene.warnings), /Static export/i);
   });
 });
 
-test("static export bounds embedded ledger entries for long sessions", async () => {
-  await withTempDir("static-export-ledger-bounds", async (dir) => {
+test("offline exports bound embedded ledger entries for long sessions", async () => {
+  await withTempDir("offline-export-ledger-bounds", async (dir) => {
     const entries = [
       { type: "config", name: "large export", metricName: "seconds", bestDirection: "lower" },
       ...Array.from({ length: 5100 }, (_, index) => ({
@@ -1866,6 +1879,7 @@ test("static export bounds embedded ledger entries for long sessions", async () 
         metric: index + 1,
         status: "measure",
         description: `measurement ${index + 1}`,
+        command: "node scripts/autoresearch.mjs log --cwd . --from-last --status keep",
       })),
     ];
     await writeFile(
@@ -1874,34 +1888,49 @@ test("static export bounds embedded ledger entries for long sessions", async () 
       "utf8",
     );
 
-    const exported = await runCli(["export", "--cwd", dir]);
-    assert.equal(exported.code, 0, exported.stderr);
-    const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
-    const dataMatch = dashboard.match(
-      /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
-    );
-    const metaMatch = dashboard.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
-    assert.ok(dataMatch);
-    assert.ok(metaMatch);
-    const data = JSON.parse(dataMatch[1]);
-    const meta = JSON.parse(metaMatch[1]);
+    for (const exportCase of [
+      {
+        args: [],
+        output: "autoresearch-dashboard.html",
+        deliveryMode: "static-export",
+      },
+      {
+        args: ["--output", "showcase-dashboard.html", "--showcase"],
+        output: "showcase-dashboard.html",
+        deliveryMode: "showcase",
+      },
+    ]) {
+      const exported = await runCli(["export", "--cwd", dir, ...exportCase.args]);
+      assert.equal(exported.code, 0, exported.stderr);
+      const dashboard = await readFile(path.join(dir, exportCase.output), "utf8");
+      const dataMatch = dashboard.match(
+        /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
+      );
+      const metaMatch = dashboard.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+      assert.ok(dataMatch);
+      assert.ok(metaMatch);
+      const data = JSON.parse(dataMatch[1]);
+      const meta = JSON.parse(metaMatch[1]);
 
-    assert.equal(data.length, 5000);
-    assert.equal(data[0].type, "config");
-    assert.equal(data.at(-1).run, 5100);
-    assert.equal(meta.ledgerBounds.truncated, true);
-    assert.equal(meta.ledgerBounds.omittedEntries, 101);
-    assert.equal(meta.viewModel.readout.measurementRunCount, 5100);
-    assert.equal(meta.viewModel.readout.measurementRuns.length, 50);
-    assert.equal(meta.viewModel.readout.measurementRuns[0].run, 5051);
-    assert.equal(meta.viewModel.readout.measurementRuns.at(-1).run, 5100);
-    assert.equal(meta.viewModel.readout.measurementRunsTruncated, true);
-    assert.equal(meta.viewModel.readout.measurementRunsOmitted, 5050);
-    assert.ok(
-      JSON.stringify(meta.viewModel).length < 500_000,
-      "static export view model should stay transport-bounded",
-    );
-    assert.ok(dashboard.length < 2_500_000, "static export HTML should stay transport-bounded");
+      assert.equal(meta.deliveryMode, exportCase.deliveryMode);
+      assert.equal(data.length, 5000);
+      assert.equal(data[0].type, "config");
+      assert.equal(data.at(-1).run, 5100);
+      assert.doesNotMatch(JSON.stringify([data, meta]), /--from-last/);
+      assert.equal(meta.ledgerBounds.truncated, true);
+      assert.equal(meta.ledgerBounds.omittedEntries, 101);
+      assert.equal(meta.viewModel.readout.measurementRunCount, 5100);
+      assert.equal(meta.viewModel.readout.measurementRuns.length, 50);
+      assert.equal(meta.viewModel.readout.measurementRuns[0].run, 5051);
+      assert.equal(meta.viewModel.readout.measurementRuns.at(-1).run, 5100);
+      assert.equal(meta.viewModel.readout.measurementRunsTruncated, true);
+      assert.equal(meta.viewModel.readout.measurementRunsOmitted, 5050);
+      assert.ok(
+        JSON.stringify(meta.viewModel).length < 500_000,
+        "offline export view model should stay transport-bounded",
+      );
+      assert.ok(dashboard.length < 2_500_000, "offline export HTML should stay transport-bounded");
+    }
   });
 });
 

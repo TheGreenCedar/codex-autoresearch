@@ -55,6 +55,33 @@ async function readJson(file: string): Promise<LooseObject> {
   return JSON.parse(await readText(file));
 }
 
+function parseDashboardMeta(html: string): LooseObject | null {
+  const match = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function demoExportUsesShowcaseMode(html: string): boolean {
+  const meta = parseDashboardMeta(html);
+  return Boolean(
+    meta &&
+    meta.publicExport === true &&
+    meta.showcaseMode === true &&
+    meta.deliveryMode === "showcase" &&
+    meta.settings?.publicExport === true &&
+    meta.settings?.showcaseMode === true &&
+    meta.settings?.deliveryMode === "showcase" &&
+    meta.viewModel?.trustState?.mode !== "static-export" &&
+    meta.viewModel?.processHygiene?.mode !== "static-export" &&
+    !/Static export/i.test(JSON.stringify(meta.viewModel?.trustState?.reasons ?? [])) &&
+    !/Static export/i.test(JSON.stringify(meta.viewModel?.processHygiene?.warnings ?? [])),
+  );
+}
+
 async function fileExists(file: string): Promise<boolean> {
   try {
     await fsp.access(path.join(pluginRoot, file));
@@ -285,6 +312,7 @@ const checks = [
         screenshotIsCompact &&
         demoRuns === 100 &&
         demoExport.includes(`"pluginVersion":"${PLUGIN_VERSION}"`) &&
+        demoExportUsesShowcaseMode(demoExport) &&
         !demoExport.includes("C:\\Users\\alber") &&
         !demoExport.includes("C:\\Program Files") &&
         !demoExport.includes("actionNonce") &&

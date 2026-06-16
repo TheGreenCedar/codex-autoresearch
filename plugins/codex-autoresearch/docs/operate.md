@@ -24,7 +24,7 @@ Read `state --report` top-down: blockers, next action, next command, then suppor
 
 | Symptom | Likely cause | What to do |
 | --- | --- | --- |
-| Next action says repair, not `next` | Goal mismatch, decision capsule, or loop contract block | Follow the named command; see [Operator checklist](#operator-checklist) |
+| Next action says repair, not `next` | Goal mismatch, decision capsule, or loop contract block | Follow the named command; see [Resume checklist](#resume-checklist) |
 | `source-dirty` | Unrelated source files in the worktree | Clean, stash, or scope dirty files before keep/discard or finalization |
 | `session-artifacts-dirty` only | `autoresearch.*` or research scratchpad files dirty | Safe for read/run work; stash or commit session files before branch-changing finalization |
 | Dashboard liveness missing | No served dashboard or stale export | Run `serve --cwd <project>`; do not trust an old `file://` export |
@@ -48,7 +48,7 @@ Pass empty values to clear budget fields: `config --packet-budget "" --wall-cloc
 
 Packet and wall-clock budgets are not API spend tracking. Autoresearch only tracks configured packet count and elapsed wall-clock unless an external integration supplies separate spend evidence.
 
-## Operator checklist
+## Resume checklist
 
 The compact checklist is the shortest safe continuation path after compaction or a long pause:
 
