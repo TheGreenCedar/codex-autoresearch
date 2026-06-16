@@ -180,7 +180,7 @@ The dashboard answers three questions:
 
 Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, run diagnostics, finalization readiness, evidence history, and handoff details.
 
-Readout only. Use the CLI to do the work; the dashboard is a visual aid, not a control surface. See [Architecture](plugins/codex-autoresearch/docs/architecture.md).
+The dashboard is a read-only visual aid; setup, packet runs, logging, and finalization stay in the CLI. See [Architecture](plugins/codex-autoresearch/docs/architecture.md#dashboard-boundary).
 
 ## Quality-gap loops
 
@@ -210,42 +210,13 @@ Finalization should:
 
 ## Docs
 
-Start and operate:
-
-* [Docs index](plugins/codex-autoresearch/docs/index.md)
 * [Start](plugins/codex-autoresearch/docs/start.md)
-* [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md)
 * [Operate](plugins/codex-autoresearch/docs/operate.md)
-* [Finish](plugins/codex-autoresearch/docs/finish.md)
-
-Trust and troubleshooting:
-
-* [Concepts glossary](plugins/codex-autoresearch/docs/concepts.md)
 * [Trust](plugins/codex-autoresearch/docs/trust.md)
-* [Privacy](plugins/codex-autoresearch/docs/privacy.md)
-* [Terms](plugins/codex-autoresearch/docs/terms.md)
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
+* [Changelog](CHANGELOG.md)
 
-Architecture and maintenance:
-
-* [Workflow diagrams](plugins/codex-autoresearch/docs/workflows.md)
-* [Architecture diagrams](plugins/codex-autoresearch/docs/architecture.md)
-* [Control plane contracts](plugins/codex-autoresearch/docs/control-plane.md)
-* [Recipes](plugins/codex-autoresearch/docs/recipes.md)
-* [Hooks](plugins/codex-autoresearch/docs/hooks.md)
-* [Maintainers](plugins/codex-autoresearch/docs/maintainers.md)
-
-The active package lives under:
-
-```text
-plugins/codex-autoresearch
-```
-
-The plugin skill lives at:
-
-```text
-plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md
-```
+Full map: [Docs index](plugins/codex-autoresearch/docs/index.md), [workflows](plugins/codex-autoresearch/docs/workflows.md), [architecture](plugins/codex-autoresearch/docs/architecture.md), and Codex contract at `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
 
 ## Development
 

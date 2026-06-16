@@ -92,6 +92,12 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - If correctness checks fail, run `checks-inspect` before deciding.
 - Stop when the user interrupts, the limit or budget is reached, benchmark/checks are blocked, cleanup would be unsafe, a fresh segment is needed, or the goal is genuinely exhausted.
 
+## Codex-only Goal completion
+
+- Use `completionAudit` before a parent agent calls `update_goal(status="complete")`.
+- Do not complete a parent Codex Goal while the continuation says the loop is still active.
+- Keep Goal state in Codex; Autoresearch only provides `codex-goal-brief` and completion-audit evidence.
+
 CLI fallback:
 
 ```bash

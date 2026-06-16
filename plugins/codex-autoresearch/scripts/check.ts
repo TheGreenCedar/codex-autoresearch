@@ -48,6 +48,10 @@ const dashboardBuildChecks: CommandSpec[] = [
   ],
 ];
 
+const dashboardNormalizeChecks: CommandSpec[] = [
+  ["normalize:dashboard-build", node, ["scripts/normalize-dashboard-build.mjs"]],
+];
+
 const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.js",
   "assets/dashboard-build/dashboard-app.css",
@@ -206,6 +210,8 @@ async function runDashboardBuildWithParity(): Promise<boolean> {
   const before = await dashboardAssetHashes();
   const buildOk = await runPhase("dashboard", dashboardBuildChecks);
   if (!buildOk) return false;
+  const normalizeOk = await runPhase("dashboard normalization", dashboardNormalizeChecks);
+  if (!normalizeOk) return false;
   const after = await dashboardAssetHashes();
   const changed = dashboardAssets.filter((file) => before[file] !== after[file]);
   console.log("\n== dashboard parity ==");
