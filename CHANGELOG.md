@@ -12,6 +12,12 @@ This project uses a root-only changelog because the root README is the public do
 - Documentation rewrite: plain-warm senior-engineer voice, clearer audience split between human docs and agent contracts, restructured docs index, and `concepts.md#state-fields` glossary for compact-state labels.
 - Removed brittle doc-copy test gates (`ax-ux-golden-path`, `full-product-docs`, `loop-governance-docs`) and relaxed README phrase assertions in product tests.
 
+## 2.3.10 - 2026-06-15
+
+### Changed
+
+- Wall-clock compact-read startup budgets moved into an explicit perf test so the normal correctness gate is not blocked by local machine variance.
+
 ## 2.3.9 - 2026-06-15
 
 ### Fixed

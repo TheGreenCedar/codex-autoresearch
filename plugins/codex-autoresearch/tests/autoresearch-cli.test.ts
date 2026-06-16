@@ -520,7 +520,11 @@ test("state recommend-next and dashboard share workflow friction readout", async
 
 test(
   "compact read commands stay within a warm local startup budget",
-  { skip: process.env.CI_PERF_UNSTABLE === "1" },
+  {
+    skip:
+      process.env.CODEX_AUTORESEARCH_RUN_PERF_TESTS !== "1" &&
+      "Set CODEX_AUTORESEARCH_RUN_PERF_TESTS=1 for wall-clock startup budgets.",
+  },
   async () => {
     await withTempDir("compact-read-budget", async (dir) => {
       await runCli([
