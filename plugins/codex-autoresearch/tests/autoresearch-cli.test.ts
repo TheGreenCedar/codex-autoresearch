@@ -520,7 +520,11 @@ test("state recommend-next and dashboard share workflow friction readout", async
 
 test(
   "compact read commands stay within a warm local startup budget",
-  { skip: process.env.CI_PERF_UNSTABLE === "1" },
+  {
+    skip:
+      process.env.CODEX_AUTORESEARCH_RUN_PERF_TESTS !== "1" &&
+      "Set CODEX_AUTORESEARCH_RUN_PERF_TESTS=1 for wall-clock startup budgets.",
+  },
   async () => {
     await withTempDir("compact-read-budget", async (dir) => {
       await runCli([
@@ -1622,6 +1626,8 @@ test("state and recommend-next surface active decision capsules as loop brakes",
       "session-decision-capsule",
     );
     assert.equal(statePayload.canonicalNextAction.kind, "decision-capsule");
+    assert.notEqual(statePayload.decisionEnvelope.canonicalNextAction.toolName, "decision_capsule");
+    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
     assert.equal(statePayload.loopContract.canRunNextPacket, false);
     const stateActionCommand = statePayload.canonicalNextAction.command || "";
     assert.match(stateActionCommand, /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/);
@@ -1632,6 +1638,11 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
     assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.notEqual(
+      recommendPayload.decisionEnvelope.canonicalNextAction.toolName,
+      "decision_capsule",
+    );
+    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
     const recommendActionCommand =
       recommendPayload.decisionEnvelope.canonicalNextAction.command || "";
     assert.match(
@@ -7696,7 +7707,15 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
     ]);
     await writeFile(path.join(dir, "tracked.txt"), "experiment\n", "utf8");
     const gapsPath = path.join(dir, "autoresearch.research", "study", "quality-gaps.md");
+    const dashboardPath = path.join(dir, "autoresearch-dashboard.html");
+    const evidencePath = path.join(dir, "target", "autoresearch", "evidence.json");
+    const cachePath = path.join(dir, ".autoresearch-cache", "packet.json");
     await writeFile(gapsPath, "- [ ] Preserve this scratchpad\n", "utf8");
+    await mkdir(path.dirname(evidencePath), { recursive: true });
+    await writeFile(evidencePath, '{"kept":true}\n', "utf8");
+    await mkdir(path.dirname(cachePath), { recursive: true });
+    await writeFile(cachePath, '{"cached":true}\n', "utf8");
+    await writeFile(dashboardPath, "<!doctype html><title>Autoresearch</title>\n", "utf8");
 
     const result = await runCli([
       "log",
@@ -7714,6 +7733,12 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
 
     assert.equal(await readFile(path.join(dir, "tracked.txt"), "utf8"), "base\n");
     assert.equal(await readFile(gapsPath, "utf8"), "- [ ] Preserve this scratchpad\n");
+    assert.equal(
+      await readFile(dashboardPath, "utf8"),
+      "<!doctype html><title>Autoresearch</title>\n",
+    );
+    assert.equal(await readFile(evidencePath, "utf8"), '{"kept":true}\n');
+    assert.equal(await readFile(cachePath, "utf8"), '{"cached":true}\n');
   });
 });
 
