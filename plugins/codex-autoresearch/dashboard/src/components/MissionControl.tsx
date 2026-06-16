@@ -1,4 +1,3 @@
-import { useCopyText } from "../hooks/useCopyText";
 import type { DashboardMode, DashboardViewModel, MissionStep } from "../types";
 
 const STATE_CLASS: Record<string, string> = {
@@ -28,7 +27,6 @@ function stateLabel(state?: string, active?: boolean): string {
 
 export function MissionControl({
   viewModel,
-  mode,
 }: {
   viewModel: DashboardViewModel;
   mode: DashboardMode;
@@ -46,7 +44,6 @@ export function MissionControl({
             key={step.id || i}
             step={step}
             active={step.id === mc.activeStep}
-            showCommand={mode.liveRefresh && mode.liveActions}
             last={i === steps.length - 1}
           />
         ))}
@@ -58,17 +55,12 @@ export function MissionControl({
 function MissionStepItem({
   step,
   active,
-  showCommand,
   last,
 }: {
   step: MissionStep;
   active: boolean;
-  showCommand: boolean;
   last: boolean;
 }) {
-  const { copied, copy } = useCopyText();
-  const primary = step.primaryCommand as { label?: string; command?: string } | undefined;
-  const cmd = primary?.command;
   const label = stateLabel(step.state, active);
   const title = step.title || step.id || "Step";
 
@@ -86,16 +78,6 @@ function MissionStepItem({
         <strong className="mission-title">{title}</strong>
         <span className="mission-state-text">{label}</span>
         <span className="mission-detail">{step.detail || ""}</span>
-        {active && showCommand && cmd && (
-          <div className="mission-command">
-            <code className="mission-cmd-text" translate="no">
-              {cmd}
-            </code>
-            <button type="button" className="tool-button subtle" onClick={() => copy(cmd)}>
-              {copied ? "Copied" : primary?.label || "Copy CLI Command"}
-            </button>
-          </div>
-        )}
       </div>
     </li>
   );
