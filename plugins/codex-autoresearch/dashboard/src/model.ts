@@ -1,7 +1,7 @@
 export { asiPreview, asiText } from "./model/asi";
 export { buildChart } from "./model/chart";
 export { defaultConfig, normalizeEntries } from "./model/entries";
-export { fallbackAiSummary, fallbackMissionControl } from "./model/fallbacks";
+export { fallbackAiSummary } from "./model/fallbacks";
 export {
   directionLabel,
   formatChartPercentValue,

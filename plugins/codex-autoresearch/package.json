@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.3.10",
+  "version": "2.3.11",
   "private": true,
   "description": "Codex plugin for bounded, measured benchmark and optimization loops.",
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",

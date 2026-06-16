@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { formatDisplayTime, parseJsonl } from "../model";
+import { formatDisplayTime } from "../model";
 import type { DashboardEntry, DashboardMeta, DashboardMode, DashboardViewModel } from "../types";
 
 type LiveStatus = { title: string; detail: string };
@@ -164,20 +164,13 @@ async function fetchLiveDashboardSnapshot(
     const payload = (await viewModelResponse.json()) as DashboardViewModel;
     const embeddedEntries = entriesFromViewModel(payload);
     return {
-      entries: embeddedEntries ?? (await fetchLegacyLedgerEntries(signal)),
+      entries: embeddedEntries ?? [],
       generatedAt: new Date().toISOString(),
       viewModel: payload || {},
     };
   }
 
   throw new Error("view-model.json could not be refreshed");
-}
-
-async function fetchLegacyLedgerEntries(signal: AbortSignal | null): Promise<DashboardEntry[]> {
-  const jsonlResponse = await fetch("autoresearch.jsonl", noStoreRequest(signal));
-  const failure = await responseFailure(jsonlResponse, "autoresearch.jsonl");
-  if (failure) throw failure;
-  return parseJsonl(await jsonlResponse.text());
 }
 
 function noStoreRequest(signal: AbortSignal | null): RequestInit {
