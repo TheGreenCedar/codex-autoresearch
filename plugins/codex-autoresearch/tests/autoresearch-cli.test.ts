@@ -1622,6 +1622,8 @@ test("state and recommend-next surface active decision capsules as loop brakes",
       "session-decision-capsule",
     );
     assert.equal(statePayload.canonicalNextAction.kind, "decision-capsule");
+    assert.notEqual(statePayload.decisionEnvelope.canonicalNextAction.toolName, "decision_capsule");
+    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
     assert.equal(statePayload.loopContract.canRunNextPacket, false);
     const stateActionCommand = statePayload.canonicalNextAction.command || "";
     assert.match(stateActionCommand, /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/);
@@ -1632,6 +1634,11 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
     assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.notEqual(
+      recommendPayload.decisionEnvelope.canonicalNextAction.toolName,
+      "decision_capsule",
+    );
+    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
     const recommendActionCommand =
       recommendPayload.decisionEnvelope.canonicalNextAction.command || "";
     assert.match(

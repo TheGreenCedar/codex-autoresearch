@@ -1169,6 +1169,7 @@ function guidedStageForCanonicalKind(kind: string): string {
 
 function guidedToolNameForCanonicalKind(kind: string): string {
   if (kind === "setup" || kind === "benchmark-command") return "setup_session";
+  if (kind === "decision-capsule") return "recommend_next";
   if (kind === "partial-salvage" || kind === "packet-diagnostic") return "partial_results";
   if (kind === "segment-transition") return "new_segment";
   if (kind === "finalization" || kind === "finalize-preview") return "finalize_preview";
@@ -2308,6 +2309,7 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
       workDir,
       compactState: compactStateForRecommendHandoff(compact),
     });
+    withCanonicalDecisionEnvelopeToolName(response as LooseObject);
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
       const action = (response.action || {}) as LooseObject;
       const canonicalNextAction = (compact.canonicalNextAction || {}) as LooseObject;
@@ -2420,6 +2422,14 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     sessionDecisionCapsule:
       decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
   });
+}
+
+function withCanonicalDecisionEnvelopeToolName(response: LooseObject): LooseObject {
+  const action = compactRecord(compactRecord(response.decisionEnvelope)?.canonicalNextAction);
+  if (action && !action.toolName) {
+    action.toolName = guidedToolNameForCanonicalKind(String(action.kind || ""));
+  }
+  return response;
 }
 
 function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
@@ -8512,6 +8522,7 @@ function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): L
     canonicalNextAction: {
       ...action,
       command,
+      toolName: action.toolName || guidedToolNameForCanonicalKind(String(action.kind || "")),
     },
   };
 }
