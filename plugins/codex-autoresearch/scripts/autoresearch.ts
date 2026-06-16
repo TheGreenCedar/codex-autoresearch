@@ -6018,8 +6018,9 @@ async function clearSession(args: any) {
 }
 
 function dashboardHtml(entries: any[], meta: LooseObject = {}) {
-  const staticExport =
-    meta.deliveryMode === "static-export" || meta.settings?.deliveryMode === "static-export";
+  const offlineExport = ["static-export", "showcase"].includes(
+    String(meta.deliveryMode || meta.settings?.deliveryMode || ""),
+  );
   const dashboardContext = { workDir: meta.workDir || meta.settings?.workDir || "" };
   const publicExport = Boolean(
     meta.publicExport ||
@@ -6027,8 +6028,8 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
     meta.settings?.publicExport ||
     meta.settings?.showcaseMode,
   );
-  const entriesForClient = staticExport ? stripDashboardCommandFields(entries) : entries;
-  const boundedEntries = staticExport
+  const entriesForClient = offlineExport ? stripDashboardCommandFields(entries) : entries;
+  const boundedEntries = offlineExport
     ? boundDashboardStaticExportEntries(entriesForClient)
     : {
         entries: entriesForClient,
@@ -6043,7 +6044,7 @@ function dashboardHtml(entries: any[], meta: LooseObject = {}) {
   const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
   const metaForClient = stripDashboardCommandFields({
     ...meta,
-    ledgerBounds: staticExport
+    ledgerBounds: offlineExport
       ? {
           truncated: boundedEntries.truncated,
           omittedEntries: boundedEntries.omittedEntries,

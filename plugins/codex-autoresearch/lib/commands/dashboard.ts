@@ -138,6 +138,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const commands = deps.dashboardCommands(workDir);
     const generatedAt = new Date().toISOString();
     const showcaseExport = deps.boolOption(args.showcase ?? args.showcaseMode, false);
+    const deliveryMode = showcaseExport ? "showcase" : "static-export";
     const sourceCwd = showcaseExport
       ? path.relative(deps.pluginRoot, workDir).replaceAll("\\", "/") || "."
       : workDir;
@@ -153,7 +154,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       deps.pluginVersion,
     );
     const dashboardContext = {
-      deliveryMode: "static-export",
+      deliveryMode,
       generatedAt,
       sourceCwd,
       pluginVersion: deps.pluginVersion,
@@ -171,7 +172,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       workDir,
       generatedAt,
       jsonlName: "autoresearch.jsonl",
-      deliveryMode: "static-export",
+      deliveryMode,
       liveActionsAvailable: false,
       modeGuidance: {
         title: showcaseExport ? "Demo Snapshot" : "Static Snapshot",

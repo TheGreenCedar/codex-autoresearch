@@ -543,6 +543,7 @@ async function runDemoTrustCheck() {
     path.join(ROOT, "examples", "demo-session", "autoresearch-dashboard.html"),
     "utf8",
   );
+  const showcaseIssues = demoShowcaseIssues(html);
   const forbidden = [
     { label: "Windows user path", pattern: /C:(?:\\+|\/)Users(?:\\+|\/)/ },
     {
@@ -561,10 +562,17 @@ async function runDemoTrustCheck() {
     },
     { label: "branch-specific final tree coverage", pattern: /Final tree coverage is missing/ },
   ].filter((entry) => entry.pattern.test(html));
-  if (!html.includes(`"pluginVersion":"${pkg.version}"`) || forbidden.length) {
+  if (
+    !html.includes(`"pluginVersion":"${pkg.version}"`) ||
+    forbidden.length ||
+    showcaseIssues.length
+  ) {
     console.log("fail demo:export");
     if (!html.includes(`"pluginVersion":"${pkg.version}"`)) {
       console.log(indent(`Demo export does not embed current pluginVersion ${pkg.version}.`));
+    }
+    if (showcaseIssues.length) {
+      console.log(indent(`Demo export is not a valid showcase:\n${showcaseIssues.join("\n")}`));
     }
     if (forbidden.length) {
       console.log(
@@ -579,6 +587,44 @@ async function runDemoTrustCheck() {
   }
   console.log("ok demo:export");
   return true;
+}
+
+function parseDashboardMeta(html: string): any | null {
+  const match = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function demoShowcaseIssues(html: string): string[] {
+  const meta = parseDashboardMeta(html);
+  if (!meta) return ["missing or invalid embedded dashboard metadata"];
+  const issues: string[] = [];
+  if (meta.publicExport !== true || meta.settings?.publicExport !== true) {
+    issues.push("public export flags are missing");
+  }
+  if (meta.showcaseMode !== true || meta.settings?.showcaseMode !== true) {
+    issues.push("showcase flags are missing");
+  }
+  if (meta.deliveryMode !== "showcase" || meta.settings?.deliveryMode !== "showcase") {
+    issues.push("deliveryMode is not showcase");
+  }
+  if (
+    meta.viewModel?.trustState?.mode === "static-export" ||
+    meta.viewModel?.processHygiene?.mode === "static-export"
+  ) {
+    issues.push("view model still reports static-export mode");
+  }
+  if (
+    /Static export/i.test(JSON.stringify(meta.viewModel?.trustState?.reasons ?? [])) ||
+    /Static export/i.test(JSON.stringify(meta.viewModel?.processHygiene?.warnings ?? []))
+  ) {
+    issues.push("view model still embeds static-export warnings");
+  }
+  return issues;
 }
 
 function parseNpmPackManifest(output: string): PackageManifestParse {
