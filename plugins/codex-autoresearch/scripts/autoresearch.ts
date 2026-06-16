@@ -85,7 +85,7 @@ import {
   defaultEvidenceStatusForRun,
   isAcceptedCurrentRun,
 } from "../lib/evidence-registry.js";
-import { resolvePathInsideRootSync } from "../lib/path-containment.js";
+import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
@@ -9330,14 +9330,6 @@ async function realPathOrResolved(target: string): Promise<string> {
   } catch {
     return path.resolve(target);
   }
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target)).replace(/\\/g, "/");
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative))
-  );
 }
 
 function promotionStateForLoggedDecision({

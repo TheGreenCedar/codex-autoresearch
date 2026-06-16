@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { isPathInside } from "../path-containment.js";
 import { isUnknownRecord, type UnknownRecord } from "../types/json.js";
 
 export interface ProtectedBenchmarkSnapshot {
@@ -738,14 +739,6 @@ function sortRecords(records: UnknownRecord[]): UnknownRecord[] {
 
 function hashText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target)).replace(/\\/g, "/");
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative))
-  );
 }
 
 async function lstatOrNull(filePath: string) {
