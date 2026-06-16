@@ -15,6 +15,8 @@ Codex Autoresearch keeps each attempt measured, logged, and scoped so you can se
 
 Inspired by the AI-focused [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). Codex Autoresearch adapts measured improvement loops for Codex: local benchmarks, durable state, live readouts, and reviewable branch previews.
 
+This project pairs especially well with [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail): Ponytail keeps Codex on the shortest workable implementation path, while Autoresearch checks whether the result actually improves.
+
 ## Try it
 
 Ask Codex to use Codex Autoresearch.
