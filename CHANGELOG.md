@@ -8,6 +8,7 @@ This project uses a root-only changelog because the root README is the public do
 
 ### Changed
 
+- README: added the Ponytail plugin pairing note for short, measured improvement loops.
 - README: problem/solution opener, worked example, and questions section (structure only; no behavior change).
 - Documentation rewrite: plain-warm senior-engineer voice, clearer audience split between human docs and agent contracts, restructured docs index, and `concepts.md#state-fields` glossary for compact-state labels.
 - Removed brittle doc-copy test gates (`ax-ux-golden-path`, `full-product-docs`, `loop-governance-docs`) and relaxed README phrase assertions in product tests.
