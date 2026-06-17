@@ -279,6 +279,22 @@ const CONTRACTS = {
     safety: "Writes research scratchpad and session artifacts.",
     outputSchema: basicOutputSchema(["ok", "workDir", "slug", "qualityGap"]),
   },
+  start_research_loop: {
+    purpose: "Start a qualitative quality_gap loop.",
+    whenToUse:
+      "Create the scratchpad, validate the benchmark, and optionally capture the first baseline.",
+    contrast: "Use setup_research_session for scratchpad-only setup.",
+    safety:
+      "Writes research scratchpad and session artifacts unless dry_run=true; baseline logging is a measure record and can be disabled with no_baseline_log=true.",
+    outputSchema: basicOutputSchema([
+      "dryRun",
+      "workDir",
+      "slug",
+      "metricName",
+      "baselineLogged",
+      "commands",
+    ]),
+  },
   research_fanout: {
     purpose: "Plan bounded parallel research lanes from current session memory.",
     whenToUse: "Use when the loop is spending too long serially exploring one hypothesis path.",
@@ -556,6 +572,7 @@ const CONTRACTS = {
       "loopContract",
       "canonicalNextAction",
       "commandExecutionBoundary",
+      "commandAuthority",
       "runtimeProvenance",
       "decisionEnvelope",
       "sessionDecisionCapsule",

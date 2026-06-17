@@ -31,6 +31,14 @@ const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
+const pathExists = async (target: string) => {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return (payload.result as Record<string, unknown>) || payload;
@@ -943,6 +951,102 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     assert.doesNotMatch(dashboard, /Serve dashboard/);
     assert.doesNotMatch(dashboard, /--research-slug \\"project-study\\"/);
     assert.match(dashboard, /activeResearchSlug/);
+  });
+});
+
+test("research-start dry-run prints the full qualitative loop start plan", async () => {
+  await withTempDir("research-start-dry-run", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--checks-command",
+      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      "--dry-run",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.slug, "language-support");
+    assert.equal(payload.metricName, "quality_gap");
+    assert.match(payload.commands.setup, /\bresearch-setup\b/);
+    assert.match(payload.commands.benchmarkLint, /\bbenchmark-lint\b/);
+    assert.match(payload.commands.doctor, /\bdoctor\b.*--check-benchmark/);
+    assert.match(payload.commands.baseline, /\bnext\b.*--compact/);
+    assert.match(payload.commands.logBaseline, /\blog\b.*--status measure/);
+    assert.match(payload.commands.resume, /\brecommend-next\b.*--compact/);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), false);
+  });
+});
+
+test("research-start creates a quality-gap session and can skip baseline logging", async () => {
+  await withTempDir("research-start-baseline", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--no-baseline-log",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricName, "quality_gap");
+    assert.equal(payload.baselineLogged, false);
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.metricName, "quality_gap");
+    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+    assert.equal(
+      await pathExists(
+        path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
+      ),
+      true,
+    );
+  });
+});
+
+test("research-start default baseline logging keeps benchmark command authority aligned", async () => {
+  await withTempDir("research-start-default-baseline", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.baselineLogged, true);
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    const baselineCommand = payload.baselinePacket?.run?.command;
+    const baselineIdentityCommand =
+      payload.baselinePacket?.packetEvidence?.commandIdentity?.command;
+    assert.equal(config.benchmarkCommand, baselineCommand);
+    assert.equal(config.benchmarkCommand, baselineIdentityCommand);
+    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+
+    const ledger = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const measureEntry = ledger.find((entry) => entry.status === "measure");
+    assert.ok(measureEntry);
+    assert.equal(measureEntry.benchmarkContract?.command, config.benchmarkCommand);
   });
 });
 

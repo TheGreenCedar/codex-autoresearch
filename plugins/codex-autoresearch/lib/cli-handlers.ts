@@ -40,6 +40,7 @@ export interface CliCommandDeps {
   serveDashboard: CliDependency;
   sessionForensics: CliDependency;
   setupPlan: CliDependency;
+  researchStart: CliDependency;
   setupResearchSession: CliDependency;
   setupSession: CliDependency;
 }
@@ -186,6 +187,40 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         overwrite: args.overwrite,
         createChecks: args.createChecks,
         skipInit: args.skipInit,
+      }),
+    }),
+    "research-start": async (args) => ({
+      result: await deps.researchStart({
+        cwd: args.cwd,
+        slug: args.slug,
+        goal: args.goal,
+        name: args.name,
+        checksCommand: args.checksCommand,
+        shell: args.shell,
+        filesInScope: args.filesInScope,
+        constraints: args.constraints,
+        secondaryMetricConstraints: args.secondaryMetricConstraints,
+        secondaryMetricConstraintMode: args.secondaryMetricConstraintMode,
+        protectedBenchmarkPaths: args.protectedBenchmarkPaths,
+        commitPaths: args.commitPaths,
+        maxIterations: args.maxIterations,
+        packetBudget: args.packetBudget,
+        wallClockBudgetSeconds: args.wallClockBudgetSeconds,
+        budgetNote: args.budgetNote,
+        autonomyMode: args.autonomyMode,
+        checksPolicy: args.checksPolicy,
+        keepPolicy: args.keepPolicy,
+        dashboardRefreshSeconds: args.dashboardRefreshSeconds,
+        overwrite: args.overwrite,
+        createChecks: args.createChecks,
+        baselineLog: args.baselineLog,
+        noBaselineLog: args.noBaselineLog,
+        baseline_log: args.baseline_log,
+        no_baseline_log: args.no_baseline_log,
+        dryRun: args.dryRun,
+        skipInit: args.skipInit,
+        allowUnsafeCommand: args.allowUnsafeCommand,
+        allow_unsafe_command: args.allow_unsafe_command,
       }),
     }),
     "research-fanout": async (args) => ({

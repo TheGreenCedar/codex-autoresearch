@@ -4819,6 +4819,143 @@ async function setupResearchSession(args: any) {
   };
 }
 
+async function researchStart(args: LooseObject) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const slug = safeSlug(args.slug || "research");
+  const goal = String(args.goal || "").trim();
+  if (!goal) throw new Error("research-start requires --goal.");
+
+  const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
+  const shouldLogBaseline = boolOption(args.no_baseline_log ?? args.noBaselineLog, false)
+    ? false
+    : boolOption(args.baseline_log ?? args.baselineLog, true);
+  const commandShell = normalizeCommandShell(args.shell, defaultCommandShell());
+  const shellQuote = (value: string) => quoteShellArg(value, commandShell);
+  const scriptPath = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
+  const commands = buildContinuationCommands({
+    researchSlug: slug,
+    scriptPath,
+    shellQuote,
+    workDir,
+  });
+  const setupParts = [
+    "node",
+    shellQuote(scriptPath),
+    "research-setup",
+    "--cwd",
+    shellQuote(workDir),
+    "--slug",
+    shellQuote(slug),
+    "--goal",
+    shellQuote(goal),
+  ];
+  const addSetupOption = (flag: string, value: unknown) => {
+    if (value == null || value === "") return;
+    setupParts.push(flag, shellQuote(String(value)));
+  };
+  const addSetupListOption = (flag: string, value: unknown) => {
+    const values = listOption(value);
+    if (values.length === 0) return;
+    setupParts.push(flag, shellQuote(values.join(",")));
+  };
+  const addSetupBoolOption = (flag: string, value: unknown) => {
+    if (boolOption(value, false)) setupParts.push(flag);
+  };
+  addSetupOption("--name", args.name);
+  addSetupOption("--checks-command", args.checksCommand ?? args.checks_command);
+  addSetupOption("--shell", args.shell);
+  addSetupListOption("--files-in-scope", args.filesInScope ?? args.files_in_scope);
+  addSetupListOption("--constraints", args.constraints);
+  addSetupListOption(
+    "--secondary-metric-constraints",
+    args.secondaryMetricConstraints ?? args.secondary_metric_constraints,
+  );
+  addSetupOption(
+    "--secondary-metric-constraint-mode",
+    args.secondaryMetricConstraintMode ?? args.secondary_metric_constraint_mode,
+  );
+  addSetupListOption(
+    "--protected-benchmark-paths",
+    args.protectedBenchmarkPaths ?? args.protected_benchmark_paths,
+  );
+  addSetupListOption("--commit-paths", args.commitPaths ?? args.commit_paths);
+  addSetupOption("--max-iterations", args.maxIterations ?? args.max_iterations);
+  addSetupOption("--packet-budget", args.packetBudget ?? args.packet_budget);
+  addSetupOption(
+    "--wall-clock-budget-seconds",
+    args.wallClockBudgetSeconds ?? args.wall_clock_budget_seconds,
+  );
+  addSetupOption("--budget-note", args.budgetNote ?? args.budget_note);
+  addSetupOption("--autonomy-mode", args.autonomyMode ?? args.autonomy_mode);
+  addSetupOption("--checks-policy", args.checksPolicy ?? args.checks_policy);
+  addSetupOption("--keep-policy", args.keepPolicy ?? args.keep_policy);
+  addSetupOption(
+    "--dashboard-refresh-seconds",
+    args.dashboardRefreshSeconds ?? args.dashboard_refresh_seconds,
+  );
+  addSetupBoolOption("--overwrite", args.overwrite);
+  addSetupBoolOption("--create-checks", args.createChecks ?? args.create_checks);
+  addSetupBoolOption("--skip-init", args.skipInit ?? args.skip_init);
+  addSetupBoolOption(
+    "--allow-unsafe-command",
+    args.allowUnsafeCommand ?? args.allow_unsafe_command,
+  );
+
+  const output = {
+    dryRun,
+    workDir,
+    slug,
+    goal,
+    metricName: "quality_gap",
+    baselineLogged: false,
+    commands: {
+      setup: setupParts.join(" "),
+      benchmarkLint: commands.benchmarkLint,
+      doctor: `node ${shellQuote(scriptPath)} doctor --cwd ${shellQuote(workDir)} --check-benchmark --explain`,
+      baseline: commands.next,
+      logBaseline: commands.measureLast,
+      resume: commands.recommendNext,
+      state: commands.state,
+    },
+  };
+  if (dryRun) return output;
+
+  const setup = await setupResearchSession({ ...args, cwd: workDir, slug, goal });
+  const benchmarkCommand = await defaultBenchmarkCommand(workDir);
+  const runtimeConfig = await writeRuntimeConfig(setup.sessionCwd, {
+    name: args.name || `Deep research: ${goal}`,
+    goal,
+    metricName: "quality_gap",
+    metricUnit: "gaps",
+    bestDirection: "lower",
+    benchmarkCommand,
+  });
+  const lint = await benchmarkLint({ cwd: workDir });
+  const doctor = await doctorSession({ cwd: workDir, checkBenchmark: true, explain: true });
+  let baselinePacket: LooseObject | null = null;
+  let baselineLogResult: LooseObject | null = null;
+  if (shouldLogBaseline) {
+    baselinePacket = await nextExperiment({ cwd: workDir, compact: true });
+    baselineLogResult = await logExperiment({
+      cwd: workDir,
+      fromLast: true,
+      status: "measure",
+      description: "Baseline quality_gap measurement",
+    });
+  }
+  return {
+    ...output,
+    dryRun: false,
+    setup,
+    runtimeConfig,
+    benchmarkLint: lint,
+    doctor,
+    baselinePacket,
+    baselineLog: baselineLogResult,
+    baselineLogged: Boolean(baselineLogResult),
+  };
+}
+
 async function measureQualityGap(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
@@ -9361,6 +9498,7 @@ async function executeAutoresearchCli(
     runExperiment,
     serveDashboard,
     setupPlan,
+    researchStart,
     setupResearchSession,
     setupSession,
   });
