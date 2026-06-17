@@ -64,6 +64,7 @@ const TOOL_REGISTRY = [
   registryEntry("partial_results", "partial-results", "read", "diagnostic", "advanced"),
   registryEntry("log_experiment", "log", "git_mutation", "happy_path", "default"),
   registryEntry("read_state", "state", "read", "happy_path", "default"),
+  registryEntry("ledger_doctor", "ledger-doctor", "read", "diagnostic", "default"),
   registryEntry("measure_quality_gap", "quality-gap", "read", "diagnostic", "advanced"),
   registryEntry("gap_candidates", "gap-candidates", "preview", "diagnostic", "advanced"),
   registryEntry("finalize_preview", "finalize-preview", "read", "happy_path", "default"),
@@ -119,6 +120,7 @@ export function actionPolicyForTool(name: string, args: LooseObject = {}): Actio
     return args.command ? "process_start" : "state_mutation";
   }
   if (name === "partial_results" && enabledArg(args.record)) return "artifact_write";
+  if (name === "ledger_doctor" && enabledArg(args.repair)) return "artifact_write";
   if (
     name === "guided_setup" &&
     (enabledArg(args.start_dashboard) || enabledArg(args.startDashboard))

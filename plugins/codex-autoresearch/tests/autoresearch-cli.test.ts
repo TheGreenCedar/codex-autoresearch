@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
@@ -18,6 +18,7 @@ import {
   PARTIAL_RESULT_ARTIFACT_MAX_ROWS,
 } from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
+import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
@@ -44,9 +45,263 @@ function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return (payload.result as Record<string, unknown>) || payload;
 }
 
+async function writeLedger(dir: string, records: Record<string, unknown>[]) {
+  await writeFile(
+    path.join(dir, "autoresearch.jsonl"),
+    records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+}
+
+function parseLedger(text: string): Record<string, unknown>[] {
+  return text
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
+
+test("ledger health detects duplicate, missing, non-monotonic, and malformed run fields", () => {
+  const duplicateAndMissing = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 2, status: "discard" },
+    { run: 2, status: "measure" },
+    { run: 4, status: "keep" },
+  ]);
+
+  assert.equal(duplicateAndMissing.ok, false);
+  assert.deepEqual(duplicateAndMissing.duplicateRuns, [2]);
+  assert.deepEqual(duplicateAndMissing.missingRuns, [3]);
+  assert.deepEqual(duplicateAndMissing.nonMonotonicRuns, [{ previous: 2, current: 2, index: 2 }]);
+  assert.match(duplicateAndMissing.warnings.join("\n"), /Duplicate run numbers: 2/);
+
+  const nonMonotonic = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 3, status: "discard" },
+    { run: 2, status: "measure" },
+  ]);
+  assert.deepEqual(nonMonotonic.nonMonotonicRuns, [{ previous: 3, current: 2, index: 2 }]);
+
+  const malformed = analyzeLedgerHealth([
+    { run: "2", status: "keep" },
+    { run: 0, status: "discard" },
+    { run: 1.5, status: "measure" },
+    { type: "config" },
+  ]);
+  assert.deepEqual(malformed.malformedRecords, [0, 1, 2]);
+});
+
+test("ledger health bounds large missing-run gaps without enumerating every missing run", () => {
+  const health = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 1_000_000_000, status: "discard" },
+  ]);
+
+  assert.equal(health.ok, false);
+  assert.equal(health.missingRunCount, 999_999_998);
+  assert.equal(health.missingRuns.length, health.bounded.sampleLimit);
+  assert.equal(health.missingRunsOmitted, 999_999_978);
+  assert.equal(health.missingRunRanges[0].start, 2);
+  assert.equal(health.missingRunRanges[0].end, 999_999_999);
+  assert.equal(health.missingRunRanges[0].count, 999_999_998);
+  assert.equal(health.bounded.truncated, true);
+  assert.ok(health.warnings.join("\n").length < 500);
+});
+
+test("ledger repair normalizes duplicate numeric runs and preserves evidence", () => {
+  const records = [
+    { type: "config", metricName: "seconds" },
+    { run: 1, status: "keep", evidence: { artifact: "a.json" } },
+    { run: 1, status: "discard", evidence: { artifact: "b.json" } },
+    { run: "bad", status: "measure", evidence: { artifact: "malformed.json" } },
+    { run: 2, status: "keep", evidence: { artifact: "c.json" } },
+  ];
+
+  const repair = repairLedgerRecords(records);
+
+  assert.equal(repair.changed, true);
+  assert.equal(repair.records.length, records.length);
+  assert.deepEqual(
+    repair.records.map((record) => record.run),
+    [undefined, 1, 2, "bad", 3],
+  );
+  assert.deepEqual(repair.records[2].evidence, { artifact: "b.json" });
+  assert.deepEqual(repair.records[3].evidence, { artifact: "malformed.json" });
+  assert.equal(records[2].run, 1, "repair should not mutate caller-owned records");
+});
+
+test("ledger-doctor --json returns bounded structured health for malformed JSONL", async () => {
+  await withTempDir("ledger-doctor-malformed-jsonl", async (dir) => {
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = [
+      JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+      "{ bad json",
+      JSON.stringify({ run: 1, metric: 5, status: "keep" }),
+      "",
+    ].join("\n");
+    await writeFile(ledgerPath, before);
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
+    assert.equal(payload.ledgerHealth.bounded.truncated, false);
+    assert.match(payload.ledgerHealth.warnings.join("\n"), /Malformed JSONL lines: 2/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("ledger-doctor --repair --yes refuses malformed JSONL and writes no backup", async () => {
+  await withTempDir("ledger-doctor-malformed-repair-refused", async (dir) => {
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = [
+      JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+      "{ bad json",
+      JSON.stringify({ run: 1, metric: 5, status: "keep" }),
+      "",
+    ].join("\n");
+    await writeFile(ledgerPath, before);
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair", "--yes", "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.refused, true);
+    assert.equal(payload.code, "ledger_parse_errors");
+    assert.equal(payload.repair.changed, false);
+    assert.equal(payload.backupPath, "");
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+    const backups = (await readdir(dir)).filter((entry) =>
+      entry.startsWith("autoresearch.jsonl.repair-backup-"),
+    );
+    assert.deepEqual(backups, []);
+  });
+});
+
+test("ledger-doctor --json reports duplicate runs without modifying the ledger", async () => {
+  await withTempDir("ledger-doctor-read-only", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep", evidence: { artifact: "a.json" } },
+      { run: 1, metric: 6, status: "discard", evidence: { artifact: "b.json" } },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("ledger-doctor --repair refuses without --yes and leaves files untouched", async () => {
+  await withTempDir("ledger-doctor-repair-refuses", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /ledger-doctor --repair requires --yes/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+    const backups = (await readdir(dir)).filter((entry) =>
+      entry.startsWith("autoresearch.jsonl.repair-backup-"),
+    );
+    assert.deepEqual(backups, []);
+  });
+});
+
+test("ledger-doctor --repair --yes backs up and normalizes duplicates without deleting evidence", async () => {
+  await withTempDir("ledger-doctor-repair-confirmed", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep", evidence: { artifact: "a.json" } },
+      { run: 1, metric: 6, status: "discard", evidence: { artifact: "b.json" } },
+      { run: 2, metric: 4, status: "keep", evidence: { artifact: "c.json" } },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair", "--yes", "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.repair.changed, true);
+    assert.match(path.basename(payload.backupPath), /^autoresearch\.jsonl\.repair-backup-/);
+    assert.equal(await readFile(payload.backupPath, "utf8"), before);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.equal(payload.repairedLedgerHealth.ok, true);
+
+    const after = parseLedger(await readFile(ledgerPath, "utf8"));
+    assert.equal(after.length, 4);
+    assert.deepEqual(
+      after.map((record) => record.run),
+      [undefined, 1, 2, 3],
+    );
+    assert.deepEqual(after[2].evidence, { artifact: "b.json" });
+    assert.deepEqual(after[3].evidence, { artifact: "c.json" });
+  });
+});
+
+test("state --json includes ledgerHealth and does not repair duplicates", async () => {
+  await withTempDir("state-ledger-health", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["state", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ledgerHealth.ok, false);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.match(payload.ledgerHealth.warnings.join("\n"), /Duplicate run numbers: 1/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("state --json exposes bounded ledgerHealth for large gaps without repairing", async () => {
+  await withTempDir("state-ledger-health-bounded", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1_000_000_000, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["state", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ledgerHealth.ok, false);
+    assert.equal(payload.ledgerHealth.missingRunCount, 999_999_998);
+    assert.equal(payload.ledgerHealth.missingRuns.length, payload.ledgerHealth.bounded.sampleLimit);
+    assert.equal(payload.ledgerHealth.bounded.truncated, true);
+    assert.ok(payload.ledgerHealth.warnings.join("\n").length < 500);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
 
 test("state exposes missing product claim coverage for shippable retrieval work", async () => {
   await withTempDir("product-claim-coverage-state", async (dir) => {
@@ -8197,6 +8452,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
+  const ledgerDoctor = toolSchemas.find((tool) => tool.name === "ledger_doctor");
 
   assert.ok(guided);
   assert.ok(run);
@@ -8209,6 +8465,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
   assert.ok(configureSession);
+  assert.ok(ledgerDoctor);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -8243,6 +8500,10 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(benchmarkLint.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
   assert.equal(readState.inputSchema.properties.report.type, "boolean");
   assert.equal(readState.outputSchema.properties.report.type, "object");
+  assert.equal(ledgerDoctor.inputSchema.properties.repair.type, "boolean");
+  assert.equal(ledgerDoctor.inputSchema.properties.yes.type, "boolean");
+  assert.equal(ledgerDoctor.outputSchema.properties.ledgerHealth.type, "object");
+  assert.equal(ledgerDoctor.outputSchema.properties.backupPath.type, "string");
   assert.equal(readState.outputSchema.properties.dashboardHealth.type, "object");
   assert.equal(onboardingPacket.inputSchema.properties.operator_checklist, undefined);
   assert.equal(recommendNext.inputSchema.properties.operator_checklist.type, "boolean");
@@ -8328,13 +8589,18 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(cliCommandForTool("next_experiment"), "next");
   assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
+  assert.equal(cliCommandForTool("ledger_doctor"), "ledger-doctor");
   assert.equal(toolNameForCliCommand("next"), "next_experiment");
   assert.equal(toolNameForCliCommand("research-fanout"), "research_fanout");
   assert.equal(toolNameForCliCommand("checks-inspect"), "checks_inspect");
+  assert.equal(toolNameForCliCommand("ledger-doctor"), "ledger_doctor");
   assert.equal(toolMutates("next_experiment"), true);
   assert.equal(toolMutates("research_fanout"), false);
   assert.equal(actionPolicyForTool("research_fanout"), "read");
   assert.equal(actionPolicyForTool("research_fanout", { yes: true }), "state_mutation");
+  assert.equal(toolMutates("ledger_doctor"), false);
+  assert.equal(actionPolicyForTool("ledger_doctor"), "read");
+  assert.equal(actionPolicyForTool("ledger_doctor", { repair: true, yes: true }), "artifact_write");
   assert.equal(toolMutates("read_state"), false);
 });
 
@@ -8406,6 +8672,24 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
   assert.deepEqual(normalizeRuntimeToolArguments("doctor_session", doctorArgs), {
     cwd: "C:/repo",
     allowFixedControlRerun: true,
+  });
+  const ledgerDoctorArgs = validateToolArguments("ledger_doctor", {
+    workingDir: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
+  });
+  assert.deepEqual(ledgerDoctorArgs, {
+    working_dir: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("ledger_doctor", ledgerDoctorArgs), {
+    cwd: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
   });
   const benchmarkLintArgs = validateToolArguments("benchmark_lint", {
     workingDir: "C:/repo",

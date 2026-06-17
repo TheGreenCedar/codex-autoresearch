@@ -55,6 +55,7 @@ export interface CompactStateBuilderInput {
   runtimeDriftSummary?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
+  ledgerHealth?: unknown;
   gateQuality?: unknown;
   preflight?: unknown;
   portfolioRecommendation?: unknown;
@@ -76,6 +77,7 @@ const OPTIONAL_COMPACT_STATE_FIELDS = [
   "runtimeDriftSummary",
   "dashboardHealth",
   "sourceCleanliness",
+  "ledgerHealth",
   "gateQuality",
   "preflight",
   "portfolioRecommendation",
@@ -148,6 +150,7 @@ export interface CompactStateResponse {
   runtimeDriftSummary?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
+  ledgerHealth?: unknown;
   gateQuality?: unknown;
   preflight?: unknown;
   portfolioRecommendation?: unknown;

@@ -178,6 +178,11 @@ import {
   buildScaffoldHealth,
   commandDiagnostics,
 } from "../lib/truth-signals.js";
+import {
+  analyzeLedgerHealth,
+  readLedgerRecordsTolerant,
+  repairLedgerRecords,
+} from "../lib/ledger-health.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
@@ -6699,6 +6704,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
 
   const state = loadSessionState(workDir, readCache);
   const records = loadSessionRecords(workDir, readCache);
+  const ledgerHealth = analyzeLedgerHealth(records);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir, state);
@@ -6874,6 +6880,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     runtimeDriftSummary: guidance.runtimeDriftSummary,
     dashboardHealth,
     sourceCleanliness,
+    ledgerHealth,
     gateQuality: guidance.gateQuality,
     fixedControl: fixedControlStateSummary(config.fixedControl),
     commandAuthority: publicCommandAuthority,
@@ -6910,6 +6917,96 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   return compact ? compactPublicState(fullState) : fullState;
 }
 
+async function ledgerDoctor(args: LooseObject): Promise<LooseObject> {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const ledger = readLedgerRecordsTolerant(workDir);
+  const { ledgerPath, records, parseErrors } = ledger;
+  const ledgerHealth = analyzeLedgerHealth(records, { parseErrors });
+  const repairRequested = boolOption(args.repair, false);
+
+  if (!repairRequested) {
+    return {
+      ok: ledgerHealth.ok,
+      workDir,
+      ledgerPath,
+      readOnly: true,
+      ledgerHealth,
+      parseErrors: ledgerHealth.parseErrors,
+      warnings: ledgerHealth.warnings,
+    };
+  }
+
+  if (!boolOption(args.yes, false)) {
+    throw new Error("ledger-doctor --repair requires --yes before modifying autoresearch.jsonl.");
+  }
+
+  if (ledgerHealth.parseErrorCount > 0) {
+    return {
+      ok: false,
+      workDir,
+      ledgerPath,
+      readOnly: true,
+      refused: true,
+      code: "ledger_parse_errors",
+      ledgerHealth,
+      repairedLedgerHealth: null,
+      backupPath: "",
+      repair: summarizeLedgerRepair({ changed: false, records, repairs: [] }),
+      parseErrors: ledgerHealth.parseErrors,
+      warnings: ledgerHealth.warnings,
+    };
+  }
+
+  const repair = repairLedgerRecords(records);
+  if (!repair.changed) {
+    return {
+      ok: ledgerHealth.ok,
+      workDir,
+      ledgerPath,
+      readOnly: false,
+      ledgerHealth,
+      repairedLedgerHealth: ledgerHealth,
+      backupPath: "",
+      repair: summarizeLedgerRepair(repair),
+      warnings: ledgerHealth.warnings,
+    };
+  }
+
+  const backupPath = `${ledgerPath}.repair-backup-${ledgerBackupTimestamp()}`;
+  await fsp.copyFile(ledgerPath, backupPath);
+  await fsp.writeFile(ledgerPath, formatJsonl(repair.records), "utf8");
+  const repairedLedgerHealth = analyzeLedgerHealth(repair.records);
+  return {
+    ok: repairedLedgerHealth.ok,
+    workDir,
+    ledgerPath,
+    readOnly: false,
+    ledgerHealth,
+    repairedLedgerHealth,
+    backupPath,
+    repair: summarizeLedgerRepair(repair),
+    warnings: repairedLedgerHealth.warnings,
+  };
+}
+
+function summarizeLedgerRepair(repair: ReturnType<typeof repairLedgerRecords>): LooseObject {
+  return {
+    changed: repair.changed,
+    repairedRuns: repair.repairs.length,
+    preservedRecords: repair.records.length,
+    repairs: repair.repairs,
+  };
+}
+
+function formatJsonl(records: Array<Record<string, unknown>>): string {
+  if (!records.length) return "";
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+function ledgerBackupTimestamp(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
 async function publicCompactState({
   workDir,
   config,
@@ -6924,6 +7021,7 @@ async function publicCompactState({
   const effectiveReadCache = (readCache || createSessionReadCache()) as any;
   const state = loadSessionState(workDir, effectiveReadCache);
   const records = loadSessionRecords(workDir, effectiveReadCache);
+  const ledgerHealth = analyzeLedgerHealth(records);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
@@ -7094,6 +7192,7 @@ async function publicCompactState({
     runtimeDriftSummary: guidance.runtimeDriftSummary,
     dashboardHealth,
     sourceCleanliness,
+    ledgerHealth,
     gateQuality: guidance.gateQuality,
     fixedControl: fixedControlStateSummary(config.fixedControl),
     preflight: publicPreflight,
@@ -7384,6 +7483,7 @@ function compactPublicState(state: LooseObject) {
       : null,
     dashboardHealth: state.dashboardHealth || null,
     sourceCleanliness: state.sourceCleanliness || null,
+    ledgerHealth: state.ledgerHealth || null,
     gateQuality: state.gateQuality
       ? {
           posture: state.gateQuality.posture,
@@ -9648,6 +9748,7 @@ async function executeAutoresearchCli(
     integrationsCommand,
     interactiveSetup,
     logExperiment,
+    ledgerDoctor,
     measureQualityGap,
     newSegment,
     nextExperiment,

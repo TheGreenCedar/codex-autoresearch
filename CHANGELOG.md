@@ -6,6 +6,10 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+### Added
+
+- Added `ledger-doctor --cwd <project> [--json]` to report ledger run-number health, with guarded `--repair --yes` duplicate-run normalization that writes a timestamped backup first.
+
 ### Changed
 
 - Fixed-control guard help now documents `--allow-fixed-control-rerun` on guarded benchmark-running commands; `fixedControl.forbiddenCommandPatterns` use literal substring matches and reruns require the explicit override.

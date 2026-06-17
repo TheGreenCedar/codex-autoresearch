@@ -509,6 +509,21 @@ export const toolSchemas = applyToolContracts([
     },
   },
   {
+    name: "ledger_doctor",
+    description:
+      "Analyze autoresearch.jsonl numbering health and optionally repair duplicate run numbers after confirmation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        json: { type: "boolean" },
+        repair: { type: "boolean" },
+        yes: { type: "boolean" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "measure_quality_gap",
     description:
       "Count open and closed checklist items in autoresearch.research/<slug>/quality-gaps.md.",

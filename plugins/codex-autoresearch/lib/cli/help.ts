@@ -14,6 +14,7 @@ const DEFAULT_USAGE_LINES = [
   "  node scripts/autoresearch.mjs next --cwd <project> [--compact] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",
   "  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text>",
   "  node scripts/autoresearch.mjs state --cwd <project> [--compact] [--report]",
+  "  node scripts/autoresearch.mjs ledger-doctor --cwd <project> [--json] [--repair --yes]",
   "  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]",
 ];
 
@@ -64,6 +65,7 @@ const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]",
   "  node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
   "  node scripts/autoresearch.mjs state --cwd <project> [--compact] [--report]",
+  "  node scripts/autoresearch.mjs ledger-doctor --cwd <project> [--json] [--repair --yes]",
   "  node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--allow-fixed-control-rerun] [--explain]",
   "  node scripts/autoresearch.mjs doctor hooks",
   "  node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",

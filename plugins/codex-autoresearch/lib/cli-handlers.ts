@@ -23,6 +23,7 @@ export interface CliCommandDeps {
   integrationsCommand: CliDependency;
   interactiveSetup: CliDependency;
   laneRunner: CliDependency;
+  ledgerDoctor: CliDependency;
   logExperiment: CliDependency;
   measureQualityGap: CliDependency;
   newSegment: CliDependency;
@@ -256,6 +257,14 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         evidence: args.evidence,
         humanApproval: args.humanApproval,
         risks: args.risks,
+      }),
+    }),
+    "ledger-doctor": async (args) => ({
+      result: await deps.ledgerDoctor({
+        cwd: args.cwd,
+        json: args.json,
+        repair: args.repair,
+        yes: args.yes,
       }),
     }),
     config: async (args) => ({

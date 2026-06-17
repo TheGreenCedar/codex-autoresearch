@@ -11,6 +11,7 @@ test("default help leads with the short happy path", () => {
   assert.match(help, /setup-plan --cwd <project>/);
   assert.match(help, /prompt-plan --cwd <project>/);
   assert.match(help, /node scripts\/autoresearch\.mjs setup --cwd <project>/);
+  assert.match(help, /ledger-doctor --cwd <project> \[--json\] \[--repair --yes\]/);
   assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /node scripts\/autoresearch\.mjs finalize-preview --cwd <project>/);
@@ -33,6 +34,7 @@ test("full help preserves advanced and maintainer commands", () => {
   assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /clear --cwd <project>/);
+  assert.match(help, /ledger-doctor --cwd <project> \[--json\] \[--repair --yes\]/);
   assert.doesNotMatch(help, /Run `--help --all`/);
 });
 
