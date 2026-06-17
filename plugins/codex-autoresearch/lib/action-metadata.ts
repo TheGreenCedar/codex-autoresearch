@@ -34,10 +34,11 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["finalizePreview", "newSegmentDryRun", "state"],
   }),
   "current-tree-finalization": actionMetadata({
-    label: "Preview finalization",
-    commandLabel: "Preview",
-    safeAction: "finalize-preview",
-    fallbackKeys: ["finalizePreview", "state"],
+    label: "Finalize current tree",
+    commandLabel: "Preview current-tree finalization",
+    safeAction: "finalize-current-tree",
+    fallbackKeys: ["finalizeCurrentTree", "finalizePreview", "state"],
+    packetBrake: true,
   }),
   "finalization-runway": actionMetadata({
     label: "Inspect finalization runway",
@@ -222,6 +223,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
 
 const operationalFallbackKinds = new Set([
   "baseline",
+  "current-tree-finalization",
   "log-decision",
   "next-packet",
   "plateau",

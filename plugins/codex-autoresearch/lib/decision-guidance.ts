@@ -48,9 +48,16 @@ export async function buildDecisionGuidanceContext({
   const stateConfig = unknownRecordOrEmpty(stateRecord.config);
   const resolvedBenchmarkCommand =
     cleanString(benchmarkCommand) ||
+    cleanString(configRecord.benchmarkCommand) ||
     (await defaultBenchmarkCommandOrEmpty(defaultBenchmarkCommand, workDir));
   const resolvedChecksCommand =
-    cleanString(checksCommand) || cleanString(await defaultChecksCommand(workDir));
+    cleanString(checksCommand) ||
+    cleanString(configRecord.checksCommand) ||
+    cleanString(await defaultChecksCommand(workDir));
+  const commandAuthority = {
+    benchmarkCommand: resolvedBenchmarkCommand,
+    checksCommand: resolvedChecksCommand,
+  };
   const metricName = cleanString(stateConfig.metricName || configRecord.metricName) || "metric";
   const benchmarkLintCommand = resolvedBenchmarkCommand
     ? renderCommand([
@@ -99,6 +106,7 @@ export async function buildDecisionGuidanceContext({
 
   return {
     gateQuality,
+    commandAuthority,
     preflight: buildPreflightAudit({
       metricName,
       benchmarkCommand: resolvedBenchmarkCommand,

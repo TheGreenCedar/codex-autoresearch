@@ -8742,6 +8742,42 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
   });
 });
 
+test("state and doctor use checksCommand from config for gate quality", async () => {
+  await withTempDir("config-checks-gate-quality", async (dir) => {
+    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" check`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify(
+        {
+          name: "config checks",
+          goal: "prove configured checks are respected",
+          metricName: "seconds",
+          metricUnit: "seconds",
+          bestDirection: "lower",
+          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          checksCommand,
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(path.join(dir, "autoresearch.jsonl"), "");
+
+    const state = await runCli(["state", "--cwd", dir, "--json"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "correctness");
+    assert.equal(statePayload.commandAuthority?.checksCommand, checksCommand);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.gateQuality.posture, "correctness");
+    assert.equal(doctorPayload.commandAuthority?.checksCommand, checksCommand);
+    assert.doesNotMatch(JSON.stringify(doctorPayload.explanation), /No independent checks gate/i);
+  });
+});
+
 test("setup state and doctor expose gate quality and preflight readiness", async () => {
   await withTempDir("gate-quality-preflight", async (dir) => {
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;

@@ -6657,6 +6657,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
+    commandAuthority: guidance.commandAuthority,
     preflight: guidance.preflight,
     limit: iterationLimitInfo(state, config),
     settings: {
@@ -8326,6 +8327,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     drift,
     runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
+    commandAuthority: guidance.commandAuthority,
     preflight: guidance.preflight,
     decisionEnvelope: loopAuthority.decisionEnvelope,
     loopContract: loopAuthority.loopContract,

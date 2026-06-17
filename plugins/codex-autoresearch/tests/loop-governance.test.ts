@@ -626,7 +626,11 @@ test("packet-brake blocker actions get non-next fallback commands", () => {
     });
     assert.notEqual(command, "", action.kind);
     assert.doesNotMatch(command, /\bnext\b/, action.kind);
-    assert.doesNotMatch(command, /\bfinalize-current-tree\b/, action.kind);
+    if (action.kind === "current-tree-finalization") {
+      assert.match(command, /\bfinalize-current-tree\b/, action.kind);
+    } else {
+      assert.doesNotMatch(command, /\bfinalize-current-tree\b/, action.kind);
+    }
     assert.equal(typeof action.label, "string", action.kind);
     assert.notEqual(action.label, "", action.kind);
   }
