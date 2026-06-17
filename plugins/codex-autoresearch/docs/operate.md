@@ -14,7 +14,7 @@ node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
 
-For broad new requests, start with `prompt-plan`, then `onboarding-packet`, `recommend-next`, `state`, `guide`, and `doctor`.
+For broad qualitative new requests, `research-start --cwd <project> --slug <slug> --goal "<goal>"` is the golden path. It keeps scratchpad seeding, `quality_gap` setup, benchmark validation, first baseline measurement, and resume commands together. Use `prompt-plan` first when you need read-only planning before creating files.
 
 CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
 
@@ -81,6 +81,14 @@ Hard capsules block generic `next` and finalization until benchmark repair, a fr
 When a done claim is rejected because accuracy, lazy behavior, ranking quality, or product-grade proof was not tested, stop packet work and downgrade to an experimental primitive. Run `state --compact` or `recommend-next --compact`, inspect claim coverage, and add missing acceptance proof before finalization uses product-grade language.
 
 When benchmark-contract drift is intentional, use `new-segment` instead of editing the ledger by hand. A fresh segment is the boundary where a new benchmark command, protected path set, metric name, direction, or unit becomes authoritative.
+
+When run numbers duplicate, segments look stale, or manual log entries were edited, inspect the ledger before another packet:
+
+```bash
+node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json
+```
+
+Use `ledger-doctor --repair --yes` only after reviewing the backup path in the repair preview or JSON output.
 
 When the dashboard handoff matters:
 
@@ -221,10 +229,12 @@ ASI is the structured memory saved with a packet decision — the context the ne
 For broad research, product study, docs, UX, and architecture:
 
 ```bash
-node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal "<goal>"
+node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
 node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug> --list
 node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug>
 ```
+
+`research-start` creates the scratchpad, configures `quality_gap`, validates the command, records the first baseline as `measure`, and prints the resume commands. Add `--no-baseline-log` when the first baseline should stay out of the ledger.
 
 Scratchpad under `autoresearch.research/<slug>/`:
 

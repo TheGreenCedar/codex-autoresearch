@@ -61,8 +61,10 @@ If branch contents are right but commit-level kept evidence is stale:
 ```bash
 git status --short
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
-node scripts/autoresearch.mjs finalize-current-tree --cwd <project>
+node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts
 ```
+
+When `state --report` reports `current-tree-finalization`, run `finalize-current-tree --cwd <project> --exclude-session-artifacts` as the primary command. Do not substitute generic `finalize-preview`; preview can explain the blocker, but current-tree mode is the route that packages the current non-session branch diff.
 
 Current-tree mode states that the current tree, not old kept commits, is the review unit. Session artifacts are excluded by default.
 

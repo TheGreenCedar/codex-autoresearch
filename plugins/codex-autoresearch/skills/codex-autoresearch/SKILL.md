@@ -18,6 +18,7 @@ The job: make one measured improvement loop trustworthy enough that a human can 
 ## For Codex
 
 - Use the short command path unless the session is ambiguous or blocked: `setup`, `doctor`, `next`, `log`, `state`, then `finalize-preview`.
+- For qualitative or deep-research improvement loops, start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It creates the scratchpad, configures `quality_gap`, validates the command, and records the first baseline as `measure` unless `--no-baseline-log` is passed.
 - Use advanced diagnostics only when needed: `onboarding-packet`, `recommend-next`, `prompt-plan`, `setup-plan`, `benchmark-inspect`, `partial-results`, `session-forensics`, `guide`, or `serve`.
 - Use `new-segment` when the active segment is maxed, stale, phase-changing, or no longer comparable.
 - Prefer CLI JSON and durable session files over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.last-run.json`, and `autoresearch.research/<slug>/`.
@@ -82,6 +83,9 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - `keep`, ordinary `discard`, and `measure` require a finite primary metric.
 - Use `measure` for non-promotional evidence: baselines, no-change probes, environment checks, and diagnostics.
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
+- Treat `review_required` metrics as provisional until ASI acknowledges the review outcome.
+- If `autoresearch.config.json` contains `fixedControl`, treat the named artifact as control truth. Do not rerun commands matching `forbiddenCommandPatterns` unless the user explicitly accepts `--allow-fixed-control-rerun`; prefer `reuseCommandHint`.
+- If run numbers duplicate, segments look stale, or manual log entries were edited, run `ledger-doctor --cwd <project> --json` before another packet. Use `ledger-doctor --repair --yes` only after reviewing the backup path it will create.
 - Read parsed metrics and promotion readiness separately. New keeps default to exploratory unless repeat, holdout, breadth, or explicit promotion metadata make the evidence promotable.
 - The loop contract is the authority for whether to spend another packet. `sourceCleanliness.blocks.nextPacket=false` only says source dirtiness is not the blocker.
 - Control-plane contracts are packet brakes too: goal mismatches, missing scoped approvals, stale process residue, unsupported broad claims, and unsafe finalization runways outrank another packet.
@@ -121,7 +125,7 @@ Use the served dashboard when a live readout is useful:
 
 Use a deep-research loop for broad, qualitative, product-study, UX, architecture, or documentation prompts. Study, accept gaps, measure `quality_gap`, close credible candidates, then start a fresh round when the question is still alive.
 
-1. Create the scratchpad with `research-setup --cwd <project> --slug <slug> --goal "<goal>"`.
+1. Start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It seeds `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates the command, records the first baseline as `measure`, and prints the resume commands. Use `--no-baseline-log` only when that first baseline should not be recorded.
 2. Keep sources dated and claim-specific in `autoresearch.research/<slug>/sources.md`.
 3. Write the judgment pass in `synthesis.md`: filter hallucinations, separate evidence from inference.
 4. Turn accepted findings into `quality-gaps.md`.
@@ -145,7 +149,7 @@ Use finalization when noisy loop history has useful kept commits.
 5. Treat previews and plans as read-only.
 6. Review dirty tree, stale plan, overlap, semantic safety, and excluded-file warnings.
 7. Session artifacts are excluded by default. Use `--include-session-artifacts` only when the reviewer explicitly wants them.
-8. When the current tree is the review unit, use `finalize-current-tree --cwd <project>`.
+8. When state reports `current-tree-finalization`, run `finalize-current-tree --cwd <project> --exclude-session-artifacts`. Do not substitute generic `finalize-preview` as the primary command.
 9. Ask before creating branches unless the user already approved finalization.
 10. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
 11. Do not suggest branch cleanup until merge verification has succeeded.
