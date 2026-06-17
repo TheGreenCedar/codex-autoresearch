@@ -13,6 +13,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - Fixed-control guard help now documents `--allow-fixed-control-rerun` on guarded benchmark-running commands; `fixedControl.forbiddenCommandPatterns` use literal substring matches and reruns require the explicit override.
+- Packet diagnostics now surface review-required evidence signals and keep those packets provisional until explicit ASI review acknowledgement.
 
 ## 2.3.15 - 2026-06-16
 

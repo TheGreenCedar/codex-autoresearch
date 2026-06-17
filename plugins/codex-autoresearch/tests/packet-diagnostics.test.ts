@@ -87,6 +87,46 @@ test("classifies sufficient packets that still fail quality", () => {
   assert.equal(result.primaryStage, "marked_sufficient_but_failed");
 });
 
+test("review-required metrics mark packet diagnostics unresolved", () => {
+  const diagnostics = classifyPacketDiagnostics({
+    metrics: {
+      quality_gap: 0,
+      ideal_anchor_mismatch_count: 2,
+      sufficient_quality_mismatch: 1,
+      review_required: 1,
+    },
+  });
+
+  assert.equal(diagnostics.primaryStage, "review_required");
+  assert.equal(diagnostics.unresolved, true);
+  assert.match(diagnostics.reasons.join("\n"), /ideal_anchor_mismatch_count=2/);
+  assert.match(diagnostics.recommendation, /human review/i);
+});
+
+test("review-required string metrics ignore no-issue tokens", () => {
+  for (const overfitSignal of ["none", "pass", "passed"]) {
+    const diagnostics = classifyPacketDiagnostics({
+      metrics: {
+        overfit_signal: overfitSignal,
+      },
+    });
+
+    assert.equal(diagnostics.primaryStage, "none", overfitSignal);
+    assert.equal(diagnostics.unresolved, false, overfitSignal);
+  }
+});
+
+test("review-required string metrics accept positive signal tokens", () => {
+  const diagnostics = classifyPacketDiagnostics({
+    metrics: {
+      overfit_signal: "detected",
+    },
+  });
+
+  assert.equal(diagnostics.primaryStage, "review_required");
+  assert.match(diagnostics.reasons.join("\n"), /overfit_signal=detected/);
+});
+
 test("carries optional task artifact diagnostics without changing metric classification", () => {
   const taskArtifacts = {
     acceptedTasks: [{ id: "task-1", status: "done" }],

@@ -4,11 +4,12 @@ import {
   buildApprovalLedgerStatus,
   dedupeApprovalRequirements,
 } from "./approval-ledger.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { classifyEvidenceMaturity, runsFromState } from "./evidence-maturity.js";
 import { buildGoalContract } from "./goal-frame.js";
 import { planFailureRecoveryLanes } from "./lane-orchestration-controller.js";
 import { buildResourcePreflight, resourceBudgetFromConfig } from "./process-governor.js";
-import { STATUS_VALUES, isKeepStatus } from "./run-status.js";
+import { STATUS_VALUES } from "./run-status.js";
 import type { UnknownRecord } from "./types/json.js";
 
 type ReadModelRecord = UnknownRecord & Record<string, any>;
@@ -28,7 +29,7 @@ export function buildCheapFinalizationPressure({
   const hasBlockers = Array.isArray(warningDetails)
     ? warningDetails.some((warning) => warning?.severity === "blocker")
     : false;
-  const hasAcceptedEvidence = current.some((run: ReadModelRecord) => isKeepStatus(run.status));
+  const hasAcceptedEvidence = current.some((run: ReadModelRecord) => isAcceptedCurrentRun(run));
   const qualityGapOpen =
     qualityGap?.done === false &&
     (Number(qualityGap.open ?? qualityGap.openItems ?? qualityGap.remaining ?? 0) > 0 ||

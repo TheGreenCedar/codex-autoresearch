@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { redactPathDisplay } from "./evidence-redaction.js";
+import { reviewRequiredMetricSignals } from "./packet-diagnostics.js";
 import { resolvePathInsideRootSync } from "./path-containment.js";
 import { isKeepStatus, isRejectedRunStatus } from "./run-status.js";
 
@@ -52,15 +53,17 @@ export function normalizeEvidenceStatus(
 
 export function defaultEvidenceStatusForRun(run: LooseObject): EvidenceStatus {
   const status = String(run?.status || "");
-  if (isKeepStatus(status)) return "accepted";
+  if (isKeepStatus(status))
+    return reviewRequiredRunNeedsAcknowledgement(run) ? "provisional" : "accepted";
   if (status === "measure") return "provisional";
   return "rejected";
 }
 
 export function isAcceptedCurrentEvidence(value: LooseObject | null | undefined): boolean {
-  const fallback =
-    value?.kind === "artifact" ? "provisional" : defaultEvidenceStatusForRun(value || {});
-  const evidenceStatus = normalizeEvidenceStatus(value?.evidenceStatus, fallback);
+  const evidenceStatus =
+    value?.kind === "artifact"
+      ? normalizeEvidenceStatus(value?.evidenceStatus, "provisional")
+      : evidenceStatusForRun(value || {});
   return evidenceStatus === "accepted" && value?.quarantined !== true;
 }
 
@@ -109,14 +112,13 @@ export function buildEvidenceRegistry({
   const entries: EvidenceRegistryEntry[] = [];
   for (const run of runs || []) {
     entries.push(runEvidenceEntry(run));
+    const runEvidenceStatus = evidenceStatusForRun(run);
     const artifactEvidence = Array.isArray(run?.artifactEvidence)
-      ? run.artifactEvidence
+      ? run.artifactEvidence.map((artifact) =>
+          gateArtifactEvidenceStatus(artifact, runEvidenceStatus),
+        )
       : run?.artifacts && Object.keys(run.artifacts).length
-        ? artifactEvidenceList(
-            run.artifacts,
-            workDir,
-            normalizeEvidenceStatus(run.evidenceStatus, defaultEvidenceStatusForRun(run)),
-          )
+        ? artifactEvidenceList(run.artifacts, workDir, runEvidenceStatus)
         : [];
     for (const artifact of artifactEvidence) {
       entries.push(
@@ -156,7 +158,7 @@ function runEvidenceEntry(run: LooseObject): EvidenceRegistryEntry {
     run: run.run ?? null,
     status: run.status || "",
     metric: run.metric ?? null,
-    evidenceStatus: normalizeEvidenceStatus(run.evidenceStatus, defaultEvidenceStatusForRun(run)),
+    evidenceStatus: evidenceStatusForRun(run),
     description: run.description || "",
   });
 }
@@ -165,7 +167,10 @@ function normalizeEvidenceEntry(value: LooseObject): EvidenceRegistryEntry {
   const kind: EvidenceKind = value.kind === "artifact" ? "artifact" : "run";
   const fallback =
     kind === "run" ? defaultEvidenceStatusForRun(value) : ("provisional" as EvidenceStatus);
-  const evidenceStatus = normalizeEvidenceStatus(value.evidenceStatus, fallback);
+  const evidenceStatus =
+    kind === "run"
+      ? evidenceStatusForRun(value)
+      : normalizeEvidenceStatus(value.evidenceStatus, fallback);
   const quarantined = value.quarantined === true;
   const accepted = evidenceStatus === "accepted" && !quarantined;
   const current = accepted;
@@ -183,6 +188,36 @@ function normalizeEvidenceEntry(value: LooseObject): EvidenceRegistryEntry {
     current,
     auditVisible: true,
     quarantined,
+  };
+}
+
+function evidenceStatusForRun(run: LooseObject): EvidenceStatus {
+  const evidenceStatus = normalizeEvidenceStatus(
+    run.evidenceStatus,
+    defaultEvidenceStatusForRun(run),
+  );
+  if (evidenceStatus === "accepted" && reviewRequiredRunNeedsAcknowledgement(run)) {
+    return "provisional";
+  }
+  return evidenceStatus;
+}
+
+function reviewRequiredRunNeedsAcknowledgement(run: LooseObject | null | undefined): boolean {
+  if (!run || run.asi?.review_acknowledged === true) return false;
+  return reviewRequiredMetricSignals(run).length > 0;
+}
+
+function gateArtifactEvidenceStatus(
+  artifact: LooseObject,
+  runEvidenceStatus: EvidenceStatus,
+): LooseObject {
+  const evidenceStatus = normalizeEvidenceStatus(artifact.evidenceStatus, runEvidenceStatus);
+  return {
+    ...artifact,
+    evidenceStatus:
+      runEvidenceStatus !== "accepted" && evidenceStatus === "accepted"
+        ? runEvidenceStatus
+        : evidenceStatus,
   };
 }
 
