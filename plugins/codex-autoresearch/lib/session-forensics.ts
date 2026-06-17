@@ -284,8 +284,21 @@ function observeFunctionCall(state: ReturnType<typeof createAccumulator>, payloa
   const name = String(payload.name || "unknown");
   increment(state.toolCounts, name);
   if (name === "write_stdin") increment(state.toolCounts, "shell_poll");
-  if (name !== "exec_command") return;
   const args = parseMaybeJson(payload.arguments);
+  if (name === "update_goal") {
+    scanGoalSnapshot(state, args);
+    if (String(args?.status || "").toLowerCase() === "complete") {
+      state.productSignals.push(
+        signal(
+          "goal_churn_or_early_completion",
+          "warning",
+          "A function call marked the Codex goal complete.",
+          "function_call:update_goal",
+        ),
+      );
+    }
+  }
+  if (name !== "exec_command") return;
   const command = redactEvidenceText(String(args?.cmd || ""));
   const head = commandHead(command);
   if (head) increment(state.commandClasses, head);
@@ -475,11 +488,107 @@ function scanDecisionHints(
   text: string,
   source: string,
 ) {
+  for (const finding of matchSessionFrictionHints(text, source)) {
+    state.decisionHints.push(finding);
+  }
   for (const finding of matchDecisionRules(text, source)) {
     state.decisionHints.push(
       signal(finding.kind, finding.severity, finding.message, finding.source),
     );
   }
+}
+
+function matchSessionFrictionHints(text: string, source: string): ForensicsSignal[] {
+  const findings: ForensicsSignal[] = [];
+  const add = (kind: string, severity: ForensicsSignal["severity"], message: string) => {
+    findings.push(signal(kind, severity, message, source));
+  };
+  if (
+    /setup alone is not autoresearch|scaffold\b[^.?!;]{0,160}\bnot started|loop did not start/i.test(
+      text,
+    )
+  ) {
+    add(
+      "setup_not_started",
+      "blocker",
+      "The session says setup or scaffold work happened, but the measured Autoresearch loop did not start.",
+    );
+  }
+  if (
+    /(?:do not|don't) rerun[^.?!;]*(?:baseline|control)|reuse [^.?!;]*fixed control|reuse [^.?!;]*control artifact/i.test(
+      text,
+    )
+  ) {
+    add(
+      "fixed_control_rerun_correction",
+      "blocker",
+      "The session corrected a control rerun; reuse the fixed control artifact unless an invalidator changed.",
+    );
+  }
+  if (/old segment|stale segment|picked up [^.?!;]{0,120}segment|unexpected segment/i.test(text)) {
+    add(
+      "stale_segment_pickup",
+      "warning",
+      "The session indicates a stale or unexpected segment was picked up.",
+    );
+  }
+  if (hasGoalChurnOrEarlyCompletionEvent(text)) {
+    add(
+      "goal_churn_or_early_completion",
+      "warning",
+      "The session indicates Codex goal churn or early completion before loop evidence was resolved.",
+    );
+  }
+  if (
+    /hard-?coded|overfit[^.?!;]{0,80}filename|repo-specific assumption|answer-key steering/i.test(
+      text,
+    )
+  ) {
+    add(
+      "overfit_correction",
+      "blocker",
+      "The session flags hard-coded, repo-specific, or answer-key-shaped evidence that needs generalization proof.",
+    );
+  }
+  return findings;
+}
+
+function hasGoalChurnOrEarlyCompletionEvent(text: string): boolean {
+  return goalCompletionSegments(text).some(
+    (segment) =>
+      hasGoalCompletionEventPhrase(segment) && !hasPreventiveGoalCompletionLanguage(segment),
+  );
+}
+
+function goalCompletionSegments(text: string): string[] {
+  return String(text || "")
+    .split(/(?:[\r\n]+|[.!?;]+)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function hasGoalCompletionEventPhrase(segment: string): boolean {
+  return (
+    /completed (?:the )?(?:Codex )?goal/i.test(segment) ||
+    /\bmarked [^.?!;]{0,80}goal [^.?!;]{0,40}complete\b/i.test(segment) ||
+    /\bupdate_goal\s*\(\s*status\s*=\s*["']?complete["']?\s*\)/i.test(segment) ||
+    /goal churn|early completion/i.test(segment)
+  );
+}
+
+function hasPreventiveGoalCompletionLanguage(segment: string): boolean {
+  return (
+    /\b(?:do\s+not|don't|should\s+not|must\s+not|never|cannot|can't)\s+(?:mark|complete|call|treat|use)\b/i.test(
+      segment,
+    ) ||
+    /\bbefore\s+(?:marking|calling|completing|complete)\b/i.test(segment) ||
+    /\b(?:until|unless)\b[^.?!;]{0,120}\b(?:mark|complete|completion|update_goal)\b/i.test(
+      segment,
+    ) ||
+    /\b(?:blocked|blocks|blocker|refuse[sd]?|insufficient)\b[^.?!;]{0,120}\b(?:mark|complete|completion|update_goal)\b/i.test(
+      segment,
+    )
+  );
 }
 
 function scanGoalSnapshot(state: ReturnType<typeof createAccumulator>, value: unknown) {

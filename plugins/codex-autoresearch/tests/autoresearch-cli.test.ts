@@ -6350,6 +6350,34 @@ test("next compact refuses current-tree finalization blockers before running pac
   });
 });
 
+test("codex goal complete audit blocks current-tree finalization blockers", async () => {
+  await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
+    await prepareCurrentTreeFinalizationBlocker(dir);
+
+    const result = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      dir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Kept metric and source changes are ready.",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const audit = payload.completionAudit;
+
+    assert.equal(audit.status, "blocked");
+    assert.equal(audit.canMarkCodexGoalComplete, false);
+    assert.match(
+      audit.localEvidence.blockers.join("\n"),
+      /Do not mark the Codex goal complete while Autoresearch has unresolved quality gaps, review-required evidence, fixed-control violations, or current-tree finalization blockers\./,
+    );
+    assert.match(audit.recommendedCodexAction, /Do not mark complete|Resolve/);
+  });
+});
+
 test("stale packet compact state recommends replacement next command", async () => {
   await withTempDir("state-stale-last-run-replacement", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "stale state", "--metric-name", "seconds"]);

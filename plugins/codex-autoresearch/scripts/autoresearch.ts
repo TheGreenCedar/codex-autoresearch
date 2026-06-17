@@ -104,7 +104,11 @@ import {
   finalizeCurrentTree as buildFinalizeCurrentTree,
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
-import { buildGoalContract, buildGoalFrame } from "../lib/goal-frame.js";
+import {
+  buildGoalContract,
+  buildGoalFrame,
+  goalCompletionUnresolvedBlockers,
+} from "../lib/goal-frame.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -2648,11 +2652,27 @@ function codexGoalCompletionAudit({
       ? state.decisionEnvelope.researchIntegrity.notPromotableBecause
       : []),
   ].filter(Boolean);
-  const blockers = [...new Set(evidenceBlockers.map((blocker) => String(blocker)))];
   const limitReached = compact.limitReached === true;
   const finalizationReady = state.decisionEnvelope?.finalizationReadiness?.ready === true;
   const qualityRound = state.decisionEnvelope?.qualityRound || {};
   const completionRequested = completionConfirmed && Boolean(completionEvidence);
+  const blockers = [
+    ...new Set([
+      ...evidenceBlockers.map((blocker) => String(blocker)),
+      ...goalCompletionUnresolvedBlockers({
+        completionClaimed: completionRequested,
+        blockers: evidenceBlockers,
+        finalizationReadiness: state.decisionEnvelope?.finalizationReadiness,
+        preflight: state.preflight,
+        qualityRound,
+        warningDetails: state.warningDetails,
+        workflowFriction:
+          state.workflowFriction ||
+          state.decisionEnvelope?.workflowFriction ||
+          compact.workflowFriction,
+      }),
+    ]),
+  ];
   const importedGoalCompletable = importedGoal?.status === "active";
   const hasMeasuredEvidence =
     Number(state.runs) > 0 &&

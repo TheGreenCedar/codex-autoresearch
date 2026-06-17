@@ -23,6 +23,7 @@ import { buildOperatorReadout } from "../lib/operator-readout.js";
 import { buildResourcePreflight } from "../lib/process-governor.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import {
+  codeStoryLanguageSupportFrictionFixtureEntries,
   fixtureJsonl,
   session019eb85aControlPlaneFixtureEntries,
 } from "./helpers/session-forensics-fixtures.js";
@@ -475,5 +476,137 @@ test("session 019eb85a derived fixture detects control-plane friction", async ()
     assert.ok(wasteKinds.includes("resource_interruption"));
     assert.ok(wasteKinds.includes("cleanup_afterthought"));
     assert.ok(wasteKinds.includes("output_budget_exceeded"));
+  });
+});
+
+test("session forensics detects setup-only start, fixed-control corrections, stale segments, and goal churn", async () => {
+  await withTempDir("session-forensics-start-control-goal-drift", async (dir) => {
+    const fixture = path.join(dir, "language-support-friction.jsonl");
+    await writeFile(
+      fixture,
+      fixtureJsonl(codeStoryLanguageSupportFrictionFixtureEntries()),
+      "utf8",
+    );
+
+    const parsed = await parseSessionForensics({ sessionJsonl: fixture });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+
+    const signals = new Map(parsed.productSignals.map((signal) => [signal.kind, signal.severity]));
+
+    assert.equal(signals.get("setup_not_started"), "blocker");
+    assert.equal(signals.get("fixed_control_rerun_correction"), "blocker");
+    assert.equal(signals.get("stale_segment_pickup"), "warning");
+    assert.equal(signals.get("goal_churn_or_early_completion"), "warning");
+    assert.equal(signals.get("overfit_correction"), "blocker");
+    assert.equal(parsed.decisionCapsule.enforcement.mode, "hard-block");
+    assert.equal(parsed.decisionCapsule.enforcement.canRunNextPacket, false);
+    assert.equal(parsed.decisionCapsule.enforcement.blocksFinalization, true);
+    assert.match(parsed.decisionCapsule.bottleneck, /loop has not started/i);
+    assert.match(parsed.decisionCapsule.nextExperiment, /doctor/i);
+    assert.match(parsed.decisionCapsule.wrongNextActions.join("\n"), /Do not mark setup/i);
+    assert.match(parsed.decisionCapsule.evidence.join("\n"), /fixed control/i);
+  });
+});
+
+test("session forensics ignores preventive Codex goal completion guidance", async () => {
+  await withTempDir("session-forensics-preventive-goal-guidance", async (dir) => {
+    const fixture = path.join(dir, "preventive-goal-guidance.jsonl");
+    await writeFile(
+      fixture,
+      fixtureJsonl([
+        {
+          timestamp: "2026-06-16T15:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_codex_goal_brief",
+            output: [
+              "Do not mark the Codex goal complete while Autoresearch has unresolved quality gaps.",
+              "You should not mark complete until review-required evidence is acknowledged.",
+              "Before marking complete, cite checks and remaining risks.",
+              "Do not complete this goal from budget exhaustion.",
+            ].join("\n"),
+          },
+        },
+      ]),
+      "utf8",
+    );
+
+    const parsed = await parseSessionForensics({ sessionJsonl: fixture });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+
+    assert.equal(
+      parsed.productSignals.some((signal) => signal.kind === "goal_churn_or_early_completion"),
+      false,
+    );
+  });
+});
+
+test("session forensics ignores imported goal status audit snapshots", async () => {
+  await withTempDir("session-forensics-imported-goal-status", async (dir) => {
+    const fixture = path.join(dir, "imported-goal-status.jsonl");
+    await writeFile(
+      fixture,
+      fixtureJsonl([
+        {
+          timestamp: "2026-06-16T15:20:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_codex_goal_brief",
+            output: JSON.stringify({
+              completionAudit: {
+                importedCodexStatus: "complete",
+                recommendedCodexAction:
+                  "The imported Codex Goal is already complete; do not call update_goal again from this audit.",
+              },
+            }),
+          },
+        },
+      ]),
+      "utf8",
+    );
+
+    const parsed = await parseSessionForensics({ sessionJsonl: fixture });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+
+    assert.equal(
+      parsed.productSignals.some((signal) => signal.kind === "goal_churn_or_early_completion"),
+      false,
+    );
+  });
+});
+
+test("session forensics detects update_goal complete function calls", async () => {
+  await withTempDir("session-forensics-update-goal-complete", async (dir) => {
+    const fixture = path.join(dir, "update-goal-complete.jsonl");
+    await writeFile(
+      fixture,
+      fixtureJsonl([
+        {
+          timestamp: "2026-06-16T15:30:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "update_goal",
+            arguments: JSON.stringify({ status: "complete" }),
+          },
+        },
+      ]),
+      "utf8",
+    );
+
+    const parsed = await parseSessionForensics({ sessionJsonl: fixture });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+
+    assert.equal(
+      parsed.productSignals.some((signal) => signal.kind === "goal_churn_or_early_completion"),
+      true,
+    );
+    assert.equal(parsed.goal.status, "complete");
   });
 });
