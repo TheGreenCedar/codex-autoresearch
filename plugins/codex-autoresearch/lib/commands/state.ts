@@ -68,6 +68,7 @@ export interface CompactStateBuilderInput {
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
+  fixedControl?: unknown;
 }
 
 const OPTIONAL_COMPACT_STATE_FIELDS = [
@@ -89,6 +90,7 @@ const OPTIONAL_COMPACT_STATE_FIELDS = [
   "packetDiagnostics",
   "commandExecutionBoundary",
   "metricSemanticsWarning",
+  "fixedControl",
 ] as const satisfies readonly (keyof CompactStateBuilderInput)[];
 
 export interface CompactStateResponse {
@@ -159,6 +161,7 @@ export interface CompactStateResponse {
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
+  fixedControl?: unknown;
 }
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {

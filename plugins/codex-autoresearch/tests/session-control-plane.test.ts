@@ -10,6 +10,11 @@ import {
   resolveApproval,
 } from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
+import {
+  fixedControlStateSummary,
+  fixedControlViolationForCommand,
+  normalizeFixedControlConfig,
+} from "../lib/fixed-control.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
 import { buildGoalContract } from "../lib/goal-frame.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
@@ -25,6 +30,66 @@ import { withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const withTempDir = (name: string, fn: (dir: string) => Promise<void>) =>
   withNamedTempDir("autoresearch-control-plane", name, fn);
+
+test("fixed control config normalizes command patterns and invalidators", () => {
+  const fixedControl = normalizeFixedControlConfig({
+    artifact: "target/control/no-codestory.json",
+    reason: "Reuse the no-CodeStory control from the first baseline.",
+    validUntilChanged: ["benchmarks/language-support.mjs"],
+    forbiddenCommandPatterns: ["--mode no-codestory", "NO_CODESTORY=1"],
+    reuseCommandHint: "node scripts/score-existing-control.mjs target/control/no-codestory.json",
+  });
+
+  assert.deepEqual(fixedControl, {
+    artifact: "target/control/no-codestory.json",
+    reason: "Reuse the no-CodeStory control from the first baseline.",
+    validUntilChanged: ["benchmarks/language-support.mjs"],
+    forbiddenCommandPatterns: ["--mode no-codestory", "NO_CODESTORY=1"],
+    reuseCommandHint: "node scripts/score-existing-control.mjs target/control/no-codestory.json",
+  });
+});
+
+test("fixed control guard blocks forbidden rerun commands", () => {
+  const violation = fixedControlViolationForCommand(
+    "node bench.mjs --mode no-codestory",
+    normalizeFixedControlConfig({
+      artifact: "target/control/no-codestory.json",
+      reason: "Reuse control",
+      forbiddenCommandPatterns: ["--mode no-codestory"],
+    }),
+  );
+
+  assert.equal(violation?.code, "fixed_control_rerun_blocked");
+  assert.match(violation?.message || "", /target\/control\/no-codestory\.json/);
+});
+
+test("fixed control state summary bounds arrays strings and command hints", () => {
+  const secret = "sk-fixed-control-secret-123";
+  const summary = fixedControlStateSummary(
+    normalizeFixedControlConfig({
+      artifact: "target/control/no-codestory.json",
+      reason: "r".repeat(500),
+      validUntilChanged: Array.from({ length: 14 }, (_, index) => `benchmarks/${index}.mjs`),
+      forbiddenCommandPatterns: Array.from(
+        { length: 16 },
+        (_, index) => `--mode no-codestory-${index} --token=${secret}`,
+      ),
+      reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs ${"x".repeat(500)}`,
+    }),
+  );
+
+  assert.ok(summary);
+  assert.equal(summary.reason.length <= 240, true);
+  assert.equal(summary.validUntilChanged.length, 10);
+  assert.equal(summary.forbiddenCommandPatterns.length, 10);
+  assert.equal(summary.reuseCommandHint.length <= 240, true);
+  assert.doesNotMatch(JSON.stringify(summary), new RegExp(secret));
+  assert.equal(summary.truncated, true);
+  assert.equal(summary.truncation.reasonChars, 260);
+  assert.equal(summary.truncation.validUntilChanged, 4);
+  assert.equal(summary.truncation.forbiddenCommandPatterns, 6);
+  assert.equal(summary.truncation.reuseCommandHintChars > 0, true);
+});
 
 test("goal contract blocks mismatched broad work and guides missing Codex objective recovery", () => {
   const missing = buildGoalContract({

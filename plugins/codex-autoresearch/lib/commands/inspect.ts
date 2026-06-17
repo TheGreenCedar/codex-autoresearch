@@ -3,10 +3,21 @@ import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js"
 
 type LooseObject = Record<string, any>;
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
+type FixedControlBlock = {
+  code?: string;
+  fixedControlViolation?: unknown;
+  issue?: string;
+  message?: string;
+};
 
 export interface InspectCommandDeps {
   currentState: (workDir: string) => LooseObject;
   defaultBenchmarkCommand: (workDir: string) => Promise<string>;
+  fixedControlBlockForCommand?: (
+    command: unknown,
+    config: LooseObject,
+    args?: LooseObject,
+  ) => FixedControlBlock | null;
   finiteMetric: (value: unknown) => number | null;
   headText: (text: string, maxLines?: number, maxBytes?: number) => string;
   metricParseSource: (result: LooseObject) => string;
@@ -39,6 +50,17 @@ export function createInspectCommands(deps: InspectCommandDeps) {
         (separatorCommand ? args._.slice(1).join(" ") : "") ||
         (await deps.defaultBenchmarkCommand(workDir));
       if (command) {
+        const fixedControlBlock = deps.fixedControlBlockForCommand?.(command, config, args);
+        if (fixedControlBlock) {
+          return blockedBenchmarkLint({
+            block: fixedControlBlock,
+            config,
+            metricName,
+            separatorCommand,
+            state,
+            workDir,
+          });
+        }
         commandResult = await deps.runShell(command, workDir, timeoutSeconds, {
           retainMetricNames: [metricName],
         });
@@ -114,7 +136,7 @@ export function createInspectCommands(deps: InspectCommandDeps) {
   }
 
   async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
-    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const state = deps.currentState(workDir);
     const command = String(args.command || "").trim();
     const timeoutSeconds = Math.max(
@@ -140,6 +162,29 @@ export function createInspectCommands(deps: InspectCommandDeps) {
         parsedMetrics: {},
         nextAction:
           "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet.",
+      };
+    }
+    const fixedControlBlock = deps.fixedControlBlockForCommand?.(command, config, args);
+    if (fixedControlBlock) {
+      const warning = fixedControlBlock.issue || fixedControlBlock.message || "Blocked.";
+      return {
+        ...inspectionBase({
+          ok: false,
+          workDir,
+          ranCommand: false,
+          command: "",
+          timeoutSeconds: null,
+          exitCode: null,
+          timedOut: false,
+          warnings: [warning],
+          hints: benchmarkInspectHints(state.config.metricName || ""),
+          outputPreview: "",
+          outputTruncated: false,
+        }),
+        code: fixedControlBlock.code,
+        fixedControlViolation: fixedControlBlock.fixedControlViolation,
+        parsedMetrics: {},
+        nextAction: fixedControlBlock.message || warning,
       };
     }
     const result = await deps.runShell(command, workDir, timeoutSeconds, {
@@ -235,6 +280,55 @@ export function createInspectCommands(deps: InspectCommandDeps) {
   }
 
   return { benchmarkLint, benchmarkInspect, checksInspect };
+}
+
+function blockedBenchmarkLint({
+  block,
+  config,
+  metricName,
+  separatorCommand,
+  state,
+  workDir,
+}: LooseObject): LooseObject {
+  const issue = block.issue || block.message || "Blocked.";
+  const parsedMetrics = {};
+  const researchIntegrity = buildResearchIntegrity({
+    state,
+    config: { ...state.config, ...config },
+    parsedMetrics,
+    metricName,
+    sample: "",
+  });
+  const issues = [issue];
+  return {
+    ok: false,
+    workDir,
+    metricName,
+    checkedCommand: "",
+    parsedMetrics,
+    emitsPrimary: false,
+    metricParsing: {
+      ok: false,
+      emitsPrimary: false,
+      parsedMetricCount: 0,
+      issues,
+    },
+    researchIntegrity,
+    commandDiagnostics: commandDiagnostics({
+      command: "",
+      result: null,
+      separatorCommand,
+    }),
+    code: block.code,
+    fixedControlViolation: block.fixedControlViolation,
+    issues,
+    warnings: researchIntegrity.warnings,
+    timeoutSeconds: null,
+    contractCheckHint:
+      "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
+    example: `METRIC ${metricName}=1.23`,
+    nextAction: block.message || issue,
+  };
 }
 
 function inspectionBase({

@@ -1,3 +1,4 @@
+import { normalizeFixedControlConfig, type FixedControlConfig } from "../fixed-control.js";
 import { type JsonObject, type UnknownRecord, unknownRecordOrEmpty } from "./json.js";
 import { type PacketRecord } from "./packet.js";
 
@@ -15,6 +16,7 @@ export interface SessionConfig extends UnknownRecord {
   benchmarkCommand?: string;
   checksCommand?: string;
   commitPaths?: string[];
+  fixedControl?: FixedControlConfig | null;
   goal?: string;
   metricName?: string;
   metricUnit?: string;
@@ -60,6 +62,7 @@ export function normalizeSessionConfig(value: unknown): SessionConfig {
     bestDirection: normalizeMetricDirection(record.bestDirection),
     checksCommand: stringOrUndefined(record.checksCommand),
     commitPaths: stringArrayOrUndefined(record.commitPaths),
+    fixedControl: normalizeFixedControlConfig(record.fixedControl),
     goal: stringOrUndefined(record.goal),
     metricName: stringOrUndefined(record.metricName),
     metricUnit: stringOrUndefined(record.metricUnit),

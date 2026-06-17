@@ -1837,6 +1837,279 @@ test("next refuses hard decision capsules before running a packet", async () => 
   });
 });
 
+test("next refuses fixed-control rerun commands without override", async () => {
+  await withTempDir("fixed-control-next", async (dir) => {
+    const secret = "sk-fixed-control-next-secret-123";
+    const sentinel = path.join(dir, "next-sentinel.txt");
+    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["next", "--cwd", dir, "--compact"]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    const blockedPayload = JSON.parse(blocked.stdout);
+    assert.equal(blockedPayload.ok, false);
+    assert.equal(blockedPayload.refused, true);
+    assert.equal(blockedPayload.code, "fixed_control_rerun_blocked");
+    assert.match(blockedPayload.nextAction, /target\/control\/no-codestory\.json/);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    assert.equal(await pathExists(sentinel), false);
+
+    const allowed = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("run refuses fixed-control rerun commands without override", async () => {
+  await withTempDir("fixed-control-run", async (dir) => {
+    const sentinel = path.join(dir, "run-sentinel.txt");
+    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: ["--mode no-codestory"],
+          reuseCommandHint: "node bench.mjs --reuse-control target/control/no-codestory.json",
+        },
+      }),
+    );
+
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory`;
+    const blocked = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr + blocked.stdout, /fixed_control_rerun_blocked/);
+    assert.equal(await pathExists(sentinel), false);
+
+    const allowed = await runCli([
+      "run",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("doctor check-benchmark refuses fixed-control rerun commands without executing", async () => {
+  await withTempDir("fixed-control-doctor", async (dir) => {
+    const secret = "sk-fixed-control-doctor-secret-123";
+    const sentinel = path.join(dir, "doctor-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.benchmark.checked, true);
+    assert.equal(payload.benchmark.exitCode, null);
+    assert.equal(payload.benchmark.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.issues.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--check-benchmark",
+      "--json",
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("benchmark-lint refuses fixed-control explicit commands without override", async () => {
+  await withTempDir("fixed-control-benchmark-lint", async (dir) => {
+    const secret = "sk-fixed-control-lint-secret-123";
+    const sentinel = path.join(dir, "lint-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["benchmark-lint", "--cwd", dir, "--command", command]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "fixed_control_rerun_blocked");
+    assert.equal(payload.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.issues.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("benchmark-inspect refuses fixed-control explicit commands without override", async () => {
+  await withTempDir("fixed-control-benchmark-inspect", async (dir) => {
+    const secret = "sk-fixed-control-inspect-secret-123";
+    const sentinel = path.join(dir, "inspect-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "fixed_control_rerun_blocked");
+    assert.equal(payload.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.warnings.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "benchmark-inspect",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("state exposes fixed-control config", async () => {
+  await withTempDir("fixed-control-state", async (dir) => {
+    const secret = "sk-fixed-control-state-secret-123";
+    const longReason = "The no-CodeStory control is fixed for this round. " + "r".repeat(500);
+    const forbiddenCommandPatterns = Array.from(
+      { length: 16 },
+      (_, index) => `--mode no-codestory-${index} --token=${secret}`,
+    );
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: longReason,
+          validUntilChanged: Array.from({ length: 13 }, (_, index) => `benchmarks/${index}.mjs`),
+          forbiddenCommandPatterns,
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json ${"x".repeat(500)}`,
+        },
+      }),
+    );
+
+    const full = await runCli(["state", "--cwd", dir, "--json"]);
+    assert.equal(full.code, 0, full.stderr);
+    assert.doesNotMatch(full.stdout, new RegExp(secret));
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact", "--json"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    assert.doesNotMatch(compact.stdout, new RegExp(secret));
+
+    const payload = JSON.parse(compact.stdout);
+    assert.equal(payload.fixedControl.artifact, "target/control/no-codestory.json");
+    assert.equal(payload.fixedControl.reason.length <= 240, true);
+    assert.equal(payload.fixedControl.validUntilChanged.length, 10);
+    assert.equal(payload.fixedControl.forbiddenCommandPatterns.length, 10);
+    assert.equal(payload.fixedControl.reuseCommandHint.length <= 240, true);
+    assert.doesNotMatch(payload.fixedControl.reuseCommandHint, new RegExp(secret));
+    assert.equal(payload.fixedControl.truncated, true);
+    assert.equal(payload.fixedControl.truncation.validUntilChanged, 3);
+    assert.equal(payload.fixedControl.truncation.forbiddenCommandPatterns, 6);
+    assert.equal(payload.fixedControl.truncation.reasonChars > 0, true);
+  });
+});
+
 test("next allows explicitly bounded packet work for bounded-next capsules", async () => {
   await withTempDir("next-bounded-decision-capsule", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "bounded capsule", "--metric-name", "seconds"]);
@@ -7912,8 +8185,11 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(registryCheck.ok, true, JSON.stringify(registryCheck));
 
   const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
+  const run = toolSchemas.find((tool) => tool.name === "run_experiment");
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
+  const benchmarkInspect = toolSchemas.find((tool) => tool.name === "benchmark_inspect");
+  const benchmarkLint = toolSchemas.find((tool) => tool.name === "benchmark_lint");
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
   const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
@@ -7923,6 +8199,9 @@ test("tool schemas expose guidance and output contracts", async () => {
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
 
   assert.ok(guided);
+  assert.ok(run);
+  assert.ok(benchmarkInspect);
+  assert.ok(benchmarkLint);
   assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
@@ -7957,6 +8236,11 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.inputSchema.properties.port.type, "number");
   assert.equal(configureSession.inputSchema.properties.clear_packet_budget.type, "boolean");
   assert.equal(configureSession.inputSchema.properties.clear_wall_clock_budget.type, "boolean");
+  assert.equal(run.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(next.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(doctor.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(benchmarkInspect.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(benchmarkLint.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
   assert.equal(readState.inputSchema.properties.report.type, "boolean");
   assert.equal(readState.outputSchema.properties.report.type, "object");
   assert.equal(readState.outputSchema.properties.dashboardHealth.type, "object");
@@ -8086,6 +8370,66 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     benchmarkCommand: "node bench.js",
     commitPaths: ["src"],
     allow_unsafe_command: true,
+  });
+  const runArgs = validateToolArguments("run_experiment", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(runArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("run_experiment", runArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const nextArgs = validateToolArguments("next_experiment", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(nextArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("next_experiment", nextArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const doctorArgs = validateToolArguments("doctor_session", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(doctorArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("doctor_session", doctorArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const benchmarkLintArgs = validateToolArguments("benchmark_lint", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(benchmarkLintArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("benchmark_lint", benchmarkLintArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const benchmarkInspectArgs = validateToolArguments("benchmark_inspect", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(benchmarkInspectArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("benchmark_inspect", benchmarkInspectArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
   });
   assert.deepEqual(
     normalizeCliCommandArguments("setup-plan", {

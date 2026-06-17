@@ -105,6 +105,13 @@ import {
   finalizePreview as buildFinalizePreview,
 } from "../lib/finalize-preview.js";
 import { buildGoalContract, buildGoalFrame } from "../lib/goal-frame.js";
+import {
+  fixedControlStateSummary,
+  fixedControlViolationForCommand,
+  fixedControlViolationSummary,
+  normalizeFixedControlConfig,
+  type FixedControlViolation,
+} from "../lib/fixed-control.js";
 import { discoverPartialResultCandidates } from "../lib/partial-results.js";
 import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
@@ -280,6 +287,7 @@ const { exportDashboard, serveDashboard } = createDashboardCommands({
 const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands({
   currentState,
   defaultBenchmarkCommand,
+  fixedControlBlockForCommand,
   finiteMetric,
   headText,
   metricParseSource,
@@ -3333,10 +3341,15 @@ async function defaultBenchmarkCommandExists(workDir: string) {
   );
 }
 
-async function benchmarkCommandFromArgs(args: LooseObject, workDir: string) {
+async function benchmarkCommandFromArgs(
+  args: LooseObject,
+  workDir: string,
+  config: LooseObject = readConfig(workDir),
+) {
   const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
     fallbackToDefault: true,
     requireCommand: true,
+    config,
   });
   const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
   const env = envFile ? await readEnvFile(envFile, workDir) : null;
@@ -3369,7 +3382,7 @@ function packetEnvModeFromArgs(args: LooseObject): "inherit" | "minimal" {
 async function resolveBenchmarkCommandSource(
   args: LooseObject,
   workDir: string,
-  options: { fallbackToDefault?: boolean; requireCommand?: boolean } = {},
+  options: { fallbackToDefault?: boolean; requireCommand?: boolean; config?: LooseObject } = {},
 ) {
   const commandFile = args.command_file ?? args.commandFile;
   if (args.command && commandFile) {
@@ -3400,6 +3413,19 @@ async function resolveBenchmarkCommandSource(
       commandFile: resolveOptionPath(commandFile, workDir),
       separatorCommand: false,
       source: "command-file",
+      missingReason: "",
+    };
+  }
+  const configuredCommand =
+    typeof options.config?.benchmarkCommand === "string"
+      ? options.config.benchmarkCommand.trim()
+      : "";
+  if (configuredCommand) {
+    return {
+      command: normalizePowerShellEscapedCommandArg(configuredCommand),
+      commandFile: "",
+      separatorCommand: false,
+      source: "config",
       missingReason: "",
     };
   }
@@ -3438,6 +3464,57 @@ function missingBenchmarkCommandMessage(error: unknown = null): string {
     return "No benchmark command was provided and no autoresearch script was found.";
   }
   return detail || "No benchmark command was provided and no autoresearch script was found.";
+}
+
+function allowFixedControlRerun(args: LooseObject): boolean {
+  return boolOption(args.allow_fixed_control_rerun ?? args.allowFixedControlRerun, false);
+}
+
+type FixedControlBlock = {
+  code: FixedControlViolation["code"];
+  commandHint: string;
+  fixedControlViolation: ReturnType<typeof fixedControlViolationSummary>;
+  issue: string;
+  message: string;
+};
+
+function fixedControlBlockForCommand(
+  command: unknown,
+  config: LooseObject,
+  args: LooseObject = {},
+): FixedControlBlock | null {
+  const violation = fixedControlViolationForCommand(
+    command,
+    normalizeFixedControlConfig(config.fixedControl),
+  );
+  if (!violation || allowFixedControlRerun(args)) return null;
+  const summary = fixedControlViolationSummary(violation);
+  const message = summary?.message || violation.message;
+  return {
+    code: violation.code,
+    commandHint: summary?.reuseCommandHint || "",
+    fixedControlViolation: summary,
+    issue: `${violation.code}: ${message}`,
+    message,
+  };
+}
+
+function fixedControlRerunError(block: FixedControlBlock): Error {
+  const error = new Error(block.message);
+  (error as Error & { code?: string; fixedControlViolation?: unknown }).code = block.code;
+  (error as Error & { fixedControlViolation?: unknown }).fixedControlViolation =
+    block.fixedControlViolation;
+  return error;
+}
+
+function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
+  return redactEvidenceObject({
+    ok: doctor.ok === true,
+    workDir: doctor.workDir || "",
+    issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 10) : [],
+    warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 10) : [],
+    nextAction: typeof doctor.nextAction === "string" ? doctor.nextAction : "",
+  }) as LooseObject;
 }
 
 function resolveOptionPath(filePath: string, workDir: string) {
@@ -5509,8 +5586,10 @@ async function runExperiment(args: LooseObject) {
   if (protectedBenchmarkGuard.configured && !protectedBenchmarkGuard.ok) {
     throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
   }
-  const commandInput = await benchmarkCommandFromArgs(args, workDir);
+  const commandInput = await benchmarkCommandFromArgs(args, workDir, config);
   const { command } = commandInput;
+  const fixedControlBlock = fixedControlBlockForCommand(command, config, args);
+  if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
   const timeoutSeconds = numberOption(
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
@@ -6672,6 +6751,8 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     scaffoldHealth,
     warningDetails,
   });
+  const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
+  const publicPreflight = publicCommandPayload(guidance.preflight);
   const stateWithQualityGap = buildSessionReadModelState({
     state,
     qualityGap,
@@ -6682,7 +6763,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
   });
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -6708,7 +6789,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const portfolioRecommendation = recommendPortfolioDirection({
     runtimeDrift: guidance.runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
     laneLifecycle,
     laneResults: laneLifecycle.latestResults,
     packetDiagnostics,
@@ -6734,7 +6815,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
   });
   const controlPlane = readModel.controlPlane;
   const statusCounts = readModel.statusCounts;
@@ -6769,7 +6850,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const fullState = {
     ok: true,
     workDir,
-    config: state.config,
+    config: publicSessionConfig(state.config),
     segment: state.segment,
     runs: state.current.length,
     totalRuns: state.results.length,
@@ -6794,8 +6875,9 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    commandAuthority: guidance.commandAuthority,
-    preflight: guidance.preflight,
+    fixedControl: fixedControlStateSummary(config.fixedControl),
+    commandAuthority: publicCommandAuthority,
+    preflight: publicPreflight,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -6888,6 +6970,7 @@ async function publicCompactState({
     scaffoldHealth,
     warningDetails,
   });
+  const publicPreflight = publicCommandPayload(guidance.preflight);
   const stateWithQualityGap = buildSessionReadModelState({
     state,
     qualityGap,
@@ -6898,7 +6981,7 @@ async function publicCompactState({
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
   });
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
@@ -6920,7 +7003,7 @@ async function publicCompactState({
   const portfolioRecommendation = recommendPortfolioDirection({
     runtimeDrift: guidance.runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
     laneLifecycle,
     laneResults: laneLifecycle.latestResults,
     packetDiagnostics,
@@ -6958,7 +7041,7 @@ async function publicCompactState({
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    preflight: publicPreflight,
   });
   const controlPlane = readModel.controlPlane;
   const decisionEnvelope = withCanonicalActionCommand(
@@ -6987,7 +7070,7 @@ async function publicCompactState({
   return compactPublicState({
     ok: true,
     workDir,
-    config: state.config,
+    config: publicSessionConfig(state.config),
     segment: state.segment,
     runs: state.current.length,
     totalRuns: state.results.length,
@@ -7012,7 +7095,8 @@ async function publicCompactState({
     dashboardHealth,
     sourceCleanliness,
     gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
+    fixedControl: fixedControlStateSummary(config.fixedControl),
+    preflight: publicPreflight,
     limit: iterationLimitInfo(state, config),
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -7076,6 +7160,29 @@ function hasFinalizationEvidence(state: LooseObject): boolean {
       ? state.current
       : [];
   return runs.some((run: LooseObject) => isAcceptedCurrentRun(run));
+}
+
+function publicSessionConfig(config: unknown): LooseObject {
+  const record = config && typeof config === "object" ? { ...(config as LooseObject) } : {};
+  const output = redactEvidenceObject(record) as LooseObject;
+  for (const field of [
+    "benchmarkCommand",
+    "benchmark_command",
+    "checksCommand",
+    "checks_command",
+  ]) {
+    if (typeof record[field] === "string") {
+      output[field] = redactCommandDisplay(record[field]);
+    }
+  }
+  if (Object.hasOwn(record, "fixedControl")) {
+    output.fixedControl = fixedControlStateSummary(record.fixedControl);
+  }
+  return output;
+}
+
+function publicCommandPayload<T>(value: T): T {
+  return redactEvidenceObject(value) as T;
 }
 
 function compactPublicState(state: LooseObject) {
@@ -7285,6 +7392,7 @@ function compactPublicState(state: LooseObject) {
           nextActionHint: state.gateQuality.nextActionHint || "",
         }
       : null,
+    fixedControl: state.fixedControl || null,
     preflight: state.preflight
       ? {
           status: state.preflight.status,
@@ -8301,6 +8409,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   try {
     benchmarkCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
       fallbackToDefault: true,
+      config,
     });
     benchmarkCommandHint = benchmarkCommandSource.command;
   } catch (error: unknown) {
@@ -8316,6 +8425,8 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     runtimeDriftSummary,
     benchmarkCommand: benchmarkCommandHint,
   });
+  const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
+  const publicPreflight = publicCommandPayload(guidance.preflight);
   for (const blocker of guidanceBlockers(guidance)) {
     if (!hasSharperDoctorBlocker(state, blocker)) {
       pushUniqueMessage(issues, blocker);
@@ -8328,7 +8439,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         state: {
           ...state,
           gateQuality: guidance.gateQuality,
-          preflight: guidance.preflight,
+          preflight: publicPreflight,
           portfolioRecommendation: null,
           runtimeDriftSummary,
           scaffoldHealth: state.scaffoldHealth,
@@ -8360,6 +8471,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
       (await resolveBenchmarkCommandSource(args, workDir, {
         fallbackToDefault: true,
         requireCommand: false,
+        config,
       }));
     benchmark.command = benchmarkCommandSource.command;
     if (!benchmark.command) {
@@ -8367,47 +8479,54 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
       issues.push(benchmark.metricError);
     } else {
-      const latestContract = latestBenchmarkContractEntry(workDir, state)?.benchmarkContract;
-      const doctorPacketEnvMode =
-        latestContract && Object.hasOwn(latestContract, "packetEnvMode")
-          ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
-          : "inherit";
-      benchmark.packetEnvMode = doctorPacketEnvMode;
-      const run = await runShell(
-        benchmark.command,
-        workDir,
-        numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
-        {
-          envMode: doctorPacketEnvMode,
-          retainMetricNames: [state.config.metricName],
-        },
-      );
-      benchmark.exitCode = run.exitCode;
-      benchmark.timedOut = run.timedOut;
-      benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
-      benchmark.emitsPrimary =
-        finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
-      benchmark.progress = buildRunProgress({
-        benchmark: run,
-        checks: null,
-        checksCommand: null,
-        passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary,
-      });
-      if (run.exitCode !== 0 || run.timedOut) {
-        issues.push(
-          `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
+      const fixedControlBlock = fixedControlBlockForCommand(benchmark.command, config, args);
+      if (fixedControlBlock) {
+        benchmark.fixedControlViolation = fixedControlBlock.fixedControlViolation;
+        benchmark.metricError = fixedControlBlock.issue;
+        issues.push(fixedControlBlock.issue);
+      } else {
+        const latestContract = latestBenchmarkContractEntry(workDir, state)?.benchmarkContract;
+        const doctorPacketEnvMode =
+          latestContract && Object.hasOwn(latestContract, "packetEnvMode")
+            ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
+            : "inherit";
+        benchmark.packetEnvMode = doctorPacketEnvMode;
+        const run = await runShell(
+          benchmark.command,
+          workDir,
+          numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
+          {
+            envMode: doctorPacketEnvMode,
+            retainMetricNames: [state.config.metricName],
+          },
         );
-      } else if (!benchmark.emitsPrimary) {
-        benchmark.metricError = `Benchmark did not emit primary metric METRIC ${state.config.metricName}=<number>.`;
-        issues.push(benchmark.metricError);
+        benchmark.exitCode = run.exitCode;
+        benchmark.timedOut = run.timedOut;
+        benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
+        benchmark.emitsPrimary =
+          finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
+        benchmark.progress = buildRunProgress({
+          benchmark: run,
+          checks: null,
+          checksCommand: null,
+          passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary,
+        });
+        if (run.exitCode !== 0 || run.timedOut) {
+          issues.push(
+            `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
+          );
+        } else if (!benchmark.emitsPrimary) {
+          benchmark.metricError = `Benchmark did not emit primary metric METRIC ${state.config.metricName}=<number>.`;
+          issues.push(benchmark.metricError);
+        }
+        const driftWarning = benchmarkDriftWarning({
+          currentMetric: benchmark.parsedMetrics[state.config.metricName],
+          bestMetric: state.best,
+          direction: state.config.bestDirection,
+          metricName: state.config.metricName,
+        });
+        if (driftWarning) warnings.push(driftWarning);
       }
-      const driftWarning = benchmarkDriftWarning({
-        currentMetric: benchmark.parsedMetrics[state.config.metricName],
-        bestMetric: state.best,
-        direction: state.config.bestDirection,
-        metricName: state.config.metricName,
-      });
-      if (driftWarning) warnings.push(driftWarning);
     }
   }
 
@@ -8420,6 +8539,8 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   } else if (issues.some((issue: any) => /primary metric|benchmark/i.test(issue))) {
     nextAction =
       "Fix the benchmark command so it emits the configured primary metric before continuing.";
+  } else if (issues.some((issue: any) => /fixed_control_rerun_blocked/i.test(String(issue)))) {
+    nextAction = "Reuse the fixed control artifact instead of running the benchmark check.";
   } else if (state.runs === 0) {
     nextAction = "Run and log a baseline before trying optimizations.";
   } else if (state.limit.limitReached) {
@@ -8442,6 +8563,10 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const benchmarkContractChanged = warningDetails.some(
     (detail: any) => detail?.code === "benchmark_contract_changed",
   );
+  const publicBenchmark = {
+    ...benchmark,
+    command: redactCommandDisplay(benchmark.command),
+  };
 
   const result: LooseObject = {
     ok: issues.length === 0,
@@ -8460,12 +8585,12 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
       historical: contractDiagnostics.historicalContracts.length > 0,
       segmentEntry: activeBenchmarkContractEntry?.benchmarkContractScope === "segment",
     },
-    benchmark,
+    benchmark: publicBenchmark,
     drift,
     runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
-    commandAuthority: guidance.commandAuthority,
-    preflight: guidance.preflight,
+    commandAuthority: publicCommandAuthority,
+    preflight: publicPreflight,
     decisionEnvelope: loopAuthority.decisionEnvelope,
     loopContract: loopAuthority.loopContract,
     canonicalNextAction: loopAuthority.canonicalNextAction,
@@ -9066,7 +9191,7 @@ function promotionStateForLoggedDecision({
 
 async function nextExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  await writeNextPreflightProgressSnapshot(workDir, args).catch(() => {});
+  await writeNextPreflightProgressSnapshot(workDir, args, config).catch(() => {});
   const doctor = await doctorSession({
     ...args,
     check_benchmark: false,
@@ -9199,6 +9324,39 @@ async function nextExperiment(args: any) {
       }),
     };
   }
+  const fixedControlCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
+    fallbackToDefault: true,
+    requireCommand: true,
+    config,
+  });
+  const fixedControlBlock = fixedControlBlockForCommand(
+    fixedControlCommandSource.command,
+    config,
+    args,
+  );
+  if (fixedControlBlock) {
+    await deleteActiveProgressSnapshot(workDir).catch(() => {});
+    const nextAction =
+      fixedControlBlock.message ||
+      "A fixed control artifact is active; reuse it instead of rerunning the control command.";
+    return {
+      ok: false,
+      workDir,
+      refused: true,
+      code: fixedControlBlock.code,
+      doctor: fixedControlBlockedDoctorSummary(doctor),
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+      fixedControlViolation: fixedControlBlock.fixedControlViolation,
+      nextAction,
+      clearingCondition:
+        "Reuse the fixed control artifact, update the fixedControl config when an invalidator changes, or pass --allow-fixed-control-rerun explicitly.",
+      commandHint: fixedControlBlock.commandHint || continuationCommands(workDir).state,
+      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
+        stopReason: nextAction,
+      }),
+    };
+  }
   const preRunGit = await lastRunGitSnapshot(workDir, config).catch((error: any) => ({
     inside: null as boolean | null,
     error: error.message || String(error),
@@ -9303,11 +9461,16 @@ async function nextExperiment(args: any) {
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
 }
 
-async function writeNextPreflightProgressSnapshot(workDir: string, args: LooseObject) {
+async function writeNextPreflightProgressSnapshot(
+  workDir: string,
+  args: LooseObject,
+  config: LooseObject = readConfig(workDir),
+) {
   const state = currentState(workDir);
   const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
     fallbackToDefault: true,
     requireCommand: false,
+    config,
   }).catch(() => null);
   const timeoutSeconds = numberOption(
     args.timeout_seconds ?? args.timeoutSeconds,
@@ -9441,7 +9604,11 @@ export async function runAutoresearchCli(
     await executeAutoresearchCli(argv, writeStdout);
     return 0;
   } catch (error: any) {
-    writeStderr(error.stack || error.message || String(error));
+    if (error?.code) {
+      writeStderr(`${error.code}: ${error.message || String(error)}`);
+    } else {
+      writeStderr(error.stack || error.message || String(error));
+    }
     return 1;
   }
 }

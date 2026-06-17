@@ -347,6 +347,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
         checksPolicy: args.checksPolicy,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     next: async (args) => ({
@@ -363,6 +364,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
         checksPolicy: args.checksPolicy,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "partial-results": async (args) => ({
@@ -417,6 +419,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
             checkInstalled: args.checkInstalled,
             explain: args.explain,
             timeoutSeconds: args.timeoutSeconds,
+            allowFixedControlRerun: args.allowFixedControlRerun,
           })),
     }),
     "benchmark-lint": async (args) => ({
@@ -427,6 +430,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         sample: args.sample,
         command: args.command,
         timeoutSeconds: args.timeoutSeconds,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "benchmark-inspect": async (args) => ({
@@ -434,6 +438,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         cwd: args.cwd,
         command: args.command,
         timeoutSeconds: args.timeoutSeconds,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "checks-inspect": async (args) => ({

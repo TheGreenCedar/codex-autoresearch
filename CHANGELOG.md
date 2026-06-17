@@ -6,6 +6,10 @@ This project uses a root-only changelog because the root README is the public do
 
 ## Unreleased
 
+### Changed
+
+- Fixed-control guard help now documents `--allow-fixed-control-rerun` on guarded benchmark-running commands; `fixedControl.forbiddenCommandPatterns` use literal substring matches and reruns require the explicit override.
+
 ## 2.3.15 - 2026-06-16
 
 ### Changed
