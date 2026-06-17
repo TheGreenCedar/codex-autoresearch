@@ -223,6 +223,20 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     );
   }
 
+  const runtimeAuthority = objectValue(envelope.runtimeAuthority);
+  if (runtimeAuthority?.blocking === true) {
+    blockers.push(
+      loopAction(
+        "runtime-authority",
+        LOOP_PRIORITY.validationGate,
+        runtimeAuthority.blocker ||
+          "Inspect or refresh the installed plugin runtime before claiming installed behavior.",
+        runtimeAuthority.command,
+        ["runtimeAuthority"],
+      ),
+    );
+  }
+
   const salvageCandidate = objectValue(
     arrayValue(envelope.salvageCandidates).find(isDiagnosticSalvage),
   );

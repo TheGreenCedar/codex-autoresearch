@@ -41,6 +41,38 @@ const pathExists = async (target: string) => {
   }
 };
 
+function isolatedRuntimeEnv(homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  };
+}
+
+async function writeInstalledRuntimeFixture(homeDir: string, status: string) {
+  const cacheRoot = path.join(
+    homeDir,
+    ".codex",
+    "plugins",
+    "cache",
+    "thegreencedar-autoresearch",
+    "codex-autoresearch",
+  );
+  const runtimeDir = path.join(cacheRoot, status === "stale" ? "0.0.0" : PLUGIN_VERSION);
+  await mkdir(runtimeDir, { recursive: true });
+  if (status === "stale") {
+    await writeFile(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({ version: "0.0.0" }, null, 2),
+    );
+  } else if (status === "unavailable") {
+    await writeFile(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({ version: PLUGIN_VERSION }, null, 2),
+    );
+  }
+}
+
 function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return (payload.result as Record<string, unknown>) || payload;
 }
@@ -9471,6 +9503,43 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
       smokeCheck: payload.runtimeDriftSummary.smokeCheck,
       nextActionHint: payload.runtimeDriftSummary.nextActionHint,
     });
+  });
+});
+
+test("doctor --check-installed blocks non-fresh installed runtime before packet guidance", async () => {
+  await withTempDir("doctor-check-installed-runtime-authority", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "installed doctor", "--metric-name", "seconds"]);
+
+    for (const status of ["stale", "missing", "unavailable"]) {
+      await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
+        await writeInstalledRuntimeFixture(homeDir, status);
+
+        const result = await runCli(["doctor", "--cwd", dir, "--check-installed", "--explain"], {
+          env: isolatedRuntimeEnv(homeDir),
+        });
+        assert.equal(result.code, 0, result.stderr);
+
+        const payload = JSON.parse(result.stdout);
+        assert.equal(payload.ok, false, status);
+        assert.equal(payload.runtimeAuthority.trustScope, "installed-plugin", status);
+        assert.equal(payload.runtimeAuthority.blocking, true, status);
+        assert.equal(payload.runtimeAuthority.installedRuntime.status, status);
+        assert.equal(payload.canonicalNextAction.kind, "runtime-authority", status);
+        assert.equal(payload.canonicalNextAction.safeAction, "doctor", status);
+        assert.equal(payload.canonicalNextAction.toolName, "doctor", status);
+        assert.match(payload.canonicalNextAction.command || "", /\bdoctor\b/, status);
+        assert.match(payload.canonicalNextAction.command || "", /--explain\b/, status);
+        assert.doesNotMatch(payload.canonicalNextAction.command || "", /\bnext\b/, status);
+        assert.match(
+          payload.issues.join("\n"),
+          new RegExp(`${status} installed plugin runtime`, "i"),
+        );
+        assert.match(payload.nextAction, /installed.*runtime/i);
+        assert.match(payload.nextAction, /inspect|refresh/i);
+        assert.doesNotMatch(payload.nextAction, /Run the next experiment|next measured packet/i);
+        assert.match(payload.explanation.nextSafeAction, /installed.*runtime/i);
+      });
+    }
   });
 });
 

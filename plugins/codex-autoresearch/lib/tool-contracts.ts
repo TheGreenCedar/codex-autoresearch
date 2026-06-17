@@ -108,6 +108,9 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   runtimeDriftSummary: objectSchema(
     "Source, installed, and built runtime status with smoke-check and next-action hints.",
   ),
+  runtimeAuthority: objectSchema(
+    "Scoped runtime authority readout that separates source-checkout and installed-plugin trust.",
+  ),
   runtimeProvenance: objectSchema("Source, local, installed runtime, and drift provenance."),
   scaffoldHealth: objectSchema("Session scaffold integrity and automation safety checks."),
   sessionDecisionCapsule: objectSchema("Active session decision capsule when one is loaded."),
@@ -415,6 +418,7 @@ const CONTRACTS = {
       "loopContract",
       "runtimeProvenance",
       "runtimeDriftSummary",
+      "runtimeAuthority",
       "dashboardHealth",
       "sourceCleanliness",
       "ledgerHealth",
@@ -592,6 +596,7 @@ const CONTRACTS = {
       "warningDetails",
       "drift",
       "runtimeDriftSummary",
+      "runtimeAuthority",
       "gateQuality",
       "preflight",
       "loopContract",

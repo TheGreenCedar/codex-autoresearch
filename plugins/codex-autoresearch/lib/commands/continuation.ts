@@ -16,6 +16,8 @@ export function buildContinuationCommands({
   const slug = shellQuote(researchSlug);
   return {
     state: `node ${script} state --cwd ${cwd}`,
+    doctor: `node ${script} doctor --cwd ${cwd}`,
+    doctorExplain: `node ${script} doctor --cwd ${cwd} --explain`,
     next: `node ${script} next --cwd ${cwd} --compact`,
     nextFull: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,

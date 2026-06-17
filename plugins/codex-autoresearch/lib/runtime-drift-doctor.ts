@@ -5,6 +5,12 @@ import path from "node:path";
 
 export type RuntimeAvailability = "fresh" | "stale" | "missing" | "unavailable";
 export type BuiltRuntimeStatus = "available" | "missing" | "unavailable";
+export type RuntimeTrustScope = "source-checkout" | "installed-plugin";
+
+export interface RuntimeStatus {
+  status: string;
+  version?: string;
+}
 
 export interface RuntimeDriftFacts {
   sourceVersion: string;
@@ -24,6 +30,62 @@ export interface RuntimeDriftSummary {
   runtimeFingerprint: "matched" | "mismatched" | "unavailable";
   smokeCheck: string;
   nextActionHint: string;
+}
+
+export function summarizeRuntimeAuthority(input: {
+  sourceRuntime?: RuntimeStatus | null;
+  installedRuntime?: RuntimeStatus | null;
+  trustScope?: RuntimeTrustScope;
+}) {
+  const trustScope = input.trustScope || "source-checkout";
+  const installedStatus = normalizeRuntimeStatus(input.installedRuntime?.status);
+  const installedFresh = installedStatus === "fresh";
+  const installedNeedsAttention = !installedFresh;
+  const blocking = installedNeedsAttention && trustScope === "installed-plugin";
+  return {
+    sourceRuntime: input.sourceRuntime || null,
+    installedRuntime: input.installedRuntime || null,
+    trustScope,
+    blocking,
+    blocker: blocking ? runtimeAuthorityBlocker(installedStatus) : "",
+    warning:
+      installedNeedsAttention && trustScope === "source-checkout"
+        ? runtimeAuthorityWarning(installedStatus)
+        : "",
+  };
+}
+
+function normalizeRuntimeStatus(status: unknown): string {
+  const normalized = String(status || "")
+    .trim()
+    .toLowerCase();
+  return normalized || "unknown";
+}
+
+function runtimeAuthorityBlocker(installedStatus: string): string {
+  if (installedStatus === "stale") {
+    return "Stale installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.";
+  }
+  if (installedStatus === "missing") {
+    return "Missing installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.";
+  }
+  if (installedStatus === "unavailable") {
+    return "Unavailable installed plugin runtime evidence blocks this installed-runtime verification; inspect the installed runtime before claiming installed behavior.";
+  }
+  return "Installed plugin runtime is not fresh, so installed-runtime verification is blocked until the installed runtime is inspected or refreshed.";
+}
+
+function runtimeAuthorityWarning(installedStatus: string): string {
+  if (installedStatus === "stale") {
+    return "Stale installed plugin runtime is advisory for source-checkout work; verify installed runtime before claiming live installed behavior.";
+  }
+  if (installedStatus === "missing") {
+    return "Missing installed plugin runtime is advisory for source-checkout work; verify installed runtime before claiming live installed behavior.";
+  }
+  if (installedStatus === "unavailable") {
+    return "Unavailable installed plugin runtime evidence is advisory for source-checkout work; verify installed runtime before claiming live installed behavior.";
+  }
+  return "Installed plugin runtime freshness is unknown for source-checkout work; verify installed runtime before claiming live installed behavior.";
 }
 
 export function inspectRuntimeDriftFromFacts(facts: RuntimeDriftFacts): RuntimeDriftSummary {

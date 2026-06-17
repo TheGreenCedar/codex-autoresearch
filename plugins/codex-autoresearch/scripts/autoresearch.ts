@@ -5081,6 +5081,7 @@ async function decisionGuidance({
   setupMissing = [],
   qualityConstraints: explicitQualityConstraints = null,
   runtimeDriftSummary = null,
+  runtimeTrustScope = "source-checkout",
   benchmarkCommand = "",
   checksCommand = "",
 }: LooseObject) {
@@ -5103,6 +5104,7 @@ async function decisionGuidance({
     setupMissing,
     qualityConstraints,
     runtimeDriftSummary,
+    runtimeTrustScope,
     benchmarkCommand,
     checksCommand,
     defaultBenchmarkCommand,
@@ -5259,19 +5261,23 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       state,
       scaffoldHealth,
       warningDetails: warnings,
+      runtimeTrustScope: context.includeInstalledRuntime ? "installed-plugin" : "source-checkout",
     }),
   );
-  const stateWithQualityGap = buildSessionReadModelState({
-    state,
-    qualityGap,
-    laneLifecycle,
-    packetDiagnostics,
-    runtimeProvenance: currentRuntimeProvenance,
-    runtimeDriftSummary: guidance.runtimeDriftSummary,
-    sourceCleanliness,
-    gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
-  });
+  const stateWithQualityGap = {
+    ...buildSessionReadModelState({
+      state,
+      qualityGap,
+      laneLifecycle,
+      packetDiagnostics,
+      runtimeProvenance: currentRuntimeProvenance,
+      runtimeDriftSummary: guidance.runtimeDriftSummary,
+      sourceCleanliness,
+      gateQuality: guidance.gateQuality,
+      preflight: guidance.preflight,
+    }),
+    runtimeAuthority: guidance.runtimeAuthority,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -6759,18 +6765,21 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   });
   const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
   const publicPreflight = publicCommandPayload(guidance.preflight);
-  const stateWithQualityGap = buildSessionReadModelState({
-    state,
-    qualityGap,
-    laneLifecycle,
-    packetDiagnostics,
-    runtimeProvenance: currentRuntimeProvenance,
-    runtimeDriftSummary: guidance.runtimeDriftSummary,
-    dashboardHealth,
-    sourceCleanliness,
-    gateQuality: guidance.gateQuality,
-    preflight: publicPreflight,
-  });
+  const stateWithQualityGap = {
+    ...buildSessionReadModelState({
+      state,
+      qualityGap,
+      laneLifecycle,
+      packetDiagnostics,
+      runtimeProvenance: currentRuntimeProvenance,
+      runtimeDriftSummary: guidance.runtimeDriftSummary,
+      dashboardHealth,
+      sourceCleanliness,
+      gateQuality: guidance.gateQuality,
+      preflight: publicPreflight,
+    }),
+    runtimeAuthority: guidance.runtimeAuthority,
+  };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
     title: recipe.title,
@@ -6878,6 +6887,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     researchIntegrity,
     runtimeProvenance: currentRuntimeProvenance,
     runtimeDriftSummary: guidance.runtimeDriftSummary,
+    runtimeAuthority: guidance.runtimeAuthority,
     dashboardHealth,
     sourceCleanliness,
     ledgerHealth,
@@ -7069,18 +7079,21 @@ async function publicCompactState({
     warningDetails,
   });
   const publicPreflight = publicCommandPayload(guidance.preflight);
-  const stateWithQualityGap = buildSessionReadModelState({
-    state,
-    qualityGap,
-    laneLifecycle,
-    packetDiagnostics,
-    runtimeProvenance: currentRuntimeProvenance,
-    runtimeDriftSummary: guidance.runtimeDriftSummary,
-    dashboardHealth,
-    sourceCleanliness,
-    gateQuality: guidance.gateQuality,
-    preflight: publicPreflight,
-  });
+  const stateWithQualityGap = {
+    ...buildSessionReadModelState({
+      state,
+      qualityGap,
+      laneLifecycle,
+      packetDiagnostics,
+      runtimeProvenance: currentRuntimeProvenance,
+      runtimeDriftSummary: guidance.runtimeDriftSummary,
+      dashboardHealth,
+      sourceCleanliness,
+      gateQuality: guidance.gateQuality,
+      preflight: publicPreflight,
+    }),
+    runtimeAuthority: guidance.runtimeAuthority,
+  };
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -7190,6 +7203,7 @@ async function publicCompactState({
     researchIntegrity,
     runtimeProvenance: currentRuntimeProvenance,
     runtimeDriftSummary: guidance.runtimeDriftSummary,
+    runtimeAuthority: guidance.runtimeAuthority,
     dashboardHealth,
     sourceCleanliness,
     ledgerHealth,
@@ -7481,6 +7495,7 @@ function compactPublicState(state: LooseObject) {
           nextActionHint: state.runtimeDriftSummary.nextActionHint,
         }
       : null,
+    runtimeAuthority: compactRuntimeAuthority(state.runtimeAuthority),
     dashboardHealth: state.dashboardHealth || null,
     sourceCleanliness: state.sourceCleanliness || null,
     ledgerHealth: state.ledgerHealth || null,
@@ -7639,6 +7654,18 @@ function compactLaneLifecycle(laneLifecycle: LooseObject | null | undefined): Lo
       : [],
     recommendation: laneLifecycle.recommendation || "",
     command: laneLifecycle.command || "",
+  };
+}
+
+function compactRuntimeAuthority(value: LooseObject | null | undefined): LooseObject | null {
+  if (!value) return null;
+  return {
+    sourceRuntime: value.sourceRuntime || null,
+    installedRuntime: value.installedRuntime || null,
+    trustScope: value.trustScope || "source-checkout",
+    blocking: value.blocking === true,
+    blocker: value.blocker || "",
+    warning: value.warning || "",
   };
 }
 
@@ -8424,6 +8451,8 @@ function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): L
     canonicalNextAction: {
       ...action,
       command,
+      safeAction:
+        action.safeAction || actionSafeActionForKind(action.kind, String(action.kind || "")),
       toolName: action.toolName || guidedToolNameForCanonicalKind(String(action.kind || "")),
     },
   };
@@ -8499,6 +8528,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     pluginRoot: PLUGIN_ROOT,
     includeInstalled: boolOption(args.check_installed ?? args.checkInstalled, false),
   });
+  const checkInstalledRuntime = boolOption(args.check_installed ?? args.checkInstalled, false);
   const runtimeDriftSummary = await inspectRuntimeDrift({
     packageRoot: PLUGIN_ROOT,
     sourceVersion: PLUGIN_VERSION,
@@ -8523,10 +8553,15 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     scaffoldHealth: state.scaffoldHealth,
     warningDetails,
     runtimeDriftSummary,
+    runtimeTrustScope: checkInstalledRuntime ? "installed-plugin" : "source-checkout",
     benchmarkCommand: benchmarkCommandHint,
   });
   const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
   const publicPreflight = publicCommandPayload(guidance.preflight);
+  const runtimeAuthority = (guidance.runtimeAuthority || null) as LooseObject | null;
+  if (runtimeAuthority?.blocking === true) {
+    pushUniqueMessage(issues, runtimeAuthority.blocker);
+  }
   for (const blocker of guidanceBlockers(guidance)) {
     if (!hasSharperDoctorBlocker(state, blocker)) {
       pushUniqueMessage(issues, blocker);
@@ -8542,6 +8577,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
           preflight: publicPreflight,
           portfolioRecommendation: null,
           runtimeDriftSummary,
+          runtimeAuthority: guidance.runtimeAuthority,
           scaffoldHealth: state.scaffoldHealth,
         },
         nextAction: "Run the next experiment, then log keep or discard with ASI.",
@@ -8631,7 +8667,11 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
   }
 
   let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (loopAuthority.nextAction) {
+  if (runtimeAuthority?.blocking === true) {
+    nextAction =
+      String(runtimeAuthority.blocker || "").trim() ||
+      "Inspect or refresh the installed plugin runtime before claiming installed behavior.";
+  } else if (loopAuthority.nextAction) {
     nextAction = loopAuthority.nextAction;
   } else if (issues.some((issue: any) => /contract changed/i.test(issue))) {
     nextAction =
@@ -8688,6 +8728,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     benchmark: publicBenchmark,
     drift,
     runtimeDriftSummary,
+    runtimeAuthority: guidance.runtimeAuthority,
     gateQuality: guidance.gateQuality,
     commandAuthority: publicCommandAuthority,
     preflight: publicPreflight,
@@ -8746,6 +8787,7 @@ function doctorExplanation(result: LooseObject): LooseObject {
           nextActionHint: runtimeSummary.nextActionHint,
         }
       : null,
+    runtimeAuthority: result.runtimeAuthority || null,
     gateQuality: result.gateQuality || null,
     preflight: result.preflight || null,
     nextSafeAction: result.nextAction,

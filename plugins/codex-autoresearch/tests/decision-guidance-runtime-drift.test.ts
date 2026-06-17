@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { inspectRuntimeDriftFromFacts } from "../lib/runtime-drift-doctor.js";
+import {
+  inspectRuntimeDriftFromFacts,
+  summarizeRuntimeAuthority,
+} from "../lib/runtime-drift-doctor.js";
 
 const DOCTOR_COMMAND = /node .*scripts[\\/]autoresearch\.mjs doctor .*--explain/;
 const ABSOLUTE_DOCTOR_COMMAND =
@@ -139,4 +142,46 @@ test("missing built runtime is reported separately from installed runtime", () =
   });
 
   assert.equal(summary.builtRuntime, "missing");
+});
+
+test("source checkout work treats non-fresh installed runtime as advisory", () => {
+  for (const status of ["stale", "missing", "unavailable"]) {
+    const authority = summarizeRuntimeAuthority({
+      sourceRuntime: { status: "fresh", version: "2.0.2" },
+      installedRuntime: { status, ...(status === "stale" ? { version: "2.0.1" } : {}) },
+    });
+
+    assert.equal(authority.blocking, false, status);
+    assert.equal(authority.trustScope, "source-checkout", status);
+    assert.equal(authority.blocker, "", status);
+    assert.match(authority.warning, new RegExp(`${status} installed plugin runtime`, "i"));
+  }
+});
+
+test("installed plugin verification treats non-fresh installed runtime as blocking", () => {
+  for (const status of ["stale", "missing", "unavailable"]) {
+    const authority = summarizeRuntimeAuthority({
+      sourceRuntime: { status: "fresh", version: "2.0.2" },
+      installedRuntime: { status, ...(status === "stale" ? { version: "2.0.1" } : {}) },
+      trustScope: "installed-plugin",
+    });
+
+    assert.equal(authority.blocking, true, status);
+    assert.equal(authority.trustScope, "installed-plugin", status);
+    assert.match(authority.blocker, new RegExp(`${status} installed plugin runtime`, "i"));
+    assert.match(authority.blocker, /installed-runtime verification/i);
+    assert.equal(authority.warning, "", status);
+  }
+});
+
+test("installed plugin verification accepts fresh installed runtime", () => {
+  const authority = summarizeRuntimeAuthority({
+    sourceRuntime: { status: "fresh", version: "2.0.2" },
+    installedRuntime: { status: "fresh", version: "2.0.2" },
+    trustScope: "installed-plugin",
+  });
+
+  assert.equal(authority.blocking, false);
+  assert.equal(authority.blocker, "");
+  assert.equal(authority.warning, "");
 });

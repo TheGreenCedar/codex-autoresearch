@@ -53,6 +53,7 @@ export interface CompactStateBuilderInput {
   canonicalNextAction?: unknown;
   runtimeProvenance?: unknown;
   runtimeDriftSummary?: unknown;
+  runtimeAuthority?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
   ledgerHealth?: unknown;
@@ -75,6 +76,7 @@ export interface CompactStateBuilderInput {
 const OPTIONAL_COMPACT_STATE_FIELDS = [
   "runtimeProvenance",
   "runtimeDriftSummary",
+  "runtimeAuthority",
   "dashboardHealth",
   "sourceCleanliness",
   "ledgerHealth",
@@ -148,6 +150,7 @@ export interface CompactStateResponse {
   canonicalNextAction: unknown;
   runtimeProvenance?: unknown;
   runtimeDriftSummary?: unknown;
+  runtimeAuthority?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
   ledgerHealth?: unknown;

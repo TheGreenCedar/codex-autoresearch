@@ -94,6 +94,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
   }),
+  "runtime-authority": actionMetadata({
+    label: "Inspect runtime authority",
+    commandLabel: "Doctor",
+    safeAction: "doctor",
+    fallbackKeys: ["doctorExplain", "doctor", "state"],
+  }),
   "packet-diagnostic": actionMetadata({
     label: "Inspect packet diagnostics",
     commandLabel: "Partial",
