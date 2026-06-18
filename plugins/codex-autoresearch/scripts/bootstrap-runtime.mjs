@@ -39,9 +39,7 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
-  const targetMtime = await fileMtime(target);
-  const sourceMtime = await newestSourceMtime(pluginRoot);
-  if (sourceMtime <= targetMtime) return;
+  if ((await newestSourceMtime(pluginRoot)) <= (await fileMtime(target))) return;
 
   const build = npmBuildInvocation();
   await run(build.command, build.args, { cwd: pluginRoot });
@@ -299,30 +297,21 @@ async function fileMtime(file) {
 }
 
 async function newestSourceMtime(pluginRoot) {
-  let newest = await fileMtime(path.join(pluginRoot, "package.json"));
-  for (const relativeDir of ["lib", "scripts"]) {
-    newest = Math.max(newest, await newestTsMtime(path.join(pluginRoot, relativeDir)));
+  const files = ["package.json"];
+  for (const dir of ["lib", "scripts"]) {
+    const entries = await fs
+      .readdir(path.join(pluginRoot, dir), { recursive: true })
+      .catch(() => []);
+    files.push(
+      ...entries
+        .filter((entry) => String(entry).endsWith(".ts"))
+        .map((entry) => path.join(dir, entry)),
+    );
   }
-  return newest;
-}
-
-async function newestTsMtime(dir) {
-  let newest = 0;
-  let entries = [];
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return newest;
-  }
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      newest = Math.max(newest, await newestTsMtime(entryPath));
-    } else if (entry.name.endsWith(".ts")) {
-      newest = Math.max(newest, await fileMtime(entryPath));
-    }
-  }
-  return newest;
+  return Math.max(
+    0,
+    ...(await Promise.all(files.map((file) => fileMtime(path.join(pluginRoot, file))))),
+  );
 }
 
 function npmBuildInvocation() {

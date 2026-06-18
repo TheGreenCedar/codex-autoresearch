@@ -1,17 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  access,
-  chmod,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  symlink,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
@@ -9913,7 +9903,7 @@ test("source launcher direct-script detection survives normalized paths", async 
   });
 });
 
-test("source launcher rebuilds stale local dist before use", async () => {
+test("source launcher rebuilds local source runtime before use", async () => {
   await withTempDir("runtime-stale-source-build", async (dir) => {
     const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
     await writeFile(
@@ -9931,6 +9921,8 @@ test("source launcher rebuilds stale local dist before use", async () => {
     );
     await mkdir(path.join(pluginDir, "node_modules"), { recursive: true });
     await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
+    const target = path.join(pluginDir, "dist", "scripts", "autoresearch.mjs");
+    await writeFile(target, "export const staleRuntime = true;\n", "utf8");
     await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
     await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
     await writeFile(
@@ -9945,12 +9937,6 @@ test("source launcher rebuilds stale local dist before use", async () => {
       ].join("\n"),
       "utf8",
     );
-    const target = path.join(pluginDir, "dist", "scripts", "autoresearch.mjs");
-    await writeFile(target, "export const staleRuntime = true;\n", "utf8");
-    const oldDate = new Date(Date.now() - 10_000);
-    const newDate = new Date();
-    await utimes(target, oldDate, oldDate);
-    await utimes(path.join(pluginDir, "scripts", "autoresearch.ts"), newDate, newDate);
 
     const bootstrap = await import(
       pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
