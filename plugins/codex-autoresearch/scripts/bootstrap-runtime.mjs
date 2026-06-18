@@ -39,7 +39,7 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
-  if ((await newestSourceMtime(pluginRoot)) <= (await fileMtime(target))) return;
+  if ((await newestSourceMtime(pluginRoot)) < (await fileMtime(target))) return;
 
   const build = npmBuildInvocation();
   await run(build.command, build.args, { cwd: pluginRoot });
