@@ -85,7 +85,7 @@ After `next`, log the packet. After `log`, read the returned continuation object
 - `crash` and `checks_failed` can be logged without inventing sentinel metrics.
 - Treat `review_required` metrics as provisional until ASI acknowledges the review outcome.
 - If `autoresearch.config.json` contains `fixedControl`, treat the named artifact as control truth. Do not rerun commands matching `forbiddenCommandPatterns` unless the user explicitly accepts `--allow-fixed-control-rerun`; prefer `reuseCommandHint`.
-- If run numbers duplicate, segments look stale, or manual log entries were edited, run `ledger-doctor --cwd <project> --json` before another packet. Use `ledger-doctor --repair --yes` only after reviewing the backup path it will create.
+- If run numbers duplicate, segments look stale, or manual log entries were edited, run `ledger-doctor --cwd <project> --json` before another packet. Use `ledger-doctor --repair --yes` only after reviewing the JSON health summary; after repair, verify the returned `backupPath`.
 - Read parsed metrics and promotion readiness separately. New keeps default to exploratory unless repeat, holdout, breadth, or explicit promotion metadata make the evidence promotable.
 - The loop contract is the authority for whether to spend another packet. `sourceCleanliness.blocks.nextPacket=false` only says source dirtiness is not the blocker.
 - Control-plane contracts are packet brakes too: goal mismatches, missing scoped approvals, stale process residue, unsupported broad claims, and unsafe finalization runways outrank another packet.

@@ -3,6 +3,12 @@ import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js"
 
 type LooseObject = Record<string, any>;
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
+type BenchmarkCommandSource = {
+  command: string;
+  missingReason?: string;
+  separatorCommand?: boolean;
+  source?: string;
+};
 type FixedControlBlock = {
   code?: string;
   fixedControlViolation?: unknown;
@@ -23,6 +29,11 @@ export interface InspectCommandDeps {
   metricParseSource: (result: LooseObject) => string;
   numberOption: (value: unknown, fallback: number) => number;
   parseMetricLines: (output: string) => Record<string, number>;
+  resolveBenchmarkCommand?: (
+    args: LooseObject,
+    workDir: string,
+    config: LooseObject,
+  ) => Promise<BenchmarkCommandSource>;
   resolveWorkDir: (value: string) => { workDir: string; config: LooseObject };
   runShell: (
     command: string,
@@ -44,11 +55,9 @@ export function createInspectCommands(deps: InspectCommandDeps) {
     let commandResult: InspectShellRunResult | null = null;
     const timeoutSeconds = deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
     if (!sample) {
-      const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
-      const command =
-        args.command ||
-        (separatorCommand ? args._.slice(1).join(" ") : "") ||
-        (await deps.defaultBenchmarkCommand(workDir));
+      const commandSource = await benchmarkCommandSource(args, workDir, config);
+      const separatorCommand = commandSource.separatorCommand === true;
+      const command = commandSource.command;
       if (command) {
         const fixedControlBlock = deps.fixedControlBlockForCommand?.(command, config, args);
         if (fixedControlBlock) {
@@ -132,6 +141,25 @@ export function createInspectCommands(deps: InspectCommandDeps) {
           ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.`
           : `Update the benchmark so it prints METRIC ${metricName}=<number>.`
         : "Benchmark output satisfies the metric contract.",
+    };
+  }
+
+  async function benchmarkCommandSource(
+    args: LooseObject,
+    workDir: string,
+    config: LooseObject,
+  ): Promise<BenchmarkCommandSource> {
+    if (deps.resolveBenchmarkCommand) {
+      return await deps.resolveBenchmarkCommand(args, workDir, config);
+    }
+    const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
+    return {
+      command:
+        args.command ||
+        (separatorCommand ? args._.slice(1).join(" ") : "") ||
+        (await deps.defaultBenchmarkCommand(workDir)),
+      separatorCommand,
+      source: args.command ? "command" : separatorCommand ? "separator" : "default",
     };
   }
 

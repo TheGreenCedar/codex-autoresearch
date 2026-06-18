@@ -100,6 +100,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
   }),
+  "ledger-integrity": actionMetadata({
+    label: "Inspect ledger integrity",
+    commandLabel: "Ledger",
+    safeAction: "ledger-doctor",
+    fallbackKeys: ["ledgerDoctor", "state"],
+  }),
   "packet-diagnostic": actionMetadata({
     label: "Inspect packet diagnostics",
     commandLabel: "Partial",

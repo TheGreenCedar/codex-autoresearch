@@ -155,20 +155,20 @@ export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
       allowBoundedNext: false,
       blocksFinalization: true,
       clearingCondition:
-        "Reuse the configured fixed control artifact, or document the invalidator and explicit override before any control rerun.",
+        "Reuse the configured fixed control artifact, or document the manual invalidator check and explicit override before any control rerun.",
       commandHint: "node scripts/autoresearch.mjs state --cwd <project> --compact",
       triggeredBy: ["sessionDecisionCapsule", "fixedControl"],
     },
     patterns: [],
     message:
-      "The session corrected a control rerun; reuse the fixed control artifact unless an invalidator changed.",
+      "The session corrected a control rerun; reuse the fixed control artifact unless an operator has documented an invalidator change.",
     bottleneck:
       "The fixed control artifact is the comparison baseline; rerunning the control would break comparability.",
     nextExperiment:
-      "Load or reuse the fixed control artifact, update fixedControl only if an invalidator changed, and log the reuse decision before more packets.",
+      "Load or reuse the fixed control artifact. If an invalidator changed, update fixedControl manually and pass an explicit override before rerunning control work.",
     wrongNextActions: [
       "Do not rerun a named baseline or control just because the benchmark command is available.",
-      "Do not replace a fixed control artifact without recording the invalidating change.",
+      "Do not replace a fixed control artifact without recording the manual invalidator check.",
     ],
   },
   {

@@ -88,7 +88,7 @@ When run numbers duplicate, segments look stale, or manual log entries were edit
 node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json
 ```
 
-Use `ledger-doctor --repair --yes` only after reviewing the backup path in the repair preview or JSON output.
+Use `ledger-doctor --repair --yes` only after reviewing the JSON health summary and deciding the run-number repair is the right fix. After the repair, verify the returned `backupPath` before doing more packet work.
 
 When the dashboard handoff matters:
 

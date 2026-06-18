@@ -11,7 +11,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | Speed improved but correctness unchecked | Quality constraint | Add checks for accuracy, recall, ranking, accessibility, security, or data integrity. Treat as experimental until claim coverage is present. |
 | Perfect metric looks too good | Evaluator contamination or cache replay | Require breadth, freshness, holdout, and repeat evidence. |
 | Current benchmark far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor and start a new segment if the old phase is stale. |
-| Duplicate run numbers, stale segments, or edited manual entries | Ledger integrity | Run `ledger-doctor --cwd <project> --json`; use `--repair --yes` only after reviewing the backup path. |
+| Duplicate run numbers, stale segments, or edited manual entries | Ledger integrity | Run `ledger-doctor --cwd <project> --json`; use `--repair --yes` only after reviewing the JSON health summary, then verify the returned `backupPath`. |
 | Setup wrapper loops or calls itself | Scaffold health | Replace self-recursive wrapper or rerun setup with `--benchmark-command`. |
 | Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL. |
 | Live refresh reports HTTP 409 | Session changed mid-refresh | Retry refresh or wait for next auto-refresh. |

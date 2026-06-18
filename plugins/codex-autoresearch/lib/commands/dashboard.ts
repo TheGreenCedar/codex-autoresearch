@@ -109,6 +109,10 @@ export function buildDashboardCommands({
       command: `node ${script} partial-results --cwd ${cwd} --from-last`,
     },
     {
+      label: "Ledger doctor",
+      command: `node ${script} ledger-doctor --cwd ${cwd} --json`,
+    },
+    {
       label: "Quality gap",
       command: `node ${script} quality-gap --cwd ${cwd} --research-slug ${slug}`,
     },

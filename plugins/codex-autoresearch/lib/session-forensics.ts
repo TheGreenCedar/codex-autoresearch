@@ -522,7 +522,7 @@ function matchSessionFrictionHints(text: string, source: string): ForensicsSigna
     add(
       "fixed_control_rerun_correction",
       "blocker",
-      "The session corrected a control rerun; reuse the fixed control artifact unless an invalidator changed.",
+      "The session corrected a control rerun; reuse the fixed control artifact unless an operator has documented an invalidator change.",
     );
   }
   if (/old segment|stale segment|picked up [^.?!;]{0,120}segment|unexpected segment/i.test(text)) {

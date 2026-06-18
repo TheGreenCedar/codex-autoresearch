@@ -302,6 +302,12 @@ const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands
   metricParseSource,
   numberOption,
   parseMetricLines,
+  resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
+    await resolveBenchmarkCommandSource(args, workDir, {
+      fallbackToDefault: true,
+      requireCommand: false,
+      config,
+    }),
   resolveWorkDir,
   runShell,
   validateMetricName,
@@ -4928,9 +4934,12 @@ async function researchStart(args: LooseObject) {
   if (!goal) throw new Error("research-start requires --goal.");
 
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
-  const shouldLogBaseline = boolOption(args.no_baseline_log ?? args.noBaselineLog, false)
+  const skipInit = boolOption(args.skipInit ?? args.skip_init, false);
+  const shouldLogBaseline = skipInit
     ? false
-    : boolOption(args.baseline_log ?? args.baselineLog, true);
+    : boolOption(args.no_baseline_log ?? args.noBaselineLog, false)
+      ? false
+      : boolOption(args.baseline_log ?? args.baselineLog, true);
   const commandShell = normalizeCommandShell(args.shell, defaultCommandShell());
   const shellQuote = (value: string) => quoteShellArg(value, commandShell);
   const scriptPath = path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs");
@@ -5010,6 +5019,7 @@ async function researchStart(args: LooseObject) {
     goal,
     metricName: "quality_gap",
     baselineLogged: false,
+    baselineSkippedReason: skipInit ? "skip-init disables the default baseline/log step." : "",
     commands: {
       setup: setupParts.join(" "),
       benchmarkLint: commands.benchmarkLint,
@@ -5245,6 +5255,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   const dashboardSetupPlan = stripDashboardCommandGuidance(setupPlanResult);
   const dashboardGuidedSetup = stripDashboardCommandGuidance(guidedSetupResult);
   const records = loadSessionRecords(workDir, readCache);
+  const ledgerHealth = analyzeLedgerHealth(records);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
@@ -5297,6 +5308,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       preflight: guidance.preflight,
     }),
     runtimeAuthority: guidance.runtimeAuthority,
+    ledgerHealth,
   };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -5393,6 +5405,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     laneLifecycle,
     packetDiagnostics,
     runtimeProvenance: currentRuntimeProvenance,
+    ledgerHealth,
     sourceCleanliness,
     watchdogSummary,
     experimentEconomics,
@@ -6712,12 +6725,24 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
   const readCache = args.readCache || createSessionReadCache();
   if (compact || report) {
-    const compactState = await publicCompactState({
-      workDir,
-      config,
-      codexGoalObjective,
-      readCache,
-    });
+    let compactState: LooseObject;
+    try {
+      compactState = await publicCompactState({
+        workDir,
+        config,
+        codexGoalObjective,
+        readCache,
+      });
+    } catch (error) {
+      if (!isStrictLedgerParseError(error)) throw error;
+      compactState = repairFirstStateForInvalidLedger({
+        workDir,
+        config,
+        codexGoalObjective,
+        error,
+        compact: true,
+      });
+    }
     if (!report) return compactState;
     const response: LooseObject = {
       ok: compactState.ok !== false,
@@ -6728,8 +6753,21 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     return response;
   }
 
-  const state = loadSessionState(workDir, readCache);
-  const records = loadSessionRecords(workDir, readCache);
+  let state: ReturnType<typeof loadSessionState>;
+  let records: ReturnType<typeof loadSessionRecords>;
+  try {
+    state = loadSessionState(workDir, readCache);
+    records = loadSessionRecords(workDir, readCache);
+  } catch (error) {
+    if (!isStrictLedgerParseError(error)) throw error;
+    return repairFirstStateForInvalidLedger({
+      workDir,
+      config,
+      codexGoalObjective,
+      error,
+      compact: false,
+    });
+  }
   const ledgerHealth = analyzeLedgerHealth(records);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
@@ -6799,6 +6837,7 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
       preflight: publicPreflight,
     }),
     runtimeAuthority: guidance.runtimeAuthority,
+    ledgerHealth,
   };
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
     id: recipe.id,
@@ -6945,6 +6984,88 @@ async function publicState(args: LooseObject): Promise<LooseObject> {
     decisionEnvelope,
   };
   return compact ? compactPublicState(fullState) : fullState;
+}
+
+function isStrictLedgerParseError(error: unknown): boolean {
+  return /Invalid JSONL in .*[\\/]?autoresearch\.jsonl at line \d+:/i.test(errorMessage(error));
+}
+
+function repairFirstStateForInvalidLedger({
+  workDir,
+  config,
+  codexGoalObjective,
+  error,
+  compact,
+}: {
+  workDir: string;
+  config: LooseObject;
+  codexGoalObjective?: unknown;
+  error: unknown;
+  compact: boolean;
+}): LooseObject {
+  const ledger = readLedgerRecordsTolerant(workDir);
+  const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
+    parseErrors: ledger.parseErrors,
+  });
+  const commands = continuationCommands(workDir);
+  const ledgerHealth = {
+    ...rawLedgerHealth,
+    command: commands.ledgerDoctor,
+  };
+  const runtime = runtimeProvenance();
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: {
+        config,
+        current: [],
+        results: [],
+        ledgerHealth,
+        runtimeProvenance: runtime,
+      },
+      nextAction: "Run ledger-doctor before another Autoresearch packet.",
+    }),
+    commands,
+  );
+  const response = {
+    ok: false,
+    code: "ledger_jsonl_invalid",
+    workDir,
+    config: publicSessionConfig(config),
+    segment: 0,
+    runs: ledger.records.length,
+    totalRuns: ledger.records.length,
+    kept: 0,
+    discarded: 0,
+    measured: 0,
+    crashed: 0,
+    checksFailed: 0,
+    baseline: null,
+    best: null,
+    historicalBest: null,
+    development: null,
+    promotion: null,
+    confidence: null,
+    ledgerPath: ledger.ledgerPath,
+    ledgerHealth,
+    parseErrors: ledgerHealth.parseErrors,
+    warnings: ledgerHealth.warnings,
+    error: errorMessage(error),
+    commands,
+    continuation: {
+      shouldContinue: false,
+      nextAction: "Run ledger-doctor before another packet.",
+      commands,
+    },
+    nextAction: "Run ledger-doctor before another packet.",
+    blockers: ledgerHealth.warnings,
+    runtimeProvenance: runtime,
+    codexGoalObjective,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+    canonicalNextAction: decisionEnvelope.canonicalNextAction,
+    loopContract: decisionEnvelope.loopContract,
+  };
+  return compact ? compactPublicState(response) : response;
 }
 
 async function ledgerDoctor(args: LooseObject): Promise<LooseObject> {
@@ -7113,6 +7234,7 @@ async function publicCompactState({
       preflight: publicPreflight,
     }),
     runtimeAuthority: guidance.runtimeAuthority,
+    ledgerHealth,
   };
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
   const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({

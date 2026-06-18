@@ -308,6 +308,20 @@ test("state --json includes ledgerHealth and does not repair duplicates", async 
     assert.equal(payload.ledgerHealth.ok, false);
     assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
     assert.match(payload.ledgerHealth.warnings.join("\n"), /Duplicate run numbers: 1/);
+    assert.equal(payload.decisionEnvelope.loopContract.canRunNextPacket, false);
+    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "ledger-integrity");
+    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+    assert.match(
+      payload.decisionEnvelope.loopContract.blockers[0].reason,
+      /Duplicate run numbers: 1/,
+    );
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--json"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.report.json.status, "blocked");
+    assert.match(reportPayload.report.json.blocker, /Duplicate run numbers: 1/);
+    assert.match(reportPayload.report.json.nextCommand, /ledger-doctor\b.*--json/);
     assert.equal(await readFile(ledgerPath, "utf8"), before);
   });
 });
@@ -1293,6 +1307,37 @@ test("research-start creates a quality-gap session and can skip baseline logging
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.metricName, "quality_gap");
     assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+    assert.equal(
+      await pathExists(
+        path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
+      ),
+      true,
+    );
+  });
+});
+
+test("research-start skip-init skips default baseline logging cleanly", async () => {
+  await withTempDir("research-start-skip-init", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--skip-init",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.baselineLogged, false);
+    assert.match(payload.baselineSkippedReason, /skip-init/i);
+    assert.equal(payload.setup.init, null);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.last-run.json")), false);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.jsonl")), false);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), true);
     assert.equal(
       await pathExists(
         path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
@@ -2725,7 +2770,7 @@ test("state supports negative metrics when lower is better", async () => {
   });
 });
 
-test("state reports corrupt JSONL with the ledger path", async () => {
+test("state reports corrupt JSONL with repair-first ledger guidance", async () => {
   await withTempDir("state-corrupt-jsonl", async (dir) => {
     await writeFile(
       path.join(dir, "autoresearch.jsonl"),
@@ -2737,9 +2782,22 @@ test("state reports corrupt JSONL with the ledger path", async () => {
     );
 
     const state = await runCli(["state", "--cwd", dir]);
-    assert.notEqual(state.code, 0);
-    assert.match(state.stderr, /autoresearch\.jsonl/);
-    assert.match(state.stderr, /line 2/);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "ledger_jsonl_invalid");
+    assert.match(payload.ledgerPath, /autoresearch\.jsonl$/);
+    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
+    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--json"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.ok, false);
+    assert.equal(reportPayload.report.json.status, "blocked");
+    assert.match(reportPayload.report.json.blocker, /Malformed JSONL lines: 2/);
+    assert.match(reportPayload.report.json.nextCommand, /ledger-doctor\b.*--json/);
   });
 });
 
@@ -4292,6 +4350,35 @@ test("benchmark-lint separates metric parsing from research integrity", async ()
     assert.equal(payload.metricParsing.ok, true);
     assert.equal(payload.researchIntegrity.ok, false);
     assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect|holdout|repeat/i);
+  });
+});
+
+test("benchmark-lint uses config benchmark command without wrapper fallback", async () => {
+  await withTempDir("benchmark-lint-config-command", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lint config command",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=7')"`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ benchmarkCommand }, null, 2),
+      "utf8",
+    );
+
+    const result = await runCli(["benchmark-lint", "--cwd", dir, "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.parsedMetrics.score, 7);
+    assert.equal(payload.checkedCommand, benchmarkCommand);
   });
 });
 

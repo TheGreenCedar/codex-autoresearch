@@ -237,6 +237,21 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     );
   }
 
+  const ledgerHealth = objectValue(envelope.ledgerHealth);
+  const ledgerWarnings = stringList(ledgerHealth?.warnings, []);
+  if (ledgerHealth?.ok === false || ledgerWarnings.length > 0) {
+    blockers.push(
+      loopAction(
+        "ledger-integrity",
+        LOOP_PRIORITY.essentialSafety,
+        ledgerWarnings[0] ||
+          "Autoresearch ledger integrity is not trustworthy; inspect ledger health before another packet.",
+        ledgerHealth?.command,
+        ["ledgerHealth"],
+      ),
+    );
+  }
+
   const salvageCandidate = objectValue(
     arrayValue(envelope.salvageCandidates).find(isDiagnosticSalvage),
   );
