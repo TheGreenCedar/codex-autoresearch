@@ -14,6 +14,7 @@ This project uses a root-only changelog because the root README is the public do
 ### Changed
 
 - Documented the safer qualitative-loop workflow across docs, skill, and product gates: fixed-control rerun guards, `review_required` packet diagnostics, config-backed checks/protected-path guidance, and current-tree finalization routing through `finalize-current-tree`.
+- Reduced the plugin package contents by shipping only the public dashboard screenshot and required runtime assets.
 
 ### Fixed
 
