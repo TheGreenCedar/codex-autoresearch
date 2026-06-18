@@ -468,21 +468,15 @@ export interface ChartPoint {
   run: SessionRun;
   chartMetric: number;
   heldMetric: boolean;
-  x: number;
-  y: number;
   best: boolean;
   latest: boolean;
 }
 
 export interface ChartModel {
   points: ChartPoint[];
-  linePath: string;
-  baselineY: number | null;
-  bestY: number | null;
   baselineValue: number | null;
   bestValue: number | null;
   domain: [number, number] | null;
-  winZone: { x: number; y: number; width: number; height: number } | null;
   winZoneBounds: { y1: number; y2: number } | null;
   note: string;
   summary: string;
