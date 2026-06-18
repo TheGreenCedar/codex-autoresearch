@@ -48,6 +48,86 @@ export function benchmarkOverfitFixtureEntries(): RolloutEntry[] {
   ];
 }
 
+export function codeStoryLanguageSupportFrictionFixtureEntries(): RolloutEntry[] {
+  return [
+    {
+      timestamp: "2026-06-16T14:00:00.000Z",
+      type: "session_meta",
+      payload: { id: "019f-language-support" },
+    },
+    {
+      timestamp: "2026-06-16T14:01:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "I created the Autoresearch scaffold for CodeStory language support, but I have not started the measured loop yet.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-16T14:02:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Setup alone is not autoresearch. The loop did not start, so stop calling this progress.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-16T14:03:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Do not rerun the no-CodeStory baseline; reuse the fixed control artifact from the first run.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-16T14:04:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: "I picked up an old segment from the stale segment state, then completed the Codex goal.",
+          },
+        ],
+      },
+    },
+    {
+      timestamp: "2026-06-16T14:05:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "That fix is hard-coded and overfit to filenames, with repo-specific assumption and answer-key steering.",
+          },
+        ],
+      },
+    },
+  ];
+}
+
 export function searchLatencyFixtureEntries(): RolloutEntry[] {
   return [
     { timestamp: "2026-05-31T20:00:00.000Z", type: "session_meta", payload: { id: "019e5d3a" } },

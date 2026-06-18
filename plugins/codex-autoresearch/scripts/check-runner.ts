@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { killProcess } from "../lib/runner.js";
 
 export type CommandSpec = [label: string, command: string, args: string[]];
 
@@ -61,7 +62,7 @@ export function runCommand(
       () => {
         timedOut = true;
         stderr += `Command timed out after ${Math.max(1, timeoutSeconds)} seconds.\n`;
-        killCommandProcess(child.pid);
+        killProcess(child.pid);
         timeoutFallback = setTimeout(
           () => finish({ label, code: null, stdout, stderr, timedOut: true }),
           5000,
@@ -99,21 +100,4 @@ export function resolveSpawnCommand(
     );
   }
   return { command, args };
-}
-
-function killCommandProcess(pid?: number): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Process already exited.
-    }
-  }
 }

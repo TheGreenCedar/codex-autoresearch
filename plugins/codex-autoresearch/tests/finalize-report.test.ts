@@ -211,6 +211,72 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalization treats review-required keeps as provisional until ASI acknowledgement",
+  "autoresearch-finalize-review-required-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, "src", "base.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/autoresearch-review-required"], repo);
+    await writeFile(path.join(repo, "src", "review-required.txt"), "review\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "review required keep"], repo);
+    const reviewHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(path.join(repo, "src", "acknowledged.txt"), "ack\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "acknowledged keep"], repo);
+    const acknowledgedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "review required loop",
+          metricName: "quality_gap",
+          bestDirection: "lower",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          evidenceStatus: "accepted",
+          metric: 0,
+          metrics: { quality_gap: 0, review_required: 1 },
+          description: "Review required keep",
+          commit: reviewHash,
+        }),
+        JSON.stringify({
+          run: 2,
+          status: "keep",
+          evidenceStatus: "accepted",
+          metric: 0,
+          metrics: { quality_gap: 0, review_required: 1 },
+          asi: { review_acknowledged: true },
+          description: "Acknowledged review keep",
+          commit: acknowledgedHash,
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log autoresearch session"], repo);
+
+    const preview = await finalizePreview({ cwd: repo, trunk: "main" });
+    assert.equal(preview.groups.length, 1);
+    assert.equal(preview.groups[0].commit, acknowledgedHash);
+    assert.notEqual(preview.groups[0].commit, reviewHash);
+  },
+);
+
+testWithTempRoot(
   "product-grade finalization preview blocks under-proven retrieval claims",
   "autoresearch-product-grade-preview-",
   async (root) => {

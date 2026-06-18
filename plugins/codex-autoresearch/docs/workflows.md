@@ -83,8 +83,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A["Broad product/docs/UX prompt"] --> B["research-setup"]
-  B --> C["brief, sources, synthesis"]
+  A["Broad product/docs/UX prompt"] --> B["research-start"]
+  B --> C["brief, sources, synthesis, baseline"]
   C --> D["filter weak claims"]
   D --> E["quality-gaps.md"]
   E --> F["quality_gap benchmark"]

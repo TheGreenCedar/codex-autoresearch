@@ -18,6 +18,7 @@ import {
   streamJsonl,
   statusHash,
 } from "../lib/session-core.js";
+import { buildCheapFinalizationPressure } from "../lib/session-read-model.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
 import {
   isMetricEligibleStatus,
@@ -502,6 +503,121 @@ test("evidence registry keeps rejected and provisional runs out of accepted curr
       ["run-1", "run-2", "run-3", "run-4"],
     );
   });
+});
+
+test("review-required kept evidence stays provisional until ASI acknowledgement", () => {
+  const run = {
+    run: 1,
+    metric: 0,
+    status: "keep",
+    description: "Review-gated packet.",
+    metrics: { quality_gap: 0, review_required: 1 },
+  };
+  const registry = buildEvidenceRegistry({ runs: [run] });
+  const signals = analyzeWorkflowFriction({
+    state: {
+      current: [run],
+      results: [run],
+    },
+  });
+  const signal = signals.find((item) => item.kind === "review_required_packet");
+
+  assert.equal(signal?.severity, "warning");
+  assert.match(signal?.reason || "", /review_required=1/);
+  assert.match(signal?.suggestedAction.reason || "", /ASI acknowledgement/i);
+  assert.equal(registry.entries[0].evidenceStatus, "provisional");
+  assert.equal(registry.entries[0].current, false);
+  assert.equal(registry.currentRuns.length, 0);
+});
+
+test("review-required no-issue string metrics stay accepted without workflow warning", () => {
+  const run = {
+    run: 1,
+    metric: 0,
+    status: "keep",
+    evidenceStatus: "accepted",
+    description: "Clean packet.",
+    metrics: { quality_gap: 0, overfit_signal: "passed" },
+  };
+  const registry = buildEvidenceRegistry({ runs: [run] });
+  const signals = analyzeWorkflowFriction({
+    state: {
+      current: [run],
+      results: [run],
+    },
+  });
+
+  assert.equal(registry.entries[0].evidenceStatus, "accepted");
+  assert.equal(registry.entries[0].current, true);
+  assert.equal(
+    signals.some((item) => item.kind === "review_required_packet"),
+    false,
+  );
+});
+
+test("review-required positive string metrics stay provisional with workflow warning", () => {
+  const run = {
+    run: 1,
+    metric: 0,
+    status: "keep",
+    evidenceStatus: "accepted",
+    description: "Detected review signal.",
+    metrics: { quality_gap: 0, overfit_signal: "detected" },
+  };
+  const registry = buildEvidenceRegistry({ runs: [run] });
+  const signals = analyzeWorkflowFriction({
+    state: {
+      current: [run],
+      results: [run],
+    },
+  });
+  const signal = signals.find((item) => item.kind === "review_required_packet");
+
+  assert.equal(registry.entries[0].evidenceStatus, "provisional");
+  assert.equal(registry.entries[0].current, false);
+  assert.equal(signal?.severity, "warning");
+  assert.match(signal?.reason || "", /overfit_signal=detected/);
+});
+
+test("review-required provisional evidence is not accepted read-model finalization proof", () => {
+  const pressure = buildCheapFinalizationPressure({
+    state: {
+      productClaimCoverage: { productGradeReady: true },
+      current: [
+        {
+          run: 1,
+          metric: 0,
+          status: "keep",
+          metrics: { quality_gap: 0, review_required: 1 },
+        },
+      ],
+    },
+  });
+
+  assert.equal(pressure.ready, false);
+  assert.match(pressure.nextAction, /Git-backed autoresearch branch/i);
+});
+
+test("review-required acknowledged kept evidence remains accepted and current", () => {
+  const registry = buildEvidenceRegistry({
+    runs: [
+      {
+        run: 1,
+        metric: 0,
+        status: "keep",
+        description: "Human-reviewed packet.",
+        metrics: { quality_gap: 0, review_required: 1 },
+        asi: { review_acknowledged: true },
+      },
+    ],
+  });
+
+  assert.equal(registry.entries[0].evidenceStatus, "accepted");
+  assert.equal(registry.entries[0].current, true);
+  assert.deepEqual(
+    registry.currentRuns.map((run) => run.run),
+    [1],
+  );
 });
 
 test("run status taxonomy separates rejected evidence from metric-eligible records", () => {

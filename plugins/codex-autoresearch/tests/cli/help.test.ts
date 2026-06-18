@@ -11,6 +11,7 @@ test("default help leads with the short happy path", () => {
   assert.match(help, /setup-plan --cwd <project>/);
   assert.match(help, /prompt-plan --cwd <project>/);
   assert.match(help, /node scripts\/autoresearch\.mjs setup --cwd <project>/);
+  assert.match(help, /ledger-doctor --cwd <project> \[--json\] \[--repair --yes\]/);
   assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /node scripts\/autoresearch\.mjs finalize-preview --cwd <project>/);
@@ -32,8 +33,22 @@ test("full help preserves advanced and maintainer commands", () => {
   assert.match(help, /session artifacts are excluded by default/);
   assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
+  assert.match(help, /research-start --cwd <project> .*--skip-init/);
   assert.match(help, /clear --cwd <project>/);
+  assert.match(help, /ledger-doctor --cwd <project> \[--json\] \[--repair --yes\]/);
   assert.doesNotMatch(help, /Run `--help --all`/);
+});
+
+test("full help documents fixed-control rerun overrides on guarded commands", () => {
+  const help = renderCliHelp({ all: true });
+  for (const command of ["run", "next", "doctor", "benchmark-inspect", "benchmark-lint"]) {
+    const usageLine = help
+      .split("\n")
+      .find((line) => line.includes(`node scripts/autoresearch.mjs ${command} --cwd <project>`));
+
+    assert.ok(usageLine, `${command} usage line should be present`);
+    assert.match(usageLine, /--allow-fixed-control-rerun/);
+  }
 });
 
 test("full help documents shared setup guardrails for guide", () => {

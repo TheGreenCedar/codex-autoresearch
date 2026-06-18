@@ -60,7 +60,11 @@ Fresh packets carry a packet evidence bundle: packet id, command identity, timeo
 
 Runtime provenance is a trust gate. Read it before making live claims from source changes, dashboard exports, or compact state. If source and installed runtime disagree, source-only changes are not live evidence.
 
+The scope matters. A stale installed-plugin runtime blocks installed behavior claims. Source-checkout work can continue when the source runtime is fresh and the command is run from that checkout; label the proof as source-checkout evidence until the installed runtime is refreshed.
+
 Packet diagnostics classify evidence loss: failed citation carry, lost claims during synthesis, missed quality scores, or sufficiency marked while the benchmark failed. Diagnostic evidence explains the next fix; it is not a product win.
+
+Metrics such as `review_required=1` make the packet provisional until ASI acknowledges what was reviewed and why the evidence can or cannot count. `quality_gap=0` closes the accepted checklist for the current research round; it is not universal proof that discovery is complete.
 
 ## Promotion evidence
 
@@ -110,6 +114,8 @@ If claim coverage is missing, use experimental or development wording. Finalizat
 `protectedBenchmarkPaths` records project-relative benchmark files or fixture folders that define the measurement contract. `doctor`, `next`, and `log --from-last` warn or block when those paths are dirty, missing, changed after baseline snapshot, or resolve outside the working directory.
 
 Keep protected paths tight. Very large or deep folders can make `next` refuse when freshness cannot be proven.
+
+If `autoresearch.config.json` contains `fixedControl`, the named artifact is the fixed control truth. Commands matching `fixedControl.forbiddenCommandPatterns` must not rerun the control baseline unless the rerun is explicitly accepted with `--allow-fixed-control-rerun`; use `fixedControl.reuseCommandHint` when it exists.
 
 Secondary metric constraints add explicit tradeoff checks:
 

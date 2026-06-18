@@ -34,10 +34,11 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     fallbackKeys: ["finalizePreview", "newSegmentDryRun", "state"],
   }),
   "current-tree-finalization": actionMetadata({
-    label: "Preview finalization",
-    commandLabel: "Preview",
-    safeAction: "finalize-preview",
-    fallbackKeys: ["finalizePreview", "state"],
+    label: "Finalize current tree",
+    commandLabel: "Preview current-tree finalization",
+    safeAction: "finalize-current-tree",
+    fallbackKeys: ["finalizeCurrentTree", "finalizePreview", "state"],
+    packetBrake: true,
   }),
   "finalization-runway": actionMetadata({
     label: "Inspect finalization runway",
@@ -92,6 +93,18 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     commandLabel: "Doctor",
     safeAction: "doctor",
     fallbackKeys: ["doctorExplain", "doctor", "state"],
+  }),
+  "runtime-authority": actionMetadata({
+    label: "Inspect runtime authority",
+    commandLabel: "Doctor",
+    safeAction: "doctor",
+    fallbackKeys: ["doctorExplain", "doctor", "state"],
+  }),
+  "ledger-integrity": actionMetadata({
+    label: "Inspect ledger integrity",
+    commandLabel: "Ledger",
+    safeAction: "ledger-doctor",
+    fallbackKeys: ["ledgerDoctor", "state"],
   }),
   "packet-diagnostic": actionMetadata({
     label: "Inspect packet diagnostics",
@@ -222,6 +235,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
 
 const operationalFallbackKinds = new Set([
   "baseline",
+  "current-tree-finalization",
   "log-decision",
   "next-packet",
   "plateau",

@@ -11,6 +11,7 @@ Find the failing layer first. Do not retry a live step until a precondition has 
 | Speed improved but correctness unchecked | Quality constraint | Add checks for accuracy, recall, ranking, accessibility, security, or data integrity. Treat as experimental until claim coverage is present. |
 | Perfect metric looks too good | Evaluator contamination or cache replay | Require breadth, freshness, holdout, and repeat evidence. |
 | Current benchmark far worse than best | Runtime or benchmark drift | Treat old best as history; rerun doctor and start a new segment if the old phase is stale. |
+| Duplicate run numbers, stale segments, or edited manual entries | Ledger integrity | Run `ledger-doctor --cwd <project> --json`; use `--repair --yes` only after reviewing the JSON health summary, then verify the returned `backupPath`. |
 | Setup wrapper loops or calls itself | Scaffold health | Replace self-recursive wrapper or rerun setup with `--benchmark-command`. |
 | Dashboard opens as `file://` | Static export | Run `serve --cwd <project>` and use the `http://127.0.0.1:<port>/` URL. |
 | Live refresh reports HTTP 409 | Session changed mid-refresh | Retry refresh or wait for next auto-refresh. |
@@ -50,6 +51,7 @@ Compact-state field names: [state-fields](concepts.md#state-fields).
 - **Treating dashboard as truth**: serve a fresh instance when data looks stale.
 - **Broad Git cleanup after discard**: scope reverts with `revertPaths`; avoid `--allow-add-all` unless every dirty file is intentional.
 - **Skipping ASI**: the next session has no memory and repeats failed approaches.
+- **Editing the ledger by hand**: run `ledger-doctor --cwd <project> --json` before another packet if run numbers duplicate, segments look stale, or manual edits changed history.
 
 Before any command that can commit, discard, revert, or change branches:
 

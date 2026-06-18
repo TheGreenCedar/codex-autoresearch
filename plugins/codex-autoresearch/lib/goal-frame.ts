@@ -15,6 +15,16 @@ export interface GoalContractInput extends GoalFrameInput {
   recoveryCommand?: unknown;
 }
 
+export interface GoalCompletionBlockerInput {
+  completionClaimed?: unknown;
+  blockers?: unknown;
+  finalizationReadiness?: unknown;
+  preflight?: unknown;
+  qualityRound?: unknown;
+  warningDetails?: unknown;
+  workflowFriction?: unknown;
+}
+
 export interface GoalFrame {
   authoritativeGoal: string;
   codexGoalObjective: string;
@@ -34,6 +44,9 @@ export interface GoalContract extends GoalFrame {
   blocksPacket: boolean;
   blocksFinalization: boolean;
 }
+
+export const GOAL_COMPLETION_UNRESOLVED_BLOCKER =
+  "Do not mark the Codex goal complete while Autoresearch has unresolved quality gaps, review-required evidence, fixed-control violations, or current-tree finalization blockers.";
 
 export function buildGoalFrame({
   autoresearchGoal,
@@ -121,6 +134,44 @@ export function buildGoalContract({
   };
 }
 
+export function goalCompletionUnresolvedBlockers({
+  completionClaimed,
+  blockers,
+  finalizationReadiness,
+  preflight,
+  qualityRound,
+  warningDetails,
+  workflowFriction,
+}: GoalCompletionBlockerInput = {}): string[] {
+  if (completionClaimed !== true) return [];
+  const text = [
+    ...stringArray(blockers),
+    ...stringArray(recordValue(preflight)?.blockers),
+    ...stringArray(recordValue(preflight)?.warnings),
+    ...stringArray(recordValue(finalizationReadiness)?.warnings),
+    ...stringArray(warningDetails).map((item) => signalText(item)),
+    ...stringArray(workflowFriction).map((item) => signalText(item)),
+    signalText(finalizationReadiness),
+    signalText(qualityRound),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  if (
+    hasOpenQualityGaps(qualityRound) ||
+    hasReviewRequiredFriction(workflowFriction) ||
+    /fixed[_ -]?control[_ -]?rerun[_ -]?blocked|fixed control[^.?!;\n]*rerun|fixed-control/i.test(
+      text,
+    ) ||
+    /finalize-current-tree|current-tree finalization|current non-session branch diff|Final tree coverage/i.test(
+      text,
+    ) ||
+    recordValue(finalizationReadiness)?.actionCode === "current-tree-finalization"
+  ) {
+    return [GOAL_COMPLETION_UNRESOLVED_BLOCKER];
+  }
+  return [];
+}
+
 function classifyCodexObjective(
   autoresearchGoal: string,
   codexObjective: string,
@@ -154,4 +205,48 @@ function looksLikeOperatorInstruction(value: string): boolean {
   return /\b(continue|resume|start by|state|starting the goal|where we left off|please)\b/i.test(
     value,
   );
+}
+
+function hasOpenQualityGaps(value: unknown): boolean {
+  const qualityRound = recordValue(value);
+  if (!qualityRound) return false;
+  if (qualityRound.done === false) return true;
+  const open = Number(qualityRound.open ?? qualityRound.remaining ?? qualityRound.openItems);
+  if (Number.isFinite(open) && open > 0) return true;
+  return Array.isArray(qualityRound.openItems) && qualityRound.openItems.length > 0;
+}
+
+function hasReviewRequiredFriction(value: unknown): boolean {
+  return stringArray(value).some((item) =>
+    /review[_ -]?required|review required|review-required/i.test(signalText(item)),
+  );
+}
+
+function recordValue(value: unknown): Record<string, any> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : null;
+}
+
+function stringArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function signalText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return String(value);
+  const record = value as Record<string, any>;
+  return [
+    record.kind,
+    record.code,
+    record.message,
+    record.reason,
+    record.actionReason,
+    record.nextAction,
+    record.actionCode,
+  ]
+    .map((item) => String(item || ""))
+    .filter(Boolean)
+    .join(" ");
 }

@@ -16,11 +16,14 @@ export function buildContinuationCommands({
   const slug = shellQuote(researchSlug);
   return {
     state: `node ${script} state --cwd ${cwd}`,
+    doctor: `node ${script} doctor --cwd ${cwd}`,
+    doctorExplain: `node ${script} doctor --cwd ${cwd} --explain`,
     next: `node ${script} next --cwd ${cwd} --compact`,
     nextFull: `node ${script} next --cwd ${cwd}`,
     keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
     measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    ledgerDoctor: `node ${script} ledger-doctor --cwd ${cwd} --json`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
     laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,
     gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${slug}`,

@@ -121,6 +121,82 @@ const ADVISORY: SessionDecisionEnforcement = {
 
 export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
   {
+    kind: "setup_not_started",
+    severity: "blocker",
+    enforcement: {
+      mode: "hard-block",
+      canRunNextPacket: false,
+      allowBoundedNext: false,
+      blocksFinalization: true,
+      clearingCondition:
+        "Run doctor and a first trusted next/log or baseline measurement, then record the loop-start evidence before claiming Autoresearch progress.",
+      commandHint:
+        "node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain",
+      triggeredBy: ["sessionDecisionCapsule", "loopStart"],
+    },
+    patterns: [],
+    message:
+      "The session says setup or scaffold work happened, but the measured Autoresearch loop did not start.",
+    bottleneck:
+      "The loop has not started; scaffold files and setup output are not measurement evidence.",
+    nextExperiment:
+      "Run doctor, prove the benchmark contract, then execute and log the first bounded packet or explicit baseline measurement.",
+    wrongNextActions: [
+      "Do not mark setup or scaffold creation as an Autoresearch run.",
+      "Do not finalize, complete the Codex goal, or summarize progress before the loop has measured evidence.",
+    ],
+  },
+  {
+    kind: "fixed_control_rerun_correction",
+    severity: "blocker",
+    enforcement: {
+      mode: "hard-block",
+      canRunNextPacket: false,
+      allowBoundedNext: false,
+      blocksFinalization: true,
+      clearingCondition:
+        "Reuse the configured fixed control artifact, or document the manual invalidator check and explicit override before any control rerun.",
+      commandHint: "node scripts/autoresearch.mjs state --cwd <project> --compact",
+      triggeredBy: ["sessionDecisionCapsule", "fixedControl"],
+    },
+    patterns: [],
+    message:
+      "The session corrected a control rerun; reuse the fixed control artifact unless an operator has documented an invalidator change.",
+    bottleneck:
+      "The fixed control artifact is the comparison baseline; rerunning the control would break comparability.",
+    nextExperiment:
+      "Load or reuse the fixed control artifact. If an invalidator changed, update fixedControl manually and pass an explicit override before rerunning control work.",
+    wrongNextActions: [
+      "Do not rerun a named baseline or control just because the benchmark command is available.",
+      "Do not replace a fixed control artifact without recording the manual invalidator check.",
+    ],
+  },
+  {
+    kind: "overfit_correction",
+    severity: "blocker",
+    enforcement: {
+      mode: "hard-block",
+      canRunNextPacket: false,
+      allowBoundedNext: false,
+      blocksFinalization: true,
+      clearingCondition:
+        "Remove answer-key, filename-specific, or repo-specific steering and pass a blind holdout, breadth gate, or explicit generalization audit.",
+      commandHint: "node scripts/autoresearch.mjs state --cwd <project> --compact",
+      triggeredBy: ["sessionDecisionCapsule", "overfitCorrection"],
+    },
+    patterns: [],
+    message:
+      "The session flags hard-coded, repo-specific, or answer-key-shaped evidence that needs generalization proof.",
+    bottleneck:
+      "The immediate blocker is generalization trust: the evidence may be hard-coded to known answers instead of product behavior.",
+    nextExperiment:
+      "Strip the hard-coded or repo-specific steering, rerun on a blind holdout or broader fixture, and downgrade existing evidence until that passes.",
+    wrongNextActions: [
+      "Do not ship filename-specific, repo-specific, or answer-key-shaped fixes as product evidence.",
+      "Do not finalize broad claims until a holdout or breadth gate proves the behavior generalizes.",
+    ],
+  },
+  {
     kind: "product_bar_rejection",
     severity: "blocker",
     enforcement: {
@@ -154,6 +230,35 @@ export const SESSION_DECISION_RULES: SessionDecisionRule[] = [
     wrongNextActions: [
       "Do not continue as if the previous done claim was valid.",
       "Do not hide the maturity downgrade in summary prose.",
+    ],
+  },
+  {
+    kind: "stale_segment_pickup",
+    severity: "warning",
+    enforcement: BOUNDED_NEXT_REQUIRED,
+    patterns: [],
+    message: "The session indicates a stale or unexpected segment was picked up.",
+    bottleneck:
+      "Segment state is stale; continuing from the wrong segment can spend packets against obsolete evidence.",
+    nextExperiment:
+      "Inspect state --compact, then start a fresh segment or explicitly acknowledge the current segment before another bounded packet.",
+    wrongNextActions: [
+      "Do not continue from an old segment without checking the active segment and latest packet freshness.",
+    ],
+  },
+  {
+    kind: "goal_churn_or_early_completion",
+    severity: "warning",
+    enforcement: BOUNDED_NEXT_REQUIRED,
+    patterns: [],
+    message:
+      "The session indicates Codex goal churn or early completion before loop evidence was resolved.",
+    bottleneck:
+      "Codex Goal lifecycle is drifting ahead of Autoresearch evidence and unresolved blockers.",
+    nextExperiment:
+      "Run codex-goal-brief with the current Goal status and completion evidence, then obey the completion audit before update_goal.",
+    wrongNextActions: [
+      "Do not call update_goal(status=complete) while Autoresearch state still has blockers or unresolved review evidence.",
     ],
   },
   {
@@ -614,10 +719,15 @@ function selectRule(
   const kinds = new Set(signals.map((signal) => signal.kind));
   for (const kind of [
     "benchmark_contract_broken",
+    "setup_not_started",
+    "fixed_control_rerun_correction",
+    "overfit_correction",
     "benchmark_overfit_steering",
     "product_bar_rejection",
     "false_done_admission",
     "goal_frame_mismatch",
+    "stale_segment_pickup",
+    "goal_churn_or_early_completion",
     "search_latency_bottleneck",
     "metric_reframe_feedback",
   ]) {
@@ -655,20 +765,25 @@ function prioritizedDecisionEvidence(
 ): CapsuleSignal[] {
   const priority = new Map([
     ["benchmark_contract_broken", 0],
-    ["benchmark_overfit_steering", 1],
-    ["product_bar_rejection", 2],
-    ["false_done_admission", 3],
-    ["goal_frame_mismatch", 4],
-    ["search_latency_bottleneck", 5],
-    ["metric_reframe_feedback", 6],
-    ["probe_churn_feedback", 7],
-    ["skill_preflight_feedback", 8],
-    ["carry_forward_request", 9],
-    ["context_distillation_required", 10],
-    ["oversized_tool_output", 11],
-    ["closed_stdin_poll", 12],
-    ["output_budget_exceeded", 13],
-    ["quality_gap_wording", 14],
+    ["setup_not_started", 1],
+    ["fixed_control_rerun_correction", 2],
+    ["overfit_correction", 3],
+    ["benchmark_overfit_steering", 4],
+    ["product_bar_rejection", 5],
+    ["false_done_admission", 6],
+    ["goal_frame_mismatch", 7],
+    ["stale_segment_pickup", 8],
+    ["goal_churn_or_early_completion", 9],
+    ["search_latency_bottleneck", 10],
+    ["metric_reframe_feedback", 11],
+    ["probe_churn_feedback", 12],
+    ["skill_preflight_feedback", 13],
+    ["carry_forward_request", 14],
+    ["context_distillation_required", 15],
+    ["oversized_tool_output", 16],
+    ["closed_stdin_poll", 17],
+    ["output_budget_exceeded", 18],
+    ["quality_gap_wording", 19],
   ]);
   const byKind = new Map<string, CapsuleSignal>();
   for (const signal of [...productSignals, ...workflowWaste].sort(

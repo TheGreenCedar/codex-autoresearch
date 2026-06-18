@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
@@ -18,6 +18,7 @@ import {
   PARTIAL_RESULT_ARTIFACT_MAX_ROWS,
 } from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
+import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
@@ -31,14 +32,344 @@ const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
+const pathExists = async (target: string) => {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+function isolatedRuntimeEnv(homeDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  };
+}
+
+async function writeInstalledRuntimeFixture(homeDir: string, status: string) {
+  const cacheRoot = path.join(
+    homeDir,
+    ".codex",
+    "plugins",
+    "cache",
+    "thegreencedar-autoresearch",
+    "codex-autoresearch",
+  );
+  const runtimeDir = path.join(cacheRoot, status === "stale" ? "0.0.0" : PLUGIN_VERSION);
+  await mkdir(runtimeDir, { recursive: true });
+  if (status === "stale") {
+    await writeFile(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({ version: "0.0.0" }, null, 2),
+    );
+  } else if (status === "unavailable") {
+    await writeFile(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({ version: PLUGIN_VERSION }, null, 2),
+    );
+  }
+}
 
 function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return (payload.result as Record<string, unknown>) || payload;
 }
 
+async function writeLedger(dir: string, records: Record<string, unknown>[]) {
+  await writeFile(
+    path.join(dir, "autoresearch.jsonl"),
+    records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+}
+
+function parseLedger(text: string): Record<string, unknown>[] {
+  return text
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
 };
+
+test("ledger health detects duplicate, missing, non-monotonic, and malformed run fields", () => {
+  const duplicateAndMissing = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 2, status: "discard" },
+    { run: 2, status: "measure" },
+    { run: 4, status: "keep" },
+  ]);
+
+  assert.equal(duplicateAndMissing.ok, false);
+  assert.deepEqual(duplicateAndMissing.duplicateRuns, [2]);
+  assert.deepEqual(duplicateAndMissing.missingRuns, [3]);
+  assert.deepEqual(duplicateAndMissing.nonMonotonicRuns, [{ previous: 2, current: 2, index: 2 }]);
+  assert.match(duplicateAndMissing.warnings.join("\n"), /Duplicate run numbers: 2/);
+
+  const nonMonotonic = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 3, status: "discard" },
+    { run: 2, status: "measure" },
+  ]);
+  assert.deepEqual(nonMonotonic.nonMonotonicRuns, [{ previous: 3, current: 2, index: 2 }]);
+
+  const malformed = analyzeLedgerHealth([
+    { run: "2", status: "keep" },
+    { run: 0, status: "discard" },
+    { run: 1.5, status: "measure" },
+    { type: "config" },
+  ]);
+  assert.deepEqual(malformed.malformedRecords, [0, 1, 2]);
+});
+
+test("ledger health bounds large missing-run gaps without enumerating every missing run", () => {
+  const health = analyzeLedgerHealth([
+    { run: 1, status: "keep" },
+    { run: 1_000_000_000, status: "discard" },
+  ]);
+
+  assert.equal(health.ok, false);
+  assert.equal(health.missingRunCount, 999_999_998);
+  assert.equal(health.missingRuns.length, health.bounded.sampleLimit);
+  assert.equal(health.missingRunsOmitted, 999_999_978);
+  assert.equal(health.missingRunRanges[0].start, 2);
+  assert.equal(health.missingRunRanges[0].end, 999_999_999);
+  assert.equal(health.missingRunRanges[0].count, 999_999_998);
+  assert.equal(health.bounded.truncated, true);
+  assert.ok(health.warnings.join("\n").length < 500);
+});
+
+test("ledger repair normalizes duplicate numeric runs and preserves evidence", () => {
+  const records = [
+    { type: "config", metricName: "seconds" },
+    { run: 1, status: "keep", evidence: { artifact: "a.json" } },
+    { run: 1, status: "discard", evidence: { artifact: "b.json" } },
+    { run: "bad", status: "measure", evidence: { artifact: "malformed.json" } },
+    { run: 2, status: "keep", evidence: { artifact: "c.json" } },
+  ];
+
+  const repair = repairLedgerRecords(records);
+
+  assert.equal(repair.changed, true);
+  assert.equal(repair.records.length, records.length);
+  assert.deepEqual(
+    repair.records.map((record) => record.run),
+    [undefined, 1, 2, "bad", 3],
+  );
+  assert.deepEqual(repair.records[2].evidence, { artifact: "b.json" });
+  assert.deepEqual(repair.records[3].evidence, { artifact: "malformed.json" });
+  assert.equal(records[2].run, 1, "repair should not mutate caller-owned records");
+});
+
+test("ledger-doctor --json returns bounded structured health for malformed JSONL", async () => {
+  await withTempDir("ledger-doctor-malformed-jsonl", async (dir) => {
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = [
+      JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+      "{ bad json",
+      JSON.stringify({ run: 1, metric: 5, status: "keep" }),
+      "",
+    ].join("\n");
+    await writeFile(ledgerPath, before);
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
+    assert.equal(payload.ledgerHealth.bounded.truncated, false);
+    assert.match(payload.ledgerHealth.warnings.join("\n"), /Malformed JSONL lines: 2/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("doctor routes corrupt ledgers to ledger-doctor guidance", async () => {
+  await withTempDir("doctor-malformed-jsonl", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+        "{ bad json",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await runCli(["doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state.code, "ledger_jsonl_invalid");
+    assert.equal(payload.benchmarkContract.activeSource, "none");
+    assert.match(payload.nextAction, /ledger-doctor/i);
+  });
+});
+
+test("ledger-doctor --repair --yes refuses malformed JSONL and writes no backup", async () => {
+  await withTempDir("ledger-doctor-malformed-repair-refused", async (dir) => {
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = [
+      JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+      "{ bad json",
+      JSON.stringify({ run: 1, metric: 5, status: "keep" }),
+      "",
+    ].join("\n");
+    await writeFile(ledgerPath, before);
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair", "--yes", "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.refused, true);
+    assert.equal(payload.code, "ledger_parse_errors");
+    assert.equal(payload.repair.changed, false);
+    assert.equal(payload.backupPath, "");
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+    const backups = (await readdir(dir)).filter((entry) =>
+      entry.startsWith("autoresearch.jsonl.repair-backup-"),
+    );
+    assert.deepEqual(backups, []);
+  });
+});
+
+test("ledger-doctor --json reports duplicate runs without modifying the ledger", async () => {
+  await withTempDir("ledger-doctor-read-only", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep", evidence: { artifact: "a.json" } },
+      { run: 1, metric: 6, status: "discard", evidence: { artifact: "b.json" } },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("ledger-doctor --repair refuses without --yes and leaves files untouched", async () => {
+  await withTempDir("ledger-doctor-repair-refuses", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /ledger-doctor --repair requires --yes/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+    const backups = (await readdir(dir)).filter((entry) =>
+      entry.startsWith("autoresearch.jsonl.repair-backup-"),
+    );
+    assert.deepEqual(backups, []);
+  });
+});
+
+test("ledger-doctor --repair --yes backs up and normalizes duplicates without deleting evidence", async () => {
+  await withTempDir("ledger-doctor-repair-confirmed", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep", evidence: { artifact: "a.json" } },
+      { run: 1, metric: 6, status: "discard", evidence: { artifact: "b.json" } },
+      { run: 2, metric: 4, status: "keep", evidence: { artifact: "c.json" } },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["ledger-doctor", "--cwd", dir, "--repair", "--yes", "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.repair.changed, true);
+    assert.match(path.basename(payload.backupPath), /^autoresearch\.jsonl\.repair-backup-/);
+    assert.equal(await readFile(payload.backupPath, "utf8"), before);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.equal(payload.repairedLedgerHealth.ok, true);
+
+    const after = parseLedger(await readFile(ledgerPath, "utf8"));
+    assert.equal(after.length, 4);
+    assert.deepEqual(
+      after.map((record) => record.run),
+      [undefined, 1, 2, 3],
+    );
+    assert.deepEqual(after[2].evidence, { artifact: "b.json" });
+    assert.deepEqual(after[3].evidence, { artifact: "c.json" });
+  });
+});
+
+test("state --json includes ledgerHealth and does not repair duplicates", async () => {
+  await withTempDir("state-ledger-health", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["state", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ledgerHealth.ok, false);
+    assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
+    assert.match(payload.ledgerHealth.warnings.join("\n"), /Duplicate run numbers: 1/);
+    assert.equal(payload.decisionEnvelope.loopContract.canRunNextPacket, false);
+    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "ledger-integrity");
+    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+    assert.match(
+      payload.decisionEnvelope.loopContract.blockers[0].reason,
+      /Duplicate run numbers: 1/,
+    );
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--json"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.report.json.status, "blocked");
+    assert.match(reportPayload.report.json.blocker, /Duplicate run numbers: 1/);
+    assert.match(reportPayload.report.json.nextCommand, /ledger-doctor\b.*--json/);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("state --json exposes bounded ledgerHealth for large gaps without repairing", async () => {
+  await withTempDir("state-ledger-health-bounded", async (dir) => {
+    await writeLedger(dir, [
+      { type: "config", metricName: "seconds", bestDirection: "lower" },
+      { run: 1, metric: 5, status: "keep" },
+      { run: 1_000_000_000, metric: 6, status: "discard" },
+    ]);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const before = await readFile(ledgerPath, "utf8");
+
+    const result = await runCli(["state", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ledgerHealth.ok, false);
+    assert.equal(payload.ledgerHealth.missingRunCount, 999_999_998);
+    assert.equal(payload.ledgerHealth.missingRuns.length, payload.ledgerHealth.bounded.sampleLimit);
+    assert.equal(payload.ledgerHealth.bounded.truncated, true);
+    assert.ok(payload.ledgerHealth.warnings.join("\n").length < 500);
+    assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
 
 test("state exposes missing product claim coverage for shippable retrieval work", async () => {
   await withTempDir("product-claim-coverage-state", async (dir) => {
@@ -946,6 +1277,136 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
   });
 });
 
+test("research-start dry-run prints the full qualitative loop start plan", async () => {
+  await withTempDir("research-start-dry-run", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--checks-command",
+      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      "--dry-run",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.dryRun, true);
+    assert.equal(payload.slug, "language-support");
+    assert.equal(payload.metricName, "quality_gap");
+    assert.match(payload.commands.setup, /\bresearch-setup\b/);
+    assert.match(payload.commands.benchmarkLint, /\bbenchmark-lint\b/);
+    assert.match(payload.commands.doctor, /\bdoctor\b.*--check-benchmark/);
+    assert.match(payload.commands.baseline, /\bnext\b.*--compact/);
+    assert.match(payload.commands.logBaseline, /\blog\b.*--status measure/);
+    assert.match(payload.commands.resume, /\brecommend-next\b.*--compact/);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), false);
+  });
+});
+
+test("research-start creates a quality-gap session and can skip baseline logging", async () => {
+  await withTempDir("research-start-baseline", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--no-baseline-log",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricName, "quality_gap");
+    assert.equal(payload.baselineLogged, false);
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.metricName, "quality_gap");
+    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+    assert.equal(
+      await pathExists(
+        path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
+      ),
+      true,
+    );
+  });
+});
+
+test("research-start skip-init skips default baseline logging cleanly", async () => {
+  await withTempDir("research-start-skip-init", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--skip-init",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.baselineLogged, false);
+    assert.match(payload.baselineSkippedReason, /skip-init/i);
+    assert.equal(payload.setup.init, null);
+    assert.equal(payload.benchmarkLint.ok, true);
+    assert.equal(payload.benchmarkLint.metricName, "quality_gap");
+    assert.equal(payload.doctor.benchmark.emitsPrimary, true);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.last-run.json")), false);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.jsonl")), false);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), true);
+    assert.equal(
+      await pathExists(
+        path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
+      ),
+      true,
+    );
+  });
+});
+
+test("research-start default baseline logging keeps benchmark command authority aligned", async () => {
+  await withTempDir("research-start-default-baseline", async (dir) => {
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "language-support",
+      "--goal",
+      "Improve language support in CodeStory",
+      "--json",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.baselineLogged, true);
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    const baselineCommand = payload.baselinePacket?.run?.command;
+    const baselineIdentityCommand =
+      payload.baselinePacket?.packetEvidence?.commandIdentity?.command;
+    assert.equal(config.benchmarkCommand, baselineCommand);
+    assert.equal(config.benchmarkCommand, baselineIdentityCommand);
+    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+
+    const ledger = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const measureEntry = ledger.find((entry) => entry.status === "measure");
+    assert.ok(measureEntry);
+    assert.equal(measureEntry.benchmarkContract?.command, config.benchmarkCommand);
+  });
+});
+
 test("quality-gap counts checked and unchecked research gaps", async () => {
   await withTempDir("quality-gap", async (dir) => {
     await runCli([
@@ -1733,6 +2194,279 @@ test("next refuses hard decision capsules before running a packet", async () => 
   });
 });
 
+test("next refuses fixed-control rerun commands without override", async () => {
+  await withTempDir("fixed-control-next", async (dir) => {
+    const secret = "sk-fixed-control-next-secret-123";
+    const sentinel = path.join(dir, "next-sentinel.txt");
+    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["next", "--cwd", dir, "--compact"]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    const blockedPayload = JSON.parse(blocked.stdout);
+    assert.equal(blockedPayload.ok, false);
+    assert.equal(blockedPayload.refused, true);
+    assert.equal(blockedPayload.code, "fixed_control_rerun_blocked");
+    assert.match(blockedPayload.nextAction, /target\/control\/no-codestory\.json/);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    assert.equal(await pathExists(sentinel), false);
+
+    const allowed = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("run refuses fixed-control rerun commands without override", async () => {
+  await withTempDir("fixed-control-run", async (dir) => {
+    const sentinel = path.join(dir, "run-sentinel.txt");
+    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: ["--mode no-codestory"],
+          reuseCommandHint: "node bench.mjs --reuse-control target/control/no-codestory.json",
+        },
+      }),
+    );
+
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory`;
+    const blocked = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr + blocked.stdout, /fixed_control_rerun_blocked/);
+    assert.equal(await pathExists(sentinel), false);
+
+    const allowed = await runCli([
+      "run",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("doctor check-benchmark refuses fixed-control rerun commands without executing", async () => {
+  await withTempDir("fixed-control-doctor", async (dir) => {
+    const secret = "sk-fixed-control-doctor-secret-123";
+    const sentinel = path.join(dir, "doctor-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.benchmark.checked, true);
+    assert.equal(payload.benchmark.exitCode, null);
+    assert.equal(payload.benchmark.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.issues.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--check-benchmark",
+      "--json",
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("benchmark-lint refuses fixed-control explicit commands without override", async () => {
+  await withTempDir("fixed-control-benchmark-lint", async (dir) => {
+    const secret = "sk-fixed-control-lint-secret-123";
+    const sentinel = path.join(dir, "lint-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["benchmark-lint", "--cwd", dir, "--command", command]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "fixed_control_rerun_blocked");
+    assert.equal(payload.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.issues.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "benchmark-lint",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("benchmark-inspect refuses fixed-control explicit commands without override", async () => {
+  await withTempDir("fixed-control-benchmark-inspect", async (dir) => {
+    const secret = "sk-fixed-control-inspect-secret-123";
+    const sentinel = path.join(dir, "inspect-sentinel.txt");
+    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: "The no-CodeStory control is fixed for this round.",
+          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
+        },
+      }),
+    );
+
+    const blocked = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.equal(await pathExists(sentinel), false);
+    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    const payload = JSON.parse(blocked.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "fixed_control_rerun_blocked");
+    assert.equal(payload.fixedControlViolation.code, "fixed_control_rerun_blocked");
+    assert.match(payload.warnings.join("\n"), /fixed_control_rerun_blocked/);
+
+    const allowed = await runCli([
+      "benchmark-inspect",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--allow-fixed-control-rerun",
+    ]);
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.equal(await pathExists(sentinel), true);
+  });
+});
+
+test("state exposes fixed-control config", async () => {
+  await withTempDir("fixed-control-state", async (dir) => {
+    const secret = "sk-fixed-control-state-secret-123";
+    const longReason = "The no-CodeStory control is fixed for this round. " + "r".repeat(500);
+    const forbiddenCommandPatterns = Array.from(
+      { length: 16 },
+      (_, index) => `--mode no-codestory-${index} --token=${secret}`,
+    );
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({
+        name: "fixed control",
+        goal: "preserve baseline",
+        metricName: "score",
+        metricUnit: "points",
+        bestDirection: "higher",
+        benchmarkCommand: command,
+        fixedControl: {
+          artifact: "target/control/no-codestory.json",
+          reason: longReason,
+          validUntilChanged: Array.from({ length: 13 }, (_, index) => `benchmarks/${index}.mjs`),
+          forbiddenCommandPatterns,
+          reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json ${"x".repeat(500)}`,
+        },
+      }),
+    );
+
+    const full = await runCli(["state", "--cwd", dir, "--json"]);
+    assert.equal(full.code, 0, full.stderr);
+    assert.doesNotMatch(full.stdout, new RegExp(secret));
+
+    const compact = await runCli(["state", "--cwd", dir, "--compact", "--json"]);
+    assert.equal(compact.code, 0, compact.stderr);
+    assert.doesNotMatch(compact.stdout, new RegExp(secret));
+
+    const payload = JSON.parse(compact.stdout);
+    assert.equal(payload.fixedControl.artifact, "target/control/no-codestory.json");
+    assert.equal(payload.fixedControl.reason.length <= 240, true);
+    assert.equal(payload.fixedControl.validUntilChanged.length, 10);
+    assert.equal(payload.fixedControl.forbiddenCommandPatterns.length, 10);
+    assert.equal(payload.fixedControl.reuseCommandHint.length <= 240, true);
+    assert.doesNotMatch(payload.fixedControl.reuseCommandHint, new RegExp(secret));
+    assert.equal(payload.fixedControl.truncated, true);
+    assert.equal(payload.fixedControl.truncation.validUntilChanged, 3);
+    assert.equal(payload.fixedControl.truncation.forbiddenCommandPatterns, 6);
+    assert.equal(payload.fixedControl.truncation.reasonChars > 0, true);
+  });
+});
+
 test("next allows explicitly bounded packet work for bounded-next capsules", async () => {
   await withTempDir("next-bounded-decision-capsule", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "bounded capsule", "--metric-name", "seconds"]);
@@ -2061,7 +2795,7 @@ test("state supports negative metrics when lower is better", async () => {
   });
 });
 
-test("state reports corrupt JSONL with the ledger path", async () => {
+test("state reports corrupt JSONL with repair-first ledger guidance", async () => {
   await withTempDir("state-corrupt-jsonl", async (dir) => {
     await writeFile(
       path.join(dir, "autoresearch.jsonl"),
@@ -2073,9 +2807,22 @@ test("state reports corrupt JSONL with the ledger path", async () => {
     );
 
     const state = await runCli(["state", "--cwd", dir]);
-    assert.notEqual(state.code, 0);
-    assert.match(state.stderr, /autoresearch\.jsonl/);
-    assert.match(state.stderr, /line 2/);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "ledger_jsonl_invalid");
+    assert.match(payload.ledgerPath, /autoresearch\.jsonl$/);
+    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
+    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+
+    const report = await runCli(["state", "--cwd", dir, "--report", "--json"]);
+    assert.equal(report.code, 0, report.stderr);
+    const reportPayload = JSON.parse(report.stdout);
+    assert.equal(reportPayload.ok, false);
+    assert.equal(reportPayload.report.json.status, "blocked");
+    assert.match(reportPayload.report.json.blocker, /Malformed JSONL lines: 2/);
+    assert.match(reportPayload.report.json.nextCommand, /ledger-doctor\b.*--json/);
   });
 });
 
@@ -3628,6 +4375,35 @@ test("benchmark-lint separates metric parsing from research integrity", async ()
     assert.equal(payload.metricParsing.ok, true);
     assert.equal(payload.researchIntegrity.ok, false);
     assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect|holdout|repeat/i);
+  });
+});
+
+test("benchmark-lint uses config benchmark command without wrapper fallback", async () => {
+  await withTempDir("benchmark-lint-config-command", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "lint config command",
+      "--metric-name",
+      "score",
+      "--direction",
+      "higher",
+    ]);
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=7')"`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify({ benchmarkCommand }, null, 2),
+      "utf8",
+    );
+
+    const result = await runCli(["benchmark-lint", "--cwd", dir, "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.parsedMetrics.score, 7);
+    assert.equal(payload.checkedCommand, benchmarkCommand);
   });
 });
 
@@ -5683,6 +6459,34 @@ test("next compact refuses current-tree finalization blockers before running pac
     assert.equal(payload.decision, null);
     assert.match(payload.commandHint, /finalize-(preview|current-tree)/);
     assert.doesNotMatch(payload.commandHint, /autoresearch\.mjs"?\s+next\b/);
+  });
+});
+
+test("codex goal complete audit blocks current-tree finalization blockers", async () => {
+  await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
+    await prepareCurrentTreeFinalizationBlocker(dir);
+
+    const result = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      dir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Kept metric and source changes are ready.",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const audit = payload.completionAudit;
+
+    assert.equal(audit.status, "blocked");
+    assert.equal(audit.canMarkCodexGoalComplete, false);
+    assert.match(
+      audit.localEvidence.blockers.join("\n"),
+      /Do not mark the Codex goal complete while Autoresearch has unresolved quality gaps, review-required evidence, fixed-control violations, or current-tree finalization blockers\./,
+    );
+    assert.match(audit.recommendedCodexAction, /Do not mark complete|Resolve/);
   });
 });
 
@@ -7808,8 +8612,11 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(registryCheck.ok, true, JSON.stringify(registryCheck));
 
   const guided = toolSchemas.find((tool) => tool.name === "guided_setup");
+  const run = toolSchemas.find((tool) => tool.name === "run_experiment");
   const next = toolSchemas.find((tool) => tool.name === "next_experiment");
   const doctor = toolSchemas.find((tool) => tool.name === "doctor_session");
+  const benchmarkInspect = toolSchemas.find((tool) => tool.name === "benchmark_inspect");
+  const benchmarkLint = toolSchemas.find((tool) => tool.name === "benchmark_lint");
   const checksInspect = toolSchemas.find((tool) => tool.name === "checks_inspect");
   const researchFanout = toolSchemas.find((tool) => tool.name === "research_fanout");
   const serve = toolSchemas.find((tool) => tool.name === "serve_dashboard");
@@ -7817,8 +8624,13 @@ test("tool schemas expose guidance and output contracts", async () => {
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
+  const ledgerDoctor = toolSchemas.find((tool) => tool.name === "ledger_doctor");
+  const startResearch = toolSchemas.find((tool) => tool.name === "start_research_loop");
 
   assert.ok(guided);
+  assert.ok(run);
+  assert.ok(benchmarkInspect);
+  assert.ok(benchmarkLint);
   assert.ok(researchFanout);
   assert.ok(checksInspect);
   assert.ok(serve);
@@ -7826,6 +8638,8 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
   assert.ok(configureSession);
+  assert.ok(ledgerDoctor);
+  assert.ok(startResearch);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -7843,6 +8657,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(researchFanout.annotations.readOnlyHint, false);
   assert.equal(researchFanout.annotations.openWorldHint, false);
   assert.equal(guided.annotations.openWorldHint, true);
+  assert.equal(startResearch.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
 
@@ -7853,8 +8668,17 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(guided.inputSchema.properties.port.type, "number");
   assert.equal(configureSession.inputSchema.properties.clear_packet_budget.type, "boolean");
   assert.equal(configureSession.inputSchema.properties.clear_wall_clock_budget.type, "boolean");
+  assert.equal(run.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(next.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(doctor.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(benchmarkInspect.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
+  assert.equal(benchmarkLint.inputSchema.properties.allow_fixed_control_rerun.type, "boolean");
   assert.equal(readState.inputSchema.properties.report.type, "boolean");
   assert.equal(readState.outputSchema.properties.report.type, "object");
+  assert.equal(ledgerDoctor.inputSchema.properties.repair.type, "boolean");
+  assert.equal(ledgerDoctor.inputSchema.properties.yes.type, "boolean");
+  assert.equal(ledgerDoctor.outputSchema.properties.ledgerHealth.type, "object");
+  assert.equal(ledgerDoctor.outputSchema.properties.backupPath.type, "string");
   assert.equal(readState.outputSchema.properties.dashboardHealth.type, "object");
   assert.equal(onboardingPacket.inputSchema.properties.operator_checklist, undefined);
   assert.equal(recommendNext.inputSchema.properties.operator_checklist.type, "boolean");
@@ -7940,13 +8764,18 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(cliCommandForTool("next_experiment"), "next");
   assert.equal(cliCommandForTool("research_fanout"), "research-fanout");
   assert.equal(cliCommandForTool("checks_inspect"), "checks-inspect");
+  assert.equal(cliCommandForTool("ledger_doctor"), "ledger-doctor");
   assert.equal(toolNameForCliCommand("next"), "next_experiment");
   assert.equal(toolNameForCliCommand("research-fanout"), "research_fanout");
   assert.equal(toolNameForCliCommand("checks-inspect"), "checks_inspect");
+  assert.equal(toolNameForCliCommand("ledger-doctor"), "ledger_doctor");
   assert.equal(toolMutates("next_experiment"), true);
   assert.equal(toolMutates("research_fanout"), false);
   assert.equal(actionPolicyForTool("research_fanout"), "read");
   assert.equal(actionPolicyForTool("research_fanout", { yes: true }), "state_mutation");
+  assert.equal(toolMutates("ledger_doctor"), false);
+  assert.equal(actionPolicyForTool("ledger_doctor"), "read");
+  assert.equal(actionPolicyForTool("ledger_doctor", { repair: true, yes: true }), "artifact_write");
   assert.equal(toolMutates("read_state"), false);
 });
 
@@ -7982,6 +8811,84 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
     benchmarkCommand: "node bench.js",
     commitPaths: ["src"],
     allow_unsafe_command: true,
+  });
+  const runArgs = validateToolArguments("run_experiment", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(runArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("run_experiment", runArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const nextArgs = validateToolArguments("next_experiment", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(nextArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("next_experiment", nextArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const doctorArgs = validateToolArguments("doctor_session", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(doctorArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("doctor_session", doctorArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const ledgerDoctorArgs = validateToolArguments("ledger_doctor", {
+    workingDir: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
+  });
+  assert.deepEqual(ledgerDoctorArgs, {
+    working_dir: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("ledger_doctor", ledgerDoctorArgs), {
+    cwd: "C:/repo",
+    json: true,
+    repair: true,
+    yes: true,
+  });
+  const benchmarkLintArgs = validateToolArguments("benchmark_lint", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(benchmarkLintArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("benchmark_lint", benchmarkLintArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  const benchmarkInspectArgs = validateToolArguments("benchmark_inspect", {
+    workingDir: "C:/repo",
+    allowFixedControlRerun: true,
+  });
+  assert.deepEqual(benchmarkInspectArgs, {
+    working_dir: "C:/repo",
+    allow_fixed_control_rerun: true,
+  });
+  assert.deepEqual(normalizeRuntimeToolArguments("benchmark_inspect", benchmarkInspectArgs), {
+    cwd: "C:/repo",
+    allowFixedControlRerun: true,
   });
   assert.deepEqual(
     normalizeCliCommandArguments("setup-plan", {
@@ -8742,6 +9649,80 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
   });
 });
 
+test("doctor --check-installed blocks non-fresh installed runtime before packet guidance", async () => {
+  await withTempDir("doctor-check-installed-runtime-authority", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "installed doctor", "--metric-name", "seconds"]);
+
+    for (const status of ["stale", "missing", "unavailable"]) {
+      await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
+        await writeInstalledRuntimeFixture(homeDir, status);
+
+        const result = await runCli(["doctor", "--cwd", dir, "--check-installed", "--explain"], {
+          env: isolatedRuntimeEnv(homeDir),
+        });
+        assert.equal(result.code, 0, result.stderr);
+
+        const payload = JSON.parse(result.stdout);
+        assert.equal(payload.ok, false, status);
+        assert.equal(payload.runtimeAuthority.trustScope, "installed-plugin", status);
+        assert.equal(payload.runtimeAuthority.blocking, true, status);
+        assert.equal(payload.runtimeAuthority.installedRuntime.status, status);
+        assert.equal(payload.canonicalNextAction.kind, "runtime-authority", status);
+        assert.equal(payload.canonicalNextAction.safeAction, "doctor", status);
+        assert.equal(payload.canonicalNextAction.toolName, "doctor", status);
+        assert.match(payload.canonicalNextAction.command || "", /\bdoctor\b/, status);
+        assert.match(payload.canonicalNextAction.command || "", /--explain\b/, status);
+        assert.doesNotMatch(payload.canonicalNextAction.command || "", /\bnext\b/, status);
+        assert.match(
+          payload.issues.join("\n"),
+          new RegExp(`${status} installed plugin runtime`, "i"),
+        );
+        assert.match(payload.nextAction, /installed.*runtime/i);
+        assert.match(payload.nextAction, /inspect|refresh/i);
+        assert.doesNotMatch(payload.nextAction, /Run the next experiment|next measured packet/i);
+        assert.match(payload.explanation.nextSafeAction, /installed.*runtime/i);
+      });
+    }
+  });
+});
+
+test("state and doctor use checksCommand from config for gate quality", async () => {
+  await withTempDir("config-checks-gate-quality", async (dir) => {
+    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" check`;
+    const displayedChecksCommand = redactCommandDisplay(checksCommand);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      JSON.stringify(
+        {
+          name: "config checks",
+          goal: "prove configured checks are respected",
+          metricName: "seconds",
+          metricUnit: "seconds",
+          bestDirection: "lower",
+          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          checksCommand,
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(path.join(dir, "autoresearch.jsonl"), "");
+
+    const state = await runCli(["state", "--cwd", dir, "--json"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.gateQuality.posture, "correctness");
+    assert.equal(statePayload.commandAuthority?.checksCommand, displayedChecksCommand);
+
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json"]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.gateQuality.posture, "correctness");
+    assert.equal(doctorPayload.commandAuthority?.checksCommand, displayedChecksCommand);
+    assert.doesNotMatch(JSON.stringify(doctorPayload.explanation), /No independent checks gate/i);
+  });
+});
+
 test("setup state and doctor expose gate quality and preflight readiness", async () => {
   await withTempDir("gate-quality-preflight", async (dir) => {
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -8920,6 +9901,55 @@ test("source launcher direct-script detection survives normalized paths", async 
     } catch (error) {
       if (process.platform !== "win32") throw error;
     }
+  });
+});
+
+test("source launcher rebuilds local source runtime before use", async () => {
+  await withTempDir("runtime-stale-source-build", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "codex-autoresearch",
+          version: PLUGIN_VERSION,
+          scripts: { "build:node": "node scripts/write-runtime.mjs" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await mkdir(path.join(pluginDir, "node_modules"), { recursive: true });
+    await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
+    const target = path.join(pluginDir, "dist", "scripts", "autoresearch.mjs");
+    await writeFile(target, "export const staleRuntime = true;\n", "utf8");
+    await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
+    await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
+    await writeFile(
+      path.join(pluginDir, "scripts", "write-runtime.mjs"),
+      [
+        'import { mkdir, writeFile } from "node:fs/promises";',
+        'import path from "node:path";',
+        'import { fileURLToPath } from "node:url";',
+        'const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");',
+        'await mkdir(path.join(root, "dist", "scripts"), { recursive: true });',
+        'await writeFile(path.join(root, "dist", "scripts", "autoresearch.mjs"), "export const rebuiltRuntime = true;\\n", "utf8");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+    const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+      releaseBaseUrl: "http://127.0.0.1:1",
+    });
+
+    assert.equal(
+      await readFile(new URL(runtimeHref), "utf8"),
+      "export const rebuiltRuntime = true;\n",
+    );
   });
 });
 
