@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fallbackCommandForKind, resolveActionCommand } from "../lib/action-metadata.js";
+import {
+  actionSafeActionForKind,
+  fallbackCommandForKind,
+  resolveActionCommand,
+} from "../lib/action-metadata.js";
 import { buildCompactRecommendNextResponse } from "../lib/commands/recommend-next.js";
 import { acceptedCurrentTreeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { buildGoalFrame } from "../lib/goal-frame.js";
@@ -497,6 +501,41 @@ test("stale installed runtime alone stays advisory for source checkout work", ()
   assert.equal(status.blockers.length, 0);
 });
 
+test("installed runtime authority blocks canonical next action", () => {
+  const status = buildLoopContractStatus({
+    runtimeAuthority: {
+      trustScope: "installed-plugin",
+      blocking: true,
+      blocker:
+        "Missing installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.",
+    },
+    preflight: {
+      status: "blocked",
+      blockers: ["No benchmark command is available for the first packet."],
+      nextCommand: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
+    },
+  });
+  const action = canonicalNextActionForLoop({
+    runtimeAuthority: {
+      trustScope: "installed-plugin",
+      blocking: true,
+      blocker:
+        "Missing installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.",
+    },
+    preflight: {
+      status: "blocked",
+      blockers: ["No benchmark command is available for the first packet."],
+      nextCommand: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
+    },
+  });
+
+  assert.equal(status.ok, false);
+  assert.equal(status.canRunNextPacket, false);
+  assert.equal(status.blockers[0].kind, "runtime-authority");
+  assert.match(action.reason, /installed.*runtime/i);
+  assert.doesNotMatch(action.reason, /benchmark command/i);
+});
+
 test("source or built runtime failures remain loop blockers", () => {
   const status = buildLoopContractStatus({
     runtimeProvenance: {
@@ -626,7 +665,11 @@ test("packet-brake blocker actions get non-next fallback commands", () => {
     });
     assert.notEqual(command, "", action.kind);
     assert.doesNotMatch(command, /\bnext\b/, action.kind);
-    assert.doesNotMatch(command, /\bfinalize-current-tree\b/, action.kind);
+    if (action.kind === "current-tree-finalization") {
+      assert.match(command, /\bfinalize-current-tree\b/, action.kind);
+    } else {
+      assert.doesNotMatch(command, /\bfinalize-current-tree\b/, action.kind);
+    }
     assert.equal(typeof action.label, "string", action.kind);
     assert.notEqual(action.label, "", action.kind);
   }
@@ -646,6 +689,20 @@ test("readout action fallback skips process-starting fallback commands", () => {
   assert.equal(
     resolveActionCommand("decision-capsule", commands),
     "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  );
+});
+
+test("runtime authority action metadata routes to read-only doctor", () => {
+  const commands = {
+    doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
+    doctor: "node scripts/autoresearch.mjs doctor --cwd C:/repo",
+    state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  };
+
+  assert.equal(actionSafeActionForKind("runtime-authority"), "doctor");
+  assert.equal(
+    resolveActionCommand("runtime-authority", commands),
+    "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
   );
 });
 

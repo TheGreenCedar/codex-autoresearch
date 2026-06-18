@@ -53,8 +53,10 @@ export interface CompactStateBuilderInput {
   canonicalNextAction?: unknown;
   runtimeProvenance?: unknown;
   runtimeDriftSummary?: unknown;
+  runtimeAuthority?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
+  ledgerHealth?: unknown;
   gateQuality?: unknown;
   preflight?: unknown;
   portfolioRecommendation?: unknown;
@@ -68,13 +70,16 @@ export interface CompactStateBuilderInput {
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
+  fixedControl?: unknown;
 }
 
 const OPTIONAL_COMPACT_STATE_FIELDS = [
   "runtimeProvenance",
   "runtimeDriftSummary",
+  "runtimeAuthority",
   "dashboardHealth",
   "sourceCleanliness",
+  "ledgerHealth",
   "gateQuality",
   "preflight",
   "portfolioRecommendation",
@@ -89,6 +94,7 @@ const OPTIONAL_COMPACT_STATE_FIELDS = [
   "packetDiagnostics",
   "commandExecutionBoundary",
   "metricSemanticsWarning",
+  "fixedControl",
 ] as const satisfies readonly (keyof CompactStateBuilderInput)[];
 
 export interface CompactStateResponse {
@@ -144,8 +150,10 @@ export interface CompactStateResponse {
   canonicalNextAction: unknown;
   runtimeProvenance?: unknown;
   runtimeDriftSummary?: unknown;
+  runtimeAuthority?: unknown;
   dashboardHealth?: unknown;
   sourceCleanliness?: unknown;
+  ledgerHealth?: unknown;
   gateQuality?: unknown;
   preflight?: unknown;
   portfolioRecommendation?: unknown;
@@ -159,6 +167,7 @@ export interface CompactStateResponse {
   laneLifecycle?: unknown;
   packetDiagnostics?: unknown;
   metricSemanticsWarning?: unknown;
+  fixedControl?: unknown;
 }
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {

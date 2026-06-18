@@ -73,6 +73,16 @@ Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
 `benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block because the worktree is dirty, runtime is stale, promotion metadata is missing, or other trust checks fail.
 
+## Qualitative loops
+
+For docs, UX, architecture, product study, or other qualitative improvement loops, use the bundled start command:
+
+```bash
+node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
+```
+
+`research-start` keeps the awkward first mile together: it creates `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates the command, records the first baseline as `measure`, and prints the resume commands. Pass `--no-baseline-log` only when that first baseline should be inspected before it becomes ledger evidence.
+
 After setup, optional stop conditions:
 
 ```bash

@@ -23,6 +23,7 @@ export interface CliCommandDeps {
   integrationsCommand: CliDependency;
   interactiveSetup: CliDependency;
   laneRunner: CliDependency;
+  ledgerDoctor: CliDependency;
   logExperiment: CliDependency;
   measureQualityGap: CliDependency;
   newSegment: CliDependency;
@@ -40,6 +41,7 @@ export interface CliCommandDeps {
   serveDashboard: CliDependency;
   sessionForensics: CliDependency;
   setupPlan: CliDependency;
+  researchStart: CliDependency;
   setupResearchSession: CliDependency;
   setupSession: CliDependency;
 }
@@ -188,6 +190,40 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         skipInit: args.skipInit,
       }),
     }),
+    "research-start": async (args) => ({
+      result: await deps.researchStart({
+        cwd: args.cwd,
+        slug: args.slug,
+        goal: args.goal,
+        name: args.name,
+        checksCommand: args.checksCommand,
+        shell: args.shell,
+        filesInScope: args.filesInScope,
+        constraints: args.constraints,
+        secondaryMetricConstraints: args.secondaryMetricConstraints,
+        secondaryMetricConstraintMode: args.secondaryMetricConstraintMode,
+        protectedBenchmarkPaths: args.protectedBenchmarkPaths,
+        commitPaths: args.commitPaths,
+        maxIterations: args.maxIterations,
+        packetBudget: args.packetBudget,
+        wallClockBudgetSeconds: args.wallClockBudgetSeconds,
+        budgetNote: args.budgetNote,
+        autonomyMode: args.autonomyMode,
+        checksPolicy: args.checksPolicy,
+        keepPolicy: args.keepPolicy,
+        dashboardRefreshSeconds: args.dashboardRefreshSeconds,
+        overwrite: args.overwrite,
+        createChecks: args.createChecks,
+        baselineLog: args.baselineLog,
+        noBaselineLog: args.noBaselineLog,
+        baseline_log: args.baseline_log,
+        no_baseline_log: args.no_baseline_log,
+        dryRun: args.dryRun,
+        skipInit: args.skipInit,
+        allowUnsafeCommand: args.allowUnsafeCommand,
+        allow_unsafe_command: args.allow_unsafe_command,
+      }),
+    }),
     "research-fanout": async (args) => ({
       result: await deps.researchFanout({
         cwd: args.cwd,
@@ -221,6 +257,14 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         evidence: args.evidence,
         humanApproval: args.humanApproval,
         risks: args.risks,
+      }),
+    }),
+    "ledger-doctor": async (args) => ({
+      result: await deps.ledgerDoctor({
+        cwd: args.cwd,
+        json: args.json,
+        repair: args.repair,
+        yes: args.yes,
       }),
     }),
     config: async (args) => ({
@@ -312,6 +356,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
         checksPolicy: args.checksPolicy,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     next: async (args) => ({
@@ -328,6 +373,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         checksCommand: args.checksCommand,
         checksTimeoutSeconds: args.checksTimeoutSeconds,
         checksPolicy: args.checksPolicy,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "partial-results": async (args) => ({
@@ -382,6 +428,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
             checkInstalled: args.checkInstalled,
             explain: args.explain,
             timeoutSeconds: args.timeoutSeconds,
+            allowFixedControlRerun: args.allowFixedControlRerun,
           })),
     }),
     "benchmark-lint": async (args) => ({
@@ -392,6 +439,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         sample: args.sample,
         command: args.command,
         timeoutSeconds: args.timeoutSeconds,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "benchmark-inspect": async (args) => ({
@@ -399,6 +447,7 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         cwd: args.cwd,
         command: args.command,
         timeoutSeconds: args.timeoutSeconds,
+        allowFixedControlRerun: args.allowFixedControlRerun,
       }),
     }),
     "checks-inspect": async (args) => ({

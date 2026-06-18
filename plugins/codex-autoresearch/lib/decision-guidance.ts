@@ -1,7 +1,11 @@
 import path from "node:path";
 import { evaluateGateQuality } from "./gate-quality.js";
 import { buildPreflightAudit } from "./preflight-audit.js";
-import { inspectRuntimeDrift } from "./runtime-drift-doctor.js";
+import {
+  inspectRuntimeDrift,
+  summarizeRuntimeAuthority,
+  type RuntimeTrustScope,
+} from "./runtime-drift-doctor.js";
 import { unknownRecordOrEmpty, unknownRecordOrNull, type UnknownRecord } from "./types/json.js";
 
 type LooseObject = UnknownRecord;
@@ -17,6 +21,7 @@ export interface DecisionGuidanceInput {
   setupMissing?: unknown[];
   qualityConstraints?: Array<Record<string, unknown>> | null;
   runtimeDriftSummary?: LooseObject | null;
+  runtimeTrustScope?: RuntimeTrustScope;
   benchmarkCommand?: unknown;
   checksCommand?: unknown;
   defaultBenchmarkCommand: (workDir: string) => Promise<string> | string;
@@ -36,6 +41,7 @@ export async function buildDecisionGuidanceContext({
   setupMissing = [],
   qualityConstraints = null,
   runtimeDriftSummary = null,
+  runtimeTrustScope = "source-checkout",
   benchmarkCommand = "",
   checksCommand = "",
   defaultBenchmarkCommand,
@@ -48,9 +54,16 @@ export async function buildDecisionGuidanceContext({
   const stateConfig = unknownRecordOrEmpty(stateRecord.config);
   const resolvedBenchmarkCommand =
     cleanString(benchmarkCommand) ||
+    cleanString(configRecord.benchmarkCommand) ||
     (await defaultBenchmarkCommandOrEmpty(defaultBenchmarkCommand, workDir));
   const resolvedChecksCommand =
-    cleanString(checksCommand) || cleanString(await defaultChecksCommand(workDir));
+    cleanString(checksCommand) ||
+    cleanString(configRecord.checksCommand) ||
+    cleanString(await defaultChecksCommand(workDir));
+  const commandAuthority = {
+    benchmarkCommand: resolvedBenchmarkCommand,
+    checksCommand: resolvedChecksCommand,
+  };
   const metricName = cleanString(stateConfig.metricName || configRecord.metricName) || "metric";
   const benchmarkLintCommand = resolvedBenchmarkCommand
     ? renderCommand([
@@ -87,6 +100,11 @@ export async function buildDecisionGuidanceContext({
       smokeCheck: "",
       nextActionHint: `Runtime drift inspection failed: ${errorMessage(error)}`,
     })));
+  const runtimeAuthority = summarizeRuntimeAuthority({
+    sourceRuntime: runtimeStatusFromSummary(runtimeSummary, "source"),
+    installedRuntime: runtimeStatusFromSummary(runtimeSummary, "installed"),
+    trustScope: runtimeTrustScope,
+  });
   const gateQuality = evaluateGateQuality({
     benchmarkCommand: resolvedBenchmarkCommand,
     checksCommand: resolvedChecksCommand,
@@ -99,6 +117,7 @@ export async function buildDecisionGuidanceContext({
 
   return {
     gateQuality,
+    commandAuthority,
     preflight: buildPreflightAudit({
       metricName,
       benchmarkCommand: resolvedBenchmarkCommand,
@@ -112,6 +131,7 @@ export async function buildDecisionGuidanceContext({
       runs: Array.isArray(stateRecord.current) ? stateRecord.current.length : stateRecord.runs,
     }),
     runtimeDriftSummary: runtimeSummary,
+    runtimeAuthority,
   };
 }
 
@@ -152,4 +172,19 @@ function stringList(value: unknown): string[] {
 
 function cleanString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function runtimeStatusFromSummary(runtimeSummary: LooseObject, kind: "source" | "installed") {
+  if (kind === "source") {
+    const builtRuntime = cleanString(runtimeSummary.builtRuntime);
+    if (!builtRuntime) return null;
+    const sourceVersion = cleanString(runtimeSummary.sourceVersion);
+    return {
+      status: builtRuntime === "available" ? "fresh" : builtRuntime,
+      ...(sourceVersion ? { version: sourceVersion } : {}),
+    };
+  }
+  const installedRuntime = cleanString(runtimeSummary.installedRuntime);
+  if (!installedRuntime) return null;
+  return { status: installedRuntime };
 }

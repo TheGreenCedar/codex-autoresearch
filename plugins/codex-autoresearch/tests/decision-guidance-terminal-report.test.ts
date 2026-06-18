@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 
 test("terminal report prioritizes blockers before packet recommendations", () => {
@@ -495,6 +496,40 @@ test("terminal report does not coerce missing metrics to zero", () => {
   assert.equal(report.json.metric.name, "seconds");
   assert.equal(report.json.metric.best, null);
   assert.equal(report.json.metric.developmentBest, null);
+});
+
+test("terminal report shows source-checkout runtime authority as advisory", () => {
+  const compactState = buildCompactStateResponse({
+    workDir: "C:/work/project",
+    runtimeDriftSummary: {
+      installedRuntime: "stale",
+      builtRuntime: "available",
+      nextActionHint: "Installed runtime is stale for source 2.0.2.",
+    },
+    runtimeAuthority: {
+      sourceRuntime: { status: "fresh", version: "2.0.2" },
+      installedRuntime: { status: "stale", version: "2.0.1" },
+      trustScope: "source-checkout",
+      blocking: false,
+      blocker: "",
+      warning:
+        "Stale installed plugin runtime is advisory for source-checkout work; verify installed runtime before claiming live installed behavior.",
+    },
+    commands: {
+      next: "node scripts/autoresearch.mjs next --cwd C:/work/project --compact",
+    },
+  });
+  const report = buildTerminalReport(compactState);
+  const compactAuthority = compactState.runtimeAuthority as { trustScope?: string } | null;
+
+  assert.equal(compactAuthority?.trustScope, "source-checkout");
+  assert.equal(report.json.status, "ready-with-warnings");
+  assert.equal(report.json.blocker, "");
+  assert.equal(report.json.runtimeAuthority.trustScope, "source-checkout");
+  assert.equal(report.json.runtimeAuthority.blocking, false);
+  assert.match(report.json.runtimeAuthority.warning, /stale installed plugin runtime/i);
+  assert.match(report.text, /Runtime authority: source-checkout advisory/);
+  assert.match(report.text, /stale installed plugin runtime/i);
 });
 
 test("terminal report renders compact metric freshness lane and ASI contract fields", () => {

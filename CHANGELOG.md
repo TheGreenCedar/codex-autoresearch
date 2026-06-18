@@ -4,7 +4,20 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
-## Unreleased
+## 2.4.0 - 2026-06-18
+
+### Added
+
+- Added `research-start --cwd <project> --slug <slug> --goal <goal>` as the qualitative-loop start path: it seeds the scratchpad, configures `quality_gap`, validates the command, logs the first baseline as `measure` by default, and prints resume commands.
+- Added `ledger-doctor --cwd <project> [--json]` to report ledger run-number health, with guarded `--repair --yes` duplicate-run normalization that writes a timestamped backup first.
+
+### Changed
+
+- Documented the safer qualitative-loop workflow across docs, skill, and product gates: fixed-control rerun guards, `review_required` packet diagnostics, config-backed checks/protected-path guidance, and current-tree finalization routing through `finalize-current-tree`.
+
+### Fixed
+
+- Routed ledger-integrity failures into state/report next-action guidance, made corrupt JSONL sessions return repair-first `ledger-doctor --json` readouts, kept `benchmark-lint` aligned with config-backed benchmark commands, and made `research-start --skip-init` skip baseline logging cleanly.
 
 ## 2.3.15 - 2026-06-16
 

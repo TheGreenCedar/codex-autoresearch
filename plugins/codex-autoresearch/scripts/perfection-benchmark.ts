@@ -371,9 +371,13 @@ const checks = [
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
       return includesAll(skill, [
         "## Deep research loops",
+        "research-start --cwd <project>",
         "autoresearch.research/<slug>/",
         "sources.md",
         "synthesis.md",
+        "review_required",
+        "fixedControl",
+        "ledger-doctor",
         "`quality_gap=0` only means",
         "filter hallucinations",
         "## Dashboard",
@@ -381,10 +385,86 @@ const checks = [
         "Static exports are read-only",
         "## Finalize",
         "finalize-preview",
+        "finalize-current-tree",
         "Runway order",
       ])
         ? pass()
-        : fail("Main skill is missing research, dashboard, or finalization guidance.");
+        : fail(
+            "Main skill is missing research-start, safety, dashboard, or finalization guidance.",
+          );
+    },
+  },
+  {
+    id: "qualitative-loop-safety-docs",
+    file: "../../CHANGELOG.md, skills/codex-autoresearch/SKILL.md, docs/start.md, docs/operate.md, docs/trust.md, docs/troubleshooting.md, docs/finish.md",
+    description:
+      "Docs, skill, and changelog expose the safer qualitative-loop start path and trust gates.",
+    run: async () => {
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const start = await readText("docs/start.md");
+      const operate = await readText("docs/operate.md");
+      const trust = await readText("docs/trust.md");
+      const troubleshooting = await readText("docs/troubleshooting.md");
+      const finish = await readText("docs/finish.md");
+      const changelog = await readRootText("CHANGELOG.md");
+      const skillHasLoopSafety = includesAll(skill, [
+        "research-start",
+        "fixedControl",
+        "ledger-doctor",
+        "finalize-current-tree",
+        "review_required",
+      ]);
+      const docsHaveStartPath = includesAll(start, [
+        "research-start",
+        "quality_gap",
+        "measure",
+        "--no-baseline-log",
+      ]);
+      const docsHaveLedgerPath =
+        includesAll(operate, [
+          "ledger-doctor --cwd <project> --json",
+          "ledger-doctor --repair --yes",
+        ]) &&
+        includesAll(troubleshooting, ["ledger-doctor --cwd <project> --json", "--repair --yes"]);
+      const docsHaveChecksGuidance =
+        includesAll(start, [
+          "Checks: npm test",
+          "quality constraint or checks command",
+          "--protected-benchmark-paths",
+          "--secondary-metric-constraints",
+        ]) &&
+        includesAll(trust, [
+          "protectedBenchmarkPaths",
+          "--secondary-metric-constraints",
+          "checks_command",
+        ]);
+      const docsHaveTrustSafety =
+        hasRegex(trust, /fixed control/i) &&
+        hasRegex(trust, /source-checkout/i) &&
+        trust.includes("fixedControl") &&
+        trust.includes("review_required=1");
+      const docsHaveCurrentTreeFinalize =
+        finish.includes("finalize-current-tree --cwd <project> --exclude-session-artifacts") &&
+        hasRegex(finish, /current-tree-finalization/i);
+      const changelogHasReleaseNote = includesAll(changelog, [
+        "research-start",
+        "ledger-doctor",
+        "fixed-control rerun guards",
+        "review_required",
+        "config-backed checks/protected-path guidance",
+        "finalize-current-tree",
+      ]);
+      return skillHasLoopSafety &&
+        docsHaveStartPath &&
+        docsHaveLedgerPath &&
+        docsHaveChecksGuidance &&
+        docsHaveTrustSafety &&
+        docsHaveCurrentTreeFinalize &&
+        changelogHasReleaseNote
+        ? pass()
+        : fail(
+            "Qualitative-loop docs are missing research-start, ledger-doctor, fixedControl, review_required, config-backed checks/protected-path, or current-tree finalization guidance.",
+          );
     },
   },
   {

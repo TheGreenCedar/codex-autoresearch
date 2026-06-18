@@ -1,6 +1,7 @@
 type LooseObject = Record<string, unknown>;
 
 export type PacketDiagnosticStage =
+  | "review_required"
   | "retrieved_but_not_cited"
   | "lost_in_synthesis_or_citation"
   | "missing_quality_score"
@@ -23,6 +24,16 @@ export interface BenchmarkContractDiagnostics {
   historicalContracts: LooseObject[];
 }
 
+export const REVIEW_REQUIRED_METRIC_KEYS = [
+  "review_required",
+  "sufficient_quality_mismatch",
+  "sufficient_quality_mismatch_count",
+  "ideal_anchor_mismatch",
+  "ideal_anchor_mismatch_count",
+  "overfit_signal",
+  "overfit_signal_count",
+] as const;
+
 export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagnostics {
   const packetEvidence = objectValue(input.packetEvidence) || {};
   const run = objectValue(input.run) || {};
@@ -41,6 +52,16 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
     .join("\n");
   const stages: PacketDiagnosticStage[] = [];
   const reasons: string[] = [];
+  const reviewSignals = reviewRequiredMetricSignalsFromMetrics(metrics);
+
+  if (reviewSignals.length > 0) {
+    addStage(
+      stages,
+      reasons,
+      "review_required",
+      `Packet has review-required signal${reviewSignals.length === 1 ? "" : "s"}: ${reviewSignals.join(", ")}.`,
+    );
+  }
 
   if (missingQualityScore({ input, packetEvidence, run, decision, metrics, text })) {
     addStage(stages, reasons, "missing_quality_score", "Packet exited without a quality score.");
@@ -77,12 +98,28 @@ export function classifyPacketDiagnostics(input: LooseObject = {}): PacketDiagno
     unresolved: primaryStage !== "none",
     reasons,
     recommendation:
-      primaryStage === "none"
-        ? ""
-        : `Inspect packet diagnostic stage ${primaryStage} before another packet.`,
+      primaryStage === "review_required"
+        ? "Require human review and explicit ASI acknowledgement before promotion or finalization."
+        : primaryStage === "none"
+          ? ""
+          : `Inspect packet diagnostic stage ${primaryStage} before another packet.`,
     command: stringValue(input.command),
     taskArtifacts: packetEvidence.taskArtifacts || null,
   };
+}
+
+export function reviewRequiredMetricSignals(input: LooseObject = {}): string[] {
+  const packetEvidence = objectValue(input.packetEvidence) || {};
+  return reviewRequiredMetricSignalsFromMetrics(collectMetrics(input, packetEvidence));
+}
+
+export function reviewRequiredMetricSignalsFromMetrics(metrics: LooseObject = {}): string[] {
+  const signals: string[] = [];
+  for (const key of REVIEW_REQUIRED_METRIC_KEYS) {
+    const value = reviewSignalValue(metrics[key]);
+    if (value != null) signals.push(`${key}=${value}`);
+  }
+  return signals;
 }
 
 export function benchmarkContractDiagnostics(
@@ -127,6 +164,7 @@ export function benchmarkContractDiagnostics(
 function collectMetrics(input: LooseObject, packetEvidence: LooseObject): LooseObject {
   return {
     ...objectValue(input.metrics),
+    ...objectValue(input.parsedMetrics),
     ...objectValue(objectValue(input.run)?.metrics),
     ...objectValue(objectValue(input.run)?.parsedMetrics),
     ...objectValue(objectValue(input.decision)?.metrics),
@@ -321,6 +359,29 @@ function booleanValue(value: unknown): boolean | null {
     if (/^(false|no|0|fail|failed|insufficient)$/i.test(value.trim())) return false;
   }
   return null;
+}
+
+function reviewSignalValue(value: unknown): string | null {
+  const parsed = numberValue(value);
+  if (parsed != null) return parsed > 0 ? stringValue(value) : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || noIssueReviewSignalToken(trimmed)) return null;
+    return positiveReviewSignalToken(trimmed) ? trimmed : null;
+  }
+  const parsedBoolean = booleanValue(value);
+  if (parsedBoolean != null) return parsedBoolean ? stringValue(value) : null;
+  return value ? stringValue(value) : null;
+}
+
+function noIssueReviewSignalToken(value: string): boolean {
+  return /^(none|no|false|0|ok|clean|not[_ -]?detected|pass|passed)$/i.test(value);
+}
+
+function positiveReviewSignalToken(value: string): boolean {
+  return /^(true|yes|1|required|review[_ -]?required|detected|mismatch|overfit|failed|fail)$/i.test(
+    value,
+  );
 }
 
 function firstNumber(...values: unknown[]): number | null {

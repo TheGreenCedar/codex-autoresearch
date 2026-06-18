@@ -23,6 +23,13 @@ export interface TerminalReportSummary {
     builtRuntime: string;
     detail: string;
   };
+  runtimeAuthority: {
+    trustScope: string;
+    blocking: boolean;
+    blocker: string;
+    warning: string;
+    detail: string;
+  };
   dashboard: TerminalReportDashboard;
   cleanliness: {
     status: string;
@@ -77,6 +84,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
   const preflight = recordOrNull(state.preflight);
   const gateQuality = recordOrNull(state.gateQuality);
   const runtime = recordOrNull(state.runtimeDriftSummary);
+  const runtimeAuthority = recordOrNull(state.runtimeAuthority);
   const packet = recordOrNull(state.packetDiagnostics);
   const portfolio = recordOrNull(state.portfolioRecommendation);
   const envelope = recordOrNull(state.decisionEnvelope);
@@ -97,10 +105,16 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
         loopBlockers[0] || "",
       ])
     : "";
+  const authorityBlocker =
+    runtimeAuthority?.blocking === true
+      ? stringValue(runtimeAuthority.blocker) ||
+        "Installed plugin runtime verification is blocked by runtime authority."
+      : "";
   const blocker = firstNonEmpty([
     ...loopBlockers,
     loopBlockers.length ? stringValue(recordOrNull(loopContract?.strongestAction)?.reason) : "",
     loopBlockers.length ? stringValue(canonicalNextAction?.reason) : "",
+    authorityBlocker,
     ...stringList(state.blockers),
     ...stringList(preflight?.blockers),
     ...stringList(gateQuality?.blockers),
@@ -135,6 +149,13 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     builtRuntime: stringValue(runtime?.builtRuntime) || "unknown",
     detail: stringValue(runtime?.nextActionHint),
   };
+  const runtimeAuthoritySummary = {
+    trustScope: stringValue(runtimeAuthority?.trustScope) || "source-checkout",
+    blocking: runtimeAuthority?.blocking === true,
+    blocker: stringValue(runtimeAuthority?.blocker),
+    warning: stringValue(runtimeAuthority?.warning),
+    detail: runtimeAuthorityDetail(runtimeAuthority),
+  };
   const packetSummary = {
     status:
       packet?.unresolved === true ? stringValue(packet.primaryStage) || "unresolved" : "clear",
@@ -152,6 +173,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     loopContract,
     preflight,
     runtime,
+    runtimeAuthority,
   });
   const status = blocker
     ? "blocked"
@@ -172,6 +194,13 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     `Runtime: installed ${runtimeSummary.installedRuntime}, build ${runtimeSummary.builtRuntime}${
       runtimeSummary.detail ? ` - ${runtimeSummary.detail}` : ""
     }`,
+    `Runtime authority: ${runtimeAuthoritySummary.trustScope}${
+      runtimeAuthoritySummary.blocking
+        ? " blocking"
+        : runtimeAuthoritySummary.warning
+          ? " advisory"
+          : " clear"
+    }${runtimeAuthoritySummary.detail ? ` - ${runtimeAuthoritySummary.detail}` : ""}`,
     `Metric: ${metric.name}, active segment best ${formatMetricValue(metric.best)}, development best ${formatMetricValue(metric.developmentBest)}, historical best ${formatHistoricalBest(metric)}`,
     `Freshness: ${freshnessLabel(freshness.fresh)}${
       freshness.reason ? ` - ${freshness.reason}` : ""
@@ -202,6 +231,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
       nextCommand,
       gate,
       runtime: runtimeSummary,
+      runtimeAuthority: runtimeAuthoritySummary,
       dashboard,
       cleanliness,
       packet: packetSummary,
@@ -388,18 +418,37 @@ function hasReadyWarning({
   loopContract,
   preflight,
   runtime,
+  runtimeAuthority,
 }: {
   dashboard: TerminalReportDashboard;
   gateQuality: JsonRecord | null;
   loopContract: JsonRecord | null;
   preflight: JsonRecord | null;
   runtime: JsonRecord | null;
+  runtimeAuthority: JsonRecord | null;
 }): boolean {
   if (objectMessageList(loopContract?.warnings).length > 0) return true;
   if (stringList(gateQuality?.warnings).length > 0) return true;
   if (stringList(preflight?.warnings).length > 0) return true;
   if (runtimeWarning(runtime)) return true;
+  if (runtimeAuthorityWarning(runtimeAuthority)) return true;
   return dashboard.status === "dead" || /\(stale\)/i.test(dashboard.detail);
+}
+
+function runtimeAuthorityDetail(runtimeAuthority: JsonRecord | null): string {
+  if (!runtimeAuthority) return "";
+  if (runtimeAuthority.blocking === true) {
+    return (
+      stringValue(runtimeAuthority.blocker) ||
+      "Installed runtime verification must refresh stale installed plugin runtime first."
+    );
+  }
+  return stringValue(runtimeAuthority.warning);
+}
+
+function runtimeAuthorityWarning(runtimeAuthority: JsonRecord | null): boolean {
+  if (!runtimeAuthority) return false;
+  return runtimeAuthority.blocking === true || Boolean(stringValue(runtimeAuthority.warning));
 }
 
 function runtimeWarning(runtime: JsonRecord | null): boolean {

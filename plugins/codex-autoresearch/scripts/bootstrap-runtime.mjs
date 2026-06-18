@@ -19,6 +19,7 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const pluginRoot = path.resolve(scriptDir, "..");
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
+  await rebuildStaleSourceRuntime(pluginRoot, target);
   if (await fileExists(target)) return pathToFileURL(target).href;
   if (!install) throw missingRuntimeError(pluginRoot, target);
 
@@ -31,6 +32,17 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   });
 
   return pathToFileURL(target).href;
+}
+
+async function rebuildStaleSourceRuntime(pluginRoot, target) {
+  if (!(await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts")))) return;
+  if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
+  if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
+
+  if ((await newestSourceMtime(pluginRoot)) <= (await fileMtime(target))) return;
+
+  const build = npmBuildInvocation();
+  await run(build.command, build.args, { cwd: pluginRoot });
 }
 
 export function isDirectScript(importerUrl, argvPath = process.argv[1]) {
@@ -245,9 +257,10 @@ async function downloadFile(url, destination) {
   }
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd: options.cwd,
       windowsHide: true,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -273,6 +286,39 @@ async function fileExists(file) {
   } catch {
     return false;
   }
+}
+
+async function fileMtime(file) {
+  try {
+    return (await fs.stat(file)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+async function newestSourceMtime(pluginRoot) {
+  const files = ["package.json"];
+  for (const dir of ["lib", "scripts"]) {
+    const entries = await fs
+      .readdir(path.join(pluginRoot, dir), { recursive: true })
+      .catch(() => []);
+    files.push(
+      ...entries
+        .filter((entry) => String(entry).endsWith(".ts"))
+        .map((entry) => path.join(dir, entry)),
+    );
+  }
+  return Math.max(
+    0,
+    ...(await Promise.all(files.map((file) => fileMtime(path.join(pluginRoot, file))))),
+  );
+}
+
+function npmBuildInvocation() {
+  if (process.platform === "win32") {
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm run build:node"] };
+  }
+  return { command: "npm", args: ["run", "build:node"] };
 }
 
 function sleep(ms) {

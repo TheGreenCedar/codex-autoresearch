@@ -1,4 +1,6 @@
 import { resolveDecisionThresholds, type DecisionThresholdConfig } from "./decision-thresholds.js";
+import { reviewRequiredMetricSignals } from "./packet-diagnostics.js";
+import { isKeepStatus } from "./run-status.js";
 
 type LooseObject = Record<string, any>;
 
@@ -12,6 +14,7 @@ export type WorkflowFrictionKind =
   | "product_bar_rejection"
   | "false_done_admission"
   | "benchmark_overfit_steering"
+  | "review_required_packet"
   | "oversized_tool_output"
   | "closed_stdin_poll";
 
@@ -46,6 +49,7 @@ export function analyzeWorkflowFriction({
   signals.push(...forensicsFrictionSignals({ forensics }));
   signals.push(...verificationChurnSignals({ state, thresholds }));
   signals.push(...dirtyTreeSignals({ state, warningDetails }));
+  signals.push(...reviewRequiredPacketSignals({ state }));
   const unknown = unknownRecipeSignal({ state, recipes });
   if (unknown) signals.push(unknown);
   const qualityGap = qualityGapWordingSignal({ state });
@@ -95,6 +99,33 @@ function forensicsFrictionSignals({
     );
   }
   return signals;
+}
+
+function reviewRequiredPacketSignals({ state }: { state: LooseObject }): WorkflowFrictionSignal[] {
+  const matches: string[] = [];
+  const seenRuns = new Set<string>();
+  for (const run of [...arrayValue(state.current), ...arrayValue(state.results)]) {
+    if (!isKeptOrAcceptedEvidence(run) || reviewAcknowledged(run)) continue;
+    const signals = reviewRequiredMetricSignals(run);
+    if (signals.length === 0) continue;
+    const runKey = run.run == null ? "" : String(run.run);
+    if (runKey && seenRuns.has(runKey)) continue;
+    if (runKey) seenRuns.add(runKey);
+    matches.push(`${runLabel(run)} ${signals.join(", ")}`);
+  }
+  if (matches.length === 0) return [];
+  const summarized = matches.slice(0, 3).join("; ");
+  const suffix = matches.length > 3 ? `; +${matches.length - 3} more` : "";
+  return [
+    workflowSignal({
+      kind: "review_required_packet",
+      severity: "warning",
+      reason: `Kept or accepted packet evidence has review-required signal${matches.length === 1 ? "" : "s"}: ${summarized}${suffix}.`,
+      count: matches.length,
+      actionReason:
+        "Review packet evidence and add explicit ASI acknowledgement before treating it as accepted finalization evidence.",
+    }),
+  ];
 }
 
 function outputBudgetSignals({
@@ -355,6 +386,23 @@ function arrayValue(value: unknown): LooseObject[] {
   return Array.isArray(value)
     ? value.map((item) => (item && typeof item === "object" ? (item as LooseObject) : {}))
     : [];
+}
+
+function isKeptOrAcceptedEvidence(run: LooseObject): boolean {
+  return (
+    isKeepStatus(run.status) ||
+    String(run.evidenceStatus || "").toLowerCase() === "accepted" ||
+    run.accepted === true ||
+    run.current === true
+  );
+}
+
+function reviewAcknowledged(run: LooseObject): boolean {
+  return run.asi?.review_acknowledged === true;
+}
+
+function runLabel(run: LooseObject): string {
+  return run.run == null ? "packet" : `run ${run.run}`;
 }
 
 function forensicsSignalReason(kind: string): string {

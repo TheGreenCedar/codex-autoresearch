@@ -686,6 +686,31 @@ test("docs and skill describe the product-grade finalization bar", async () => {
   }
 });
 
+test("product docs and skill expose research-start fixed controls and ledger doctor", async () => {
+  const [skill, startDoc, operateDoc, trustDoc, troubleshootingDoc, finishDoc] = await Promise.all(
+    [
+      "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
+      "plugins/codex-autoresearch/docs/start.md",
+      "plugins/codex-autoresearch/docs/operate.md",
+      "plugins/codex-autoresearch/docs/trust.md",
+      "plugins/codex-autoresearch/docs/troubleshooting.md",
+      "plugins/codex-autoresearch/docs/finish.md",
+    ].map(async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8")),
+  );
+
+  assert.match(skill, /research-start/);
+  assert.match(skill, /fixedControl/);
+  assert.match(skill, /ledger-doctor/);
+  assert.match(skill, /finalize-current-tree/);
+  assert.match(startDoc, /research-start/);
+  assert.match(operateDoc, /ledger-doctor/);
+  assert.match(trustDoc, /fixed control/i);
+  assert.match(trustDoc, /source-checkout/i);
+  assert.match(trustDoc, /review_required/);
+  assert.match(troubleshootingDoc, /ledger-doctor/);
+  assert.match(finishDoc, /finalize-current-tree/);
+});
+
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
   await withTempDir("cli-delight-tools", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "cli delight", "--metric-name", "score"]);

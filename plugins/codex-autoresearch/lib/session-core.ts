@@ -609,6 +609,8 @@ export function buildDecisionEnvelope({
     laneLifecycle: state?.laneLifecycle || null,
     laneOrchestration: state?.laneOrchestration || null,
     runtimeProvenance: state?.runtimeProvenance || null,
+    runtimeAuthority: state?.runtimeAuthority || null,
+    ledgerHealth: state?.ledgerHealth || null,
     goalContract: state?.goalContract || null,
     approvalLedger: state?.approvalLedger || null,
     resourcePreflight: state?.resourcePreflight || null,
