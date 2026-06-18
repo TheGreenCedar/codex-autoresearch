@@ -19,6 +19,7 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const pluginRoot = path.resolve(scriptDir, "..");
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
+  await rebuildStaleSourceRuntime(pluginRoot, target);
   if (await fileExists(target)) return pathToFileURL(target).href;
   if (!install) throw missingRuntimeError(pluginRoot, target);
 
@@ -31,6 +32,19 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   });
 
   return pathToFileURL(target).href;
+}
+
+async function rebuildStaleSourceRuntime(pluginRoot, target) {
+  if (!(await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts")))) return;
+  if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
+  if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
+
+  const targetMtime = await fileMtime(target);
+  const sourceMtime = await newestSourceMtime(pluginRoot);
+  if (sourceMtime <= targetMtime) return;
+
+  const build = npmBuildInvocation();
+  await run(build.command, build.args, { cwd: pluginRoot });
 }
 
 export function isDirectScript(importerUrl, argvPath = process.argv[1]) {
@@ -245,9 +259,10 @@ async function downloadFile(url, destination) {
   }
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd: options.cwd,
       windowsHide: true,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -273,6 +288,48 @@ async function fileExists(file) {
   } catch {
     return false;
   }
+}
+
+async function fileMtime(file) {
+  try {
+    return (await fs.stat(file)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+async function newestSourceMtime(pluginRoot) {
+  let newest = await fileMtime(path.join(pluginRoot, "package.json"));
+  for (const relativeDir of ["lib", "scripts"]) {
+    newest = Math.max(newest, await newestTsMtime(path.join(pluginRoot, relativeDir)));
+  }
+  return newest;
+}
+
+async function newestTsMtime(dir) {
+  let newest = 0;
+  let entries = [];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return newest;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      newest = Math.max(newest, await newestTsMtime(entryPath));
+    } else if (entry.name.endsWith(".ts")) {
+      newest = Math.max(newest, await fileMtime(entryPath));
+    }
+  }
+  return newest;
+}
+
+function npmBuildInvocation() {
+  if (process.platform === "win32") {
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm run build:node"] };
+  }
+  return { command: "npm", args: ["run", "build:node"] };
 }
 
 function sleep(ms) {

@@ -37,8 +37,7 @@ Codex confirms the evidence source and research slug before creating session fil
 Codex creates the research scratchpad, configures the quality-gap session, and verifies the benchmark.
 
 ```bash
-node scripts/autoresearch.mjs research-setup --cwd . --slug dashboard-study --goal "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
-node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
+node scripts/autoresearch.mjs research-start --cwd . --slug dashboard-study --goal "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
 ```
 
 Illustrative output:

@@ -54,7 +54,7 @@ const TOOL_REGISTRY = [
     "advanced",
     "advanced",
   ),
-  registryEntry("start_research_loop", "research-start", "state_mutation", "happy_path", "default"),
+  registryEntry("start_research_loop", "research-start", "process_start", "happy_path", "default"),
   registryEntry("research_fanout", "research-fanout", "read", "advanced", "advanced"),
   registryEntry("lane_runner", "lane-runner", "read", "advanced", "advanced"),
   registryEntry("configure_session", "config", "state_mutation", "advanced", "advanced"),

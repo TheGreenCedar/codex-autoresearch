@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
@@ -186,6 +196,28 @@ test("ledger-doctor --json returns bounded structured health for malformed JSONL
     assert.equal(payload.ledgerHealth.bounded.truncated, false);
     assert.match(payload.ledgerHealth.warnings.join("\n"), /Malformed JSONL lines: 2/);
     assert.equal(await readFile(ledgerPath, "utf8"), before);
+  });
+});
+
+test("doctor routes corrupt ledgers to ledger-doctor guidance", async () => {
+  await withTempDir("doctor-malformed-jsonl", async (dir) => {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+        "{ bad json",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await runCli(["doctor", "--cwd", dir, "--json"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.state.code, "ledger_jsonl_invalid");
+    assert.equal(payload.benchmarkContract.activeSource, "none");
+    assert.match(payload.nextAction, /ledger-doctor/i);
   });
 });
 
@@ -1335,6 +1367,9 @@ test("research-start skip-init skips default baseline logging cleanly", async ()
     assert.equal(payload.baselineLogged, false);
     assert.match(payload.baselineSkippedReason, /skip-init/i);
     assert.equal(payload.setup.init, null);
+    assert.equal(payload.benchmarkLint.ok, true);
+    assert.equal(payload.benchmarkLint.metricName, "quality_gap");
+    assert.equal(payload.doctor.benchmark.emitsPrimary, true);
     assert.equal(await pathExists(path.join(dir, "autoresearch.last-run.json")), false);
     assert.equal(await pathExists(path.join(dir, "autoresearch.jsonl")), false);
     assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), true);
@@ -8600,6 +8635,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
   const ledgerDoctor = toolSchemas.find((tool) => tool.name === "ledger_doctor");
+  const startResearch = toolSchemas.find((tool) => tool.name === "start_research_loop");
 
   assert.ok(guided);
   assert.ok(run);
@@ -8613,6 +8649,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(recommendNext);
   assert.ok(configureSession);
   assert.ok(ledgerDoctor);
+  assert.ok(startResearch);
   assert.match(guided.description, /first-run or resume action packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
@@ -8630,6 +8667,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(researchFanout.annotations.readOnlyHint, false);
   assert.equal(researchFanout.annotations.openWorldHint, false);
   assert.equal(guided.annotations.openWorldHint, true);
+  assert.equal(startResearch.annotations.openWorldHint, true);
   assert.equal(next.annotations.readOnlyHint, false);
   assert.equal(next.annotations.openWorldHint, true);
 
@@ -9872,6 +9910,59 @@ test("source launcher direct-script detection survives normalized paths", async 
     } catch (error) {
       if (process.platform !== "win32") throw error;
     }
+  });
+});
+
+test("source launcher rebuilds stale local dist before use", async () => {
+  await withTempDir("runtime-stale-source-build", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "codex-autoresearch",
+          version: PLUGIN_VERSION,
+          scripts: { "build:node": "node scripts/write-runtime.mjs" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await mkdir(path.join(pluginDir, "node_modules"), { recursive: true });
+    await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
+    await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
+    await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
+    await writeFile(
+      path.join(pluginDir, "scripts", "write-runtime.mjs"),
+      [
+        'import { mkdir, writeFile } from "node:fs/promises";',
+        'import path from "node:path";',
+        'import { fileURLToPath } from "node:url";',
+        'const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");',
+        'await mkdir(path.join(root, "dist", "scripts"), { recursive: true });',
+        'await writeFile(path.join(root, "dist", "scripts", "autoresearch.mjs"), "export const rebuiltRuntime = true;\\n", "utf8");',
+      ].join("\n"),
+      "utf8",
+    );
+    const target = path.join(pluginDir, "dist", "scripts", "autoresearch.mjs");
+    await writeFile(target, "export const staleRuntime = true;\n", "utf8");
+    const oldDate = new Date(Date.now() - 10_000);
+    const newDate = new Date();
+    await utimes(target, oldDate, oldDate);
+    await utimes(path.join(pluginDir, "scripts", "autoresearch.ts"), newDate, newDate);
+
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+    const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+      releaseBaseUrl: "http://127.0.0.1:1",
+    });
+
+    assert.equal(
+      await readFile(new URL(runtimeHref), "utf8"),
+      "export const rebuiltRuntime = true;\n",
+    );
   });
 });
 

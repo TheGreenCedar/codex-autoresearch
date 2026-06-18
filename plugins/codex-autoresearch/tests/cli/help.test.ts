@@ -33,6 +33,7 @@ test("full help preserves advanced and maintainer commands", () => {
   assert.match(help, /session artifacts are excluded by default/);
   assert.match(help, /setup-plan --cwd <project> .*--direction lower\|higher/);
   assert.match(help, /setup --cwd <project> .*--direction lower\|higher/);
+  assert.match(help, /research-start --cwd <project> .*--skip-init/);
   assert.match(help, /clear --cwd <project>/);
   assert.match(help, /ledger-doctor --cwd <project> \[--json\] \[--repair --yes\]/);
   assert.doesNotMatch(help, /Run `--help --all`/);

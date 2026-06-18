@@ -5042,8 +5042,13 @@ async function researchStart(args: LooseObject) {
     bestDirection: "lower",
     benchmarkCommand,
   });
-  const lint = await benchmarkLint({ cwd: workDir });
-  const doctor = await doctorSession({ cwd: workDir, checkBenchmark: true, explain: true });
+  const lint = await benchmarkLint({ cwd: workDir, metricName: "quality_gap" });
+  const doctor = await doctorSession({
+    cwd: workDir,
+    checkBenchmark: true,
+    explain: true,
+    metricName: "quality_gap",
+  });
   let baselinePacket: LooseObject | null = null;
   let baselineLogResult: LooseObject | null = null;
   if (shouldLogBaseline) {
@@ -8621,6 +8626,8 @@ function currentQualityGapSlug(workDir: string) {
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
   const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state: LooseObject = await publicState({ ...args, compact: false });
+  const primaryMetricName =
+    args.metric_name || args.metricName || config.metricName || state.config.metricName || "metric";
   const issues = [];
   const warnings = [];
   const warningDetails = [];
@@ -8775,14 +8782,13 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
           numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
           {
             envMode: doctorPacketEnvMode,
-            retainMetricNames: [state.config.metricName],
+            retainMetricNames: [primaryMetricName],
           },
         );
         benchmark.exitCode = run.exitCode;
         benchmark.timedOut = run.timedOut;
         benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
-        benchmark.emitsPrimary =
-          finiteMetric(benchmark.parsedMetrics[state.config.metricName]) != null;
+        benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[primaryMetricName]) != null;
         benchmark.progress = buildRunProgress({
           benchmark: run,
           checks: null,
@@ -8794,14 +8800,14 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
             `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
           );
         } else if (!benchmark.emitsPrimary) {
-          benchmark.metricError = `Benchmark did not emit primary metric METRIC ${state.config.metricName}=<number>.`;
+          benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
           issues.push(benchmark.metricError);
         }
         const driftWarning = benchmarkDriftWarning({
-          currentMetric: benchmark.parsedMetrics[state.config.metricName],
+          currentMetric: benchmark.parsedMetrics[primaryMetricName],
           bestMetric: state.best,
           direction: state.config.bestDirection,
-          metricName: state.config.metricName,
+          metricName: primaryMetricName,
         });
         if (driftWarning) warnings.push(driftWarning);
       }
@@ -8813,6 +8819,8 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     nextAction =
       String(runtimeAuthority.blocker || "").trim() ||
       "Inspect or refresh the installed plugin runtime before claiming installed behavior.";
+  } else if (loopAuthority.canonicalNextAction?.safeAction === "ledger-doctor") {
+    nextAction = "Run ledger-doctor before another packet.";
   } else if (loopAuthority.nextAction) {
     nextAction = loopAuthority.nextAction;
   } else if (issues.some((issue: any) => /contract changed/i.test(issue))) {
@@ -8838,10 +8846,15 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
         recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
       }
     : null;
-  const activeBenchmarkContractEntry = latestBenchmarkContractEntry(workDir, state);
+  const activeBenchmarkContractEntry =
+    state.code === "ledger_jsonl_invalid" ? null : latestBenchmarkContractEntry(workDir, state);
   const contractDiagnostics = benchmarkContractDiagnostics({
-    state: loadSessionState(workDir, args.readCache),
+    state,
   });
+  const continuationState =
+    state.code === "ledger_jsonl_invalid"
+      ? { current: [], allRecords: [], ...state }
+      : currentState(workDir);
   const benchmarkContractChanged = warningDetails.some(
     (detail: any) => detail?.code === "benchmark_contract_changed",
   );
@@ -8885,7 +8898,7 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
     warnings,
     warningDetails,
     nextAction,
-    continuation: loopContinuation(workDir, currentState(workDir), config, "doctor"),
+    continuation: loopContinuation(workDir, continuationState, config, "doctor"),
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
   return result;
