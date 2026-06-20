@@ -3418,6 +3418,14 @@ test("dashboard renders strategy lanes and evidence status classes", async () =>
   const entries = [
     dashboardConfigEntry({ name: "lane path", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    {
+      type: "run",
+      run: 2,
+      metric: 5.2,
+      status: "checks_failed",
+      description: "Checks failed",
+      confidence: 1,
+    },
   ];
 
   const { dom, getById } = await runDashboard(
@@ -3449,6 +3457,10 @@ test("dashboard renders strategy lanes and evidence status classes", async () =>
     dom.window.document.querySelectorAll('[data-evidence-status="suspicious"]').length >= 1,
     true,
   );
+  assert.ok(
+    dom.window.document.querySelector('.segmented-control button.active[aria-pressed="true"]'),
+  );
+  assert.ok(dom.window.document.querySelector(".legend-swatch.checks_failed"));
 });
 
 test("dashboard reports completed-only lanes without inflating active readiness", async () => {
@@ -3510,6 +3522,40 @@ test("dashboard responsive styles keep readiness strip two-up until mobile", () 
   assert.match(
     mobileBlock,
     /\.toolbar-controls,[\s\S]*?\.signal-strip\s*\{[\s\S]*?grid-template-columns:\s*1fr/,
+  );
+});
+
+test("dashboard contrast tokens cover reported a11y targets", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const variables = cssHexVariables(css);
+  const tealDark = requiredCssVariable(variables, "--teal-dark");
+  const amberDark = requiredCssVariable(variables, "--amber-dark");
+
+  assertContrastAtLeast(tealDark, "#ffffff", 4.5, "active segmented control");
+  assertContrastAtLeast(amberDark, "#f5e6c2", 4.5, "warning evidence pill text");
+  assertContrastAtLeast(amberDark, "#ffffff", 3, "amber non-text indicators");
+  assert.match(
+    extractCssBlock(css, ".segmented-control button.active"),
+    /background:\s*var\(--teal-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".evidence-chip.evidence-suspicious"),
+    /border-left-color:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".strategy-lane-card .status-pill.warn"),
+    /border-color:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".legend-swatch.checks_failed"),
+    /background:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".chart-point-button:focus-visible .chart-point-dot"),
+    /0 0 0 6px var\(--amber-dark\)/,
   );
 });
 
@@ -4635,6 +4681,62 @@ function assertNoMutatingDashboardCommands(value: unknown) {
   assert.doesNotMatch(commands, /\b(?:serve|export|benchmark-lint)\b/i);
   assert.doesNotMatch(commands, /--check-benchmark\b/i);
   assert.doesNotMatch(commands, /\s--\s+\S/i);
+}
+
+function cssHexVariables(css: string) {
+  const root = extractCssBlock(css, ":root");
+  const variables = new Map<string, string>();
+  for (const match of root.matchAll(/(--[\w-]+):\s*(#[\da-fA-F]{6})\s*;/g)) {
+    variables.set(match[1]!, match[2]!);
+  }
+  return variables;
+}
+
+function requiredCssVariable(variables: ReadonlyMap<string, string>, name: string) {
+  const value = variables.get(name);
+  assert.ok(value, `Missing CSS variable ${name}`);
+  return value;
+}
+
+function assertContrastAtLeast(
+  foreground: string,
+  background: string,
+  minimum: number,
+  label: string,
+) {
+  const ratio = contrastRatio(foreground, background);
+  assert.ok(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} is below ${minimum}`);
+}
+
+function contrastRatio(foreground: string, background: string) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance(hex: string) {
+  const [redChannel, greenChannel, blueChannel] = hexToRgb(hex);
+  const red = relativeColorChannel(redChannel);
+  const green = relativeColorChannel(greenChannel);
+  const blue = relativeColorChannel(blueChannel);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function relativeColorChannel(channel: number) {
+  const normalized = channel / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const value = hex.replace("#", "");
+  assert.match(value, /^[\da-fA-F]{6}$/);
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
 }
 
 function extractCssBlock(css: string, marker: string) {
