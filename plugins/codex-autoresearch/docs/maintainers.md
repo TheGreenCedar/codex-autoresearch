@@ -90,6 +90,15 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 Before publishing, inspect the package artifact itself. Use dry-run pack output
 for routine review, then create and extract a real tarball for release smoke.
+Dashboard runtime assets are package output. `prepack`, `npm run check`, and
+the release workflow must build `assets/dashboard-build/dashboard-app.js` and
+`assets/dashboard-build/dashboard-app.css` before `npm pack`. The source
+checkout keeps failing clearly if those files are absent: run
+`npm run build:dashboard` from `plugins/codex-autoresearch` before serving or
+exporting dashboards. Package checks must assert both dashboard assets are in
+the tarball and smoke an extracted-package dashboard export, not just launcher
+help.
+
 The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
 and ignored in the Git tree. If a Git marketplace source checkout is missing
 `dist/`, the CLI launcher calls `scripts/bootstrap-runtime.mjs` to download the
@@ -99,7 +108,8 @@ exact tarball, verify the packaged name/version, and only then extract `dist/`
 into the plugin cache before importing the runtime. A publishable release
 tarball must include the built runtime, publish the adjacent checksum asset,
 exclude authored source and tests, ship no MCP launcher/config, and pass
-`node <extracted-package>/scripts/autoresearch.mjs --help`.
+`node <extracted-package>/scripts/autoresearch.mjs --help` plus an extracted
+package dashboard export smoke.
 
 Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 

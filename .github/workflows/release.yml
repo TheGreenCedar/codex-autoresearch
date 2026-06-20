@@ -170,6 +170,16 @@ jobs:
           tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
           node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
           node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/finalize-autoresearch.mjs" --help
+          mkdir -p "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke"
+          printf '%s\n' \
+            '{"type":"config","name":"release dashboard smoke","metricName":"quality_gap","metricUnit":"gaps","bestDirection":"lower"}' \
+            '{"type":"run","run":1,"status":"measure","metric":1,"description":"Release dashboard export smoke."}' \
+            > "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/autoresearch.jsonl"
+          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" export \
+            --cwd "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke" \
+            --output dashboard-smoke.html
+          grep -q 'id="dashboard-root"' "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/dashboard-smoke.html"
+          grep -q 'release dashboard smoke' "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/dashboard-smoke.html"
 
       - name: Create GitHub release with tarball
         env:
