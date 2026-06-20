@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -10,6 +10,7 @@ import {
   resolveApproval,
 } from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
+import { registryPathForWorkDir } from "../lib/dashboard-server-registry.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -21,7 +22,10 @@ import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.j
 import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
 import { buildResourcePreflight } from "../lib/process-governor.js";
+import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
+import { appendJsonl, jsonlPath, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
+import { resolveSessionPaths } from "../lib/session-paths.js";
 import {
   codeStoryLanguageSupportFrictionFixtureEntries,
   fixtureJsonl,
@@ -31,6 +35,78 @@ import { withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const withTempDir = (name: string, fn: (dir: string) => Promise<void>) =>
   withNamedTempDir("autoresearch-control-plane", name, fn);
+
+test("session path resolver preserves repo-local defaults", async () => {
+  await withTempDir("session-paths-repo-defaults", async (dir) => {
+    const sessionCwd = path.join(dir, "session-cwd");
+    const workDir = path.join(dir, "target");
+    const paths = resolveSessionPaths({ sessionCwd, workDir });
+
+    assert.equal(paths.mode, "repo");
+    assert.equal(paths.targetCwd, path.resolve(workDir));
+    assert.equal(paths.sessionCwd, path.resolve(sessionCwd));
+    assert.equal(paths.sessionDir, path.resolve(workDir));
+    assert.equal(paths.ledgerPath, path.join(workDir, "autoresearch.jsonl"));
+    assert.equal(paths.configPath, path.join(sessionCwd, "autoresearch.config.json"));
+    assert.equal(paths.notesPath, path.join(workDir, "autoresearch.md"));
+    assert.equal(paths.ideasPath, path.join(workDir, "autoresearch.ideas.md"));
+    assert.equal(paths.researchRoot, path.join(workDir, "autoresearch.research"));
+    assert.equal(paths.dashboardExportPath, path.join(workDir, "autoresearch-dashboard.html"));
+    assert.equal(paths.lastRunFallbackPath, path.join(workDir, "autoresearch.last-run.json"));
+    assert.equal(paths.progressFallbackPath, path.join(workDir, "autoresearch.progress.json"));
+    assert.equal(
+      paths.pendingLogTransactionFallbackPath,
+      path.join(workDir, "autoresearch.pending-transaction.json"),
+    );
+    assert.ok(paths.clearTargets.includes(path.join(workDir, "autoresearch.config.json")));
+    assert.ok(paths.clearTargets.includes(path.join(sessionCwd, "autoresearch.config.json")));
+  });
+});
+
+test("session record ledger helpers use the repo-local resolver path", async () => {
+  await withTempDir("session-paths-ledger", async (dir) => {
+    const paths = resolveSessionPaths({ workDir: dir });
+
+    assert.equal(jsonlPath(dir), paths.ledgerPath);
+    appendJsonl(dir, { type: "config", metricName: "score", bestDirection: "higher" });
+
+    assert.deepEqual(readJsonl(dir), [
+      { type: "config", metricName: "score", bestDirection: "higher" },
+    ]);
+  });
+});
+
+test("research path guard roots scratchpads through the repo-local resolver", async () => {
+  await withTempDir("session-paths-research", async (dir) => {
+    const paths = resolveSessionPaths({ workDir: dir });
+    const researchPath = await resolveSafeResearchPath(dir, "project-study");
+
+    assert.equal(researchPath.root, paths.researchRoot);
+    assert.equal(researchPath.outputDir, path.join(paths.researchRoot, "project-study"));
+  });
+});
+
+test("dashboard serve registry keeps Git-private storage and uses repo-local fallback", async () => {
+  await withTempDir("session-paths-dashboard-registry", async (dir) => {
+    const nonGit = path.join(dir, "plain");
+    const gitRepo = path.join(dir, "repo");
+    await mkdir(nonGit, { recursive: true });
+    await mkdir(path.join(gitRepo, ".git"), { recursive: true });
+
+    assert.equal(
+      registryPathForWorkDir(nonGit),
+      path.join(
+        resolveSessionPaths({ workDir: nonGit }).researchRoot,
+        ".runtime",
+        "serve-registry.json",
+      ),
+    );
+    assert.equal(
+      registryPathForWorkDir(gitRepo),
+      path.join(gitRepo, ".git", "autoresearch", "serve-registry.json"),
+    );
+  });
+});
 
 test("fixed control config normalizes command patterns and invalidators", () => {
   const fixedControl = normalizeFixedControlConfig({

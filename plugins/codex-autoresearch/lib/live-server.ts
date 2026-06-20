@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
 import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
+import { resolveSessionPaths } from "./session-paths.js";
 
 type LooseObject = Record<string, unknown>;
 
@@ -93,7 +94,9 @@ export async function serveAutoresearch(args: LooseObject) {
           );
           return;
         }
-        const ledgerLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+        const ledgerLines = await readBoundedLedgerLines(
+          resolveSessionPaths({ workDir }).ledgerPath,
+        );
         send(
           res,
           200,
@@ -405,13 +408,14 @@ async function liveSessionSnapshot(
   ) {
     return { fingerprint: options.cached.fingerprint, stamp };
   }
+  const sessionPaths = resolveSessionPaths({ workDir });
   const parts = await Promise.all([
-    fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
-    fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.last-run.json"), "autoresearch.last-run.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
-    fingerprintTree(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
+    fingerprintPath(sessionPaths.ledgerPath, "autoresearch.jsonl"),
+    fingerprintPath(sessionPaths.configPath, "autoresearch.config.json"),
+    fingerprintPath(sessionPaths.lastRunFallbackPath, "autoresearch.last-run.json"),
+    fingerprintPath(sessionPaths.notesPath, "autoresearch.md"),
+    fingerprintPath(sessionPaths.ideasPath, "autoresearch.ideas.md"),
+    fingerprintTree(sessionPaths.researchRoot, "autoresearch.research"),
   ]);
   return { fingerprint: parts.join("|"), stamp };
 }
@@ -419,13 +423,14 @@ async function liveSessionSnapshot(
 async function liveSessionStamp(workDir: string): Promise<string> {
   // TTL-bounded dashboard reuse compares this stamp; a stale stamp can serve briefly
   // until the next health poll notices ledger/config drift.
+  const sessionPaths = resolveSessionPaths({ workDir });
   const parts = await Promise.all([
-    fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
-    fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.last-run.json"), "autoresearch.last-run.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
+    fingerprintPath(sessionPaths.ledgerPath, "autoresearch.jsonl"),
+    fingerprintPath(sessionPaths.configPath, "autoresearch.config.json"),
+    fingerprintPath(sessionPaths.lastRunFallbackPath, "autoresearch.last-run.json"),
+    fingerprintPath(sessionPaths.notesPath, "autoresearch.md"),
+    fingerprintPath(sessionPaths.ideasPath, "autoresearch.ideas.md"),
+    fingerprintPath(sessionPaths.researchRoot, "autoresearch.research"),
   ]);
   return parts.join("|");
 }
@@ -488,7 +493,7 @@ async function readRedactedLedgerEntries(
   workDir: string,
   context: LooseObject,
 ): Promise<LedgerReadout> {
-  const boundedLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+  const boundedLines = await readBoundedLedgerLines(resolveSessionPaths({ workDir }).ledgerPath);
   const parsedEntries = boundedLines.lines.flatMap((line) => {
     try {
       const entry = redactEvidenceObject(JSON.parse(line), context);

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { productClaimCoverageFingerprintMaterial } from "./product-claim-coverage.js";
+import { jsonlPath } from "./session-records.js";
 
 export type LooseObject = Record<string, any>;
 
@@ -18,7 +18,7 @@ export async function readAutoresearchLedger(
   { mode = "silent-empty" }: { mode?: LedgerReadMode } = {},
 ): Promise<LooseObject[]> {
   try {
-    const text = await fsp.readFile(path.join(cwd, "autoresearch.jsonl"), "utf8");
+    const text = await fsp.readFile(jsonlPath(cwd), "utf8");
     return text
       .split(/\r?\n/)
       .map((line, index) => {

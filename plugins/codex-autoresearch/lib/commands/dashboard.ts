@@ -34,7 +34,7 @@ export interface DashboardCommandDeps {
   pluginRoot: string;
   pluginVersion: string;
   readJsonl: (workDir: string) => LooseObject[];
-  resolveOutputInside: (workDir: string, output: string) => string;
+  resolveOutputInside: (workDir: string, output?: string) => string;
   resolveWorkDir: (value: string) => { workDir: string; config: LooseObject; sessionCwd?: string };
   serveAutoresearch: (options: LooseObject) => Promise<LooseObject>;
   shellQuote: (value: string) => string;
@@ -138,7 +138,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     emitProgress(args, "export", `reading session ledger from ${workDir}`);
     const entries = deps.readJsonl(workDir);
     if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
-    const output = deps.resolveOutputInside(workDir, args.output || "autoresearch-dashboard.html");
+    const output = deps.resolveOutputInside(workDir, args.output);
     const commands = deps.dashboardCommands(workDir);
     const generatedAt = new Date().toISOString();
     const showcaseExport = deps.boolOption(args.showcase ?? args.showcaseMode, false);

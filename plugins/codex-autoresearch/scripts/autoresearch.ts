@@ -191,11 +191,20 @@ import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
+import {
+  AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_RESEARCH_DIR,
+  AUTORESEARCH_SESSION_FILES,
+  researchDirPathForSession,
+  resolveSessionPaths,
+  type SessionPaths,
+} from "../lib/session-paths.js";
 import { indexTaskArtifacts } from "../lib/task-artifact-indexer.js";
 
 type LooseObject = Record<string, any>;
 type WorkDirResolution = {
   config: LooseObject;
+  sessionPaths: SessionPaths;
   sessionCwd: string;
   workDir: string;
 };
@@ -221,26 +230,15 @@ interface LocalProcessResult {
   stdout: string;
 }
 
-const SESSION_FILES = [
-  "autoresearch.jsonl",
-  "autoresearch.md",
-  "autoresearch.ideas.md",
-  "autoresearch.sh",
-  "autoresearch.ps1",
-  "autoresearch.checks.sh",
-  "autoresearch.checks.ps1",
-  "autoresearch.config.json",
-  "autoresearch.last-run.json",
-  "autoresearch.pending-transaction.json",
-];
+const SESSION_FILES: readonly string[] = AUTORESEARCH_SESSION_FILES;
 const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
   "# Codex Autoresearch ledger files",
   "autoresearch.jsonl text eol=lf",
   "autoresearch.md text eol=lf",
   "autoresearch.ideas.md text eol=lf",
 ].join("\n");
-const RESEARCH_DIR = "autoresearch.research";
-const AUTORESEARCH_OWNED_FILES = ["autoresearch-dashboard.html"];
+const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
+const AUTORESEARCH_OWNED_FILES = [AUTORESEARCH_DASHBOARD_FILE];
 const AUTORESEARCH_OWNED_DIRS = [RESEARCH_DIR, "target/autoresearch", ".autoresearch-cache"];
 
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
@@ -267,7 +265,6 @@ const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
-const PENDING_LOG_TRANSACTION_FALLBACK_FILE = "autoresearch.pending-transaction.json";
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "runtimeDriftSummary",
   "gateQuality",
@@ -431,8 +428,11 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
   });
 }
 
-function resolveOutputInside(workDir: string, output: string) {
-  const resolved = resolvePathInsideRootSync(workDir, output || "autoresearch-dashboard.html");
+function resolveOutputInside(workDir: string, output?: string) {
+  const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
+  const resolved = output
+    ? resolvePathInsideRootSync(workDir, output)
+    : { absolutePath: defaultOutput, inside: true, relativePath: AUTORESEARCH_DASHBOARD_FILE };
   if (!resolved.inside) {
     throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
   }
@@ -461,13 +461,13 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 function readConfig(sessionCwd: string): LooseObject {
-  const configPath = path.join(sessionCwd, "autoresearch.config.json");
+  const configPath = resolveSessionPaths({ sessionCwd, workDir: sessionCwd }).configPath;
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
 function runtimeConfigPath(sessionCwd: string): string {
-  return path.join(sessionCwd, "autoresearch.config.json");
+  return resolveSessionPaths({ sessionCwd, workDir: sessionCwd }).configPath;
 }
 
 function resolveWorkDir(cwdArg: unknown): WorkDirResolution {
@@ -479,7 +479,12 @@ function resolveWorkDir(cwdArg: unknown): WorkDirResolution {
   if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
     throw new Error(`Working directory does not exist: ${workDir}`);
   }
-  return { sessionCwd, workDir, config };
+  return {
+    sessionCwd,
+    workDir,
+    config,
+    sessionPaths: resolveSessionPaths({ sessionCwd, workDir }),
+  };
 }
 
 function assetPath(fileName: string) {
@@ -3171,7 +3176,7 @@ function researchRelativeDir(slug: string) {
 }
 
 function researchDirPath(workDir: string, slug: string) {
-  return path.join(workDir, RESEARCH_DIR, slug);
+  return researchDirPathForSession(workDir, slug);
 }
 
 function renderResearchBenchmarkScript(slug: string, shellKind: string) {
@@ -3671,7 +3676,7 @@ async function gitPrivatePath(cwd: string, relativePath: string) {
 }
 
 function fallbackPendingLogTransactionPath(workDir: string) {
-  return path.join(workDir, PENDING_LOG_TRANSACTION_FALLBACK_FILE);
+  return resolveSessionPaths({ workDir }).pendingLogTransactionFallbackPath;
 }
 
 async function pendingLogTransactionPath(workDir: string, inGit?: boolean) {
@@ -3706,7 +3711,7 @@ async function writePendingLogTransaction(workDir: string, inGit: boolean, recei
         version: 1,
         createdAt: new Date().toISOString(),
         workDir,
-        ledgerPath: path.join(workDir, "autoresearch.jsonl"),
+        ledgerPath: resolveSessionPaths({ workDir }).ledgerPath,
         ...receipt,
       },
       null,
@@ -6228,14 +6233,8 @@ async function clearSession(args: any) {
   if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) {
     throw new Error("clear requires --yes for CLI confirmation");
   }
-  const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const targets = new Set([
-    ...SESSION_FILES.map((file: any) => path.join(workDir, file)),
-    await resolveLastRunPath(workDir),
-    path.join(workDir, RESEARCH_DIR),
-    path.join(workDir, "autoresearch-dashboard.html"),
-    path.join(sessionCwd, "autoresearch.config.json"),
-  ]);
+  const { sessionCwd, workDir, sessionPaths } = resolveWorkDir(args.working_dir || args.cwd);
+  const targets = new Set([...sessionPaths.clearTargets, await resolveLastRunPath(workDir)]);
   const deleted = [];
   const wouldDelete = [];
   const missing = [];
@@ -6267,14 +6266,14 @@ async function resolveLastRunPath(workDir: string) {
   if (await insideGitRepo(workDir)) {
     return await gitPrivatePath(workDir, "autoresearch/last-run.json");
   }
-  return path.join(workDir, "autoresearch.last-run.json");
+  return resolveSessionPaths({ workDir }).lastRunFallbackPath;
 }
 
 async function resolveProgressPath(workDir: string) {
   if (await insideGitRepo(workDir)) {
     return await gitPrivatePath(workDir, "autoresearch/progress.json");
   }
-  return path.join(workDir, "autoresearch.progress.json");
+  return resolveSessionPaths({ workDir }).progressFallbackPath;
 }
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
@@ -6610,7 +6609,7 @@ function looksLikeProcessEvidence(value: LooseObject): boolean {
 
 async function readLastRunPacket(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
   if (!fs.existsSync(readablePath))
     throw new Error(
@@ -6625,7 +6624,7 @@ async function readLastRunPacket(workDir: string) {
 
 async function lastRunPacketFingerprint(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
   const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
   if (!fs.existsSync(readablePath)) return "";
   return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
@@ -6805,7 +6804,7 @@ function lastRunConfigSnapshot(config: LooseObject = {}) {
 
 async function deleteLastRunPacket(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = path.join(workDir, "autoresearch.last-run.json");
+  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
   for (const target of new Set([filePath, legacyPath])) {
     await fsp.rm(target, { force: true }).catch(() => {});
   }

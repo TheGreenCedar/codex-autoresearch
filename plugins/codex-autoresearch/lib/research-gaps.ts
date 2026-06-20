@@ -7,8 +7,8 @@ import {
   parseQualityGaps,
   researchDirPath,
   safeSlug,
-  RESEARCH_DIR,
 } from "./session-core.js";
+import { resolveSessionPaths } from "./session-paths.js";
 
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
@@ -133,7 +133,7 @@ export function resolveResearchSlugForQualityGapSync(
 }
 
 export function activeQualityGapSlugCandidatesSync(workDir = process.cwd()): SlugCandidate[] {
-  const researchRoot = path.join(path.resolve(workDir), RESEARCH_DIR);
+  const researchRoot = resolveSessionPaths({ workDir: path.resolve(workDir) }).researchRoot;
   if (!fs.existsSync(researchRoot)) return [];
   return fs
     .readdirSync(researchRoot, { withFileTypes: true })
