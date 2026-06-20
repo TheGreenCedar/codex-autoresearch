@@ -343,7 +343,8 @@ function ChartDot({
         type="button"
         className="chart-point-button"
         aria-haspopup="dialog"
-        aria-describedby="trend-chart-selected chart-keyboard-help"
+        aria-current={payload.runNumber === selectedRunNumber ? "true" : undefined}
+        aria-describedby="chart-keyboard-help"
         aria-label={chartPointAriaLabel(payload)}
         data-chart-run={payload.runNumber}
         tabIndex={tabbable ? 0 : -1}
