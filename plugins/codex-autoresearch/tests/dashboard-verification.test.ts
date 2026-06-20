@@ -943,9 +943,14 @@ test("dashboard chart does not place interactive point buttons under an image ro
 
   assert.equal(chart.getAttribute("role"), null);
   assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
+  assert.match(
+    getById("chart-keyboard-help").textContent || "",
+    /arrow keys move through history/i,
+  );
   assert.match(chartSource, /className="chart-point-button"/);
   for (const button of buttons) {
     assert.equal(button.closest('[role="img"]'), null);
+    assert.match(button.getAttribute("aria-describedby") || "", /chart-keyboard-help/);
   }
   dom.window.close();
 });
@@ -3210,6 +3215,23 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
         },
       ],
     },
+    finalizationPressure: {
+      status: "medium",
+      recommendation: "Preview finalization after blocked notes are resolved.",
+    },
+    processHygiene: {
+      status: "needs-attention",
+      mode: "live-server",
+      activeCwd: "C:/repo/with/a/very/long/path",
+      pluginVersion: "2.4.0",
+      duplicateServerDetection: "checked C:/repo/.autoresearch/servers.json",
+      staleServerDetection: "checked C:/repo/.autoresearch/stale-server.json",
+      warnings: ["Runtime cache fingerprint needs review."],
+    },
+    watchdogSummary: {
+      status: "tracking",
+      recommendation: "Continue from the decision envelope before retrying packets.",
+    },
     nextBestAction: {
       priority: "Review",
       title: "Preview finalization",
@@ -3251,6 +3273,18 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
   assert.match(getById("finalization-checklist-title").textContent, /Review packet gated/);
   assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
+  assert.match(getById("v2-release-signals").textContent || "", /Preview gated/);
+  assert.match(
+    getById("v2-release-signals").textContent || "",
+    /Preview blocked until gates clear/,
+  );
+  assert.doesNotMatch(getById("v2-release-signals").textContent || "", /Preview ready/);
+  assert.match(getById("process-hygiene-detail").textContent || "", /Runtime cache fingerprint/);
+  const provenance = getById("process-hygiene-detail").querySelector("details");
+  assert.ok(provenance);
+  assert.equal(provenance.open, false);
+  assert.match(provenance.querySelector("summary")?.textContent || "", /Runtime provenance/);
+  assert.match(provenance.textContent || "", /C:\/repo\/with\/a\/very\/long\/path/);
 });
 
 test("dashboard keeps the chart first while rendering v2 readiness signals", async () => {
