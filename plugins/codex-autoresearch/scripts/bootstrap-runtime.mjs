@@ -12,6 +12,7 @@ const LOCK_TIMEOUT_MS = 120_000;
 const LOCK_RETRY_MS = 250;
 const PACKAGE_NAME = "codex-autoresearch";
 const RELEASE_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
+const DASHBOARD_BUILD_ASSETS = ["dashboard-app.js", "dashboard-app.css"];
 
 export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const { install = true } = options;
@@ -20,18 +21,42 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
   await rebuildStaleSourceRuntime(pluginRoot, target);
-  if (await fileExists(target)) return pathToFileURL(target).href;
+  if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) {
+    return pathToFileURL(target).href;
+  }
   if (!install) throw missingRuntimeError(pluginRoot, target);
 
   await withRuntimeInstallLock(pluginRoot, async () => {
-    if (await fileExists(target)) return;
+    if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) return;
     await installRuntimeFromRelease(pluginRoot, options);
     if (!(await fileExists(target))) {
       throw new Error(`Release runtime did not provide ${path.relative(pluginRoot, target)}.`);
     }
+    if (!(await dashboardBuildReady(pluginRoot))) {
+      throw new Error("Release runtime did not provide assets/dashboard-build/.");
+    }
   });
 
   return pathToFileURL(target).href;
+}
+
+async function dashboardRuntimeReady(pluginRoot) {
+  if (await dashboardBuildReady(pluginRoot)) return true;
+  return await isSourceDevelopmentCheckout(pluginRoot);
+}
+
+async function dashboardBuildReady(pluginRoot) {
+  const buildDir = path.join(pluginRoot, "assets", "dashboard-build");
+  return (
+    await Promise.all(DASHBOARD_BUILD_ASSETS.map((asset) => fileExists(path.join(buildDir, asset))))
+  ).every(Boolean);
+}
+
+async function isSourceDevelopmentCheckout(pluginRoot) {
+  return (
+    (await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts"))) &&
+    (await fileExists(path.join(pluginRoot, "tsdown.config.ts")))
+  );
 }
 
 async function rebuildStaleSourceRuntime(pluginRoot, target) {
@@ -98,14 +123,29 @@ async function installRuntimeFromRelease(pluginRoot, options = {}) {
     await fs.mkdir(extractDir, { recursive: true });
     await run("tar", ["-xzf", tarballPath, "-C", extractDir]);
 
-    const extractedDist = path.join(extractDir, "package", "dist");
+    const extractedPackage = path.join(extractDir, "package");
+    const extractedDist = path.join(extractedPackage, "dist");
     if (!(await fileExists(extractedDist))) {
       throw new Error(`Release tarball ${artifacts.tarballName} does not contain dist/.`);
     }
-    await verifyReleasePackageManifest(path.join(extractDir, "package"), version);
+    const extractedDashboardBuild = path.join(extractedPackage, "assets", "dashboard-build");
+    if (!(await dashboardBuildReady(extractedPackage))) {
+      throw new Error(
+        `Release tarball ${artifacts.tarballName} does not contain assets/dashboard-build/.`,
+      );
+    }
+    await verifyReleasePackageManifest(extractedPackage, version);
 
     await fs.rm(path.join(pluginRoot, "dist"), { recursive: true, force: true });
     await fs.cp(extractedDist, path.join(pluginRoot, "dist"), { recursive: true });
+    await fs.rm(path.join(pluginRoot, "assets", "dashboard-build"), {
+      recursive: true,
+      force: true,
+    });
+    await fs.mkdir(path.join(pluginRoot, "assets"), { recursive: true });
+    await fs.cp(extractedDashboardBuild, path.join(pluginRoot, "assets", "dashboard-build"), {
+      recursive: true,
+    });
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

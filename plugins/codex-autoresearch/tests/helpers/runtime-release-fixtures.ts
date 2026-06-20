@@ -52,6 +52,9 @@ export async function createRuntimeReleaseAsset(
     packageName = "codex-autoresearch",
     checksumFileName,
     checksumHash,
+    dashboardAppText = "window.__CODEX_AUTORESEARCH_DASHBOARD_APP__ = true;\n",
+    dashboardCssText = "#dashboard-root { color: rgb(12, 34, 56); }\n",
+    runtimeText = "export const hydratedRuntime = true;\n",
     writeChecksum = true,
   } = {},
 ) {
@@ -72,7 +75,18 @@ export async function createRuntimeReleaseAsset(
   );
   await writeFile(
     path.join(packageDir, "dist", "scripts", "autoresearch.mjs"),
-    "export const hydratedRuntime = true;\n",
+    runtimeText,
+    "utf8",
+  );
+  await mkdir(path.join(packageDir, "assets", "dashboard-build"), { recursive: true });
+  await writeFile(
+    path.join(packageDir, "assets", "dashboard-build", "dashboard-app.js"),
+    dashboardAppText,
+    "utf8",
+  );
+  await writeFile(
+    path.join(packageDir, "assets", "dashboard-build", "dashboard-app.css"),
+    dashboardCssText,
     "utf8",
   );
 
