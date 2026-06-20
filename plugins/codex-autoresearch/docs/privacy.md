@@ -22,7 +22,7 @@ Benchmark and checks commands are not sandboxed. They run as local shell process
 
 Autoresearch records bounded evidence from those commands so later sessions can resume the loop. It attempts best-effort redaction for common secrets, credentials, home paths, and env-file references, but redaction is not a confidentiality guarantee. Do not print secrets, tokens, private customer data, credentials, or sensitive local paths into benchmark output, checks output, ASI, descriptions, or artifact files.
 
-Use `--command-file` and `--packet-env-file` for command text and environment overrides that need reviewable local files. Prefer project-local wrappers such as `autoresearch.sh` or `autoresearch.ps1` when benchmark setup is sensitive.
+Use `--command-file` and `--packet-env-file` for command text and environment overrides that need reviewable local files. Prefer project-local wrappers such as `autoresearch.sh` or `autoresearch.ps1` when benchmark setup is sensitive. Outside-workdir option files are allowed for trusted local CLI use, but persisted last-run packets replace their paths with placeholders.
 
 ## External services
 

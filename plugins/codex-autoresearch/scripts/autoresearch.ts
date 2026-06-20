@@ -6344,6 +6344,7 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
     stored.packetEvidence = redactEvidenceObject(stored.packetEvidence, context);
   }
   redactRunPacketProcessEvidence(stored.run, context);
+  redactBenchmarkContractForStorage(stored.run?.benchmarkContract, context);
   if (stored.doctor) stored.doctor = redactEvidenceObject(stored.doctor, context);
   if (stored.history) {
     if (stored.history.command) {
@@ -6351,7 +6352,91 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
     }
     redactBenchmarkContractForStorage(stored.history.benchmarkContract, context);
   }
+  applyLastRunStorageReplacements(stored, lastRunStorageReplacements(packet, context));
   return stored;
+}
+
+function lastRunStorageReplacements(packet: LooseObject, context: LooseObject) {
+  const replacements: Array<{ token: string; replacement: string }> = [];
+  addOptionPathReplacements(replacements, packet?.run?.commandFile, context, {
+    replacement: redactPathDisplay(packet?.run?.commandFile, context.workDir),
+  });
+  addOptionPathReplacements(replacements, packet?.run?.envFile, context, {
+    replacement: "<env-file>",
+    includeBasename: true,
+  });
+  addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.commandFile, context, {
+    replacement: redactPathDisplay(packet?.run?.benchmarkContract?.commandFile, context.workDir),
+  });
+  addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.envFile, context, {
+    replacement: "<env-file>",
+    includeBasename: true,
+  });
+  addOptionPathReplacements(
+    replacements,
+    packet?.history?.benchmarkContract?.commandFile,
+    context,
+    {
+      replacement: redactPathDisplay(
+        packet?.history?.benchmarkContract?.commandFile,
+        context.workDir,
+      ),
+    },
+  );
+  addOptionPathReplacements(replacements, packet?.history?.benchmarkContract?.envFile, context, {
+    replacement: "<env-file>",
+    includeBasename: true,
+  });
+  return replacements
+    .filter((entry) => entry.token && entry.token !== entry.replacement)
+    .sort((a, b) => b.token.length - a.token.length);
+}
+
+function addOptionPathReplacements(
+  replacements: Array<{ token: string; replacement: string }>,
+  value: unknown,
+  context: LooseObject,
+  options: { replacement: string; includeBasename?: boolean },
+) {
+  const raw = String(value || "").trim();
+  if (!raw) return;
+  const tokens = new Set([raw, raw.replace(/\\/g, "/"), raw.replace(/\//g, "\\")]);
+  const resolved = path.isAbsolute(raw)
+    ? path.resolve(raw)
+    : path.resolve(context.workDir || "", raw);
+  tokens.add(resolved);
+  tokens.add(resolved.replace(/\\/g, "/"));
+  tokens.add(resolved.replace(/\//g, "\\"));
+  if (options.includeBasename || options.replacement === "<outside-workdir>") {
+    const basename = path.basename(raw);
+    if (basename) tokens.add(basename);
+  }
+  for (const token of tokens) {
+    if (token.length > 2) replacements.push({ token, replacement: options.replacement });
+  }
+}
+
+function applyLastRunStorageReplacements(
+  value: unknown,
+  replacements: Array<{ token: string; replacement: string }>,
+): void {
+  if (!replacements.length) return;
+  if (Array.isArray(value)) {
+    for (const item of value) applyLastRunStorageReplacements(item, replacements);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (typeof child === "string") {
+      let text = child;
+      for (const { token, replacement } of replacements) {
+        text = text.split(token).join(replacement);
+      }
+      (value as LooseObject)[key] = text;
+      continue;
+    }
+    applyLastRunStorageReplacements(child, replacements);
+  }
 }
 
 function redactRunPacketProcessEvidence(
@@ -6405,6 +6490,12 @@ function redactBenchmarkContractForStorage(
   }
   if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
   if (value.envFile) value.envFile = "<env-file>";
+  if (Array.isArray(value.files)) {
+    for (const file of value.files) {
+      if (!file || typeof file !== "object" || !file.path) continue;
+      file.path = redactEvidenceText(redactPathDisplay(file.path, context.workDir), context);
+    }
+  }
 }
 
 const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
