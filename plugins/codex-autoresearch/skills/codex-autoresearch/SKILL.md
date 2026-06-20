@@ -19,7 +19,7 @@ The job: make one measured improvement loop trustworthy enough that a human can 
 
 - Use the short command path unless the session is ambiguous or blocked: `setup`, `doctor`, `next`, `log`, `state`, then `finalize-preview`.
 - For qualitative or deep-research improvement loops, start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It creates the scratchpad, configures `quality_gap`, validates the command, and records the first baseline as `measure` unless `--no-baseline-log` is passed.
-- Use advanced diagnostics only when needed: `onboarding-packet`, `recommend-next`, `prompt-plan`, `setup-plan`, `benchmark-inspect`, `partial-results`, `session-forensics`, `guide`, or `serve`.
+- Use advanced diagnostics only when needed. Check `node scripts/autoresearch.mjs --help --all` from the package root before naming a less common command.
 - Use `new-segment` when the active segment is maxed, stale, phase-changing, or no longer comparable.
 - Prefer CLI JSON and durable session files over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.last-run.json`, and `autoresearch.research/<slug>/`.
 - Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.

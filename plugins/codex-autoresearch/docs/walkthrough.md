@@ -36,6 +36,8 @@ Codex confirms the evidence source and research slug before creating session fil
 
 Codex creates the research scratchpad, configures the quality-gap session, and verifies the benchmark.
 
+Run the launcher from `plugins/codex-autoresearch`. `--cwd` points at the target repo or child package being improved. In this walkthrough the target is the package itself, so `--cwd .` is correct only because the command is already running from `plugins/codex-autoresearch`.
+
 ```bash
 node scripts/autoresearch.mjs research-start --cwd . --slug dashboard-study --goal "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
 ```

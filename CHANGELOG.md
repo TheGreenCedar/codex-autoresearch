@@ -4,6 +4,14 @@ All notable user-facing changes to Codex Autoresearch are recorded here.
 
 This project uses a root-only changelog because the root README is the public documentation surface for the plugin wrapper.
 
+Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
+
+## Unreleased
+
+### Changed
+
+- Clarified first-run docs after install, the first successful packet ladder, package-root versus target `--cwd`, and command-index ownership.
+
 ## 2.4.0 - 2026-06-18
 
 ### Added
