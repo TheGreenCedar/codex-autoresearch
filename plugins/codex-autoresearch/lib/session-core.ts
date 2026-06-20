@@ -26,6 +26,11 @@ import {
   refreshSessionReadCacheForLedgerStamp,
   type SessionReadCache,
 } from "./session-records.js";
+import {
+  AUTORESEARCH_RESEARCH_DIR,
+  researchDirPathForSession,
+  resolveSessionPaths,
+} from "./session-paths.js";
 
 export {
   appendJsonl,
@@ -51,7 +56,7 @@ export {
   isRejectedRunStatus,
   normalizeRunStatus,
 } from "./run-status.js";
-export const RESEARCH_DIR = "autoresearch.research";
+export const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher";
 type RunRecord = LooseObject & {
@@ -129,7 +134,7 @@ export async function pathExists(filePath: string): Promise<boolean> {
 }
 
 export function readConfig(sessionCwd: string): LooseObject {
-  const configPath = path.join(sessionCwd, "autoresearch.config.json");
+  const configPath = resolveSessionPaths({ sessionCwd, workDir: sessionCwd }).configPath;
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
@@ -1359,5 +1364,5 @@ export function researchSlugFromArgs(args: LooseObject): string {
 }
 
 export function researchDirPath(workDir: string, slug: string): string {
-  return path.join(workDir, RESEARCH_DIR, slug);
+  return researchDirPathForSession(workDir, slug);
 }

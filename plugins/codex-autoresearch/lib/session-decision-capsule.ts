@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { resolveSessionPaths } from "./session-paths.js";
+
 type LooseObject = Record<string, any>;
 
 export const SESSION_DECISION_CAPSULE_SCHEMA_VERSION = 1;
 export const SESSION_DECISION_CAPSULE_KIND = "session-decision-capsule";
-const RESEARCH_DIR = "autoresearch.research";
 
 export type SessionDecisionSeverity = "info" | "warning" | "blocker";
 export type SessionDecisionEnforcementMode = "advisory" | "bounded-next" | "hard-block";
@@ -676,7 +677,7 @@ export function readActiveSessionDecisionCapsule(
   workDir: string,
   entries: LooseObject[] = [],
 ): SessionDecisionCapsule | null {
-  const researchRoot = path.join(path.resolve(workDir), RESEARCH_DIR);
+  const researchRoot = resolveSessionPaths({ workDir }).researchRoot;
   if (!fs.existsSync(researchRoot)) return null;
   const capsules: SessionDecisionCapsule[] = [];
   for (const entry of fs.readdirSync(researchRoot, { withFileTypes: true })) {

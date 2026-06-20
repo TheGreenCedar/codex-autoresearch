@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type DashboardHealthSummary, verifyDashboardHealthSummary } from "./dashboard-health.js";
+import { resolveSessionPaths } from "./session-paths.js";
 
 type Liveness = "alive" | "dead" | "unknown";
 type CwdRelation = "same-cwd" | "different-cwd" | "unknown";
@@ -65,7 +66,11 @@ export function registryPathForWorkDir(workDir: string): string {
   const resolvedWorkDir = path.resolve(workDir);
   const gitDir = findGitDir(resolvedWorkDir);
   if (gitDir) return path.join(gitDir, "autoresearch", "serve-registry.json");
-  return path.join(resolvedWorkDir, "autoresearch.research", ".runtime", "serve-registry.json");
+  return path.join(
+    resolveSessionPaths({ workDir: resolvedWorkDir }).researchRoot,
+    ".runtime",
+    "serve-registry.json",
+  );
 }
 
 export async function readServeRegistry(
