@@ -41,6 +41,7 @@
     "typecheck:dashboard": "tsgo --project tsconfig.dashboard.json --noEmit",
     "typecheck": "run-s typecheck:node typecheck:dashboard",
     "lint": "oxlint --deny-warnings --node-plugin --promise-plugin --react-plugin --jsx-a11y-plugin --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts",
+    "audit:prod": "npm audit --omit=dev",
     "format": "oxfmt --write --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.json tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts package.json",
     "format:check": "oxfmt --check --no-error-on-unmatched-pattern dashboard/src lib scripts tests vite.dashboard.config.ts tsconfig.json tsconfig.node.json tsconfig.dashboard.json tsdown.config.ts package.json",
     "prepare": "npm run build:node",
