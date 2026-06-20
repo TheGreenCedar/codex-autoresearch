@@ -9851,6 +9851,72 @@ test("source launcher hydrates runtime only after release checksum verification"
   });
 });
 
+test("source launcher hydrates packaged dashboard assets before source-shaped export", async () => {
+  await withTempDir("runtime-hydration-dashboard-export", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await mkdir(path.join(pluginDir, "assets"), { recursive: true });
+    await writeFile(
+      path.join(pluginDir, "assets", "template.html"),
+      [
+        "<!doctype html>",
+        '<div id="dashboard-root"></div>',
+        "<style>__AUTORESEARCH_DASHBOARD_CSS__</style>",
+        "<script>__AUTORESEARCH_DASHBOARD_APP__</script>",
+        '<script type="application/json">__AUTORESEARCH_DATA_PAYLOAD__</script>',
+        '<script type="application/json">__AUTORESEARCH_META_PAYLOAD__</script>',
+      ].join("\n"),
+      "utf8",
+    );
+    await assert.rejects(
+      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
+    );
+
+    const runtimeText = [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      'import { fileURLToPath } from "node:url";',
+      "export const hydratedRuntime = true;",
+      "export function exportDashboardHtml(workDir) {",
+      '  const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");',
+      '  const template = fs.readFileSync(path.join(pluginRoot, "assets", "template.html"), "utf8");',
+      '  const app = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js"), "utf8");',
+      '  const css = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css"), "utf8");',
+      "  const html = template",
+      '    .replace("__AUTORESEARCH_DASHBOARD_CSS__", css)',
+      '    .replace("__AUTORESEARCH_DASHBOARD_APP__", app)',
+      '    .replace("__AUTORESEARCH_DATA_PAYLOAD__", JSON.stringify([{ name: "package dashboard smoke" }]))',
+      '    .replace("__AUTORESEARCH_META_PAYLOAD__", JSON.stringify({ deliveryMode: "static-export" }));',
+      '  const outputPath = path.join(workDir, "autoresearch-dashboard.html");',
+      '  fs.writeFileSync(outputPath, html, "utf8");',
+      "  return outputPath;",
+      "}",
+    ].join("\n");
+    const release = await createRuntimeReleaseAsset(dir, {
+      dashboardAppText: 'window.__hydratedDashboardAsset = "release-dashboard-app";\n',
+      dashboardCssText: "#dashboard-root { color: rgb(12, 34, 56); }\n",
+      runtimeText: `${runtimeText}\n`,
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"));
+      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"));
+
+      const runtime = await import(`${runtimeHref}?dashboard=${Date.now()}`);
+      const outputPath = runtime.exportDashboardHtml(dir);
+      const dashboardHtml = await readFile(outputPath, "utf8");
+      assert.match(dashboardHtml, /release-dashboard-app/);
+      assert.match(dashboardHtml, /rgb\(12, 34, 56\)/);
+      assert.match(dashboardHtml, /package dashboard smoke/);
+    });
+  });
+});
+
 test("source launcher fails closed when release checksum metadata is missing", async () => {
   await withTempDir("runtime-hydration-missing-checksum", async (dir) => {
     const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
