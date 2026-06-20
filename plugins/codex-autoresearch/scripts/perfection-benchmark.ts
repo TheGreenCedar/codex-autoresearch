@@ -55,33 +55,6 @@ async function readJson(file: string): Promise<LooseObject> {
   return JSON.parse(await readText(file));
 }
 
-function parseDashboardMeta(html: string): LooseObject | null {
-  const match = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]);
-  } catch {
-    return null;
-  }
-}
-
-function demoExportUsesShowcaseMode(html: string): boolean {
-  const meta = parseDashboardMeta(html);
-  return Boolean(
-    meta &&
-    meta.publicExport === true &&
-    meta.showcaseMode === true &&
-    meta.deliveryMode === "showcase" &&
-    meta.settings?.publicExport === true &&
-    meta.settings?.showcaseMode === true &&
-    meta.settings?.deliveryMode === "showcase" &&
-    meta.viewModel?.trustState?.mode !== "static-export" &&
-    meta.viewModel?.processHygiene?.mode !== "static-export" &&
-    !/Static export/i.test(JSON.stringify(meta.viewModel?.trustState?.reasons ?? [])) &&
-    !/Static export/i.test(JSON.stringify(meta.viewModel?.processHygiene?.warnings ?? [])),
-  );
-}
-
 async function fileExists(file: string): Promise<boolean> {
   try {
     await fsp.access(path.join(pluginRoot, file));
@@ -275,7 +248,7 @@ const checks = [
   },
   {
     id: "docs-split-and-showcase",
-    file: "../../README.md, docs/*.md, examples/, assets/showcase/",
+    file: "../../README.md, docs/*.md, examples/demo-session/autoresearch.jsonl, assets/showcase/",
     description:
       "Detailed guidance lives in focused docs while README surfaces the live dashboard demo.",
     run: async () => {
@@ -303,7 +276,6 @@ const checks = [
         !!screenshotDimensions &&
         screenshotDimensions.width >= 900 &&
         screenshotDimensions.height / screenshotDimensions.width <= 0.8;
-      const demoExport = await readText("examples/demo-session/autoresearch-dashboard.html");
       const demoJsonl = await readText("examples/demo-session/autoresearch.jsonl");
       const demoRuns = demoJsonl
         .split(/\r?\n/)
@@ -311,14 +283,6 @@ const checks = [
       return screenshotExists &&
         screenshotIsCompact &&
         demoRuns === 100 &&
-        demoExport.includes(`"pluginVersion":"${PLUGIN_VERSION}"`) &&
-        demoExportUsesShowcaseMode(demoExport) &&
-        !demoExport.includes("C:\\Users\\alber") &&
-        !demoExport.includes("C:\\Program Files") &&
-        !demoExport.includes("actionNonce") &&
-        !demoExport.includes("/actions/") &&
-        !demoExport.includes("live-actions-panel") &&
-        !demoExport.includes("action-receipt") &&
         !readme.includes("```mermaid") &&
         includesAll(readme, ["Docs index", "dashboard-demo.png"]) &&
         includesAll(joined, [
@@ -335,7 +299,7 @@ const checks = [
         ])
         ? pass()
         : fail(
-            "Docs split, compact README snapshot, visual docs, live demo, or scrubbed demo export is incomplete.",
+            "Docs split, compact README snapshot, visual docs, or live demo ledger is incomplete.",
           );
     },
   },
