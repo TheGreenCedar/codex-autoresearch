@@ -90,14 +90,13 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 Before publishing, inspect the package artifact itself. Use dry-run pack output
 for routine review, then create and extract a real tarball for release smoke.
-Dashboard runtime assets are package output. `prepack`, `npm run check`, and
-the release workflow must build `assets/dashboard-build/dashboard-app.js` and
-`assets/dashboard-build/dashboard-app.css` before `npm pack`. The source
-checkout keeps failing clearly if those files are absent: run
-`npm run build:dashboard` from `plugins/codex-autoresearch` before serving or
-exporting dashboards. Package checks must assert both dashboard assets are in
-the tarball and smoke an extracted-package dashboard export, not just launcher
-help.
+Dashboard runtime assets are ignored package output. `prepack`, `npm run check`,
+and the release workflow must build `assets/dashboard-build/dashboard-app.js`
+and `assets/dashboard-build/dashboard-app.css` before `npm pack`. A fresh source
+checkout can generate them with `npm run build:dashboard`; serving or exporting
+dashboards without them still fails clearly with that command path. Package
+checks must assert both dashboard assets are in the tarball and smoke an
+extracted-package dashboard export, not just launcher help.
 
 The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
 and ignored in the Git tree. If a Git marketplace source checkout is missing

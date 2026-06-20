@@ -220,13 +220,21 @@ async function runDashboardBuildWithParity(): Promise<boolean> {
   const normalizeOk = await runPhase("dashboard normalization", dashboardNormalizeChecks);
   if (!normalizeOk) return false;
   const after = await dashboardAssetHashes();
-  const changed = dashboardAssets.filter((file) => before[file] !== after[file]);
+  const missing = dashboardAssets.filter((file) => after[file] === null);
+  const changed = dashboardAssets.filter(
+    (file) => before[file] !== null && before[file] !== after[file],
+  );
   console.log("\n== dashboard parity ==");
+  if (missing.length) {
+    console.log("fail dashboard-asset-parity");
+    console.log(indent(`Dashboard build did not create generated assets:\n${missing.join("\n")}`));
+    return false;
+  }
   if (changed.length) {
     console.log("fail dashboard-asset-parity");
     console.log(
       indent(
-        `Dashboard build changed generated assets:\n${changed.join("\n")}\nRun npm run build:dashboard and include the rebuilt assets.`,
+        `Dashboard build changed existing generated assets:\n${changed.join("\n")}\nRun npm run build:dashboard before checking packaging.`,
       ),
     );
     return false;
@@ -235,11 +243,19 @@ async function runDashboardBuildWithParity(): Promise<boolean> {
   return true;
 }
 
-async function dashboardAssetHashes(): Promise<Record<string, string>> {
-  const hashes: Record<string, string> = {};
+async function dashboardAssetHashes(): Promise<Record<string, string | null>> {
+  const hashes: Record<string, string | null> = {};
   for (const file of dashboardAssets) {
-    const bytes = await fsp.readFile(path.join(ROOT, file));
-    hashes[file] = createHash("sha256").update(bytes).digest("hex");
+    try {
+      const bytes = await fsp.readFile(path.join(ROOT, file));
+      hashes[file] = createHash("sha256").update(bytes).digest("hex");
+    } catch (error) {
+      if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+        hashes[file] = null;
+        continue;
+      }
+      throw error;
+    }
   }
   return hashes;
 }
