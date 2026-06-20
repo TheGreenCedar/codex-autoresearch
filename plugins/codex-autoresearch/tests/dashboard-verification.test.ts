@@ -1376,6 +1376,7 @@ test("dashboard view model warns after a watchdog no-progress window", () => {
   assert.equal(viewModel.decisionEnvelope.watchdog.stale, true);
   assert.equal(viewModel.decisionEnvelopeSummary.kind, "watchdog");
   assert.match(viewModel.nextBestAction.detail, /Intervene|finalize|rescope/i);
+  assert.equal(viewModel.nextBestAction.safeAction, "state");
   assert.notEqual(viewModel.nextBestAction.safeAction, "next");
   assert.doesNotMatch(String(viewModel.nextBestAction.command || ""), /\bnext\b/);
   assert.match(viewModel.processHygiene.warnings.join("\n"), /Intervene|quiet/i);
