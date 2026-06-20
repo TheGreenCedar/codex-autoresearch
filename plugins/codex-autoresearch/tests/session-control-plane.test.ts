@@ -59,6 +59,7 @@ test("session path resolver preserves repo-local defaults", async () => {
       path.join(workDir, "autoresearch.pending-transaction.json"),
     );
     assert.ok(paths.clearTargets.includes(path.join(workDir, "autoresearch.config.json")));
+    assert.ok(paths.clearTargets.includes(path.join(workDir, "autoresearch.progress.json")));
     assert.ok(paths.clearTargets.includes(path.join(sessionCwd, "autoresearch.config.json")));
   });
 });

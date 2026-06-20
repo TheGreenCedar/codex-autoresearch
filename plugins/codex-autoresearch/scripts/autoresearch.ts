@@ -6234,7 +6234,11 @@ async function clearSession(args: any) {
     throw new Error("clear requires --yes for CLI confirmation");
   }
   const { sessionCwd, workDir, sessionPaths } = resolveWorkDir(args.working_dir || args.cwd);
-  const targets = new Set([...sessionPaths.clearTargets, await resolveLastRunPath(workDir)]);
+  const targets = new Set([
+    ...sessionPaths.clearTargets,
+    await resolveLastRunPath(workDir),
+    await resolveProgressPath(workDir),
+  ]);
   const deleted = [];
   const wouldDelete = [];
   const missing = [];
