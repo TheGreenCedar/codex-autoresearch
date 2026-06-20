@@ -3471,6 +3471,60 @@ test("last-run packet storage redacts run benchmark contract command and option-
   });
 });
 
+test("last-run packet storage does not corrupt common option-file basenames", async () => {
+  await withTempDir("last-run-common-basename-redaction", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      const commandFile = path.join(outsideDir, "run");
+      const envFile = path.join(outsideDir, "env");
+      await writeFile(
+        commandFile,
+        [
+          `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "common basename contract",
+        "--metric-name",
+        "seconds",
+      ]);
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command-file",
+        commandFile,
+        "--packet-env-file",
+        envFile,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+
+      const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+      assert.match(lastRunText, /ordinary run env node packet text/);
+      assert.doesNotMatch(
+        lastRunText,
+        new RegExp(outsideDir.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")),
+      );
+
+      const stored = JSON.parse(lastRunText);
+      assert.equal(stored.run.benchmarkContract.commandFile, "<outside-workdir>");
+      assert.equal(stored.run.benchmarkContract.envFile, "<env-file>");
+      assert.equal(stored.run.tailOutput.includes("ordinary run env node packet text"), true);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("run command response redacts raw benchmark evidence", async () => {
   await withTempDir("run-response-redaction", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "redacted run", "--metric-name", "seconds"]);

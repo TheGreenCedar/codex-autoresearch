@@ -6345,15 +6345,43 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
   }
   redactRunPacketProcessEvidence(stored.run, context);
   redactBenchmarkContractForStorage(stored.run?.benchmarkContract, context);
-  if (stored.doctor) stored.doctor = redactEvidenceObject(stored.doctor, context);
+  if (stored.doctor) {
+    redactKnownOptionFileFields(stored.doctor, context);
+    stored.doctor = redactEvidenceObject(stored.doctor, context);
+  }
   if (stored.history) {
     if (stored.history.command) {
       stored.history.command = redactCommandDisplay(stored.history.command, context);
     }
     redactBenchmarkContractForStorage(stored.history.benchmarkContract, context);
   }
+  redactKnownOptionFileFields(stored, context);
   applyLastRunStorageReplacements(stored, lastRunStorageReplacements(packet, context));
   return stored;
+}
+
+const STORAGE_COMMAND_FILE_KEYS = new Set(["commandFile", "command_file"]);
+const STORAGE_ENV_FILE_KEYS = new Set(["envFile", "env_file", "packetEnvFile", "packet_env_file"]);
+
+function redactKnownOptionFileFields(value: unknown, context: LooseObject): void {
+  if (Array.isArray(value)) {
+    for (const item of value) redactKnownOptionFileFields(item, context);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (typeof child === "string") {
+      if (STORAGE_COMMAND_FILE_KEYS.has(key)) {
+        (value as LooseObject)[key] = redactPathDisplay(child, context.workDir);
+        continue;
+      }
+      if (STORAGE_ENV_FILE_KEYS.has(key) && child) {
+        (value as LooseObject)[key] = "<env-file>";
+        continue;
+      }
+    }
+    redactKnownOptionFileFields(child, context);
+  }
 }
 
 function lastRunStorageReplacements(packet: LooseObject, context: LooseObject) {
@@ -6363,14 +6391,12 @@ function lastRunStorageReplacements(packet: LooseObject, context: LooseObject) {
   });
   addOptionPathReplacements(replacements, packet?.run?.envFile, context, {
     replacement: "<env-file>",
-    includeBasename: true,
   });
   addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.commandFile, context, {
     replacement: redactPathDisplay(packet?.run?.benchmarkContract?.commandFile, context.workDir),
   });
   addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.envFile, context, {
     replacement: "<env-file>",
-    includeBasename: true,
   });
   addOptionPathReplacements(
     replacements,
@@ -6385,7 +6411,6 @@ function lastRunStorageReplacements(packet: LooseObject, context: LooseObject) {
   );
   addOptionPathReplacements(replacements, packet?.history?.benchmarkContract?.envFile, context, {
     replacement: "<env-file>",
-    includeBasename: true,
   });
   return replacements
     .filter((entry) => entry.token && entry.token !== entry.replacement)
@@ -6396,24 +6421,27 @@ function addOptionPathReplacements(
   replacements: Array<{ token: string; replacement: string }>,
   value: unknown,
   context: LooseObject,
-  options: { replacement: string; includeBasename?: boolean },
+  options: { replacement: string },
 ) {
   const raw = String(value || "").trim();
   if (!raw) return;
-  const tokens = new Set([raw, raw.replace(/\\/g, "/"), raw.replace(/\//g, "\\")]);
+  const tokens = new Set<string>();
   const resolved = path.isAbsolute(raw)
     ? path.resolve(raw)
     : path.resolve(context.workDir || "", raw);
-  tokens.add(resolved);
-  tokens.add(resolved.replace(/\\/g, "/"));
-  tokens.add(resolved.replace(/\//g, "\\"));
-  if (options.includeBasename || options.replacement === "<outside-workdir>") {
-    const basename = path.basename(raw);
-    if (basename) tokens.add(basename);
+  for (const candidate of [raw, resolved]) {
+    if (!isPathLikeReplacementToken(candidate)) continue;
+    tokens.add(candidate);
+    tokens.add(candidate.replace(/\\/g, "/"));
+    tokens.add(candidate.replace(/\//g, "\\"));
   }
   for (const token of tokens) {
     if (token.length > 2) replacements.push({ token, replacement: options.replacement });
   }
+}
+
+function isPathLikeReplacementToken(value: string) {
+  return path.isAbsolute(value) || /[\\/]/.test(value);
 }
 
 function applyLastRunStorageReplacements(
@@ -6453,6 +6481,7 @@ function redactRunPacketProcessEvidence(
   redactProgressEvidence(value.progress, context);
   redactProgressEvidence(value.progressSnapshot, context);
   if (value.commandDiagnostics) {
+    redactKnownOptionFileFields(value.commandDiagnostics, context);
     value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
   }
   if (value.checks && typeof value.checks === "object") {
