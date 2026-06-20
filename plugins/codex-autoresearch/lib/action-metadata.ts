@@ -182,7 +182,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
   watchdog: actionMetadata({
     label: "Inspect quiet window",
     commandLabel: "Inspect",
-    safeAction: "inspect",
+    safeAction: "state",
     fallbackKeys: ["finalizePreview", "liveDashboard", "doctor", "state"],
   }),
   finalization: actionMetadata({
