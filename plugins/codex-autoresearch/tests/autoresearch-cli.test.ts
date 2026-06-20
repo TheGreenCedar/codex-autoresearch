@@ -7698,6 +7698,57 @@ test("clear dry-run previews deletion targets without removing files", async () 
   });
 });
 
+test("clear removes active progress snapshots in fallback and Git-private modes", async () => {
+  await withTempDir("clear-progress-snapshots", async (dir) => {
+    const fallbackProgress = path.join(dir, "autoresearch.progress.json");
+    const fallbackLastRun = path.join(dir, "autoresearch.last-run.json");
+    const fallbackPending = path.join(dir, "autoresearch.pending-transaction.json");
+    await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
+    await writeFile(fallbackLastRun, JSON.stringify({ run: 1 }), "utf8");
+    await writeFile(fallbackPending, JSON.stringify({ run: 1 }), "utf8");
+
+    const fallbackPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
+    assert.equal(fallbackPreview.code, 0, fallbackPreview.stderr);
+    const fallbackPayload = JSON.parse(fallbackPreview.stdout);
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackProgress));
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackLastRun));
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackPending));
+    await access(fallbackProgress);
+
+    const fallbackClear = await runCli(["clear", "--cwd", dir, "--yes"]);
+    assert.equal(fallbackClear.code, 0, fallbackClear.stderr);
+    await assert.rejects(access(fallbackProgress));
+    await assert.rejects(access(fallbackLastRun));
+    await assert.rejects(access(fallbackPending));
+  });
+
+  await withTempDir("clear-git-progress-snapshots", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    const gitPrivateDir = path.join(dir, ".git", "autoresearch");
+    const gitProgress = path.join(gitPrivateDir, "progress.json");
+    const gitLastRun = path.join(gitPrivateDir, "last-run.json");
+    const fallbackProgress = path.join(dir, "autoresearch.progress.json");
+    await mkdir(gitPrivateDir, { recursive: true });
+    await writeFile(gitProgress, JSON.stringify({ exitState: "running" }), "utf8");
+    await writeFile(gitLastRun, JSON.stringify({ run: 1 }), "utf8");
+    await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
+
+    const gitPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
+    assert.equal(gitPreview.code, 0, gitPreview.stderr);
+    const gitPayload = JSON.parse(gitPreview.stdout);
+    assert.ok(gitPayload.wouldDelete.includes(gitProgress));
+    assert.ok(gitPayload.wouldDelete.includes(gitLastRun));
+    assert.ok(gitPayload.wouldDelete.includes(fallbackProgress));
+    await access(gitProgress);
+
+    const gitClear = await runCli(["clear", "--cwd", dir, "--yes"]);
+    assert.equal(gitClear.code, 0, gitClear.stderr);
+    await assert.rejects(access(gitProgress));
+    await assert.rejects(access(gitLastRun));
+    await assert.rejects(access(fallbackProgress));
+  });
+});
+
 test("setup-plan preserves explicit command, state inputs, and baseline measure guidance", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
     const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
