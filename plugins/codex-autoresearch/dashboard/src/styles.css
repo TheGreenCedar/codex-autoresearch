@@ -1956,6 +1956,14 @@ p {
   line-height: 1.45;
 }
 
+.chart-keyboard-help {
+  margin: 0 6px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .metric-details-panel {
   margin-top: 14px;
   border-top: 1px solid var(--soft-line);
@@ -2207,6 +2215,22 @@ p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.42;
+}
+
+.audit-detail-disclosure {
+  border-top: 1px solid var(--soft-line);
+  padding-top: 10px;
+}
+
+.audit-detail-disclosure summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.audit-detail-disclosure .memory-lane {
+  margin-top: 8px;
 }
 
 .truth-panel {

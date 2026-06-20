@@ -140,6 +140,9 @@ export function TrendChartFigure({
           ? `Selected chart point: ${selectedPoint.runLabel}, ${selectedPoint.statusLabel}, ${selectedPoint.metricDisplay}.`
           : "No chart point selected."}
       </p>
+      <p id="chart-keyboard-help" className="chart-keyboard-help">
+        Keyboard: Tab to a plotted run, arrow keys move through history, Enter opens run details.
+      </p>
       <ResponsiveContainer width="100%" height={chartHeight}>
         <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
           <defs>
@@ -340,7 +343,7 @@ function ChartDot({
         type="button"
         className="chart-point-button"
         aria-haspopup="dialog"
-        aria-describedby="trend-chart-selected"
+        aria-describedby="trend-chart-selected chart-keyboard-help"
         aria-label={chartPointAriaLabel(payload)}
         data-chart-run={payload.runNumber}
         tabIndex={tabbable ? 0 : -1}

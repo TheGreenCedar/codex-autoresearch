@@ -154,9 +154,9 @@ function finalizationSignal(viewModel: DashboardViewModel): SignalItem {
   return {
     id: "finalize",
     label: "Finalize",
-    value: ready ? "Preview ready" : titleCase(status),
-    detail: finalizationDetail(status, ready),
-    tone: status === "high" ? "warn" : ready ? "good" : "neutral",
+    value: ready ? "Preview ready" : "Preview gated",
+    detail: finalizationDetail(status, ready, clean(pressure.recommendation)),
+    tone: status === "high" || status === "medium" ? "warn" : ready ? "good" : "neutral",
   };
 }
 
@@ -173,11 +173,14 @@ function evidenceDetail({
   return `${acceptedCurrent} current${middle} / ${auditOnly} audit-only`;
 }
 
-function finalizationDetail(status: string, ready: boolean) {
+function finalizationDetail(status: string, ready: boolean, recommendation: string) {
   if (ready) return "Preview evidence is ready";
-  if (status === "high") return "Run preview or rescope";
-  if (status === "medium") return "Preview soon";
-  return "Packaging stays in CLI";
+  const detail = ["Preview blocked until gates clear."];
+  if (status === "high" || status === "medium") {
+    detail.push(`Runway pressure: ${titleCase(status)}.`);
+  }
+  detail.push(recommendation || "Packaging stays in CLI.");
+  return detail.join(" ");
 }
 
 function buildTrustItems(viewModel: DashboardViewModel) {
