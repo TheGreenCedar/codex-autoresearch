@@ -56,7 +56,8 @@ const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.js",
   "assets/dashboard-build/dashboard-app.css",
 ];
-const dashboardDemoExport = "examples/demo-session/autoresearch-dashboard.html";
+const dashboardDemoExportOutput = "tmp/autoresearch-dashboard.check.html";
+export const dashboardGeneratedDemoExport = `examples/demo-session/${dashboardDemoExportOutput}`;
 
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
@@ -544,8 +545,20 @@ async function runDemoTrustCheck() {
     console.log("ok demo:doctor");
   }
 
+  await fsp.mkdir(path.dirname(path.join(ROOT, dashboardGeneratedDemoExport)), {
+    recursive: true,
+  });
+  await fsp.rm(path.join(ROOT, dashboardGeneratedDemoExport), { force: true });
+  const exportResult = await runCommand(demoDashboardExportCommand());
+  if (exportResult.code !== 0) {
+    console.log("fail demo:export");
+    const output = `${exportResult.stdout}${exportResult.stderr}`.trim();
+    if (output) console.log(indent(output));
+    return false;
+  }
+
   const pkg = JSON.parse(await fsp.readFile(path.join(ROOT, "package.json"), "utf8"));
-  const html = await fsp.readFile(path.join(ROOT, dashboardDemoExport), "utf8");
+  const html = await fsp.readFile(path.join(ROOT, dashboardGeneratedDemoExport), "utf8");
   const parityIssues = dashboardExportAssetIssues(html, await readDashboardExportAssets());
   const showcaseIssues = demoShowcaseIssues(html);
   const forbidden = [
@@ -584,7 +597,7 @@ async function runDemoTrustCheck() {
         indent(
           `Demo export generated asset parity failed:\n${parityIssues.join(
             "\n",
-          )}\nRefresh it with: node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase`,
+          )}\nGenerated check path: ${dashboardGeneratedDemoExport}`,
         ),
       );
     }
@@ -601,6 +614,22 @@ async function runDemoTrustCheck() {
   }
   console.log("ok demo:export");
   return true;
+}
+
+export function demoDashboardExportCommand(): CommandSpec {
+  return [
+    "demo:export",
+    node,
+    [
+      "scripts/autoresearch.mjs",
+      "export",
+      "--cwd",
+      "examples/demo-session",
+      "--output",
+      dashboardDemoExportOutput,
+      "--showcase",
+    ],
+  ];
 }
 
 async function readDashboardExportAssets(): Promise<DashboardExportAssets> {

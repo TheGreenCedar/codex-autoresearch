@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resolveSpawnCommand } from "../scripts/check-runner.js";
-import { dashboardExportAssetIssues, resolveNpmCommand } from "../scripts/check.js";
+import {
+  dashboardExportAssetIssues,
+  dashboardGeneratedDemoExport,
+  demoDashboardExportCommand,
+  resolveNpmCommand,
+} from "../scripts/check.js";
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
   assert.throws(
@@ -119,6 +124,30 @@ test("demo export asset parity rejects a stale inline dashboard script", () => {
   assert.deepEqual(dashboardExportAssetIssues(html, assets), [
     "inline dashboard script does not match assets/dashboard-build/dashboard-app.js after </script escaping",
   ]);
+});
+
+test("demo trust generates its dashboard export in ignored demo tmp", () => {
+  const [label, command, args] = demoDashboardExportCommand();
+
+  assert.equal(label, "demo:export");
+  assert.equal(command, process.execPath);
+  assert.deepEqual(args, [
+    "scripts/autoresearch.mjs",
+    "export",
+    "--cwd",
+    "examples/demo-session",
+    "--output",
+    "tmp/autoresearch-dashboard.check.html",
+    "--showcase",
+  ]);
+  assert.equal(
+    dashboardGeneratedDemoExport,
+    "examples/demo-session/tmp/autoresearch-dashboard.check.html",
+  );
+  assert.notEqual(
+    dashboardGeneratedDemoExport,
+    "examples/demo-session/autoresearch-dashboard.html",
+  );
 });
 
 test("demo export asset parity accepts documented closing-tag escaping", () => {
