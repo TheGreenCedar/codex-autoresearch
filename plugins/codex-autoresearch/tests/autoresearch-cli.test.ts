@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
-import { JSDOM } from "jsdom";
 import { redactCommandDisplay } from "../lib/evidence-redaction.js";
 import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -19,78 +17,43 @@ import {
 } from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
+import { renderExportedDashboard } from "./helpers/dashboard-export.js";
+import {
+  prepareCurrentTreeFinalizationBlocker,
+  writeDecisionCapsule,
+} from "./helpers/git-fixtures.js";
+import { parseLedger, writeLedger } from "./helpers/ledger.js";
+import { runNode, runShellCommand } from "./helpers/process-fixtures.js";
+import {
+  cliPayload,
+  isolatedRuntimeEnv,
+  pathExists,
+  withAutoresearchTempDir,
+  writeInstalledRuntimeFixture,
+} from "./helpers/cli-session.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
   quoteForShell,
   runGit,
-  withTempDir as withNamedTempDir,
 } from "./helpers/process.js";
+import {
+  createRuntimeReleaseAsset,
+  escapeRegExp,
+  writeFakeSourcePlugin,
+} from "./helpers/runtime-release-fixtures.js";
+import {
+  addressPort,
+  closeServer,
+  listenOnRandomPort,
+  withReleaseServer,
+} from "./helpers/server.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
-const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
-const pathExists = async (target: string) => {
-  try {
-    await access(target);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-function isolatedRuntimeEnv(homeDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: homeDir,
-    USERPROFILE: homeDir,
-  };
-}
-
-async function writeInstalledRuntimeFixture(homeDir: string, status: string) {
-  const cacheRoot = path.join(
-    homeDir,
-    ".codex",
-    "plugins",
-    "cache",
-    "thegreencedar-autoresearch",
-    "codex-autoresearch",
-  );
-  const runtimeDir = path.join(cacheRoot, status === "stale" ? "0.0.0" : PLUGIN_VERSION);
-  await mkdir(runtimeDir, { recursive: true });
-  if (status === "stale") {
-    await writeFile(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({ version: "0.0.0" }, null, 2),
-    );
-  } else if (status === "unavailable") {
-    await writeFile(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({ version: PLUGIN_VERSION }, null, 2),
-    );
-  }
-}
-
-function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  return (payload.result as Record<string, unknown>) || payload;
-}
-
-async function writeLedger(dir: string, records: Record<string, unknown>[]) {
-  await writeFile(
-    path.join(dir, "autoresearch.jsonl"),
-    records.map((record) => JSON.stringify(record)).join("\n") + "\n",
-  );
-}
-
-function parseLedger(text: string): Record<string, unknown>[] {
-  return text
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
+const withTempDir = withAutoresearchTempDir;
 
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
@@ -459,293 +422,6 @@ test("finalize-preview json exposes missing product-grade claim coverage", async
     assert.match(result.stdout, /Experimental review branch only/);
   });
 });
-
-async function writeDecisionCapsule(dir, slug, overrides = {}) {
-  const capsuleDir = path.join(dir, "autoresearch.research", slug);
-  await mkdir(capsuleDir, { recursive: true });
-  const base = {
-    schemaVersion: 1,
-    kind: "session-decision-capsule",
-    status: "active",
-    enforcement: {
-      mode: "hard-block",
-      canRunNextPacket: false,
-      allowBoundedNext: false,
-      blocksFinalization: true,
-      clearingCondition: "Run benchmark-lint successfully, then acknowledge the capsule.",
-      commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-      triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
-    },
-    bottleneck: "Benchmark wrapper cannot prove the primary METRIC contract.",
-    evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
-    nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    wrongNextActions: ["Do not run next or finalize while benchmark-lint is broken."],
-    doNotRepeat: [],
-    commandBudgetWarnings: [],
-    generatedFrom: {
-      compactions: 0,
-      first: "2026-06-01T13:00:00.000Z",
-      last: "2026-06-01T13:10:00.000Z",
-      toolCounts: {},
-      topCommandHeads: [],
-    },
-    importedAt: "2026-06-01T13:10:00.000Z",
-  };
-  await writeFile(
-    path.join(capsuleDir, "decision-capsule.json"),
-    JSON.stringify({ ...base, ...overrides }, null, 2),
-  );
-}
-
-async function prepareCurrentTreeFinalizationBlocker(dir) {
-  await git(dir, ["init"]);
-  await git(dir, ["config", "user.email", "codex@example.test"]);
-  await git(dir, ["config", "user.name", "Codex Test"]);
-  await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
-  await git(dir, ["add", "base.txt"]);
-  await git(dir, ["commit", "-m", "base"]);
-  await git(dir, ["branch", "-M", "main"]);
-  await git(dir, ["checkout", "-b", "feature"]);
-  await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC seconds=1'\n", "utf8");
-  await writeFile(path.join(dir, "autoresearch.checks.ps1"), "Write-Output 'test ok'\n", "utf8");
-  await runCli([
-    "init",
-    "--cwd",
-    dir,
-    "--name",
-    "current tree finalization",
-    "--metric-name",
-    "seconds",
-  ]);
-  await git(dir, ["add", "autoresearch.jsonl", "autoresearch.ps1", "autoresearch.checks.ps1"]);
-  await git(dir, ["commit", "-m", "init autoresearch"]);
-
-  await mkdir(path.join(dir, "src"), { recursive: true });
-  await writeFile(path.join(dir, "src", "kept.txt"), "kept\n", "utf8");
-  await git(dir, ["add", "src/kept.txt"]);
-  await git(dir, ["commit", "-m", "kept change"]);
-  const keptCommit = (await git(dir, ["rev-parse", "HEAD"])).trim();
-  const keep = await runCli([
-    "log",
-    "--cwd",
-    dir,
-    "--metric",
-    "1",
-    "--status",
-    "keep",
-    "--description",
-    "Keep committed change",
-    "--commit",
-    keptCommit,
-  ]);
-  assert.equal(keep.code, 0, keep.stderr);
-  await git(dir, ["add", "autoresearch.jsonl"]);
-  await git(dir, ["commit", "-m", "log kept run"]);
-
-  await writeFile(path.join(dir, "src", "unlogged.txt"), "support\n", "utf8");
-  await git(dir, ["add", "src/unlogged.txt"]);
-  await git(dir, ["commit", "-m", "unlogged support change"]);
-}
-
-async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
-  return await new Promise((resolve) => {
-    const childEnv = { ...env };
-    delete childEnv.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, args, {
-      cwd,
-      env: childEnv,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
-async function runShellCommand(command, { cwd = pluginRoot } = {}) {
-  const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
-  const args =
-    process.platform === "win32"
-      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
-      : ["-c", command];
-  return await new Promise((resolve) => {
-    const child = spawn(shell, args, {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
-async function listenOnRandomPort(server) {
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-}
-
-async function closeServer(server) {
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-function addressPort(server) {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Server did not bind a TCP port");
-  return address.port;
-}
-
-async function runTar(args, cwd) {
-  const result = await new Promise((resolve) => {
-    const child = spawn("tar", args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-  assert.equal(result.code, 0, `tar ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-}
-
-async function writeFakeSourcePlugin(dir, version = PLUGIN_VERSION) {
-  const pluginDir = path.join(dir, "source-plugin");
-  const scriptsDir = path.join(pluginDir, "scripts");
-  await mkdir(scriptsDir, { recursive: true });
-  await writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ name: "codex-autoresearch", version }, null, 2),
-    "utf8",
-  );
-  return {
-    pluginDir,
-    importerUrl: pathToFileURL(path.join(scriptsDir, "autoresearch.mjs")).href,
-  };
-}
-
-async function createRuntimeReleaseAsset(
-  dir,
-  {
-    sourceVersion = PLUGIN_VERSION,
-    packageVersion = sourceVersion,
-    packageName = "codex-autoresearch",
-    checksumFileName,
-    checksumHash,
-    writeChecksum = true,
-  } = {},
-) {
-  const releaseDir = path.join(dir, `release-${Math.random().toString(16).slice(2)}`);
-  const packageParent = path.join(dir, `package-parent-${Math.random().toString(16).slice(2)}`);
-  const packageDir = path.join(packageParent, "package");
-  const tarballName = `codex-autoresearch-${sourceVersion}.tgz`;
-  const checksumName = `${tarballName}.sha256`;
-  const tarballPath = path.join(releaseDir, tarballName);
-  const checksumPath = path.join(releaseDir, checksumName);
-
-  await mkdir(path.join(packageDir, "dist", "scripts"), { recursive: true });
-  await mkdir(releaseDir, { recursive: true });
-  await writeFile(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({ name: packageName, version: packageVersion }, null, 2),
-    "utf8",
-  );
-  await writeFile(
-    path.join(packageDir, "dist", "scripts", "autoresearch.mjs"),
-    "export const hydratedRuntime = true;\n",
-    "utf8",
-  );
-
-  await runTar(["-czf", tarballPath, "-C", packageParent, "package"], dir);
-  const actualHash = createHash("sha256")
-    .update(await readFile(tarballPath))
-    .digest("hex");
-  if (writeChecksum) {
-    await writeFile(
-      checksumPath,
-      `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`,
-      "utf8",
-    );
-  }
-
-  return { releaseDir, tarballName, checksumName, tarballPath, checksumPath, actualHash };
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function withReleaseServer(releaseDir, version, fn) {
-  const server = createServer(async (request, response) => {
-    try {
-      const requestPath = new URL(request.url || "/", `http://${request.headers.host}`).pathname;
-      const fileName = path.basename(decodeURIComponent(requestPath));
-      const bytes = await readFile(path.join(releaseDir, fileName));
-      response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.end(bytes);
-    } catch {
-      response.writeHead(404, { "content-type": "text/plain" });
-      response.end("not found");
-    }
-  });
-  await listenOnRandomPort(server);
-  try {
-    return await fn(`http://127.0.0.1:${addressPort(server)}/releases/download/v${version}`);
-  } finally {
-    await closeServer(server);
-  }
-}
-
-async function renderExportedDashboard(html) {
-  const dom = new JSDOM(html, {
-    pretendToBeVisual: true,
-    runScripts: "dangerously",
-    url: "file:///autoresearch-dashboard.html",
-  });
-  const started = Date.now();
-  while (!dom.window.__AUTORESEARCH_DASHBOARD_READY__) {
-    if (Date.now() - started > 2000)
-      throw new Error("Dashboard React app did not finish rendering.");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  return dom;
-}
 
 test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
   await withTempDir("spawned-contract", async (dir) => {
@@ -6485,7 +6161,7 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
 
 test("doctor explain preserves current-tree finalization blockers", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const doctor = await runCli([
@@ -6512,7 +6188,7 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
 
 test("state, recommend-next, doctor, and dashboard share current-tree finalization authority", async () => {
   await withTempDir("shared-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
@@ -6570,7 +6246,7 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
 
 test("next compact refuses current-tree finalization blockers before running packets", async () => {
   await withTempDir("next-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
     const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
@@ -6590,7 +6266,7 @@ test("next compact refuses current-tree finalization blockers before running pac
 
 test("codex goal complete audit blocks current-tree finalization blockers", async () => {
   await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
     const result = await runCli([
       "codex-goal-brief",
