@@ -2408,8 +2408,9 @@ function compactRecommendCommands(
 ): LooseObject {
   if (!commands) return {};
   const compactCommands: LooseObject = {};
-  const primary = canonicalNextAction?.command || commands.state;
+  const primary = canonicalNextAction?.command || commands.stateCompact || commands.state;
   if (primary) compactCommands.primary = primary;
+  if (commands.stateCompact) compactCommands.stateCompact = commands.stateCompact;
   if (commands.state) compactCommands.state = commands.state;
   return compactCommands;
 }

@@ -87,6 +87,13 @@ export async function buildDecisionGuidanceContext({
     "--check-benchmark",
     "--explain",
   ]);
+  const setupPlanCommand = renderCommand([
+    "node",
+    path.join(pluginRoot, "scripts", "autoresearch.mjs"),
+    "setup-plan",
+    "--cwd",
+    workDir,
+  ]);
   const runtimeSummary =
     runtimeDriftSummary ||
     (await inspectRuntimeDrift({
@@ -123,6 +130,7 @@ export async function buildDecisionGuidanceContext({
       benchmarkCommand: resolvedBenchmarkCommand,
       benchmarkLintCommand,
       doctorCommand,
+      setupPlanCommand,
       gateQuality,
       scaffoldHealth,
       warningDetails,

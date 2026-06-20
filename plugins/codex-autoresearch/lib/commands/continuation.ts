@@ -16,6 +16,7 @@ export function buildContinuationCommands({
   const slug = shellQuote(researchSlug);
   return {
     state: `node ${script} state --cwd ${cwd}`,
+    stateCompact: `node ${script} state --cwd ${cwd} --compact`,
     doctor: `node ${script} doctor --cwd ${cwd}`,
     doctorExplain: `node ${script} doctor --cwd ${cwd} --explain`,
     next: `node ${script} next --cwd ${cwd} --compact`,
@@ -32,6 +33,7 @@ export function buildContinuationCommands({
     extendLimit: `node ${script} config --cwd ${cwd} --extend 10`,
     onboardingPacket: `node ${script} onboarding-packet --cwd ${cwd} --compact`,
     recommendNext: `node ${script} recommend-next --cwd ${cwd} --compact`,
+    setupPlan: `node ${script} setup-plan --cwd ${cwd}`,
     codexGoalBrief: `node ${script} codex-goal-brief --cwd ${cwd}`,
     benchmarkInspect: `node ${script} benchmark-inspect --cwd ${cwd}`,
     benchmarkLint: `node ${script} benchmark-lint --cwd ${cwd}`,

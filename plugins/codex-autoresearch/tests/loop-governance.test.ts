@@ -955,9 +955,10 @@ test("compact recommend-next uses blocker metadata fallback instead of next", ()
   assert.equal((response.action as { kind?: string }).kind, "preflight");
   assert.equal(
     response.commands.primary,
-    "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
+    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
   );
   assert.doesNotMatch(String(response.commands.primary), /\bnext\b/);
+  assert.doesNotMatch(String(response.commands.primary), /\bdoctor\b.*--explain\b/);
 });
 
 test("compact recommend-next skips process-starting metadata fallbacks", () => {

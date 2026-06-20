@@ -62,6 +62,7 @@ export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "recommendNext",
   "replaceLast",
   "setupPlan",
+  "stateCompact",
   "staticExport",
   "suggestedCommand",
   "suggestedCommands",

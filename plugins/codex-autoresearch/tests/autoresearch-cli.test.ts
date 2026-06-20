@@ -9941,6 +9941,29 @@ test("guide, dashboard, and recommend-next share canonical preflight blocker", a
   });
 });
 
+test("recommend-next compact operator checklist uses bounded recovery for empty sessions", async () => {
+  await withTempDir("compact-empty-recovery", async (dir) => {
+    const recommend = await runCli([
+      "recommend-next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--operator-checklist",
+    ]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const payload = JSON.parse(recommend.stdout);
+    const command = payload.operatorChecklist.command || "";
+
+    assert.equal(payload.action.kind, "preflight");
+    assert.match(payload.nextAction, /benchmark command/i);
+    assert.match(payload.operatorChecklist.blocker, /benchmark command/i);
+    assert.match(command, /autoresearch\.mjs\b.*\b(setup-plan|state)\b/);
+    assert.match(command, /--cwd\b/);
+    assert.doesNotMatch(command, /\bdoctor\b.*--explain\b/);
+    assert.doesNotMatch(payload.commands.primary || "", /\bdoctor\b.*--explain\b/);
+  });
+});
+
 test("state and recommend-next expose advisory portfolio guidance", async () => {
   await withTempDir("portfolio-guidance", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "portfolio", "--metric-name", "seconds"]);
