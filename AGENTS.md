@@ -69,7 +69,7 @@ node scripts/autoresearch.mjs state --cwd . --report
 - Decision guidance lives in `lib/decision-guidance.ts`, `lib/loop-governance.ts`, `lib/operator-checklist.ts`, `lib/session-decision-capsule.ts`, `lib/gate-quality.ts`, `lib/preflight-audit.ts`, `lib/packet-diagnostics.ts`, `lib/runtime-drift-doctor.ts`, `lib/source-cleanliness.ts`, `lib/portfolio-advisor.ts`, and `lib/lane-lifecycle.ts`.
 - Finalization behavior lives in `scripts/finalize-autoresearch.ts`, `scripts/finalize-autoresearch.mjs`, `lib/finalize-preview.ts`, `lib/finalization-plan.ts`, and `lib/finalization-acceptance.ts`.
 - Dashboard data shaping and live-readout behavior live in `lib/dashboard-view-model.ts`, `lib/live-server.ts`, `lib/dashboard-health.ts`, `lib/dashboard-server-registry.ts`, and `lib/dashboard-command-safety.ts`.
-- Dashboard UI source lives in `dashboard/src/`; generated bundled dashboard assets live in `assets/dashboard-build/` and are intentionally checked in.
+- Dashboard UI source lives in `dashboard/src/`; `assets/dashboard-build/` is generated/ignored output built by dashboard, package, and check flows.
 - Product-quality gates live in `scripts/check.ts`, `scripts/check.mjs`, `scripts/perfection-benchmark.ts`, and `scripts/perfection-benchmark.mjs`.
 
 ## Dashboard Rules
@@ -78,13 +78,13 @@ node scripts/autoresearch.mjs state --cwd . --report
 - Be explicit about mode. `serve --cwd <project>` returns a live local readout; `export --cwd <project>` writes a static read-only snapshot.
 - Do not add visible live mutation controls, action routes, command-copy panels for mutating commands, or finalization mutations to the dashboard.
 - Dashboard and terminal reports must agree on the canonical next action, blockers, runtime provenance, packet diagnostics, source cleanliness, and finalization pressure.
-- After dashboard UI, dashboard model, visual copy, or generated asset changes, rebuild and inspect the dashboard surface. Refresh the checked-in demo/export/showcase assets that represent the UI, especially `examples/demo-session/autoresearch-dashboard.html`, `assets/dashboard-build/*`, `assets/showcase/dashboard-demo.png`, and any manifest screenshot asset affected by the change.
+- After dashboard UI, dashboard model, visual copy, or generated asset changes, rebuild and inspect the dashboard surface. Refresh appropriate checked-in review/export/showcase evidence that represents the UI, such as demo exports or `assets/showcase/dashboard-demo.png` when intentionally affected, but do not reintroduce tracked `assets/dashboard-build/` bundles.
 
 ## Runtime And Packaging Truth
 
 - This plugin is CLI/skill-only. Do not add a default MCP server declaration or MCP launcher unless the product direction explicitly changes and the docs, package checks, and migration notes change with it.
 - Source checkouts intentionally do not track `plugins/codex-autoresearch/dist/`. Release/package artifacts must include `dist/`.
-- The package artifact must include `.codex-plugin/`, `docs/`, `skills/`, dashboard-build assets, small launcher scripts, and compiled `dist/`; it must not leak authored source, tests, examples, MCP config, or stale MCP launchers.
+- The package artifact must include `.codex-plugin/`, `docs/`, `skills/`, generated dashboard-build assets, small launcher scripts, and compiled `dist/`; it must not leak authored source, tests, examples, MCP config, or stale MCP launchers.
 - If installed Codex behavior differs from source, inspect the active cache under the user's Codex plugin cache and compare version plus built-entrypoint fingerprint before editing source again.
 - Common drift layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, command metadata mismatch, generated asset drift, and slow full-CLI imports. Identify the layer before retrying the same live-service action.
 
