@@ -2298,7 +2298,7 @@ function dashboardSafeActionOverride(
 ): string | null {
   if (kind === "stale-packet" && stalePacketCommand) return "";
   if (kind === "watchdog") {
-    return commandMap.get("finalize preview") ? "finalize-preview" : "inspect";
+    return commandMap.get("finalize preview") ? "finalize-preview" : "state";
   }
   return null;
 }

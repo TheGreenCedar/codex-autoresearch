@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ACTION_METADATA } from "../lib/action-metadata.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { validateToolContracts } from "../lib/tool-contracts.js";
 import { toolSchemas } from "../lib/tool-schemas.js";
 import { toolRegistry } from "../lib/tool-registry.js";
 
@@ -34,6 +36,8 @@ type CommandSurfaceMap = {
   scans: SourceScan[];
   missingPublicReferences: string[];
   metadataIssues: string[];
+  contractIssues: string[];
+  actionMetadataIssues: string[];
   internalReferences: string[];
   argumentIssues: string[];
 };
@@ -85,6 +89,8 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
   ]);
   const argumentIssues = await validateArgumentCoherence();
   const metadataIssues = validateRegistryMetadata(registry);
+  const contractIssues = validateToolContracts(toolSchemas).issues;
+  const actionMetadataIssues = validateActionMetadata(commandToEntry);
 
   const missingPublicReferences = scans
     .flatMap((scan) => {
@@ -99,11 +105,17 @@ export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
     .concat(argumentIssues);
 
   return {
-    ok: missingPublicReferences.length === 0 && metadataIssues.length === 0,
+    ok:
+      missingPublicReferences.length === 0 &&
+      metadataIssues.length === 0 &&
+      contractIssues.length === 0 &&
+      actionMetadataIssues.length === 0,
     registry,
     scans,
     missingPublicReferences,
     metadataIssues,
+    contractIssues,
+    actionMetadataIssues,
     argumentIssues,
     internalReferences: registry
       .filter((entry) => entry.internal)
@@ -178,6 +190,30 @@ function validateRegistryMetadata(registry: RegistryEntry[]): string[] {
       }
       return issues;
     });
+}
+
+function validateActionMetadata(commandToEntry: Map<string, RegistryEntry>): string[] {
+  const issues: string[] = [];
+  for (const [kind, metadata] of Object.entries(ACTION_METADATA)) {
+    if (!metadata.label.trim()) issues.push(`${kind}: missing action label`);
+    if (!metadata.commandLabel.trim()) issues.push(`${kind}: missing command label`);
+    if (!metadata.safeAction.trim()) {
+      issues.push(`${kind}: missing safeAction`);
+    } else {
+      const entry = commandToEntry.get(metadata.safeAction);
+      if (!entry) {
+        issues.push(`${kind}: safeAction ${metadata.safeAction} is not a registered CLI command`);
+      } else if (!entry.public) {
+        issues.push(`${kind}: safeAction ${metadata.safeAction} references an internal command`);
+      }
+    }
+    if (!metadata.fallbackKeys.length) issues.push(`${kind}: missing fallback keys`);
+    const fallbackKeys = new Set(metadata.fallbackKeys);
+    if (fallbackKeys.size !== metadata.fallbackKeys.length) {
+      issues.push(`${kind}: duplicate fallback keys`);
+    }
+  }
+  return issues;
 }
 
 async function scanCommandSource({
@@ -293,6 +329,14 @@ export function formatCommandSurfaceMap(map: CommandSurfaceMap): string {
   lines.push(`metadata: missing=${map.metadataIssues.length}`);
   if (map.metadataIssues.length) {
     lines.push(`  metadata issues: ${map.metadataIssues.join(", ")}`);
+  }
+  lines.push(`contracts: issues=${map.contractIssues.length}`);
+  if (map.contractIssues.length) {
+    lines.push(`  contract issues: ${map.contractIssues.join(", ")}`);
+  }
+  lines.push(`action metadata: issues=${map.actionMetadataIssues.length}`);
+  if (map.actionMetadataIssues.length) {
+    lines.push(`  action metadata issues: ${map.actionMetadataIssues.join(", ")}`);
   }
   for (const scan of map.scans) {
     const missing = scan.missingCommands.length + scan.missingToolNames.length;
