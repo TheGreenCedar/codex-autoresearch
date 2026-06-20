@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resolveSpawnCommand } from "../scripts/check-runner.js";
-import { resolveNpmCommand } from "../scripts/check.js";
+import { dashboardExportAssetIssues, resolveNpmCommand } from "../scripts/check.js";
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
   assert.throws(
@@ -95,4 +95,50 @@ test("npm resolver keeps non-Windows bare npm fallback", async () => {
   });
 
   assert.deepEqual(resolved, { command: "npm", args: ["run", "test:compiled"] });
+});
+
+test("demo export asset parity rejects a stale inline dashboard script", () => {
+  const assets = {
+    app: "console.log('fresh dashboard');",
+    css: "body { color: #111111; }",
+  };
+  const html = [
+    "<!doctype html>",
+    "<style>",
+    assets.css,
+    "</style>",
+    "<script>",
+    "window.__AUTORESEARCH_DATA__ = [];",
+    "window.__AUTORESEARCH_META__ = {};",
+    "</script>",
+    "<script>",
+    "console.log('stale dashboard');",
+    "</script>",
+  ].join("\n");
+
+  assert.deepEqual(dashboardExportAssetIssues(html, assets), [
+    "inline dashboard script does not match assets/dashboard-build/dashboard-app.js after </script escaping",
+  ]);
+});
+
+test("demo export asset parity accepts documented closing-tag escaping", () => {
+  const assets = {
+    app: "const closing = '</script>';",
+    css: ".sample::after { content: '</style>'; }",
+  };
+  const html = [
+    "<!doctype html>",
+    "<style>",
+    ".sample::after { content: '<\\/style>'; }",
+    "</style>",
+    "<script>",
+    "window.__AUTORESEARCH_DATA__ = [];",
+    "window.__AUTORESEARCH_META__ = {};",
+    "</script>",
+    "<script>",
+    "const closing = '<\\/script>';",
+    "</script>",
+  ].join("\n");
+
+  assert.deepEqual(dashboardExportAssetIssues(html, assets), []);
 });

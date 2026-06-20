@@ -56,6 +56,7 @@ const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.js",
   "assets/dashboard-build/dashboard-app.css",
 ];
+const dashboardDemoExport = "examples/demo-session/autoresearch-dashboard.html";
 
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
@@ -77,6 +78,11 @@ interface PackageEntry {
 
 interface PackageManifest {
   files?: PackageEntry[];
+}
+
+interface DashboardExportAssets {
+  app: string;
+  css: string;
 }
 
 type PackageManifestParse =
@@ -539,10 +545,8 @@ async function runDemoTrustCheck() {
   }
 
   const pkg = JSON.parse(await fsp.readFile(path.join(ROOT, "package.json"), "utf8"));
-  const html = await fsp.readFile(
-    path.join(ROOT, "examples", "demo-session", "autoresearch-dashboard.html"),
-    "utf8",
-  );
+  const html = await fsp.readFile(path.join(ROOT, dashboardDemoExport), "utf8");
+  const parityIssues = dashboardExportAssetIssues(html, await readDashboardExportAssets());
   const showcaseIssues = demoShowcaseIssues(html);
   const forbidden = [
     { label: "Windows user path", pattern: /C:(?:\\+|\/)Users(?:\\+|\/)/ },
@@ -565,6 +569,7 @@ async function runDemoTrustCheck() {
   if (
     !html.includes(`"pluginVersion":"${pkg.version}"`) ||
     forbidden.length ||
+    parityIssues.length ||
     showcaseIssues.length
   ) {
     console.log("fail demo:export");
@@ -573,6 +578,15 @@ async function runDemoTrustCheck() {
     }
     if (showcaseIssues.length) {
       console.log(indent(`Demo export is not a valid showcase:\n${showcaseIssues.join("\n")}`));
+    }
+    if (parityIssues.length) {
+      console.log(
+        indent(
+          `Demo export generated asset parity failed:\n${parityIssues.join(
+            "\n",
+          )}\nRefresh it with: node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase`,
+        ),
+      );
     }
     if (forbidden.length) {
       console.log(
@@ -587,6 +601,55 @@ async function runDemoTrustCheck() {
   }
   console.log("ok demo:export");
   return true;
+}
+
+async function readDashboardExportAssets(): Promise<DashboardExportAssets> {
+  const [app, css] = await Promise.all([
+    fsp.readFile(path.join(ROOT, "assets/dashboard-build/dashboard-app.js"), "utf8"),
+    fsp.readFile(path.join(ROOT, "assets/dashboard-build/dashboard-app.css"), "utf8"),
+  ]);
+  return { app, css };
+}
+
+export function dashboardExportAssetIssues(html: string, assets: DashboardExportAssets): string[] {
+  const issues: string[] = [];
+  const styleBlocks = extractHtmlBlocks(html, "style");
+  const scriptBlocks = extractHtmlBlocks(html, "script");
+  const inlineCss = styleBlocks[0];
+  const inlineApp = scriptBlocks[1];
+
+  if (styleBlocks.length !== 1 || inlineCss === undefined) {
+    issues.push(`expected exactly one inline dashboard style block, found ${styleBlocks.length}`);
+  } else if (inlineCss !== escapedDashboardCss(assets.css)) {
+    issues.push(
+      "inline dashboard CSS does not match assets/dashboard-build/dashboard-app.css after </style escaping",
+    );
+  }
+
+  if (scriptBlocks.length < 2 || inlineApp === undefined) {
+    issues.push(
+      `expected dashboard app in the second inline script block, found ${scriptBlocks.length} script block(s)`,
+    );
+  } else if (inlineApp !== escapedDashboardApp(assets.app)) {
+    issues.push(
+      "inline dashboard script does not match assets/dashboard-build/dashboard-app.js after </script escaping",
+    );
+  }
+
+  return issues;
+}
+
+function extractHtmlBlocks(html: string, tagName: "script" | "style"): string[] {
+  const pattern = new RegExp(`<${tagName}>\\r?\\n([\\s\\S]*?)\\r?\\n</${tagName}>`, "g");
+  return [...html.matchAll(pattern)].map((match) => match[1] || "");
+}
+
+function escapedDashboardApp(value: string): string {
+  return value.replace(/<\/script/gi, "<\\/script");
+}
+
+function escapedDashboardCss(value: string): string {
+  return value.replace(/<\/style/gi, "<\\/style");
 }
 
 function parseDashboardMeta(html: string): any | null {

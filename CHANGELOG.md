@@ -11,6 +11,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 ### Changed
 
 - Clarified first-run docs after install, the first successful packet ladder, package-root versus target `--cwd`, and command-index ownership.
+- Tightened the product gate so the checked-in demo dashboard export must match the current built dashboard CSS and JS, and documented the temporary review export path.
 
 ## 2.4.0 - 2026-06-18
 
