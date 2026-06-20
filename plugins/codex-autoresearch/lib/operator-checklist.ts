@@ -15,10 +15,11 @@ export function buildOperatorChecklist(
   context: LooseObject = {},
 ): OperatorChecklist {
   const action = objectValue(canonicalAction) || {};
-  const command =
+  const rawCommand =
     stringValue(action.command) ||
     stringValue(context.primaryCommand) ||
     inspectCommandForAction(action, context);
+  const command = boundedChecklistCommand(rawCommand, action, context);
   return {
     command,
     safetyReason:
@@ -27,6 +28,15 @@ export function buildOperatorChecklist(
     evidenceRole: evidenceRoleForAction(stringValue(action.kind)),
     source: stringValue(context.source) || "canonical-next-action",
   };
+}
+
+function boundedChecklistCommand(
+  command: string,
+  action: LooseObject,
+  context: LooseObject,
+): string {
+  if (!/\bdoctor\b/i.test(command) || !/--explain\b/i.test(command)) return command;
+  return boundedInspectCommandForAction(action, context) || command;
 }
 
 function blockerForAction(action: LooseObject, context: LooseObject): string {
@@ -96,6 +106,24 @@ function inspectCommandForAction(action: LooseObject, context: LooseObject): str
       return actionMetadataForKind(action.kind)?.packetBrake === false
         ? ""
         : `${script} state --cwd ${cwd} --compact`;
+  }
+}
+
+function boundedInspectCommandForAction(action: LooseObject, context: LooseObject): string {
+  const workDir = stringValue(context.workDir || context.cwd);
+  if (!workDir) return "";
+  const script = scriptCommand(context);
+  const cwd = quoteCommandArg(workDir);
+  switch (stringValue(action.kind)) {
+    case "preflight":
+    case "setup":
+    case "benchmark-command":
+      return `${script} setup-plan --cwd ${cwd}`;
+    case "benchmark-mismatch":
+    case "gate-quality":
+      return `${script} benchmark-lint --cwd ${cwd}`;
+    default:
+      return `${script} state --cwd ${cwd} --compact`;
   }
 }
 

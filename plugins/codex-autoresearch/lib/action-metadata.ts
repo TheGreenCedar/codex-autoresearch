@@ -19,7 +19,14 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Resolve preflight",
     commandLabel: "Doctor",
     safeAction: "doctor",
-    fallbackKeys: ["doctorExplain", "doctor", "benchmarkLint", "state"],
+    fallbackKeys: [
+      "setupPlan",
+      "benchmarkLint",
+      "stateCompact",
+      "state",
+      "doctor",
+      "doctorExplain",
+    ],
   }),
   "portfolio-trust-blocker": actionMetadata({
     label: "Inspect portfolio trust",
@@ -152,13 +159,13 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Complete setup",
     commandLabel: "Setup",
     safeAction: "setup-plan",
-    fallbackKeys: ["setup", "setupPlan", "state"],
+    fallbackKeys: ["setupPlan", "stateCompact", "state", "setup"],
   }),
   "benchmark-command": actionMetadata({
     label: "Add benchmark command",
     commandLabel: "Setup",
     safeAction: "setup-plan",
-    fallbackKeys: ["setup", "setupPlan", "benchmarkLint", "state"],
+    fallbackKeys: ["setupPlan", "benchmarkLint", "stateCompact", "state", "setup"],
   }),
   "log-decision": actionMetadata({
     label: "Log last packet",
