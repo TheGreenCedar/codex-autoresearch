@@ -80,7 +80,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/au
 
 `npm run check` generates its own ignored trust export at `examples/demo-session/tmp/autoresearch-dashboard.check.html`. That generated export must embed the current plugin version, public/showcase flags, scrub workstation paths and transient branch warnings, omit action routes, and match `assets/dashboard-build/dashboard-app.css` plus `assets/dashboard-build/dashboard-app.js` after the exporter's `</style` and `</script` escaping rules.
 
-The legacy checked-in `examples/demo-session/autoresearch-dashboard.html` is no longer the product-gate parity target. Do not refresh it just to make routine dashboard UI checks pass.
+The legacy checked-in `examples/demo-session/autoresearch-dashboard.html` is no longer the product-gate parity target or the current demo runboard. Example docs should point reviewers to `serve` or ignored `tmp/` showcase exports instead. Do not refresh the legacy fixture just to make routine dashboard UI checks pass.
 
 When intentionally refreshing the legacy fixture, use the public showcase export so workstation paths and transient branch warnings are scrubbed:
 
