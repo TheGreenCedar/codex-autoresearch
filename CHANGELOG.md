@@ -27,6 +27,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 ### Fixed
 
 - Routed ledger-integrity failures into state/report next-action guidance, made corrupt JSONL sessions return repair-first `ledger-doctor --json` readouts, kept `benchmark-lint` aligned with config-backed benchmark commands, and made `research-start --skip-init` skip baseline logging cleanly.
+- Redacted benchmark-contract command text, checks command text, option-file paths, and env-file labels from persisted last-run packet storage.
 
 ## 2.3.15 - 2026-06-16
 

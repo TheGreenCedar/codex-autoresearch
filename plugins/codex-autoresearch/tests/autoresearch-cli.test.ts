@@ -3399,6 +3399,132 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
   });
 });
 
+test("last-run packet storage redacts run benchmark contract command and option-file metadata", async () => {
+  await withTempDir("last-run-contract-redaction", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      const commandSecret = "command-secret-abcdefghijklmnop";
+      const checksSecret = "checks-secret-zyxwvutsrqpon";
+      const commandFile = path.join(outsideDir, "private-packet.command");
+      const envFile = path.join(outsideDir, ".env.private");
+      await writeFile(
+        commandFile,
+        `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')" -- --api-key ${commandSecret}\n`,
+        "utf8",
+      );
+      await writeFile(envFile, "PACKET_TOKEN=env-secret-qwertyuiop\n", "utf8");
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "redacted contract",
+        "--metric-name",
+        "seconds",
+      ]);
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command-file",
+        commandFile,
+        "--packet-env-file",
+        envFile,
+        "--checks-command",
+        `${quoteForShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+
+      const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+      assert.doesNotMatch(lastRunText, new RegExp(commandSecret));
+      assert.doesNotMatch(lastRunText, new RegExp(checksSecret));
+      assert.doesNotMatch(lastRunText, /private-packet\.command/);
+      assert.doesNotMatch(lastRunText, /\.env\.private/);
+      assert.doesNotMatch(
+        lastRunText,
+        new RegExp(outsideDir.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")),
+      );
+
+      const stored = JSON.parse(lastRunText);
+      const contract = stored.run.benchmarkContract;
+      assert.match(contract.command, /--api-key <redacted>/);
+      assert.match(contract.checksCommand, /--token <redacted>/);
+      assert.equal(contract.commandFile, "<outside-workdir>");
+      assert.equal(contract.envFile, "<env-file>");
+      assert.equal(
+        contract.files.some((file: Record<string, unknown>) =>
+          String(file.path || "").includes("private-packet.command"),
+        ),
+        false,
+      );
+      assert.equal(
+        contract.files.some((file: Record<string, unknown>) =>
+          String(file.path || "").includes(".env.private"),
+        ),
+        false,
+      );
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("last-run packet storage does not corrupt common option-file basenames", async () => {
+  await withTempDir("last-run-common-basename-redaction", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      const commandFile = path.join(outsideDir, "run");
+      const envFile = path.join(outsideDir, "env");
+      await writeFile(
+        commandFile,
+        [
+          `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "common basename contract",
+        "--metric-name",
+        "seconds",
+      ]);
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command-file",
+        commandFile,
+        "--packet-env-file",
+        envFile,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+
+      const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+      assert.match(lastRunText, /ordinary run env node packet text/);
+      assert.doesNotMatch(
+        lastRunText,
+        new RegExp(outsideDir.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")),
+      );
+
+      const stored = JSON.parse(lastRunText);
+      assert.equal(stored.run.benchmarkContract.commandFile, "<outside-workdir>");
+      assert.equal(stored.run.benchmarkContract.envFile, "<env-file>");
+      assert.equal(stored.run.tailOutput.includes("ordinary run env node packet text"), true);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("run command response redacts raw benchmark evidence", async () => {
   await withTempDir("run-response-redaction", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "redacted run", "--metric-name", "seconds"]);

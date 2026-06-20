@@ -6344,14 +6344,127 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
     stored.packetEvidence = redactEvidenceObject(stored.packetEvidence, context);
   }
   redactRunPacketProcessEvidence(stored.run, context);
-  if (stored.doctor) stored.doctor = redactEvidenceObject(stored.doctor, context);
+  redactBenchmarkContractForStorage(stored.run?.benchmarkContract, context);
+  if (stored.doctor) {
+    redactKnownOptionFileFields(stored.doctor, context);
+    stored.doctor = redactEvidenceObject(stored.doctor, context);
+  }
   if (stored.history) {
     if (stored.history.command) {
       stored.history.command = redactCommandDisplay(stored.history.command, context);
     }
     redactBenchmarkContractForStorage(stored.history.benchmarkContract, context);
   }
+  redactKnownOptionFileFields(stored, context);
+  applyLastRunStorageReplacements(stored, lastRunStorageReplacements(packet, context));
   return stored;
+}
+
+const STORAGE_COMMAND_FILE_KEYS = new Set(["commandFile", "command_file"]);
+const STORAGE_ENV_FILE_KEYS = new Set(["envFile", "env_file", "packetEnvFile", "packet_env_file"]);
+
+function redactKnownOptionFileFields(value: unknown, context: LooseObject): void {
+  if (Array.isArray(value)) {
+    for (const item of value) redactKnownOptionFileFields(item, context);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (typeof child === "string") {
+      if (STORAGE_COMMAND_FILE_KEYS.has(key)) {
+        (value as LooseObject)[key] = redactPathDisplay(child, context.workDir);
+        continue;
+      }
+      if (STORAGE_ENV_FILE_KEYS.has(key) && child) {
+        (value as LooseObject)[key] = "<env-file>";
+        continue;
+      }
+    }
+    redactKnownOptionFileFields(child, context);
+  }
+}
+
+function lastRunStorageReplacements(packet: LooseObject, context: LooseObject) {
+  const replacements: Array<{ token: string; replacement: string }> = [];
+  addOptionPathReplacements(replacements, packet?.run?.commandFile, context, {
+    replacement: redactPathDisplay(packet?.run?.commandFile, context.workDir),
+  });
+  addOptionPathReplacements(replacements, packet?.run?.envFile, context, {
+    replacement: "<env-file>",
+  });
+  addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.commandFile, context, {
+    replacement: redactPathDisplay(packet?.run?.benchmarkContract?.commandFile, context.workDir),
+  });
+  addOptionPathReplacements(replacements, packet?.run?.benchmarkContract?.envFile, context, {
+    replacement: "<env-file>",
+  });
+  addOptionPathReplacements(
+    replacements,
+    packet?.history?.benchmarkContract?.commandFile,
+    context,
+    {
+      replacement: redactPathDisplay(
+        packet?.history?.benchmarkContract?.commandFile,
+        context.workDir,
+      ),
+    },
+  );
+  addOptionPathReplacements(replacements, packet?.history?.benchmarkContract?.envFile, context, {
+    replacement: "<env-file>",
+  });
+  return replacements
+    .filter((entry) => entry.token && entry.token !== entry.replacement)
+    .sort((a, b) => b.token.length - a.token.length);
+}
+
+function addOptionPathReplacements(
+  replacements: Array<{ token: string; replacement: string }>,
+  value: unknown,
+  context: LooseObject,
+  options: { replacement: string },
+) {
+  const raw = String(value || "").trim();
+  if (!raw) return;
+  const tokens = new Set<string>();
+  const resolved = path.isAbsolute(raw)
+    ? path.resolve(raw)
+    : path.resolve(context.workDir || "", raw);
+  for (const candidate of [raw, resolved]) {
+    if (!isPathLikeReplacementToken(candidate)) continue;
+    tokens.add(candidate);
+    tokens.add(candidate.replace(/\\/g, "/"));
+    tokens.add(candidate.replace(/\//g, "\\"));
+  }
+  for (const token of tokens) {
+    if (token.length > 2) replacements.push({ token, replacement: options.replacement });
+  }
+}
+
+function isPathLikeReplacementToken(value: string) {
+  return path.isAbsolute(value) || /[\\/]/.test(value);
+}
+
+function applyLastRunStorageReplacements(
+  value: unknown,
+  replacements: Array<{ token: string; replacement: string }>,
+): void {
+  if (!replacements.length) return;
+  if (Array.isArray(value)) {
+    for (const item of value) applyLastRunStorageReplacements(item, replacements);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as LooseObject)) {
+    if (typeof child === "string") {
+      let text = child;
+      for (const { token, replacement } of replacements) {
+        text = text.split(token).join(replacement);
+      }
+      (value as LooseObject)[key] = text;
+      continue;
+    }
+    applyLastRunStorageReplacements(child, replacements);
+  }
 }
 
 function redactRunPacketProcessEvidence(
@@ -6368,6 +6481,7 @@ function redactRunPacketProcessEvidence(
   redactProgressEvidence(value.progress, context);
   redactProgressEvidence(value.progressSnapshot, context);
   if (value.commandDiagnostics) {
+    redactKnownOptionFileFields(value.commandDiagnostics, context);
     value.commandDiagnostics = redactEvidenceObject(value.commandDiagnostics, context);
   }
   if (value.checks && typeof value.checks === "object") {
@@ -6405,6 +6519,12 @@ function redactBenchmarkContractForStorage(
   }
   if (value.commandFile) value.commandFile = redactPathDisplay(value.commandFile, context.workDir);
   if (value.envFile) value.envFile = "<env-file>";
+  if (Array.isArray(value.files)) {
+    for (const file of value.files) {
+      if (!file || typeof file !== "object" || !file.path) continue;
+      file.path = redactEvidenceText(redactPathDisplay(file.path, context.workDir), context);
+    }
+  }
 }
 
 const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
