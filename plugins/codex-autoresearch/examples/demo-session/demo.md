@@ -24,7 +24,7 @@ The ledger includes:
 
 The checked-in session is preconfigured, so the default benchmark and checks paths work out of the box.
 
-Open the runboard through the local server to see the example session as a live operator surface:
+Open the dashboard through the local server to see the example session with fresh dashboard code:
 
 ```bash
 node scripts/autoresearch.mjs serve --cwd examples/demo-session
@@ -39,14 +39,18 @@ node scripts/autoresearch.mjs doctor --cwd examples/demo-session --check-benchma
 
 The demo benchmark is expected to parse cleanly: `benchmark-lint` should report the configured `seconds` metric. That is narrower than full session readiness. In a source checkout, `doctor --check-benchmark --explain` may still return non-ready because finalization/current-tree coverage, dirty local files, stale runtime provenance, development-only evidence, or other trust blockers are real in the current checkout. Treat that as demo truth, not a broken metric parser.
 
-`autoresearch-dashboard.html` is the curated docs showcase that ships with the current dashboard build and bundled demo data. Refresh it with the portable showcase mode so local workstation paths and feature-branch Git warnings are not embedded in the public demo:
+If you need a portable dashboard file for review, generate an ignored showcase export:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
 
-If you want a raw portable export of the example session evidence, write it to a separate file instead of overwriting the curated demo:
+`npm run check` writes its own ignored trust export at `examples/demo-session/tmp/autoresearch-dashboard.check.html`. That generated export is the parity target for current dashboard source, bundled assets, showcase metadata, redaction, and read-only behavior.
+
+The committed `autoresearch-dashboard.html` is a legacy fixture. Do not use it as the current runboard, and do not refresh it for routine dashboard changes.
+
+If you want a raw portable export of the example session evidence, write it under `tmp/` instead of overwriting the legacy fixture:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.session.html
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.session.html
 ```
