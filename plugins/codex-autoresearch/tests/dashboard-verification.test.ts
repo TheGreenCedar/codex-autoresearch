@@ -18,6 +18,7 @@ import {
   DASHBOARD_TRANSPORT_ARRAY_LIMIT,
   DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT,
   compactDashboardTransportViewModel,
+  dashboardHtml,
   readDashboardBuildAsset,
 } from "../lib/dashboard-transport.js";
 import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
@@ -447,6 +448,20 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
         command: "node scripts/autoresearch.mjs next --cwd C:/repo",
       },
     },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+        benchmarkCommand: "node C:/private/repo/bench.mjs --token sk-demo",
+        checksCommand: "npm test -- --token sk-demo",
+      },
+      commandAuthority: {
+        status: "custom",
+        benchmarkCommand: "node C:/private/repo/bench.mjs --token sk-demo",
+        checksCommand: "npm test -- --token sk-demo",
+      },
+    },
     sourceCwd: "C:/repo",
     summary: "No command here.",
   };
@@ -459,16 +474,33 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
   assert.equal(dashboardCommandMapKey("state"), "state");
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("replaceLast"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("finalizeCurrentTree"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("benchmarkCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("checksCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("commandAuthority"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("cleanupCommand"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("suggestedCommand"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("planOutput"), true);
   assert.deepEqual(stripDashboardGuidanceCommandFields(payload), {
     nested: { detail: "Review the current state." },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+      },
+    },
     sourceCwd: "C:/repo",
     summary: "No command here.",
   });
   assert.deepEqual(stripDashboardExportCommandFields(payload), {
     nested: { detail: "Review the current state." },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+      },
+    },
     summary: "No command here.",
   });
   assert.deepEqual(collectDashboardCommandFields(payload), [
@@ -478,7 +510,91 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
     "node scripts/autoresearch.mjs doctor --cwd C:/repo",
     "Next",
     "node scripts/autoresearch.mjs next --cwd C:/repo",
+    "node C:/private/repo/bench.mjs --token sk-demo",
+    "npm test -- --token sk-demo",
+    "custom",
+    "node C:/private/repo/bench.mjs --token sk-demo",
+    "npm test -- --token sk-demo",
   ]);
+});
+
+test("static dashboard export strips setup and recipe command fields", () => {
+  const benchmarkCommand = "node C:/Users/alber/private/bench.mjs --token sk-demo-secret";
+  const checksCommand = "npm test -- --secret sk-demo-secret";
+  const html = dashboardHtml(
+    [
+      {
+        type: "config",
+        name: "Static export setup",
+        metricName: "score",
+        bestDirection: "higher",
+        benchmarkCommand,
+        checksCommand,
+      },
+      {
+        type: "state",
+        setup: {
+          label: "Benchmark setup",
+          status: "needs-checks",
+          recommendedRecipe: {
+            id: "node-test",
+            name: "Node test",
+            status: "recommended",
+            benchmarkCommand,
+            checksCommand,
+          },
+          commandAuthority: {
+            status: "custom",
+            benchmarkCommand,
+            checksCommand,
+          },
+        },
+      },
+    ],
+    {
+      deliveryMode: "static-export",
+      viewModel: {
+        setup: {
+          label: "Benchmark setup",
+          status: "needs-checks",
+          recommendedRecipe: {
+            id: "node-test",
+            name: "Node test",
+            status: "recommended",
+            benchmarkCommand,
+            checksCommand,
+          },
+          commandAuthority: {
+            status: "custom",
+            benchmarkCommand,
+            checksCommand,
+          },
+        },
+      },
+    },
+  );
+  const dataMatch = html.match(
+    /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
+  );
+  const metaMatch = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+  assert.ok(dataMatch);
+  assert.ok(metaMatch);
+  const data = JSON.parse(dataMatch[1]);
+  const meta = JSON.parse(metaMatch[1]);
+  const serialized = JSON.stringify({ data, meta });
+
+  assert.doesNotMatch(serialized, /benchmarkCommand|checksCommand|commandAuthority/);
+  assert.doesNotMatch(serialized, /sk-demo-secret|private\/bench|C:\\/);
+  assert.equal(data[1].setup.label, "Benchmark setup");
+  assert.equal(data[1].setup.status, "needs-checks");
+  assert.equal(data[1].setup.recommendedRecipe.id, "node-test");
+  assert.equal(data[1].setup.recommendedRecipe.name, "Node test");
+  assert.equal(data[1].setup.recommendedRecipe.status, "recommended");
+  assert.equal(meta.viewModel.setup.label, "Benchmark setup");
+  assert.equal(meta.viewModel.setup.status, "needs-checks");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.id, "node-test");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.name, "Node test");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.status, "recommended");
 });
 
 test("dashboard finalization preview strips executable command-shaped fields", () => {
