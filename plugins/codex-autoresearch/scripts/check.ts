@@ -287,6 +287,7 @@ async function runPackageArtifactCheck() {
     const requiredPaths = [
       ".codex-plugin/plugin.json",
       "assets/dashboard-build/dashboard-app.js",
+      "assets/dashboard-build/dashboard-app.css",
       "docs/index.md",
       "dist/lib/runtime-paths.mjs",
       "dist/lib/tool-schemas.mjs",
@@ -972,6 +973,7 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
 }
 
 async function runPackageSmokeCommands(extractDir: string) {
+  const packageDir = path.join(extractDir, "package");
   const commands = [
     {
       label: "autoresearch",
@@ -991,7 +993,7 @@ async function runPackageSmokeCommands(extractDir: string) {
     const result = await runCommand([
       `package-runtime-smoke:${command.label}`,
       node,
-      [path.join(extractDir, "package", "scripts", command.script), ...command.args],
+      [path.join(packageDir, "scripts", command.script), ...command.args],
     ]);
     if (result.code !== 0) {
       const output = `${result.stdout}${result.stderr}`.trim();
@@ -1006,7 +1008,84 @@ async function runPackageSmokeCommands(extractDir: string) {
     }
   }
 
+  const dashboardSmoke = await runExtractedPackageDashboardExportSmoke(packageDir, extractDir);
+  if (!dashboardSmoke.ok) return dashboardSmoke;
+
   return { ok: true, error: "" };
+}
+
+async function runExtractedPackageDashboardExportSmoke(packageDir: string, extractDir: string) {
+  const smokeDir = path.join(extractDir, "dashboard-smoke");
+  const outputName = "dashboard-smoke.html";
+  const outputPath = path.join(smokeDir, outputName);
+  await fsp.mkdir(smokeDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(smokeDir, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        name: "package dashboard smoke",
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        bestDirection: "lower",
+      }),
+      JSON.stringify({
+        type: "run",
+        run: 1,
+        status: "measure",
+        metric: 1,
+        description: "Packaged dashboard export smoke.",
+      }),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const result = await runCommand([
+    "package-runtime-smoke:dashboard-export",
+    node,
+    [
+      path.join(packageDir, "scripts", "autoresearch.mjs"),
+      "export",
+      "--cwd",
+      smokeDir,
+      "--output",
+      outputName,
+    ],
+  ]);
+  if (result.code !== 0) {
+    const output = `${result.stdout}${result.stderr}`.trim();
+    return { ok: false, error: output || "dashboard export smoke failed." };
+  }
+
+  let html = "";
+  try {
+    html = await fsp.readFile(outputPath, "utf8");
+  } catch (error) {
+    return { ok: false, error: `dashboard export smoke did not write ${outputPath}: ${error}` };
+  }
+
+  const assets = await readPackageDashboardExportAssets(packageDir);
+  const assetIssues = dashboardExportAssetIssues(html, assets);
+  const markerIssues = [
+    html.includes("package dashboard smoke") ? "" : "dashboard export missed smoke session data",
+    html.includes('id="dashboard-root"') ? "" : "dashboard export missed dashboard root",
+  ].filter(Boolean);
+  if (assetIssues.length || markerIssues.length) {
+    return { ok: false, error: [...assetIssues, ...markerIssues].join("\n") };
+  }
+
+  return { ok: true, error: "" };
+}
+
+async function readPackageDashboardExportAssets(
+  packageDir: string,
+): Promise<DashboardExportAssets> {
+  const [app, css] = await Promise.all([
+    fsp.readFile(path.join(packageDir, "assets/dashboard-build/dashboard-app.js"), "utf8"),
+    fsp.readFile(path.join(packageDir, "assets/dashboard-build/dashboard-app.css"), "utf8"),
+  ]);
+  return { app, css };
 }
 
 async function runDogfoodHealthCheck() {

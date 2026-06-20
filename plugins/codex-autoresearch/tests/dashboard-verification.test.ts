@@ -18,6 +18,7 @@ import {
   DASHBOARD_TRANSPORT_ARRAY_LIMIT,
   DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT,
   compactDashboardTransportViewModel,
+  readDashboardBuildAsset,
 } from "../lib/dashboard-transport.js";
 import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
 import {
@@ -578,6 +579,20 @@ test("dashboard transport view model caps large memory arrays", () => {
   assert.equal(viewModel.decisionEnvelope.state.current[0].run, 6);
   assert.equal(viewModel.decisionEnvelope.workflowFriction.length, DASHBOARD_TRANSPORT_ARRAY_LIMIT);
   assert.equal(viewModel.decisionEnvelope.workflowFriction[0].id, 0);
+});
+
+test("source checkout reports missing dashboard build assets with build guidance", async () => {
+  const missingBuildDir = await mkdtemp(path.join(tmpdir(), "autoresearch-missing-dashboard-"));
+  await rm(missingBuildDir, { recursive: true, force: true });
+
+  assert.throws(
+    () =>
+      readDashboardBuildAsset("dashboard-app.js", {
+        buildDir: missingBuildDir,
+        pluginRoot: "C:\\repo\\plugins\\codex-autoresearch",
+      }),
+    /Dashboard build asset is missing: .* Run npm run build:dashboard from C:\\repo\\plugins\\codex-autoresearch\./,
+  );
 });
 
 test("dashboard ledger bounder preserves governing config when there is room for a run", () => {
