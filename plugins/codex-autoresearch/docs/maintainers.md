@@ -81,7 +81,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 For review without in-place churn, write a temporary ignored export in the demo session and compare or open that file instead:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.review.html --showcase
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
 
 The product gate compares the checked-in demo export's inline dashboard CSS and JS with `assets/dashboard-build/dashboard-app.css` and `assets/dashboard-build/dashboard-app.js` after the exporter's `</style` and `</script` escaping rules. A stale inline script or stylesheet fails `npm run check`.
