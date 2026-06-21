@@ -7,7 +7,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
-import { buildDashboardViewModel, buildWatchdogSummary } from "../lib/dashboard-view-model.js";
+import { buildWatchdogSummary } from "../lib/watchdog-summary.js";
 import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
 import { buildDecisionGuidanceContext } from "../lib/decision-guidance.js";
 import {
@@ -101,10 +101,6 @@ import {
 import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
-  finalizeCurrentTree as buildFinalizeCurrentTree,
-  finalizePreview as buildFinalizePreview,
-} from "../lib/finalize-preview.js";
-import {
   buildGoalContract,
   buildGoalFrame,
   goalCompletionUnresolvedBlockers,
@@ -116,8 +112,6 @@ import {
   normalizeFixedControlConfig,
   type FixedControlViolation,
 } from "../lib/fixed-control.js";
-import { discoverPartialResultCandidates } from "../lib/partial-results.js";
-import { integrationsCommand } from "../lib/integrations.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
@@ -141,7 +135,6 @@ import {
   recommendRecipe,
   revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
-import { serveAutoresearch } from "../lib/live-server.js";
 import {
   parseMetricLines,
   runProcess as runBoundedProcess,
@@ -259,6 +252,79 @@ const COMMAND_EXECUTION_BOUNDARY = {
 };
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
+
+type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
+type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
+type PartialResultsModule = typeof import("../lib/partial-results.js");
+type IntegrationsModule = typeof import("../lib/integrations.js");
+type LiveServerModule = typeof import("../lib/live-server.js");
+
+let dashboardViewModelModulePromise: Promise<DashboardViewModelModule> | null = null;
+let finalizePreviewModulePromise: Promise<FinalizePreviewModule> | null = null;
+let partialResultsModulePromise: Promise<PartialResultsModule> | null = null;
+let integrationsModulePromise: Promise<IntegrationsModule> | null = null;
+let liveServerModulePromise: Promise<LiveServerModule> | null = null;
+
+function dashboardViewModelModule(): Promise<DashboardViewModelModule> {
+  dashboardViewModelModulePromise ??= import("../lib/dashboard-view-model.js");
+  return dashboardViewModelModulePromise;
+}
+
+function finalizePreviewModule(): Promise<FinalizePreviewModule> {
+  finalizePreviewModulePromise ??= import("../lib/finalize-preview.js");
+  return finalizePreviewModulePromise;
+}
+
+function partialResultsModule(): Promise<PartialResultsModule> {
+  partialResultsModulePromise ??= import("../lib/partial-results.js");
+  return partialResultsModulePromise;
+}
+
+function integrationsModule(): Promise<IntegrationsModule> {
+  integrationsModulePromise ??= import("../lib/integrations.js");
+  return integrationsModulePromise;
+}
+
+function liveServerModule(): Promise<LiveServerModule> {
+  liveServerModulePromise ??= import("../lib/live-server.js");
+  return liveServerModulePromise;
+}
+
+async function buildDashboardViewModelLazy(
+  ...args: Parameters<DashboardViewModelModule["buildDashboardViewModel"]>
+): Promise<ReturnType<DashboardViewModelModule["buildDashboardViewModel"]>> {
+  return (await dashboardViewModelModule()).buildDashboardViewModel(...args);
+}
+
+async function buildFinalizePreview(
+  ...args: Parameters<FinalizePreviewModule["finalizePreview"]>
+): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizePreview"]>>> {
+  return (await finalizePreviewModule()).finalizePreview(...args);
+}
+
+async function buildFinalizeCurrentTree(
+  ...args: Parameters<FinalizePreviewModule["finalizeCurrentTree"]>
+): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizeCurrentTree"]>>> {
+  return (await finalizePreviewModule()).finalizeCurrentTree(...args);
+}
+
+async function discoverPartialResultCandidatesLazy(
+  ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
+): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
+  return (await partialResultsModule()).discoverPartialResultCandidates(...args);
+}
+
+async function integrationsCommandLazy(
+  ...args: Parameters<IntegrationsModule["integrationsCommand"]>
+): Promise<Awaited<ReturnType<IntegrationsModule["integrationsCommand"]>>> {
+  return (await integrationsModule()).integrationsCommand(...args);
+}
+
+async function serveAutoresearchLazy(
+  ...args: Parameters<LiveServerModule["serveAutoresearch"]>
+): Promise<Awaited<ReturnType<LiveServerModule["serveAutoresearch"]>>> {
+  return (await liveServerModule()).serveAutoresearch(...args);
+}
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
@@ -285,7 +351,7 @@ const { exportDashboard, serveDashboard } = createDashboardCommands({
   readJsonl,
   resolveOutputInside,
   resolveWorkDir,
-  serveAutoresearch,
+  serveAutoresearch: serveAutoresearchLazy,
   shellQuote,
   writeFile: fsp.writeFile,
 });
@@ -5427,7 +5493,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     resumeAudit: decisionEnvelope,
     decisionEnvelope,
   };
-  return buildDashboardViewModel({
+  return buildDashboardViewModelLazy({
     state: enrichedState as any,
     settings,
     commands,
@@ -6822,7 +6888,7 @@ async function discoverLastRunPartialResults(
   if (!lastRun || !partialResultEligiblePacket(lastRun)) {
     return { candidates: [], skippedArtifacts: [] };
   }
-  return await discoverPartialResultCandidates({
+  return await discoverPartialResultCandidatesLazy({
     workDir,
     primaryMetricName: state.config?.metricName || "metric",
     lastRunPacket: lastRun,
@@ -10066,7 +10132,7 @@ async function executeAutoresearchCli(
     gapCandidates: buildGapCandidates,
     guidedSetup,
     initExperiment,
-    integrationsCommand,
+    integrationsCommand: integrationsCommandLazy,
     interactiveSetup,
     logExperiment,
     ledgerDoctor,
