@@ -64,7 +64,9 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
-  if ((await newestSourceMtime(pluginRoot)) < (await fileMtime(target))) return;
+  const targetMtime = await fileMtime(target);
+  if (await sourceRuntimeFreshByGit(pluginRoot, targetMtime)) return;
+  if ((await newestSourceMtime(pluginRoot)) < targetMtime) return;
 
   const build = npmBuildInvocation();
   await run(build.command, build.args, { cwd: pluginRoot });
@@ -319,6 +321,28 @@ function run(command, args, options = {}) {
   });
 }
 
+function runCapture(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
 async function fileExists(file) {
   try {
     await fs.access(file);
@@ -334,6 +358,103 @@ async function fileMtime(file) {
   } catch {
     return 0;
   }
+}
+
+async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
+  if (!(targetMtime > 0)) return false;
+  const [metadata, status] = await Promise.all([
+    runCapture(
+      "git",
+      [
+        "rev-parse",
+        "--show-toplevel",
+        "--path-format=absolute",
+        "--git-path",
+        "HEAD",
+        "--git-path",
+        "index",
+      ],
+      {
+        cwd: pluginRoot,
+      },
+    ).catch(() => null),
+    runCapture(
+      "git",
+      ["status", "--porcelain=v1", "-uall", "--", "package.json", "lib", "scripts"],
+      {
+        cwd: pluginRoot,
+      },
+    ).catch(() => null),
+  ]);
+  if (!metadata || metadata.code !== 0 || !status || status.code !== 0) return false;
+
+  const [repoRootText, headPathText, indexPathText] = metadata.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!repoRootText || !headPathText || !indexPathText) return false;
+
+  const dirty = dirtyRuntimeSourcePaths({
+    pluginRoot,
+    repoRoot: repoRootText,
+    stdout: status.stdout,
+  });
+  if (dirty.fullScanRequired) return false;
+
+  const markerMtimes = await Promise.all([
+    fileMtime(headPathText),
+    fileMtime(indexPathText),
+    ...dirty.paths.map((file) => fileMtime(file)),
+  ]);
+  return Math.max(0, ...markerMtimes) < targetMtime;
+}
+
+function dirtyRuntimeSourcePaths({ pluginRoot, repoRoot, stdout }) {
+  const paths = [];
+  for (const rawLine of String(stdout || "").split(/\r?\n/)) {
+    if (!rawLine.trim()) continue;
+    const status = rawLine.slice(0, 2);
+    const parsed = parsePorcelainPath(rawLine.slice(3));
+    if (!parsed) continue;
+    if (
+      status.includes("D") ||
+      status.includes("R") ||
+      status.includes("C") ||
+      status.includes("T")
+    ) {
+      return { fullScanRequired: true, paths };
+    }
+    const absolutePath = path.resolve(repoRoot, parsed.replace(/\//g, path.sep));
+    const relativePath = slashPath(path.relative(pluginRoot, absolutePath));
+    if (!isRuntimeSourcePath(relativePath)) continue;
+    paths.push(absolutePath);
+  }
+  return { fullScanRequired: false, paths };
+}
+
+function parsePorcelainPath(text) {
+  const value = String(text || "").trim();
+  if (!value) return "";
+  const renamed = value.lastIndexOf(" -> ");
+  const pathText = renamed >= 0 ? value.slice(renamed + 4) : value;
+  if (!pathText.startsWith('"')) return pathText;
+  try {
+    return JSON.parse(pathText);
+  } catch {
+    return pathText.slice(1, -1);
+  }
+}
+
+function isRuntimeSourcePath(relativePath) {
+  return (
+    relativePath === "package.json" ||
+    ((relativePath.startsWith("lib/") || relativePath.startsWith("scripts/")) &&
+      relativePath.endsWith(".ts"))
+  );
+}
+
+function slashPath(value) {
+  return String(value || "").replace(/\\/g, "/");
 }
 
 async function newestSourceMtime(pluginRoot) {

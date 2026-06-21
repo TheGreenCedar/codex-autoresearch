@@ -23,9 +23,6 @@ import {
   operationProgress,
 } from "../lib/commands/dashboard.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
-import { createInspectCommands } from "../lib/commands/inspect.js";
-import { createLaneRunnerCommand } from "../lib/commands/lane-runner.js";
-import { createPartialResultsCommand } from "../lib/commands/partial-results.js";
 import { buildNextPacketId } from "../lib/commands/next.js";
 import {
   buildCompactRecommendNextResponse,
@@ -256,12 +253,19 @@ const OUTPUT_MAX_BYTES = 8192;
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
+type InspectCommandsModule = typeof import("../lib/commands/inspect.js");
+type LaneRunnerCommandModule = typeof import("../lib/commands/lane-runner.js");
+type PartialResultsCommandModule = typeof import("../lib/commands/partial-results.js");
 type IntegrationsModule = typeof import("../lib/integrations.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
+type InspectCommandHandlers = ReturnType<InspectCommandsModule["createInspectCommands"]>;
 
 let dashboardViewModelModulePromise: Promise<DashboardViewModelModule> | null = null;
 let finalizePreviewModulePromise: Promise<FinalizePreviewModule> | null = null;
 let partialResultsModulePromise: Promise<PartialResultsModule> | null = null;
+let inspectCommandsModulePromise: Promise<InspectCommandsModule> | null = null;
+let laneRunnerCommandModulePromise: Promise<LaneRunnerCommandModule> | null = null;
+let partialResultsCommandModulePromise: Promise<PartialResultsCommandModule> | null = null;
 let integrationsModulePromise: Promise<IntegrationsModule> | null = null;
 let liveServerModulePromise: Promise<LiveServerModule> | null = null;
 
@@ -278,6 +282,21 @@ function finalizePreviewModule(): Promise<FinalizePreviewModule> {
 function partialResultsModule(): Promise<PartialResultsModule> {
   partialResultsModulePromise ??= import("../lib/partial-results.js");
   return partialResultsModulePromise;
+}
+
+function inspectCommandsModule(): Promise<InspectCommandsModule> {
+  inspectCommandsModulePromise ??= import("../lib/commands/inspect.js");
+  return inspectCommandsModulePromise;
+}
+
+function laneRunnerCommandModule(): Promise<LaneRunnerCommandModule> {
+  laneRunnerCommandModulePromise ??= import("../lib/commands/lane-runner.js");
+  return laneRunnerCommandModulePromise;
+}
+
+function partialResultsCommandModule(): Promise<PartialResultsCommandModule> {
+  partialResultsCommandModulePromise ??= import("../lib/commands/partial-results.js");
+  return partialResultsCommandModulePromise;
 }
 
 function integrationsModule(): Promise<IntegrationsModule> {
@@ -356,40 +375,68 @@ const { exportDashboard, serveDashboard } = createDashboardCommands({
   writeFile: fsp.writeFile,
 });
 
-const { benchmarkLint, benchmarkInspect, checksInspect } = createInspectCommands({
-  currentState,
-  defaultBenchmarkCommand,
-  fixedControlBlockForCommand,
-  finiteMetric,
-  headText,
-  metricParseSource,
-  numberOption,
-  parseMetricLines,
-  resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
-    await resolveBenchmarkCommandSource(args, workDir, {
-      fallbackToDefault: true,
-      requireCommand: false,
-      config,
-    }),
-  resolveWorkDir,
-  runShell,
-  validateMetricName,
-});
+let inspectCommandHandlers: InspectCommandHandlers | null = null;
 
-const partialResultsCommand = createPartialResultsCommand({
-  appendJsonl,
-  assertFreshLastRunPacket,
-  boolOption,
-  computeConfidence,
-  currentState,
-  deleteLastRunPacket,
-  finiteMetric,
-  loopContinuation,
-  readConfig,
-  readLastRunPacket,
-  researchSlugFromArgs,
-  resolveWorkDir,
-});
+async function getInspectCommandHandlers(): Promise<InspectCommandHandlers> {
+  if (!inspectCommandHandlers) {
+    const { createInspectCommands } = await inspectCommandsModule();
+    inspectCommandHandlers = createInspectCommands({
+      currentState,
+      defaultBenchmarkCommand,
+      fixedControlBlockForCommand,
+      finiteMetric,
+      headText,
+      metricParseSource,
+      numberOption,
+      parseMetricLines,
+      resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
+        await resolveBenchmarkCommandSource(args, workDir, {
+          fallbackToDefault: true,
+          requireCommand: false,
+          config,
+        }),
+      resolveWorkDir,
+      runShell,
+      validateMetricName,
+    });
+  }
+  return inspectCommandHandlers;
+}
+
+async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
+  return await (await getInspectCommandHandlers()).benchmarkLint(args);
+}
+
+async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
+  return await (await getInspectCommandHandlers()).benchmarkInspect(args);
+}
+
+async function checksInspect(args: LooseObject): Promise<LooseObject> {
+  return await (await getInspectCommandHandlers()).checksInspect(args);
+}
+
+let partialResultsCommandHandler: ((args: LooseObject) => Promise<LooseObject>) | null = null;
+
+async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
+  if (!partialResultsCommandHandler) {
+    const { createPartialResultsCommand } = await partialResultsCommandModule();
+    partialResultsCommandHandler = createPartialResultsCommand({
+      appendJsonl,
+      assertFreshLastRunPacket,
+      boolOption,
+      computeConfidence,
+      currentState,
+      deleteLastRunPacket,
+      finiteMetric,
+      loopContinuation,
+      readConfig,
+      readLastRunPacket,
+      researchSlugFromArgs,
+      resolveWorkDir,
+    });
+  }
+  return await partialResultsCommandHandler(args);
+}
 
 let sessionForensicsCommand: ((args: LooseObject) => Promise<LooseObject>) | null = null;
 
@@ -407,31 +454,39 @@ async function sessionForensics(args: LooseObject): Promise<LooseObject> {
   return await sessionForensicsCommand(args);
 }
 
-const laneRunner = createLaneRunnerCommand({
-  appendJsonl,
-  assertNoDirtyPathsOutsideWriteScope,
-  assertWriteScopeIntegrity,
-  boolOption,
-  buildParallelOrchestrationContext,
-  commandLooksMutating,
-  commandLooksUnsafeForWriteScope,
-  currentState,
-  dashboardSettings,
-  gitStatusPorcelain,
-  insideGitRepo,
-  latestLaneResults,
-  normalizeLaneMode,
-  normalizeParallelLane,
-  normalizeRelativePaths,
-  positiveIntegerOption,
-  readJsonl,
-  resolveLaneWorktree,
-  resolveWorkDir,
-  runShell,
-  synthesizeLaneDecision,
-  tailText,
-  writeScopeSnapshot,
-});
+let laneRunnerHandler: ((args: LooseObject) => Promise<LooseObject>) | null = null;
+
+async function laneRunner(args: LooseObject): Promise<LooseObject> {
+  if (!laneRunnerHandler) {
+    const { createLaneRunnerCommand } = await laneRunnerCommandModule();
+    laneRunnerHandler = createLaneRunnerCommand({
+      appendJsonl,
+      assertNoDirtyPathsOutsideWriteScope,
+      assertWriteScopeIntegrity,
+      boolOption,
+      buildParallelOrchestrationContext,
+      commandLooksMutating,
+      commandLooksUnsafeForWriteScope,
+      currentState,
+      dashboardSettings,
+      gitStatusPorcelain,
+      insideGitRepo,
+      latestLaneResults,
+      normalizeLaneMode,
+      normalizeParallelLane,
+      normalizeRelativePaths,
+      positiveIntegerOption,
+      readJsonl,
+      resolveLaneWorktree,
+      resolveWorkDir,
+      runShell,
+      synthesizeLaneDecision,
+      tailText,
+      writeScopeSnapshot,
+    });
+  }
+  return await laneRunnerHandler(args);
+}
 
 function usage(options: { all?: boolean } = {}) {
   return renderCliHelp(options);
@@ -2099,7 +2154,12 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
   const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
   const canonicalNextAction = state.canonicalNextAction || null;
-  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const shouldReadLastRun =
+    state.requiresLogDecision === true ||
+    ["log-decision", "stale-packet"].includes(String(canonicalNextAction?.kind || ""));
+  const lastRun = shouldReadLastRun
+    ? await readLastRunPacket(workDir).catch((): null => null)
+    : null;
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const lastRunLogStatus = lastRun
@@ -3729,8 +3789,19 @@ function gitOutput(result: any, fallback: any) {
 }
 
 async function insideGitRepo(cwd: string) {
+  if (!hasGitMarker(cwd)) return false;
   const result = await git(["rev-parse", "--is-inside-work-tree"], cwd);
   return result.code === 0 && result.stdout.trim() === "true";
+}
+
+function hasGitMarker(cwd: string): boolean {
+  let current = path.resolve(cwd);
+  for (;;) {
+    if (fs.existsSync(path.join(current, ".git"))) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 async function gitPrivatePath(cwd: string, relativePath: string) {
@@ -5566,11 +5637,16 @@ async function operatorWarningsForWorkDir(
   const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
   const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
   if (protectedBenchmarkWarning) warnings.push(protectedBenchmarkWarning);
-  warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state)));
+  warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state, { inGit })));
   return warnings;
 }
 
-async function benchmarkIntegrityPreflight(workDir: string, config: any, state: any) {
+async function benchmarkIntegrityPreflight(
+  workDir: string,
+  config: any,
+  state: any,
+  options: { inGit?: boolean } = {},
+) {
   const warnings = [];
   const hasIntegrityGuard = Boolean(
     config.benchmarkIntegrityCommand ||
@@ -5598,10 +5674,8 @@ async function benchmarkIntegrityPreflight(workDir: string, config: any, state: 
   for (const relative of ["target/autoresearch", ".autoresearch-cache"]) {
     if (await pathExists(path.join(workDir, relative))) staleArtifactRoots.push(relative);
   }
-  if (
-    (await insideGitRepo(workDir).catch(() => false)) &&
-    (await gitPrivateDirectoryHasBenchmarkArtifacts(workDir, "autoresearch"))
-  ) {
+  const inGit = options.inGit ?? (await insideGitRepo(workDir).catch(() => false));
+  if (inGit && (await gitPrivateDirectoryHasBenchmarkArtifacts(workDir, "autoresearch"))) {
     staleArtifactRoots.push(".git/autoresearch");
   }
   if (staleArtifactRoots.length && !boolOption(config.allowStaleArtifacts, false)) {
