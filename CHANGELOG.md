@@ -10,6 +10,9 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Changed
 
+- Added a maintainer release-provenance smoke command that combines strict
+  tarball/checksum/release-asset digest checks with `gh attestation verify`
+  JSON certificate policy checks, without changing runtime hydration.
 - Clarified Git-private active last-run/progress storage and non-Git fallback cleanup guidance across docs and the Codex skill.
 - Clarified first-run docs after install, the first successful packet ladder, package-root versus target `--cwd`, and command-index ownership.
 - Clarified demo-session dashboard docs so current review uses the live server or ignored generated exports instead of the checked-in legacy HTML fixture.

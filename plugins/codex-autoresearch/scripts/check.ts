@@ -129,6 +129,9 @@ export async function runCheckMain(
     if (selectedPhase.phase === "release-package-smoke") {
       return (await runReleasePackageSmokePhase(selectedPhase.args)) ? 0 : 1;
     }
+    if (selectedPhase.phase === "release-provenance-smoke") {
+      return (await runReleaseProvenanceSmokePhase(selectedPhase.args)) ? 0 : 1;
+    }
     return reportUnknownPhase(selectedPhase.phase) ? 0 : 1;
   }
 
@@ -184,14 +187,16 @@ function parseSelectedPhase(args: string[]): PhaseSelection {
 function reportPhaseUsageError(message: string): false {
   console.error(message);
   console.error(
-    "Usage: node scripts/check.mjs [--phase source-hygiene|release-package-smoke --tarball <file> [--checksum <file>]]",
+    "Usage: node scripts/check.mjs [--phase source-hygiene|release-package-smoke|release-provenance-smoke --tarball <file> [--checksum <file>]]",
   );
   return false;
 }
 
 function reportUnknownPhase(phase: string): false {
   console.error(`Unknown check phase: ${phase}`);
-  console.error("Available phases: source-hygiene, release-package-smoke");
+  console.error(
+    "Available phases: source-hygiene, release-package-smoke, release-provenance-smoke",
+  );
   return false;
 }
 
@@ -407,6 +412,91 @@ async function runReleasePackageSmokePhase(args: string[]): Promise<boolean> {
   } finally {
     await fsp.rm(smokeDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function runReleaseProvenanceSmokePhase(args: string[]): Promise<boolean> {
+  console.log("\n== release provenance smoke ==");
+  const tarballArg = optionValue(args, "--tarball");
+  const checksumArg = optionValue(args, "--checksum");
+  if (!tarballArg || !checksumArg) {
+    console.log("fail release-provenance-smoke");
+    console.log(indent("Missing --tarball <file> or --checksum <file>."));
+    return false;
+  }
+
+  const repo = optionValue(args, "--repo") || "TheGreenCedar/codex-autoresearch";
+  const signerWorkflow =
+    optionValue(args, "--signer-workflow") ||
+    "TheGreenCedar/codex-autoresearch/.github/workflows/release.yml";
+  const tag = optionValue(args, "--tag");
+  const tarball = path.resolve(process.cwd(), tarballArg);
+  const checksumPath = path.resolve(process.cwd(), checksumArg);
+  const releaseJsonPath = optionValue(args, "--release-json");
+  const attestationJsonPath = optionValue(args, "--attestation-json");
+  const targetCommit = optionValue(args, "--target-commit");
+
+  let releaseJson = "";
+  if (releaseJsonPath) {
+    releaseJson = await fsp.readFile(path.resolve(process.cwd(), releaseJsonPath), "utf8");
+  } else {
+    if (!tag) {
+      console.log("fail release-provenance-smoke");
+      console.log(indent("Missing --tag <vX.Y.Z> when --release-json is not provided."));
+      return false;
+    }
+    const release = await runCommand([
+      "release-provenance:release-json",
+      "gh",
+      ["api", `repos/${repo}/releases/tags/${tag}`],
+    ]);
+    if (release.code !== 0) {
+      console.log("fail release-provenance-smoke");
+      const output = `${release.stdout}${release.stderr}`.trim();
+      if (output) console.log(indent(output));
+      return false;
+    }
+    releaseJson = release.stdout;
+  }
+
+  let attestationJson = "";
+  if (attestationJsonPath) {
+    attestationJson = await fsp.readFile(path.resolve(process.cwd(), attestationJsonPath), "utf8");
+  } else {
+    const attestation = await runCommand([
+      "release-provenance:attestation",
+      "gh",
+      releaseProvenanceGhVerifyArgs(tarball, { repo, signerWorkflow }),
+    ]);
+    if (attestation.code !== 0) {
+      console.log("fail release-provenance-smoke");
+      const output = `${attestation.stdout}${attestation.stderr}`.trim();
+      if (output) console.log(indent(output));
+      return false;
+    }
+    attestationJson = attestation.stdout;
+  }
+
+  let issue = "";
+  try {
+    issue = await releaseProvenanceIssue({
+      attestationJson,
+      checksumPath,
+      releaseJson,
+      repo,
+      signerWorkflow,
+      targetCommit,
+      tarball,
+    });
+  } catch (error) {
+    issue = errorMessage(error);
+  }
+  if (issue) {
+    console.log("fail release-provenance-smoke");
+    console.log(indent(issue));
+    return false;
+  }
+  console.log("ok release-provenance-smoke");
+  return true;
 }
 
 async function runSourceHygieneCheck(
@@ -1086,6 +1176,148 @@ export async function releaseChecksumIssue(tarball: string, checksumPath: string
   return "";
 }
 
+export interface ReleaseProvenanceOptions {
+  attestationJson: string;
+  checksumPath: string;
+  releaseJson: string;
+  repo?: string;
+  signerWorkflow?: string;
+  targetCommit?: string;
+  tarball: string;
+}
+
+export function releaseProvenanceGhVerifyArgs(
+  tarball: string,
+  options: { repo?: string; signerWorkflow?: string } = {},
+): string[] {
+  return [
+    "attestation",
+    "verify",
+    tarball,
+    "--repo",
+    options.repo || "TheGreenCedar/codex-autoresearch",
+    "--signer-workflow",
+    options.signerWorkflow || "TheGreenCedar/codex-autoresearch/.github/workflows/release.yml",
+    "--format",
+    "json",
+  ];
+}
+
+export async function releaseProvenanceIssue(options: ReleaseProvenanceOptions): Promise<string> {
+  const repo = options.repo || "TheGreenCedar/codex-autoresearch";
+  const signerWorkflow =
+    options.signerWorkflow || "TheGreenCedar/codex-autoresearch/.github/workflows/release.yml";
+  const tarballName = path.basename(options.tarball);
+  const checksumName = path.basename(options.checksumPath);
+  const checksumText = await fsp.readFile(options.checksumPath, "utf8");
+  const expectedHash = await parseStrictSha256Manifest(checksumText, tarballName);
+  const tarballHash = await fileSha256(options.tarball);
+  if (tarballHash !== expectedHash) {
+    return `Checksum mismatch for ${tarballName}: expected ${expectedHash}, got ${tarballHash}.`;
+  }
+
+  const release = parseJsonObject(options.releaseJson, "release JSON");
+  const targetCommit = options.targetCommit || stringField(release, "target_commitish");
+  if (!/^[a-f0-9]{40}$/i.test(targetCommit)) {
+    return `Release target commit must be a full 40-character SHA, got ${JSON.stringify(
+      targetCommit,
+    )}.`;
+  }
+
+  const tarballAsset = releaseAsset(release, tarballName);
+  if (!tarballAsset) return `Release asset ${tarballName} was not found.`;
+  const releaseDigest = assetSha256(tarballAsset);
+  if (releaseDigest !== tarballHash) {
+    return `Release asset digest for ${tarballName} expected ${tarballHash}, got ${releaseDigest || "missing"}.`;
+  }
+
+  const checksumAsset = releaseAsset(release, checksumName);
+  if (!checksumAsset) return `Release checksum asset ${checksumName} was not found.`;
+  const checksumAssetDigest = assetSha256(checksumAsset);
+  const checksumFileHash = await fileSha256(options.checksumPath);
+  if (checksumAssetDigest !== checksumFileHash) {
+    return `Release asset digest for ${checksumName} expected ${checksumFileHash}, got ${
+      checksumAssetDigest || "missing"
+    }.`;
+  }
+
+  const attestations = parseJsonArray(options.attestationJson, "attestation JSON");
+  const matching = attestations
+    .map((entry) => attestationPolicyView(entry))
+    .filter((entry) =>
+      entry.subjects.some(
+        (subject) => subject.name === tarballName && subject.sha256 === tarballHash,
+      ),
+    );
+  if (!matching.length) {
+    return `Attestation subject ${tarballName} with SHA-256 ${tarballHash} was not found.`;
+  }
+
+  const expectedSan = `https://github.com/${signerWorkflow}@refs/heads/main`;
+  const expectedRepoUri = `https://github.com/${repo}`;
+  const expectedWorkflowPath = signerWorkflow.slice(`${repo}/`.length);
+  const expectedBuilderUri = `https://github.com/${signerWorkflow}@refs/heads/main`;
+  for (const entry of matching) {
+    const issues = [
+      requireEqual(
+        "certificate subjectAlternativeName",
+        entry.certificate.subjectAlternativeName,
+        expectedSan,
+      ),
+      requireEqual(
+        "certificate githubWorkflowRepository",
+        entry.certificate.githubWorkflowRepository,
+        repo,
+      ),
+      requireEqual(
+        "certificate sourceRepositoryURI",
+        entry.certificate.sourceRepositoryURI,
+        expectedRepoUri,
+      ),
+      requireEqual(
+        "certificate sourceRepositoryRef",
+        entry.certificate.sourceRepositoryRef,
+        "refs/heads/main",
+      ),
+      requireEqual(
+        "certificate runnerEnvironment",
+        entry.certificate.runnerEnvironment,
+        "github-hosted",
+      ),
+      requireEqual(
+        "certificate sourceRepositoryDigest",
+        entry.certificate.sourceRepositoryDigest,
+        targetCommit,
+      ),
+      requireEqual(
+        "certificate githubWorkflowSHA",
+        entry.certificate.githubWorkflowSHA,
+        targetCommit,
+      ),
+      requireEqual("workflow repository", entry.workflow.repository, expectedRepoUri),
+      requireEqual("workflow ref", entry.workflow.ref, "refs/heads/main"),
+      requireEqual("workflow path", entry.workflow.path, expectedWorkflowPath),
+      requireEqual("predicate runner_environment", entry.runnerEnvironment, "github-hosted"),
+      requireEqual("builder id", entry.builderId, expectedBuilderUri),
+    ].filter(Boolean);
+    const dependencyOk = entry.resolvedDependencies.some(
+      (dependency) =>
+        dependency.uri === `git+${expectedRepoUri}@refs/heads/main` &&
+        dependency.gitCommit === targetCommit,
+    );
+    if (!dependencyOk) {
+      issues.push(
+        `resolvedDependencies must include git+${expectedRepoUri}@refs/heads/main at ${targetCommit}.`,
+      );
+    }
+    if (!issues.length) return "";
+  }
+
+  return `No matching attestation satisfied release provenance policy:\n${matching
+    .map((entry) => entry.summary)
+    .join("\n")}`;
+}
+
 async function parseStrictSha256Manifest(text: string, expectedFileName: string): Promise<string> {
   const releaseIntegrity = (await import(
     pathToFileURL(path.join(ROOT, "scripts", "release-integrity.mjs")).href
@@ -1093,6 +1325,124 @@ async function parseStrictSha256Manifest(text: string, expectedFileName: string)
     parseSha256Manifest: (text: string, expectedFileName: string) => string;
   };
   return releaseIntegrity.parseSha256Manifest(text, expectedFileName);
+}
+
+async function fileSha256(file: string): Promise<string> {
+  return createHash("sha256")
+    .update(await fsp.readFile(file))
+    .digest("hex");
+}
+
+function parseJsonObject(text: string, label: string): Record<string, unknown> {
+  const value = JSON.parse(text) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseJsonArray(text: string, label: string): unknown[] {
+  const value = JSON.parse(text) as unknown;
+  if (!Array.isArray(value)) throw new Error(`${label} must be a JSON array.`);
+  return value;
+}
+
+function releaseAsset(
+  release: Record<string, unknown>,
+  name: string,
+): Record<string, unknown> | null {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  for (const asset of assets) {
+    if (asset && typeof asset === "object" && !Array.isArray(asset)) {
+      const record = asset as Record<string, unknown>;
+      if (record.name === name) return record;
+    }
+  }
+  return null;
+}
+
+function assetSha256(asset: Record<string, unknown>): string {
+  const digest = String(asset.digest || "");
+  const match = digest.match(/^sha256:([a-f0-9]{64})$/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function attestationPolicyView(entry: unknown) {
+  const root = record(entry);
+  const result = record(root.verificationResult);
+  const statement = record(result.statement);
+  const predicate = record(statement.predicate);
+  const buildDefinition = record(predicate.buildDefinition);
+  const externalParameters = record(buildDefinition.externalParameters);
+  const workflow = record(externalParameters.workflow);
+  const internalParameters = record(buildDefinition.internalParameters);
+  const github = record(internalParameters.github);
+  const runDetails = record(predicate.runDetails);
+  const builder = record(runDetails.builder);
+  const signature = record(result.signature);
+  const certificate = record(signature.certificate);
+  const subjects = (Array.isArray(statement.subject) ? statement.subject : []).map((subject) => {
+    const subjectRecord = record(subject);
+    return {
+      name: stringField(subjectRecord, "name"),
+      sha256: stringField(record(subjectRecord.digest), "sha256").toLowerCase(),
+    };
+  });
+  const resolvedDependencies = (
+    Array.isArray(buildDefinition.resolvedDependencies) ? buildDefinition.resolvedDependencies : []
+  ).map((dependency) => {
+    const dependencyRecord = record(dependency);
+    return {
+      gitCommit: stringField(record(dependencyRecord.digest), "gitCommit"),
+      uri: stringField(dependencyRecord, "uri"),
+    };
+  });
+  return {
+    builderId: stringField(builder, "id"),
+    certificate: {
+      githubWorkflowRepository: stringField(certificate, "githubWorkflowRepository"),
+      githubWorkflowSHA: stringField(certificate, "githubWorkflowSHA"),
+      runnerEnvironment: stringField(certificate, "runnerEnvironment"),
+      sourceRepositoryDigest: stringField(certificate, "sourceRepositoryDigest"),
+      sourceRepositoryRef: stringField(certificate, "sourceRepositoryRef"),
+      sourceRepositoryURI: stringField(certificate, "sourceRepositoryURI"),
+      subjectAlternativeName: stringField(certificate, "subjectAlternativeName"),
+    },
+    resolvedDependencies,
+    runnerEnvironment: stringField(github, "runner_environment"),
+    subjects,
+    summary: JSON.stringify({
+      certificate: {
+        githubWorkflowRepository: stringField(certificate, "githubWorkflowRepository"),
+        sourceRepositoryDigest: stringField(certificate, "sourceRepositoryDigest"),
+        sourceRepositoryRef: stringField(certificate, "sourceRepositoryRef"),
+        subjectAlternativeName: stringField(certificate, "subjectAlternativeName"),
+      },
+      subjects,
+    }),
+    workflow: {
+      path: stringField(workflow, "path"),
+      ref: stringField(workflow, "ref"),
+      repository: stringField(workflow, "repository"),
+    },
+  };
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringField(recordValue: Record<string, unknown>, field: string): string {
+  const value = recordValue[field];
+  return typeof value === "string" ? value : "";
+}
+
+function requireEqual(label: string, actual: string, expected: string): string {
+  return actual === expected
+    ? ""
+    : `${label} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`;
 }
 
 async function runPackageSmokeCommands(extractDir: string) {

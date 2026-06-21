@@ -59,6 +59,7 @@
     "test:core": "run-s build:node test:compiled:core",
     "check:product": "npm run build:node && node scripts/check.mjs",
     "check:source-hygiene": "node scripts/check.mjs --phase source-hygiene",
+    "smoke:release-provenance": "node scripts/check.mjs --phase release-provenance-smoke",
     "check": "run-p typecheck lint format:check && npm run check:product"
   },
   "devDependencies": {

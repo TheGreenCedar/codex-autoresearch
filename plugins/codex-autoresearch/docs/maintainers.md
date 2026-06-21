@@ -120,6 +120,36 @@ package dashboard export smoke.
 
 Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, lets `prepack` build the tarball, smoke-tests the extracted tarball with the package check helper, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 
+Release provenance is a maintainer/operator gate, not runtime bootstrap. Source
+runtime hydration stays on the adjacent SHA-256 checksum and packaged
+name/version checks so first-run installs do not depend on GitHub CLI,
+attestation APIs, or Sigstore network state. After downloading a published
+tarball and adjacent checksum, use:
+
+```bash
+npm run smoke:release-provenance -- --tarball codex-autoresearch-<version>.tgz --checksum codex-autoresearch-<version>.tgz.sha256 --tag v<version>
+```
+
+The smoke fetches release metadata with `gh api`, runs
+`gh attestation verify <tarball> --repo TheGreenCedar/codex-autoresearch --signer-workflow TheGreenCedar/codex-autoresearch/.github/workflows/release.yml --format json`,
+and then checks the JSON certificate fields instead of relying on
+`--source-ref` or `--source-digest`. It requires the SLSA subject digest,
+tarball SHA-256, release asset digest, and checksum manifest digest to agree,
+then checks the signer SAN, source repository, `refs/heads/main`,
+GitHub-hosted runner, and release target commit.
+
+Check immutable-release status before publishing a release:
+
+```bash
+gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2026-03-10" /repos/TheGreenCedar/codex-autoresearch/immutable-releases
+```
+
+If it returns `{"enabled":false,...}`, a repository admin should enable
+future-release immutability with `PUT /repos/TheGreenCedar/codex-autoresearch/immutable-releases`
+or through the repository Settings > Code security > Releases control. The
+setting applies to future releases; it does not retroactively lock old release
+assets.
+
 ## Skill Progression Map
 
 Use recurring PR and review evidence to choose the next hardening drill. Each drill should leave a product safeguard behind, not just a private note.
