@@ -8,6 +8,12 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+### Changed
+
+- Clarified release-provenance smoke maintainer prerequisites for `gh`
+  authentication, network access, and release tarball/checksum/tag/commit
+  context.
+
 ### Fixed
 
 - Fixed release provenance smoke validation for auto-release runs that call the reusable release workflow, where the certificate signer is `release.yml` but the SLSA predicate records `auto-release.yml` as the caller workflow path.
@@ -19,6 +25,10 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 - Added an opt-in maintainer browser accessibility check for the dashboard
   chart/modal keyboard flow without changing dashboard behavior or adding
   browser-test dependencies.
+- Dashboard/readout surfaces now include chart keyboard guidance,
+  focus-managed run detail dialogs, clearer finalization and runtime-provenance
+  placement, watchdog status, and AI summary handoff shaping while keeping the
+  dashboard read-only.
 - Added a maintainer release-provenance smoke command that combines strict
   tarball/checksum/release-asset digest checks with `gh attestation verify`
   JSON certificate policy checks, without changing runtime hydration.
