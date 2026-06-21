@@ -93,7 +93,7 @@ type PackageManifestParse =
 type PhaseSelection =
   | { kind: "all" }
   | { kind: "error"; message: string }
-  | { kind: "phase"; phase: string };
+  | { args: string[]; kind: "phase"; phase: string };
 
 export interface NpmCommandResolveOptions {
   access?: (candidate: string) => Promise<void>;
@@ -124,6 +124,9 @@ export async function runCheckMain(
       }))
         ? 0
         : 1;
+    }
+    if (selectedPhase.phase === "release-package-smoke") {
+      return (await runReleasePackageSmokePhase(selectedPhase.args)) ? 0 : 1;
     }
     return reportUnknownPhase(selectedPhase.phase) ? 0 : 1;
   }
@@ -166,12 +169,12 @@ function parseSelectedPhase(args: string[]): PhaseSelection {
       if (!value || value.startsWith("-")) {
         return { kind: "error", message: "Missing value for --phase." };
       }
-      return { kind: "phase", phase: value };
+      return { args, kind: "phase", phase: value };
     }
     if (arg.startsWith("--phase=")) {
       const value = arg.slice("--phase=".length).trim();
       if (!value) return { kind: "error", message: "Missing value for --phase." };
-      return { kind: "phase", phase: value };
+      return { args, kind: "phase", phase: value };
     }
   }
   return { kind: "all" };
@@ -179,13 +182,15 @@ function parseSelectedPhase(args: string[]): PhaseSelection {
 
 function reportPhaseUsageError(message: string): false {
   console.error(message);
-  console.error("Usage: node scripts/check.mjs [--phase source-hygiene]");
+  console.error(
+    "Usage: node scripts/check.mjs [--phase source-hygiene|release-package-smoke --tarball <file> [--checksum <file>]]",
+  );
   return false;
 }
 
 function reportUnknownPhase(phase: string): false {
   console.error(`Unknown check phase: ${phase}`);
-  console.error("Available phases: source-hygiene");
+  console.error("Available phases: source-hygiene, release-package-smoke");
   return false;
 }
 
@@ -357,6 +362,48 @@ async function runPackageArtifactCheck() {
     return await runPackedRuntimeSmokeCheck(packInfo, packDir);
   } finally {
     await fsp.rm(packDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function runReleasePackageSmokePhase(args: string[]): Promise<boolean> {
+  console.log("\n== release package smoke ==");
+  const tarballArg = optionValue(args, "--tarball");
+  if (!tarballArg) {
+    console.log("fail release-package-smoke");
+    console.log(indent("Missing --tarball <file>."));
+    return false;
+  }
+
+  const tarball = path.resolve(process.cwd(), tarballArg);
+  try {
+    await fsp.access(tarball);
+  } catch {
+    console.log("fail release-package-smoke");
+    console.log(indent(`Release tarball was not found at ${tarball}`));
+    return false;
+  }
+
+  const checksumArg = optionValue(args, "--checksum");
+  if (checksumArg) {
+    const checksumIssue = await releaseChecksumIssue(
+      tarball,
+      path.resolve(process.cwd(), checksumArg),
+    );
+    if (checksumIssue) {
+      console.log("fail release-package-smoke");
+      console.log(indent(checksumIssue));
+      return false;
+    }
+  }
+
+  const smokeDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-autoresearch-release-smoke-"));
+  try {
+    const ok = await runPackageRuntimeSmokeFromTarball(tarball, path.join(smokeDir, "extract"));
+    if (!ok) return false;
+    console.log("ok release-package-smoke");
+    return true;
+  } finally {
+    await fsp.rm(smokeDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -967,7 +1014,10 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
     return false;
   }
 
-  const extractDir = path.join(packDir, "extract");
+  return runPackageRuntimeSmokeFromTarball(tarball, path.join(packDir, "extract"));
+}
+
+async function runPackageRuntimeSmokeFromTarball(tarball: string, extractDir: string) {
   await fsp.mkdir(extractDir, { recursive: true });
   const extract = await runCommand(["package-extract", "tar", ["-xzf", tarball, "-C", extractDir]]);
   if (extract.code !== 0) {
@@ -986,6 +1036,50 @@ async function runPackedRuntimeSmokeCheck(packInfo: PackageManifest | undefined,
 
   console.log("ok package-runtime-smoke");
   return true;
+}
+
+function optionValue(args: string[], name: string): string {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === name) return String(args[index + 1] || "").trim();
+    if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1).trim();
+  }
+  return "";
+}
+
+async function releaseChecksumIssue(tarball: string, checksumPath: string): Promise<string> {
+  let checksumText = "";
+  try {
+    checksumText = await fsp.readFile(checksumPath, "utf8");
+  } catch (error) {
+    return `Checksum file could not be read at ${checksumPath}: ${String(error)}`;
+  }
+
+  const expectedHash = checksumText.match(/\b[a-f0-9]{64}\b/i)?.[0]?.toLowerCase() || "";
+  if (!expectedHash) return `Checksum file ${checksumPath} does not contain a SHA-256 hash.`;
+
+  const namedFiles = checksumText
+    .split(/\r?\n/)
+    .map(
+      (line) =>
+        line
+          .trim()
+          .match(/^[a-f0-9]{64}\s+\*?(.+)$/i)?.[1]
+          ?.trim() || "",
+    )
+    .filter(Boolean)
+    .map((file) => path.basename(file));
+  const tarballName = path.basename(tarball);
+  if (namedFiles.length && !namedFiles.includes(tarballName)) {
+    return `Checksum file names ${namedFiles.join(", ")} but release tarball is ${tarballName}.`;
+  }
+
+  const bytes = await fsp.readFile(tarball);
+  const actualHash = createHash("sha256").update(bytes).digest("hex");
+  if (actualHash !== expectedHash) {
+    return `Checksum mismatch for ${tarballName}: expected ${expectedHash}, got ${actualHash}.`;
+  }
+  return "";
 }
 
 async function runPackageSmokeCommands(extractDir: string) {

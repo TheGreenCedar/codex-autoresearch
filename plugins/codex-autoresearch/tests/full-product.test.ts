@@ -635,6 +635,7 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
   );
+  const checkScript = await readFile(path.join(pluginRoot, "scripts", "check.ts"), "utf8");
   const codeql = await readFile(path.join(repoRoot, ".github", "workflows", "codeql.yml"), "utf8");
 
   assert.match(autoRelease, /branches:\s*\n\s*-\s*main/);
@@ -652,7 +653,9 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
   assert.match(release, /node scripts\/autoresearch\.mjs --help/);
   assert.match(release, /Refuse existing tag or release/);
   assert.match(release, /npm pack/);
-  assert.match(release, /tar -xzf/);
+  assert.match(release, /--phase release-package-smoke/);
+  assert.match(checkScript, /runPackageRuntimeSmokeFromTarball/);
+  assert.match(checkScript, /runExtractedPackageDashboardExportSmoke/);
   assert.match(release, /gh release create/);
   assert.match(release, /--target "\$GITHUB_SHA"/);
 
