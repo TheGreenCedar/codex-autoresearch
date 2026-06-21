@@ -9,6 +9,7 @@ import {
 } from "../dashboard-server-registry.js";
 import { compactDashboardTransportViewModel } from "../dashboard-transport.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
+import type { SessionPaths } from "../session-paths.js";
 
 type LooseObject = Record<string, any>;
 type DashboardCommandListOptions = {
@@ -35,7 +36,12 @@ export interface DashboardCommandDeps {
   pluginVersion: string;
   readJsonl: (workDir: string) => LooseObject[];
   resolveOutputInside: (workDir: string, output?: string) => string;
-  resolveWorkDir: (value: string) => { workDir: string; config: LooseObject; sessionCwd?: string };
+  resolveWorkDir: (value: string) => {
+    workDir: string;
+    config: LooseObject;
+    sessionCwd?: string;
+    sessionPaths: SessionPaths;
+  };
   serveAutoresearch: (options: LooseObject) => Promise<LooseObject>;
   shellQuote: (value: string) => string;
   writeFile: typeof fsp.writeFile;
@@ -231,7 +237,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
   async function serveDashboard(args: LooseObject) {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
-    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const { workDir, sessionPaths } = deps.resolveWorkDir(args.working_dir || args.cwd);
     const debugLedger = deps.boolOption(args.debugLedger ?? args.debug_ledger, false);
     const liveReadCache = deps.createSessionReadCache?.({ invalidateOnLedgerChange: true });
     let liveUrl = "";
@@ -260,6 +266,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       .catch(unavailableRuntimeDrift);
     const serveResult = await deps.serveAutoresearch({
       cwd: workDir,
+      sessionPaths,
       port: args.port,
       debugLedger,
       pluginVersion: deps.pluginVersion,
