@@ -963,11 +963,71 @@ test("dashboard chart does not place interactive point buttons under an image ro
     /arrow keys move through history/i,
   );
   assert.match(chartSource, /className="chart-point-button"/);
+  assert.match(chartSource, /aria-current=\{payload\.runNumber === selectedRunNumber/);
+  assert.doesNotMatch(chartSource, /aria-describedby="trend-chart-selected chart-keyboard-help"/);
   for (const button of buttons) {
     assert.equal(button.closest('[role="img"]'), null);
-    assert.match(button.getAttribute("aria-describedby") || "", /chart-keyboard-help/);
+    assert.equal(button.getAttribute("aria-describedby"), "chart-keyboard-help");
+    assert.doesNotMatch(button.getAttribute("aria-describedby") || "", /trend-chart-selected/);
+    assert.match(button.getAttribute("aria-label") || "", /Open details for run/);
   }
+  assert.match(getById("trend-chart-selected").textContent || "", /Selected chart point:/);
   dom.window.close();
+});
+
+test("dashboard side rail distinguishes live and static status affordances", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "side rail status", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const staticDashboard = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+  });
+  assert.ok(staticDashboard.dom.window.document.querySelector(".side-status .status-dot"));
+  assert.equal(staticDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.match(
+    staticDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Static/,
+  );
+  staticDashboard.dom.window.close();
+
+  const demoDashboard = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    showcaseMode: true,
+  });
+  assert.ok(demoDashboard.dom.window.document.querySelector(".side-status .status-dot"));
+  assert.equal(demoDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.match(
+    demoDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Demo/,
+  );
+  demoDashboard.dom.window.close();
+
+  const liveDashboard = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+  });
+  assert.ok(liveDashboard.dom.window.document.querySelector(".side-status .live-dot"));
+  assert.equal(liveDashboard.dom.window.document.querySelector(".side-status .status-dot"), null);
+  assert.match(
+    liveDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Live/,
+  );
+  liveDashboard.dom.window.close();
+});
+
+test("dashboard static status marker does not inherit live animation", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+
+  assert.match(css, /\.live-dot\s*\{[^}]*animation:\s*pulse-glow/s);
+  assert.doesNotMatch(extractCssBlock(css, ".status-dot"), /animation:/);
 });
 
 test("dashboard styles latest rejected evidence as rejected, not kept", async () => {
@@ -3681,6 +3741,21 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     item.textContent?.trim(),
   );
   assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  const sideAriaLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
+    item.getAttribute("aria-label"),
+  );
+  assert.deepEqual(sideAriaLabels, [
+    "Dashboard section: Metric",
+    "Dashboard section: Move",
+    "Dashboard section: Brief",
+    "Dashboard section: Ledger",
+  ]);
+  assert.equal(
+    [...dom.window.document.querySelectorAll(".side-nav .nav-icon")].every(
+      (item) => item.getAttribute("aria-hidden") === "true",
+    ),
+    true,
+  );
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
   const decisionRail = dom.window.document.getElementById("decision-rail");

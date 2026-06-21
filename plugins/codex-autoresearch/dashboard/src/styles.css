@@ -241,16 +241,24 @@ a:focus-visible {
   font-size: 12px;
 }
 
-.live-dot {
+.live-dot,
+.status-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   margin-right: 6px;
   border-radius: 50%;
   background: var(--teal);
+  vertical-align: middle;
+}
+
+.live-dot {
   box-shadow: 0 0 0 4px rgba(28, 181, 173, 0.2);
   animation: pulse-glow 2s infinite ease-in-out;
-  vertical-align: middle;
+}
+
+.status-dot {
+  box-shadow: 0 0 0 1px var(--teal-dark);
 }
 
 @keyframes pulse-glow {
