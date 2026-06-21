@@ -9793,7 +9793,10 @@ test("source launcher rebuilds local source runtime before use", async () => {
         {
           name: "codex-autoresearch",
           version: PLUGIN_VERSION,
-          scripts: { "build:node": "node scripts/write-runtime.mjs" },
+          scripts: {
+            build: "node scripts/write-runtime.mjs --dashboard",
+            "build:node": "node scripts/write-runtime.mjs",
+          },
         },
         null,
         2,
@@ -9813,8 +9816,14 @@ test("source launcher rebuilds local source runtime before use", async () => {
         'import path from "node:path";',
         'import { fileURLToPath } from "node:url";',
         'const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");',
+        'const includeDashboard = process.argv.includes("--dashboard");',
         'await mkdir(path.join(root, "dist", "scripts"), { recursive: true });',
         'await writeFile(path.join(root, "dist", "scripts", "autoresearch.mjs"), "export const rebuiltRuntime = true;\\n", "utf8");',
+        "if (includeDashboard) {",
+        '  await mkdir(path.join(root, "assets", "dashboard-build"), { recursive: true });',
+        '  await writeFile(path.join(root, "assets", "dashboard-build", "dashboard-app.js"), "window.__rebuiltDashboard = true;\\n", "utf8");',
+        '  await writeFile(path.join(root, "assets", "dashboard-build", "dashboard-app.css"), "#dashboard-root { color: rgb(1, 2, 3); }\\n", "utf8");',
+        "}",
       ].join("\n"),
       "utf8",
     );
@@ -9829,6 +9838,10 @@ test("source launcher rebuilds local source runtime before use", async () => {
     assert.equal(
       await readFile(new URL(runtimeHref), "utf8"),
       "export const rebuiltRuntime = true;\n",
+    );
+    assert.match(
+      await readFile(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"), "utf8"),
+      /rebuiltDashboard/,
     );
   });
 });
@@ -9917,6 +9930,57 @@ test("source launcher hydrates packaged dashboard assets before source-shaped ex
       assert.match(dashboardHtml, /release-dashboard-app/);
       assert.match(dashboardHtml, /rgb\(12, 34, 56\)/);
       assert.match(dashboardHtml, /package dashboard smoke/);
+    });
+  });
+});
+
+test("source launcher does not treat source-shaped runtime as ready without dashboard assets", async () => {
+  await withTempDir("runtime-hydration-existing-runtime-missing-dashboard", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
+    await writeFile(
+      path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"),
+      "export const sourceRuntimeWithoutDashboardAssets = true;\n",
+      "utf8",
+    );
+    await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
+    await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
+    await assert.rejects(
+      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
+    );
+
+    const release = await createRuntimeReleaseAsset(dir, {
+      dashboardAppText: 'window.__hydratedDashboardAsset = "existing-runtime-missing-assets";\n',
+      dashboardCssText: "#dashboard-root { color: rgb(98, 76, 54); }\n",
+      runtimeText: "export const hydratedRuntime = true;\n",
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+
+      assert.equal(
+        await readFile(new URL(runtimeHref), "utf8"),
+        "export const hydratedRuntime = true;\n",
+      );
+      assert.match(
+        await readFile(
+          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"),
+          "utf8",
+        ),
+        /existing-runtime-missing-assets/,
+      );
+      assert.match(
+        await readFile(
+          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"),
+          "utf8",
+        ),
+        /rgb\(98, 76, 54\)/,
+      );
     });
   });
 });
