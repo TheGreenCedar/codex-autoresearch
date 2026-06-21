@@ -1,3 +1,5 @@
+import { firstSafeCommand } from "./safe-command-resolver.js";
+
 export type PreflightStatus = "blocked" | "ready" | "unknown";
 
 export interface PreflightAuditInput {
@@ -127,14 +129,17 @@ function nextCommand(input: PreflightAuditInput, blockers: string[], warnings: s
         /No benchmark command|Missing setup|No primary metric/i.test(blocker),
       )
     ) {
-      return setupPlanCommand || benchmarkLintCommand || doctorCommand;
+      return firstSafeCommand(
+        [setupPlanCommand, benchmarkLintCommand, doctorCommand],
+        "operational",
+      );
     }
-    return benchmarkLintCommand || setupPlanCommand || doctorCommand;
+    return firstSafeCommand([benchmarkLintCommand, setupPlanCommand, doctorCommand], "operational");
   }
   if (blockers.length > 0 || warnings.some((warning) => /dirty|runtime|stale/i.test(warning))) {
-    return doctorCommand || benchmarkLintCommand;
+    return firstSafeCommand([doctorCommand, benchmarkLintCommand], "operational");
   }
-  return benchmarkLintCommand || doctorCommand;
+  return firstSafeCommand([benchmarkLintCommand, doctorCommand], "operational");
 }
 
 function scaffoldHealthBlockers(value: unknown): string[] {
