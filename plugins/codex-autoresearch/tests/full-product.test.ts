@@ -657,8 +657,13 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
   assert.match(release, /Refuse existing tag or release/);
   assert.match(release, /npm pack/);
   assert.match(release, /--phase release-package-smoke/);
+  assert.match(packageSmoke, /"scripts\/check\.mjs"/);
+  assert.match(packageSmoke, /"dist\/scripts\/check\.mjs"/);
+  assert.match(packageSmoke, /"dist\/lib\/checks\/package-smoke\.mjs"/);
   assert.match(packageSmoke, /runPackageRuntimeSmokeFromTarball/);
   assert.match(packageSmoke, /runExtractedPackageDashboardExportSmoke/);
+  assert.match(packageSmoke, /check-source-hygiene/);
+  assert.match(packageSmoke, /"--phase", "source-hygiene"/);
   assert.match(release, /gh release create/);
   assert.match(release, /--target "\$GITHUB_SHA"/);
 

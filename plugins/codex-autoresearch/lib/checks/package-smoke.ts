@@ -76,8 +76,17 @@ export async function runPackageArtifactCheck() {
       "dist/lib/runtime-paths.mjs",
       "dist/lib/tool-schemas.mjs",
       "dist/scripts/autoresearch.mjs",
+      "dist/scripts/check.mjs",
+      "dist/lib/checks/check-common.mjs",
+      "dist/lib/checks/demo-trust.mjs",
+      "dist/lib/checks/npm-command.mjs",
+      "dist/lib/checks/package-smoke.mjs",
+      "dist/lib/checks/product-phase.mjs",
+      "dist/lib/checks/source-checkout-launcher.mjs",
+      "dist/lib/checks/source-hygiene.mjs",
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
+      "scripts/check.mjs",
       "scripts/release-integrity.mjs",
       "scripts/finalize-autoresearch.mjs",
       "skills/codex-autoresearch/SKILL.md",
@@ -712,6 +721,14 @@ async function runPackageSmokeCommands(extractDir: string) {
       script: "finalize-autoresearch.mjs",
       args: ["--help"],
       expected: ["Finalize an autoresearch branch", "Usage:"],
+    },
+    {
+      label: "check-source-hygiene",
+      script: "check.mjs",
+      args: ["--phase", "source-hygiene"],
+      // Exit 0 proves the packaged wrapper can load the dist check runner chain; output
+      // differs by whether the host temp layout looks like a Git checkout.
+      expected: [],
     },
   ];
 

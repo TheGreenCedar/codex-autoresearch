@@ -647,9 +647,14 @@ const checks = [
           '--target "$GITHUB_SHA"',
         ]) &&
         includesAll(await readText("lib/checks/package-smoke.ts"), [
+          '"dist/scripts/check.mjs"',
+          '"dist/lib/checks/package-smoke.mjs"',
+          '"scripts/check.mjs"',
           "runReleasePackageSmokePhase",
           "runPackageRuntimeSmokeFromTarball",
           "runExtractedPackageDashboardExportSmoke",
+          "check-source-hygiene",
+          '"--phase", "source-hygiene"',
         ]) &&
         /pull_request:\s*\n[\s\S]*branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/m.test(codeql)
         ? pass()
