@@ -1428,7 +1428,10 @@ test("session-forensics routes context distillation to apply despite stale safe 
   const subcommandFor = (command: string) => {
     const launcherIndex = command.indexOf("autoresearch.mjs");
     assert.notEqual(launcherIndex, -1);
-    const tokens = command.slice(launcherIndex + "autoresearch.mjs".length).trim().split(/\s+/);
+    const tokens = command
+      .slice(launcherIndex + "autoresearch.mjs".length)
+      .trim()
+      .split(/\s+/);
     return tokens[0];
   };
   const commands = {
