@@ -29,7 +29,7 @@ setup -> doctor -> next -> log -> state -> finalize-preview
 
 - Benchmark commands must print `METRIC name=value`. The primary metric drives decisions; secondary metrics explain or guard tradeoffs.
 - Use `ARTIFACT name=path` only for benchmark-produced evidence that resolves inside the target working directory.
-- Prefer durable loop state over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.config.json`, `autoresearch.ideas.md`, `autoresearch.last-run.json`, `autoresearch.research/<slug>/`, evidence index files, and ASI.
+- Prefer durable loop state over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.config.json`, `autoresearch.ideas.md`, Git-private `.git/autoresearch/last-run.json`, `.git/autoresearch/progress.json`, `.git/autoresearch/pending-log-*.json`, non-Git fallback `autoresearch.last-run.json`, `autoresearch.progress.json`, `autoresearch.pending-transaction.json`, `autoresearch.research/<slug>/`, evidence index files, and ASI.
 - `keep`, ordinary `discard`, and `measure` need a finite primary metric. `crash` and `checks_failed` must not invent sentinel metric values.
 - Use `measure` for baselines, no-change probes, environment checks, and diagnostic evidence. It is not a keep and not a finalizer input.
 - `quality_gap=0` only closes the accepted checklist for the current research round. It does not prove discovery is complete forever.

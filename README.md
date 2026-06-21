@@ -52,7 +52,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Autoresearch stores loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
+Autoresearch stores loop evidence in local project files and, in Git repos, active snapshots and pending log receipts under Git-private `.git/autoresearch/`. Outside Git, those transient records fall back to local files such as `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json`. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
 
 Ask for the live dashboard in a side chat when you want a visual readout or need fresh run state in the browser.
 
