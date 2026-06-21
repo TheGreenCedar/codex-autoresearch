@@ -743,12 +743,16 @@ test("dashboard test scripts build ignored dashboard assets once before dashboar
     path.join(resolvePackageRoot(import.meta.url), "scripts", "check.ts"),
     "utf8",
   );
+  const runAllPhases = checkScript.slice(
+    checkScript.indexOf("const ok ="),
+    checkScript.indexOf("return ok ? 0 : 1;"),
+  );
   assert.ok(
-    checkScript.indexOf("runDashboardBuildWithParity") < checkScript.indexOf("runProductPhase"),
+    runAllPhases.indexOf("runDashboardBuildWithParity") < runAllPhases.indexOf("runProductPhase"),
     "npm run check must prove dashboard build parity before compiled product tests.",
   );
   assert.ok(
-    checkScript.indexOf("runProductPhase") < checkScript.indexOf("runPackageArtifactCheck"),
+    runAllPhases.indexOf("runProductPhase") < runAllPhases.indexOf("runPackageArtifactCheck"),
     "npm run check must keep package artifact/runtime smoke after product tests.",
   );
 });
