@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -35,6 +35,7 @@ import {
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { LIVE_LEDGER_MAX_ENTRIES, serveAutoresearch } from "../lib/live-server.js";
+import { resolveSessionPaths } from "../lib/session-paths.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -4391,6 +4392,73 @@ test("live dashboard view model cache invalidates on session state changes", asy
   } finally {
     server.server.close();
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache invalidates on wrapper session config changes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "autoresearch-live-wrapper-cache-"));
+  const wrapper = path.join(root, "wrapper");
+  const target = path.join(root, "target");
+  await mkdir(wrapper, { recursive: true });
+  await mkdir(target, { recursive: true });
+  let recomputes = 0;
+  const readWrapperRefreshSeconds = async () => {
+    const config = JSON.parse(
+      await readFile(path.join(wrapper, "autoresearch.config.json"), "utf8"),
+    );
+    return Number(config.dashboardRefreshSeconds);
+  };
+  const server = await serveAutoresearch({
+    cwd: wrapper,
+    sessionPaths: resolveSessionPaths({ sessionCwd: wrapper, workDir: target }),
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>wrapper cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      return { summary: { runs: await readWrapperRefreshSeconds() } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(wrapper, "autoresearch.config.json"),
+      JSON.stringify({ workingDir: "../target", dashboardRefreshSeconds: 5 }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(target, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "wrapper cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(server.workDir, path.resolve(target));
+    assert.equal(first.summary.runs, 5);
+    assert.equal(second.summary.runs, 5);
+    assert.equal(recomputes, 1);
+
+    await writeFile(
+      path.join(wrapper, "autoresearch.config.json"),
+      JSON.stringify({ workingDir: "../target", dashboardRefreshSeconds: 9 }),
+      "utf8",
+    );
+
+    const third = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(third.summary.runs, 9);
+    assert.equal(third.ledgerEntries.length, 2);
+    assert.equal(recomputes, 2);
+  } finally {
+    server.server.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 export const AUTORESEARCH_LEDGER_FILE = "autoresearch.jsonl";
@@ -79,4 +80,23 @@ export function resolveSessionPaths(input: ResolveSessionPathsInput = {}): Sessi
 
 export function researchDirPathForSession(workDir: string, slug: string): string {
   return path.join(resolveSessionPaths({ workDir }).researchRoot, slug);
+}
+
+export function sessionPathIdentity(sessionPaths: SessionPaths): string {
+  const identity = {
+    targetCwd: normalizeIdentityPath(sessionPaths.targetCwd),
+    sessionCwd: normalizeIdentityPath(sessionPaths.sessionCwd),
+    ledgerPath: normalizeIdentityPath(sessionPaths.ledgerPath),
+    configPath: normalizeIdentityPath(sessionPaths.configPath),
+    notesPath: normalizeIdentityPath(sessionPaths.notesPath),
+    ideasPath: normalizeIdentityPath(sessionPaths.ideasPath),
+    lastRunFallbackPath: normalizeIdentityPath(sessionPaths.lastRunFallbackPath),
+    researchRoot: normalizeIdentityPath(sessionPaths.researchRoot),
+  };
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
+function normalizeIdentityPath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
