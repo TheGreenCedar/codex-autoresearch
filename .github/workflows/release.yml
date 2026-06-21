@@ -139,12 +139,6 @@ jobs:
             exit 1
           fi
 
-      - name: Build node
-        run: npm run build:node
-
-      - name: Build dashboard
-        run: npm run build:dashboard
-
       - name: Create package artifact
         run: |
           set -euo pipefail
@@ -165,21 +159,7 @@ jobs:
           tarball="codex-autoresearch-${{ steps.version.outputs.version }}.tgz"
           test -f "$tarball"
           test -f "$tarball.sha256"
-          sha256sum -c "$tarball.sha256"
-          mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
-          tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/finalize-autoresearch.mjs" --help
-          mkdir -p "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke"
-          printf '%s\n' \
-            '{"type":"config","name":"release dashboard smoke","metricName":"quality_gap","metricUnit":"gaps","bestDirection":"lower"}' \
-            '{"type":"run","run":1,"status":"measure","metric":1,"description":"Release dashboard export smoke."}' \
-            > "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/autoresearch.jsonl"
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" export \
-            --cwd "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke" \
-            --output dashboard-smoke.html
-          grep -q 'id="dashboard-root"' "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/dashboard-smoke.html"
-          grep -q 'release dashboard smoke' "$RUNNER_TEMP/codex-autoresearch-dashboard-smoke/dashboard-smoke.html"
+          node scripts/check.mjs --phase release-package-smoke --tarball "$tarball" --checksum "$tarball.sha256"
 
       - name: Create GitHub release with tarball
         env:

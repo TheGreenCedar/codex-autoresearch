@@ -90,13 +90,21 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 Before publishing, inspect the package artifact itself. Use dry-run pack output
 for routine review, then create and extract a real tarball for release smoke.
-Dashboard runtime assets are ignored package output. `prepack`, `npm run check`,
-and the release workflow must build `assets/dashboard-build/dashboard-app.js`
-and `assets/dashboard-build/dashboard-app.css` before `npm pack`. A fresh source
-checkout can generate them with `npm run build:dashboard`; serving or exporting
-dashboards without them still fails clearly with that command path. Package
-checks must assert both dashboard assets are in the tarball and smoke an
-extracted-package dashboard export, not just launcher help.
+Dashboard runtime assets are ignored package output. `npm run check` builds and
+checks them for review, while release publishing lets `prepack` run the single
+publish build before `npm pack`. A fresh source checkout can generate the assets
+with `npm run build:dashboard`; serving or exporting dashboards without them
+still fails clearly with that command path. Package checks and the release
+workflow share the extracted-package smoke path: both assert dashboard assets are
+in the tarball and smoke an extracted-package dashboard export, not just launcher
+help.
+
+`npm run audit:prod` is advisory only. The plugin package currently declares no
+runtime npm dependencies; the shipped runtime is bundled into `dist/` and
+dashboard assets during the build. Use `audit:prod` as a quick declared
+production-dependency check, not as proof that bundled dev-dependency code has
+been vulnerability-audited. Release trust comes from `npm run check`, the
+tarball checksum, artifact provenance, and extracted-package smoke.
 
 The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
 and ignored in the Git tree. If a Git marketplace source checkout is missing
@@ -110,7 +118,7 @@ exclude authored source and tests, ship no MCP launcher/config, and pass
 `node <extracted-package>/scripts/autoresearch.mjs --help` plus an extracted
 package dashboard export smoke.
 
-Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
+Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, lets `prepack` build the tarball, smoke-tests the extracted tarball with the package check helper, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
 
 ## Skill Progression Map
 

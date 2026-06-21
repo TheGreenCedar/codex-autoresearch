@@ -615,7 +615,7 @@ const checks = [
   },
   {
     id: "release-workflow-safeguards",
-    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml",
+    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml, scripts/check.ts",
     description:
       "Release automation keeps version sync, branch, CodeQL, package, tarball, and duplicate-release safeguards.",
     run: async () => {
@@ -640,9 +640,14 @@ const checks = [
           "node scripts/autoresearch.mjs --help",
           "Refuse existing tag or release",
           "npm pack",
-          "tar -xzf",
+          "--phase release-package-smoke",
           "gh release create",
           '--target "$GITHUB_SHA"',
+        ]) &&
+        includesAll(await readText("scripts/check.ts"), [
+          "runReleasePackageSmokePhase",
+          "runPackageRuntimeSmokeFromTarball",
+          "runExtractedPackageDashboardExportSmoke",
         ]) &&
         /pull_request:\s*\n[\s\S]*branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/m.test(codeql)
         ? pass()
