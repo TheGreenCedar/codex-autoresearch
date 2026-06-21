@@ -34,6 +34,7 @@ export async function createRuntimeReleaseAsset(
     packageName = "codex-autoresearch",
     checksumFileName,
     checksumHash,
+    checksumText,
     dashboardAppText = "window.__CODEX_AUTORESEARCH_DASHBOARD_APP__ = true;\n",
     dashboardCssText = "#dashboard-root { color: rgb(12, 34, 56); }\n",
     runtimeText = "export const hydratedRuntime = true;\n",
@@ -77,11 +78,11 @@ export async function createRuntimeReleaseAsset(
     .update(await readFile(tarballPath))
     .digest("hex");
   if (writeChecksum) {
-    await writeFile(
-      checksumPath,
-      `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`,
-      "utf8",
-    );
+    const manifestText =
+      typeof checksumText === "function"
+        ? checksumText({ actualHash, tarballName })
+        : checksumText || `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`;
+    await writeFile(checksumPath, manifestText, "utf8");
   }
 
   return { releaseDir, tarballName, checksumName, tarballPath, checksumPath, actualHash };
