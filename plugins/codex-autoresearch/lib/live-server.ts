@@ -446,15 +446,15 @@ async function liveSessionSnapshot(
 }
 
 async function liveSessionStamp(sessionPaths: SessionPaths): Promise<string> {
-  // TTL-bounded dashboard reuse compares this stamp; a stale stamp can serve briefly
-  // until the next health poll notices ledger/config drift.
+  // TTL-bounded dashboard reuse compares this stamp before reusing the cached
+  // full fingerprint, so include the bounded research tree metadata here too.
   const parts = await Promise.all([
     fingerprintPath(sessionPaths.ledgerPath, "autoresearch.jsonl"),
     fingerprintPath(sessionPaths.configPath, "autoresearch.config.json"),
     fingerprintPath(sessionPaths.lastRunFallbackPath, "autoresearch.last-run.json"),
     fingerprintPath(sessionPaths.notesPath, "autoresearch.md"),
     fingerprintPath(sessionPaths.ideasPath, "autoresearch.ideas.md"),
-    fingerprintPath(sessionPaths.researchRoot, "autoresearch.research"),
+    fingerprintTree(sessionPaths.researchRoot, "autoresearch.research"),
   ]);
   return parts.join("|");
 }
