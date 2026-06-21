@@ -711,6 +711,19 @@ test("source checkout reports missing dashboard build assets with build guidance
   );
 });
 
+test("compiled dashboard tests build ignored dashboard assets before reading them", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(resolvePackageRoot(import.meta.url), "package.json"), "utf8"),
+  );
+  const script = String(packageJson.scripts?.["test:compiled:dashboard"] || "");
+
+  assert.match(script, /\bbuild:dashboard\b/);
+  assert.ok(
+    script.indexOf("build:dashboard") < script.indexOf("node --test"),
+    "test:compiled:dashboard must build generated dashboard assets before dashboardHtml reads them.",
+  );
+});
+
 test("dashboard ledger bounder preserves governing config when there is room for a run", () => {
   const entries = [
     { type: "config", name: "old", metricName: "seconds" },
