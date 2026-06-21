@@ -2,9 +2,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type DashboardHealthSummary, verifyDashboardHealthSummary } from "./dashboard-health.js";
+import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
 
 type Liveness = "alive" | "dead" | "unknown";
 type CwdRelation = "same-cwd" | "different-cwd" | "unknown";
+type SessionRelation = "same-session" | "different-session" | "unknown";
 
 export interface DashboardServeRegistryRecord {
   pid: number;
@@ -14,6 +16,8 @@ export interface DashboardServeRegistryRecord {
   version: string;
   healthUrl: string;
   debugLedger?: boolean;
+  sessionCwd?: string;
+  sessionPathIdentity?: string;
   previous?: DashboardServeRegistrySummary | null;
 }
 
@@ -22,6 +26,8 @@ export interface DashboardServeRegistrySummary {
   stale: boolean | null;
   sameCwd: boolean | null;
   cwdRelation: CwdRelation;
+  sameSession: boolean | null;
+  sessionRelation: SessionRelation;
   liveness: Liveness;
   currentProcess: boolean | null;
   message: string;
@@ -34,6 +40,8 @@ export interface DashboardServeRegistryHealthInput {
   pid?: number;
   registryPath: string;
   cwd: string;
+  sessionCwd: string;
+  sessionPathIdentity: string;
   version?: string;
   startedAt?: string;
   previous: DashboardServeRegistrySummary;
@@ -65,7 +73,11 @@ export function registryPathForWorkDir(workDir: string): string {
   const resolvedWorkDir = path.resolve(workDir);
   const gitDir = findGitDir(resolvedWorkDir);
   if (gitDir) return path.join(gitDir, "autoresearch", "serve-registry.json");
-  return path.join(resolvedWorkDir, "autoresearch.research", ".runtime", "serve-registry.json");
+  return path.join(
+    resolveSessionPaths({ workDir: resolvedWorkDir }).researchRoot,
+    ".runtime",
+    "serve-registry.json",
+  );
 }
 
 export async function readServeRegistry(
@@ -105,7 +117,12 @@ export async function writeServeRegistry(
 
 export function summarizeServeRegistry(
   record: DashboardServeRegistryRecord | null,
-  options: { currentPid?: number; currentCwd?: string } = {},
+  options: {
+    currentPid?: number;
+    currentCwd?: string;
+    sessionCwd?: string;
+    sessionPathIdentity?: string;
+  } = {},
 ): DashboardServeRegistrySummary {
   if (!record) {
     return {
@@ -113,6 +130,8 @@ export function summarizeServeRegistry(
       stale: null,
       sameCwd: null,
       cwdRelation: "unknown",
+      sameSession: null,
+      sessionRelation: "unknown",
       liveness: "unknown",
       currentProcess: null,
       message: "No dashboard serve registry record is available.",
@@ -126,10 +145,13 @@ export function summarizeServeRegistry(
   const sameCwd = currentCwd && normalized.cwd ? samePath(normalized.cwd, currentCwd) : null;
   const cwdRelation: CwdRelation =
     sameCwd == null ? "unknown" : sameCwd ? "same-cwd" : "different-cwd";
+  const sameSession = registrySessionMatches(normalized, options);
+  const sessionRelation: SessionRelation =
+    sameSession == null ? "unknown" : sameSession ? "same-session" : "different-session";
   const liveness = inspectProcessLiveness(normalized.pid);
   const currentProcess = currentPid == null ? null : normalized.pid === currentPid;
   const stale =
-    sameCwd === false
+    sameCwd === false || sameSession === false
       ? true
       : liveness === "dead"
         ? true
@@ -144,9 +166,18 @@ export function summarizeServeRegistry(
     stale,
     sameCwd,
     cwdRelation,
+    sameSession,
+    sessionRelation,
     liveness,
     currentProcess,
-    message: registryMessage({ record: normalized, stale, cwdRelation, liveness, currentProcess }),
+    message: registryMessage({
+      record: normalized,
+      stale,
+      cwdRelation,
+      sessionRelation,
+      liveness,
+      currentProcess,
+    }),
     record: normalized,
   };
 }
@@ -154,17 +185,29 @@ export function summarizeServeRegistry(
 export function buildServeRegistryHealthInput(
   workDir: string,
   record: DashboardServeRegistryRecord | null,
-  options: { expectedVersion?: string; timeoutMs?: number } = {},
+  options: {
+    expectedVersion?: string;
+    timeoutMs?: number;
+    sessionCwd?: string;
+    sessionPathIdentity?: string;
+  } = {},
 ): DashboardServeRegistryHealthInput {
   const requestedCwd = path.resolve(workDir);
   const normalized = record ? normalizeRecord(record) : null;
-  const previous = summarizeServeRegistry(normalized, { currentCwd: requestedCwd });
+  const previous = summarizeServeRegistry(normalized, {
+    currentCwd: requestedCwd,
+    sessionCwd: options.sessionCwd,
+    sessionPathIdentity: options.sessionPathIdentity,
+  });
   return {
     url: normalized?.port ? `http://127.0.0.1:${normalized.port}/` : "",
     port: normalized?.port,
     pid: normalized?.pid,
     registryPath: registryPathForWorkDir(requestedCwd),
     cwd: requestedCwd,
+    sessionCwd: cleanString(options.sessionCwd) || normalized?.sessionCwd || "",
+    sessionPathIdentity:
+      cleanString(options.sessionPathIdentity) || normalized?.sessionPathIdentity || "",
     version: cleanString(options.expectedVersion) || normalized?.version,
     startedAt: normalized?.startedAt,
     previous,
@@ -174,11 +217,24 @@ export function buildServeRegistryHealthInput(
 
 export async function findReusableServeRegistry(
   workDir: string,
-  options: { expectedVersion?: string; timeoutMs?: number; debugLedger?: boolean } = {},
+  options: {
+    expectedVersion?: string;
+    timeoutMs?: number;
+    debugLedger?: boolean;
+    sessionPaths?: SessionPaths;
+  } = {},
 ): Promise<DashboardServeRegistryLookup> {
   const requestedCwd = path.resolve(workDir);
+  const expectedSessionCwd = options.sessionPaths?.sessionCwd || "";
+  const expectedSessionPathIdentity = options.sessionPaths
+    ? sessionPathIdentity(options.sessionPaths)
+    : "";
   const record = await readServeRegistry(requestedCwd);
-  const previous = summarizeServeRegistry(record, { currentCwd: requestedCwd });
+  const previous = summarizeServeRegistry(record, {
+    currentCwd: requestedCwd,
+    sessionCwd: expectedSessionCwd,
+    sessionPathIdentity: expectedSessionPathIdentity,
+  });
   const registryPath = registryPathForWorkDir(requestedCwd);
   const recoveryCommand = serveRecoveryCommand(requestedCwd);
   if (!record) {
@@ -208,6 +264,8 @@ export async function findReusableServeRegistry(
     buildServeRegistryHealthInput(requestedCwd, record, {
       expectedVersion: options.expectedVersion,
       timeoutMs: options.timeoutMs,
+      sessionCwd: expectedSessionCwd,
+      sessionPathIdentity: expectedSessionPathIdentity,
     }),
   );
   const reusable =
@@ -298,6 +356,8 @@ function normalizeRecord(record: unknown): DashboardServeRegistryRecord {
     version: cleanString(source.version),
     healthUrl: cleanString(source.healthUrl),
     debugLedger: source.debugLedger === true,
+    sessionCwd: cleanString(source.sessionCwd),
+    sessionPathIdentity: cleanString(source.sessionPathIdentity),
   };
 }
 
@@ -307,6 +367,8 @@ function compactSummary(summary: DashboardServeRegistrySummary): DashboardServeR
     stale: summary.stale,
     sameCwd: summary.sameCwd,
     cwdRelation: summary.cwdRelation,
+    sameSession: summary.sameSession,
+    sessionRelation: summary.sessionRelation,
     liveness: summary.liveness,
     currentProcess: summary.currentProcess,
     message: summary.message,
@@ -331,22 +393,40 @@ function registryMessage({
   record,
   stale,
   cwdRelation,
+  sessionRelation,
   liveness,
   currentProcess,
 }: {
   record: DashboardServeRegistryRecord;
   stale: boolean | null;
   cwdRelation: CwdRelation;
+  sessionRelation: SessionRelation;
   liveness: Liveness;
   currentProcess: boolean | null;
 }): string {
-  if (currentProcess) return "Dashboard serve registry matches this process.";
   if (cwdRelation === "different-cwd") {
     return `Dashboard registry points at a different cwd: ${record.cwd}.`;
   }
+  if (sessionRelation === "different-session") {
+    return "Dashboard registry points at a different session path contract.";
+  }
+  if (currentProcess) return "Dashboard serve registry matches this process.";
   if (liveness === "dead") return `Dashboard registry pid ${record.pid} is not running.`;
   if (stale === false) return "Dashboard registry points at a live same-cwd server.";
   return "Dashboard registry liveness could not be fully inspected.";
+}
+
+function registrySessionMatches(
+  record: DashboardServeRegistryRecord,
+  options: { sessionCwd?: string; sessionPathIdentity?: string },
+): boolean | null {
+  const expectedIdentity = cleanString(options.sessionPathIdentity);
+  if (expectedIdentity) return cleanString(record.sessionPathIdentity) === expectedIdentity;
+  const expectedSessionCwd = cleanString(options.sessionCwd);
+  if (expectedSessionCwd) {
+    return record.sessionCwd ? samePath(record.sessionCwd, expectedSessionCwd) : false;
+  }
+  return null;
 }
 
 function finitePositiveInteger(value: unknown): number | null {

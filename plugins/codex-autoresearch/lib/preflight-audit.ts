@@ -1,3 +1,5 @@
+import { firstSafeCommand } from "./safe-command-resolver.js";
+
 export type PreflightStatus = "blocked" | "ready" | "unknown";
 
 export interface PreflightAuditInput {
@@ -5,6 +7,7 @@ export interface PreflightAuditInput {
   benchmarkCommand?: unknown;
   benchmarkLintCommand?: unknown;
   doctorCommand?: unknown;
+  setupPlanCommand?: unknown;
   gateQuality?: {
     posture?: unknown;
     blockers?: unknown[];
@@ -119,13 +122,24 @@ export function buildPreflightAudit(input: PreflightAuditInput): PreflightAudit 
 function nextCommand(input: PreflightAuditInput, blockers: string[], warnings: string[]): string {
   const benchmarkLintCommand = cleanString(input.benchmarkLintCommand);
   const doctorCommand = cleanString(input.doctorCommand);
+  const setupPlanCommand = cleanString(input.setupPlanCommand);
   if (blockers.some((blocker) => /benchmark|metric|setup|gate/i.test(blocker))) {
-    return benchmarkLintCommand || doctorCommand;
+    if (
+      blockers.some((blocker) =>
+        /No benchmark command|Missing setup|No primary metric/i.test(blocker),
+      )
+    ) {
+      return firstSafeCommand(
+        [setupPlanCommand, benchmarkLintCommand, doctorCommand],
+        "operational",
+      );
+    }
+    return firstSafeCommand([benchmarkLintCommand, setupPlanCommand, doctorCommand], "operational");
   }
   if (blockers.length > 0 || warnings.some((warning) => /dirty|runtime|stale/i.test(warning))) {
-    return doctorCommand || benchmarkLintCommand;
+    return firstSafeCommand([doctorCommand, benchmarkLintCommand], "operational");
   }
-  return benchmarkLintCommand || doctorCommand;
+  return firstSafeCommand([benchmarkLintCommand, doctorCommand], "operational");
 }
 
 function scaffoldHealthBlockers(value: unknown): string[] {

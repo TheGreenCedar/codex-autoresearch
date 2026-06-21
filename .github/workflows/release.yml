@@ -139,12 +139,6 @@ jobs:
             exit 1
           fi
 
-      - name: Build node
-        run: npm run build:node
-
-      - name: Build dashboard
-        run: npm run build:dashboard
-
       - name: Create package artifact
         run: |
           set -euo pipefail
@@ -165,11 +159,7 @@ jobs:
           tarball="codex-autoresearch-${{ steps.version.outputs.version }}.tgz"
           test -f "$tarball"
           test -f "$tarball.sha256"
-          sha256sum -c "$tarball.sha256"
-          mkdir -p "$RUNNER_TEMP/codex-autoresearch-release"
-          tar -xzf "$tarball" -C "$RUNNER_TEMP/codex-autoresearch-release"
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/autoresearch.mjs" --help
-          node "$RUNNER_TEMP/codex-autoresearch-release/package/scripts/finalize-autoresearch.mjs" --help
+          node scripts/check.mjs --phase release-package-smoke --tarball "$tarball" --checksum "$tarball.sha256"
 
       - name: Create GitHub release with tarball
         env:
@@ -185,3 +175,20 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes
+
+      - name: Smoke release provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="codex-autoresearch-${VERSION}.tgz"
+          checksum="$tarball.sha256"
+          node scripts/check.mjs --phase release-provenance-smoke \
+            --tarball "$tarball" \
+            --checksum "$checksum" \
+            --tag "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target-commit "$GITHUB_SHA" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"

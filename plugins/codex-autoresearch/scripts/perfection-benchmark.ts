@@ -55,33 +55,6 @@ async function readJson(file: string): Promise<LooseObject> {
   return JSON.parse(await readText(file));
 }
 
-function parseDashboardMeta(html: string): LooseObject | null {
-  const match = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]);
-  } catch {
-    return null;
-  }
-}
-
-function demoExportUsesShowcaseMode(html: string): boolean {
-  const meta = parseDashboardMeta(html);
-  return Boolean(
-    meta &&
-    meta.publicExport === true &&
-    meta.showcaseMode === true &&
-    meta.deliveryMode === "showcase" &&
-    meta.settings?.publicExport === true &&
-    meta.settings?.showcaseMode === true &&
-    meta.settings?.deliveryMode === "showcase" &&
-    meta.viewModel?.trustState?.mode !== "static-export" &&
-    meta.viewModel?.processHygiene?.mode !== "static-export" &&
-    !/Static export/i.test(JSON.stringify(meta.viewModel?.trustState?.reasons ?? [])) &&
-    !/Static export/i.test(JSON.stringify(meta.viewModel?.processHygiene?.warnings ?? [])),
-  );
-}
-
 async function fileExists(file: string): Promise<boolean> {
   try {
     await fsp.access(path.join(pluginRoot, file));
@@ -275,7 +248,7 @@ const checks = [
   },
   {
     id: "docs-split-and-showcase",
-    file: "../../README.md, docs/*.md, examples/, assets/showcase/",
+    file: "../../README.md, docs/*.md, examples/demo-session/autoresearch.jsonl, assets/showcase/",
     description:
       "Detailed guidance lives in focused docs while README surfaces the live dashboard demo.",
     run: async () => {
@@ -303,7 +276,6 @@ const checks = [
         !!screenshotDimensions &&
         screenshotDimensions.width >= 900 &&
         screenshotDimensions.height / screenshotDimensions.width <= 0.8;
-      const demoExport = await readText("examples/demo-session/autoresearch-dashboard.html");
       const demoJsonl = await readText("examples/demo-session/autoresearch.jsonl");
       const demoRuns = demoJsonl
         .split(/\r?\n/)
@@ -311,14 +283,6 @@ const checks = [
       return screenshotExists &&
         screenshotIsCompact &&
         demoRuns === 100 &&
-        demoExport.includes(`"pluginVersion":"${PLUGIN_VERSION}"`) &&
-        demoExportUsesShowcaseMode(demoExport) &&
-        !demoExport.includes("C:\\Users\\alber") &&
-        !demoExport.includes("C:\\Program Files") &&
-        !demoExport.includes("actionNonce") &&
-        !demoExport.includes("/actions/") &&
-        !demoExport.includes("live-actions-panel") &&
-        !demoExport.includes("action-receipt") &&
         !readme.includes("```mermaid") &&
         includesAll(readme, ["Docs index", "dashboard-demo.png"]) &&
         includesAll(joined, [
@@ -335,7 +299,7 @@ const checks = [
         ])
         ? pass()
         : fail(
-            "Docs split, compact README snapshot, visual docs, live demo, or scrubbed demo export is incomplete.",
+            "Docs split, compact README snapshot, visual docs, or live demo ledger is incomplete.",
           );
     },
   },
@@ -594,7 +558,7 @@ const checks = [
   },
   {
     id: "release-tarball-runtime",
-    file: ".gitignore, package.json, scripts/*.mjs, .github/workflows/release.yml",
+    file: ".gitignore, package.json, scripts/autoresearch.mjs, scripts/bootstrap-runtime.mjs, scripts/release-integrity.mjs, .github/workflows/release.yml",
     description:
       "Source checkouts keep generated dist out of Git while release tarballs include the built runtime used by public launchers.",
     run: async () => {
@@ -604,24 +568,36 @@ const checks = [
         .map((line) => line.trim())
         .some((line) => line === "dist/" || line === "/dist/" || line === "dist");
       const pkg = await readJson("package.json");
-      const packageFiles = (pkg.files || []).join("\n");
+      const packageFileEntries = (pkg.files || []).map(String);
+      const packageFiles = packageFileEntries.join("\n");
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
       const bootstrap = await readText("scripts/bootstrap-runtime.mjs");
+      const releaseIntegrity = await readText("scripts/release-integrity.mjs");
+      const runtimeIntegritySource = `${bootstrap}\n${releaseIntegrity}`;
       const release = await readRootText(".github/workflows/release.yml");
       const tagPushTrigger = /push:\s*\n\s*tags:/m.test(release);
       return ignoresDist &&
         !tagPushTrigger &&
         includesAll(packageFiles, [
           "dist/lib/",
-          "dist/scripts/",
-          "scripts/*.mjs",
+          "dist/scripts/autoresearch.mjs",
+          "dist/scripts/check.mjs",
+          "dist/scripts/check-runner.mjs",
+          "dist/scripts/finalize-autoresearch.mjs",
+          "scripts/autoresearch.mjs",
+          "scripts/bootstrap-runtime.mjs",
+          "scripts/check.mjs",
+          "scripts/finalize-autoresearch.mjs",
+          "scripts/release-integrity.mjs",
           ".codex-plugin/",
         ]) &&
+        !packageFileEntries.includes("dist/scripts/") &&
+        !packageFileEntries.includes("scripts/*.mjs") &&
         autoresearchLauncher.includes("./bootstrap-runtime.mjs") &&
         autoresearchLauncher.includes('ensureRuntime("autoresearch.mjs"') &&
         !packageFiles.includes(".mcp.json") &&
         !packageFiles.includes("autoresearch-mcp") &&
-        includesAll(bootstrap, [
+        includesAll(runtimeIntegritySource, [
           "github.com/TheGreenCedar/codex-autoresearch/releases/download",
           "${PACKAGE_NAME}-${version}.tgz",
           "verifyRuntimeTarballIntegrity",
@@ -651,7 +627,7 @@ const checks = [
   },
   {
     id: "release-workflow-safeguards",
-    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml",
+    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml, scripts/check.ts, lib/checks/package-smoke.ts",
     description:
       "Release automation keeps version sync, branch, CodeQL, package, tarball, and duplicate-release safeguards.",
     run: async () => {
@@ -676,9 +652,22 @@ const checks = [
           "node scripts/autoresearch.mjs --help",
           "Refuse existing tag or release",
           "npm pack",
-          "tar -xzf",
+          "--phase release-package-smoke",
           "gh release create",
           '--target "$GITHUB_SHA"',
+        ]) &&
+        includesAll(await readText("lib/checks/package-smoke.ts"), [
+          '"dist/scripts/check.mjs"',
+          '"dist/scripts/check-runner.mjs"',
+          '"dist/lib/checks/package-smoke.mjs"',
+          '"scripts/check.mjs"',
+          "ALLOWED_PACKAGED_SOURCE_SCRIPTS",
+          "ALLOWED_PACKAGED_DIST_SCRIPTS",
+          "runReleasePackageSmokePhase",
+          "runPackageRuntimeSmokeFromTarball",
+          "runExtractedPackageDashboardExportSmoke",
+          "check-source-hygiene",
+          '"--phase", "source-hygiene"',
         ]) &&
         /pull_request:\s*\n[\s\S]*branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/m.test(codeql)
         ? pass()

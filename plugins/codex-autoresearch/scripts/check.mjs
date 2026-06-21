@@ -1,2 +1,4 @@
 #!/usr/bin/env node
-await import(new URL("../dist/scripts/check.mjs", import.meta.url));
+import { ensureRuntime } from "./bootstrap-runtime.mjs";
+
+await import(await ensureRuntime("check.mjs", import.meta.url));

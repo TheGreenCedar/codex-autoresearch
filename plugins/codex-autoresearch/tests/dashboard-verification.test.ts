@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +18,8 @@ import {
   DASHBOARD_TRANSPORT_ARRAY_LIMIT,
   DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT,
   compactDashboardTransportViewModel,
+  dashboardHtml,
+  readDashboardBuildAsset,
 } from "../lib/dashboard-transport.js";
 import { boundDashboardLedgerEntries } from "../lib/dashboard-ledger-bounds.js";
 import {
@@ -33,6 +35,7 @@ import {
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { LIVE_LEDGER_MAX_ENTRIES, serveAutoresearch } from "../lib/live-server.js";
+import { resolveSessionPaths } from "../lib/session-paths.js";
 import {
   createDashboardHarness,
   dashboardConfigEntry,
@@ -446,6 +449,20 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
         command: "node scripts/autoresearch.mjs next --cwd C:/repo",
       },
     },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+        benchmarkCommand: "node C:/private/repo/bench.mjs --token sk-demo",
+        checksCommand: "npm test -- --token sk-demo",
+      },
+      commandAuthority: {
+        status: "custom",
+        benchmarkCommand: "node C:/private/repo/bench.mjs --token sk-demo",
+        checksCommand: "npm test -- --token sk-demo",
+      },
+    },
     sourceCwd: "C:/repo",
     summary: "No command here.",
   };
@@ -458,16 +475,33 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
   assert.equal(dashboardCommandMapKey("state"), "state");
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("replaceLast"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("finalizeCurrentTree"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("benchmarkCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("checksCommand"), true);
+  assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("commandAuthority"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("cleanupCommand"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("suggestedCommand"), true);
   assert.equal(DASHBOARD_COMMAND_FIELD_NAMES.has("planOutput"), true);
   assert.deepEqual(stripDashboardGuidanceCommandFields(payload), {
     nested: { detail: "Review the current state." },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+      },
+    },
     sourceCwd: "C:/repo",
     summary: "No command here.",
   });
   assert.deepEqual(stripDashboardExportCommandFields(payload), {
     nested: { detail: "Review the current state." },
+    setup: {
+      status: "needs-setup",
+      recommendedRecipe: {
+        id: "node-test",
+        label: "Node test",
+      },
+    },
     summary: "No command here.",
   });
   assert.deepEqual(collectDashboardCommandFields(payload), [
@@ -477,7 +511,91 @@ test("dashboard command scrubbers and leak collector share canonical taxonomy", 
     "node scripts/autoresearch.mjs doctor --cwd C:/repo",
     "Next",
     "node scripts/autoresearch.mjs next --cwd C:/repo",
+    "node C:/private/repo/bench.mjs --token sk-demo",
+    "npm test -- --token sk-demo",
+    "custom",
+    "node C:/private/repo/bench.mjs --token sk-demo",
+    "npm test -- --token sk-demo",
   ]);
+});
+
+test("static dashboard export strips setup and recipe command fields", () => {
+  const benchmarkCommand = "node C:/Users/alber/private/bench.mjs --token sk-demo-secret";
+  const checksCommand = "npm test -- --secret sk-demo-secret";
+  const html = dashboardHtml(
+    [
+      {
+        type: "config",
+        name: "Static export setup",
+        metricName: "score",
+        bestDirection: "higher",
+        benchmarkCommand,
+        checksCommand,
+      },
+      {
+        type: "state",
+        setup: {
+          label: "Benchmark setup",
+          status: "needs-checks",
+          recommendedRecipe: {
+            id: "node-test",
+            name: "Node test",
+            status: "recommended",
+            benchmarkCommand,
+            checksCommand,
+          },
+          commandAuthority: {
+            status: "custom",
+            benchmarkCommand,
+            checksCommand,
+          },
+        },
+      },
+    ],
+    {
+      deliveryMode: "static-export",
+      viewModel: {
+        setup: {
+          label: "Benchmark setup",
+          status: "needs-checks",
+          recommendedRecipe: {
+            id: "node-test",
+            name: "Node test",
+            status: "recommended",
+            benchmarkCommand,
+            checksCommand,
+          },
+          commandAuthority: {
+            status: "custom",
+            benchmarkCommand,
+            checksCommand,
+          },
+        },
+      },
+    },
+  );
+  const dataMatch = html.match(
+    /window\.__AUTORESEARCH_DATA__ = ([\s\S]*?);\nwindow\.__AUTORESEARCH_META__/,
+  );
+  const metaMatch = html.match(/window\.__AUTORESEARCH_META__ = ([\s\S]*?);\n<\/script>/);
+  assert.ok(dataMatch);
+  assert.ok(metaMatch);
+  const data = JSON.parse(dataMatch[1]);
+  const meta = JSON.parse(metaMatch[1]);
+  const serialized = JSON.stringify({ data, meta });
+
+  assert.doesNotMatch(serialized, /benchmarkCommand|checksCommand|commandAuthority/);
+  assert.doesNotMatch(serialized, /sk-demo-secret|private\/bench|C:\\/);
+  assert.equal(data[1].setup.label, "Benchmark setup");
+  assert.equal(data[1].setup.status, "needs-checks");
+  assert.equal(data[1].setup.recommendedRecipe.id, "node-test");
+  assert.equal(data[1].setup.recommendedRecipe.name, "Node test");
+  assert.equal(data[1].setup.recommendedRecipe.status, "recommended");
+  assert.equal(meta.viewModel.setup.label, "Benchmark setup");
+  assert.equal(meta.viewModel.setup.status, "needs-checks");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.id, "node-test");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.name, "Node test");
+  assert.equal(meta.viewModel.setup.recommendedRecipe.status, "recommended");
 });
 
 test("dashboard finalization preview strips executable command-shaped fields", () => {
@@ -578,6 +696,65 @@ test("dashboard transport view model caps large memory arrays", () => {
   assert.equal(viewModel.decisionEnvelope.state.current[0].run, 6);
   assert.equal(viewModel.decisionEnvelope.workflowFriction.length, DASHBOARD_TRANSPORT_ARRAY_LIMIT);
   assert.equal(viewModel.decisionEnvelope.workflowFriction[0].id, 0);
+});
+
+test("source checkout reports missing dashboard build assets with build guidance", async () => {
+  const missingBuildDir = await mkdtemp(path.join(tmpdir(), "autoresearch-missing-dashboard-"));
+  await rm(missingBuildDir, { recursive: true, force: true });
+
+  assert.throws(
+    () =>
+      readDashboardBuildAsset("dashboard-app.js", {
+        buildDir: missingBuildDir,
+        pluginRoot: "C:\\repo\\plugins\\codex-autoresearch",
+      }),
+    /Dashboard build asset is missing: .* Run npm run build:dashboard from C:\\repo\\plugins\\codex-autoresearch\./,
+  );
+});
+
+test("dashboard test scripts build ignored dashboard assets once before dashboard tests", () => {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(resolvePackageRoot(import.meta.url), "package.json"), "utf8"),
+  );
+  const scripts = packageJson.scripts || {};
+  const compiledDashboardScript = String(scripts["test:compiled:dashboard"] || "");
+
+  assert.doesNotMatch(compiledDashboardScript, /\bbuild:dashboard\b/);
+  assert.match(compiledDashboardScript, /\bnode --test\b/);
+
+  for (const [name, nextScript] of [
+    ["test", "test:compiled"],
+    ["test:dashboard", "test:compiled:dashboard"],
+  ]) {
+    const script = String(scripts[name] || "");
+
+    assert.equal(
+      script.split(/\s+/).filter((part) => part === "build:dashboard").length,
+      1,
+      `${name} must build generated dashboard assets exactly once.`,
+    );
+    assert.ok(
+      script.indexOf("build:dashboard") < script.indexOf(nextScript),
+      `${name} must build generated dashboard assets before running dashboard tests.`,
+    );
+  }
+
+  const checkScript = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "scripts", "check.ts"),
+    "utf8",
+  );
+  const runAllPhases = checkScript.slice(
+    checkScript.indexOf("const ok ="),
+    checkScript.indexOf("return ok ? 0 : 1;"),
+  );
+  assert.ok(
+    runAllPhases.indexOf("runDashboardBuildWithParity") < runAllPhases.indexOf("runProductPhase"),
+    "npm run check must prove dashboard build parity before compiled product tests.",
+  );
+  assert.ok(
+    runAllPhases.indexOf("runProductPhase") < runAllPhases.indexOf("runPackageArtifactCheck"),
+    "npm run check must keep package artifact/runtime smoke after product tests.",
+  );
 });
 
 test("dashboard ledger bounder preserves governing config when there is room for a run", () => {
@@ -943,11 +1120,76 @@ test("dashboard chart does not place interactive point buttons under an image ro
 
   assert.equal(chart.getAttribute("role"), null);
   assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
+  assert.match(
+    getById("chart-keyboard-help").textContent || "",
+    /arrow keys move through history/i,
+  );
   assert.match(chartSource, /className="chart-point-button"/);
+  assert.match(chartSource, /aria-current=\{payload\.runNumber === selectedRunNumber/);
+  assert.doesNotMatch(chartSource, /aria-describedby="trend-chart-selected chart-keyboard-help"/);
   for (const button of buttons) {
     assert.equal(button.closest('[role="img"]'), null);
+    assert.equal(button.getAttribute("aria-describedby"), "chart-keyboard-help");
+    assert.doesNotMatch(button.getAttribute("aria-describedby") || "", /trend-chart-selected/);
+    assert.match(button.getAttribute("aria-label") || "", /Open details for run/);
   }
+  assert.match(getById("trend-chart-selected").textContent || "", /Selected chart point:/);
   dom.window.close();
+});
+
+test("dashboard side rail distinguishes live and static status affordances", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "side rail status", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+
+  const staticDashboard = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+  });
+  assert.ok(staticDashboard.dom.window.document.querySelector(".side-status .status-dot"));
+  assert.equal(staticDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.match(
+    staticDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Static/,
+  );
+  staticDashboard.dom.window.close();
+
+  const demoDashboard = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveActionsAvailable: false,
+    showcaseMode: true,
+  });
+  assert.ok(demoDashboard.dom.window.document.querySelector(".side-status .status-dot"));
+  assert.equal(demoDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.match(
+    demoDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Demo/,
+  );
+  demoDashboard.dom.window.close();
+
+  const liveDashboard = await runDashboard(entries, {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+  });
+  assert.ok(liveDashboard.dom.window.document.querySelector(".side-status .live-dot"));
+  assert.equal(liveDashboard.dom.window.document.querySelector(".side-status .status-dot"), null);
+  assert.match(
+    liveDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
+    /Live/,
+  );
+  liveDashboard.dom.window.close();
+});
+
+test("dashboard static status marker does not inherit live animation", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+
+  assert.match(css, /\.live-dot\s*\{[^}]*animation:\s*pulse-glow/s);
+  assert.doesNotMatch(extractCssBlock(css, ".status-dot"), /animation:/);
 });
 
 test("dashboard styles latest rejected evidence as rejected, not kept", async () => {
@@ -1376,6 +1618,7 @@ test("dashboard view model warns after a watchdog no-progress window", () => {
   assert.equal(viewModel.decisionEnvelope.watchdog.stale, true);
   assert.equal(viewModel.decisionEnvelopeSummary.kind, "watchdog");
   assert.match(viewModel.nextBestAction.detail, /Intervene|finalize|rescope/i);
+  assert.equal(viewModel.nextBestAction.safeAction, "state");
   assert.notEqual(viewModel.nextBestAction.safeAction, "next");
   assert.doesNotMatch(String(viewModel.nextBestAction.command || ""), /\bnext\b/);
   assert.match(viewModel.processHygiene.warnings.join("\n"), /Intervene|quiet/i);
@@ -3209,6 +3452,23 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
         },
       ],
     },
+    finalizationPressure: {
+      status: "medium",
+      recommendation: "Preview finalization after blocked notes are resolved.",
+    },
+    processHygiene: {
+      status: "needs-attention",
+      mode: "live-server",
+      activeCwd: "C:/repo/with/a/very/long/path",
+      pluginVersion: "2.4.0",
+      duplicateServerDetection: "checked C:/repo/.autoresearch/servers.json",
+      staleServerDetection: "checked C:/repo/.autoresearch/stale-server.json",
+      warnings: ["Runtime cache fingerprint needs review."],
+    },
+    watchdogSummary: {
+      status: "tracking",
+      recommendation: "Continue from the decision envelope before retrying packets.",
+    },
     nextBestAction: {
       priority: "Review",
       title: "Preview finalization",
@@ -3250,6 +3510,18 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
   assert.match(getById("finalization-checklist-title").textContent, /Review packet gated/);
   assert.match(getById("finalization-checklist-items").textContent, /Diagnostic details stay/);
+  assert.match(getById("v2-release-signals").textContent || "", /Preview gated/);
+  assert.match(
+    getById("v2-release-signals").textContent || "",
+    /Preview blocked until gates clear/,
+  );
+  assert.doesNotMatch(getById("v2-release-signals").textContent || "", /Preview ready/);
+  assert.match(getById("process-hygiene-detail").textContent || "", /Runtime cache fingerprint/);
+  const provenance = getById("process-hygiene-detail").querySelector("details");
+  assert.ok(provenance);
+  assert.equal(provenance.open, false);
+  assert.match(provenance.querySelector("summary")?.textContent || "", /Runtime provenance/);
+  assert.match(provenance.textContent || "", /C:\/repo\/with\/a\/very\/long\/path/);
 });
 
 test("dashboard keeps the chart first while rendering v2 readiness signals", async () => {
@@ -3418,6 +3690,14 @@ test("dashboard renders strategy lanes and evidence status classes", async () =>
   const entries = [
     dashboardConfigEntry({ name: "lane path", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    {
+      type: "run",
+      run: 2,
+      metric: 5.2,
+      status: "checks_failed",
+      description: "Checks failed",
+      confidence: 1,
+    },
   ];
 
   const { dom, getById } = await runDashboard(
@@ -3449,6 +3729,10 @@ test("dashboard renders strategy lanes and evidence status classes", async () =>
     dom.window.document.querySelectorAll('[data-evidence-status="suspicious"]').length >= 1,
     true,
   );
+  assert.ok(
+    dom.window.document.querySelector('.segmented-control button.active[aria-pressed="true"]'),
+  );
+  assert.ok(dom.window.document.querySelector(".legend-swatch.checks_failed"));
 });
 
 test("dashboard reports completed-only lanes without inflating active readiness", async () => {
@@ -3510,6 +3794,40 @@ test("dashboard responsive styles keep readiness strip two-up until mobile", () 
   assert.match(
     mobileBlock,
     /\.toolbar-controls,[\s\S]*?\.signal-strip\s*\{[\s\S]*?grid-template-columns:\s*1fr/,
+  );
+});
+
+test("dashboard contrast tokens cover reported a11y targets", () => {
+  const css = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "styles.css"),
+    "utf8",
+  );
+  const variables = cssHexVariables(css);
+  const tealDark = requiredCssVariable(variables, "--teal-dark");
+  const amberDark = requiredCssVariable(variables, "--amber-dark");
+
+  assertContrastAtLeast(tealDark, "#ffffff", 4.5, "active segmented control");
+  assertContrastAtLeast(amberDark, "#f5e6c2", 4.5, "warning evidence pill text");
+  assertContrastAtLeast(amberDark, "#ffffff", 3, "amber non-text indicators");
+  assert.match(
+    extractCssBlock(css, ".segmented-control button.active"),
+    /background:\s*var\(--teal-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".evidence-chip.evidence-suspicious"),
+    /border-left-color:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".strategy-lane-card .status-pill.warn"),
+    /border-color:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".legend-swatch.checks_failed"),
+    /background:\s*var\(--amber-dark\)/,
+  );
+  assert.match(
+    extractCssBlock(css, ".chart-point-button:focus-visible .chart-point-dot"),
+    /0 0 0 6px var\(--amber-dark\)/,
   );
 });
 
@@ -3585,6 +3903,21 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     item.textContent?.trim(),
   );
   assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  const sideAriaLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
+    item.getAttribute("aria-label"),
+  );
+  assert.deepEqual(sideAriaLabels, [
+    "Dashboard section: Metric",
+    "Dashboard section: Move",
+    "Dashboard section: Brief",
+    "Dashboard section: Ledger",
+  ]);
+  assert.equal(
+    [...dom.window.document.querySelectorAll(".side-nav .nav-icon")].every(
+      (item) => item.getAttribute("aria-hidden") === "true",
+    ),
+    true,
+  );
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
   assert.equal(dom.window.document.querySelector(".masthead"), null);
   const decisionRail = dom.window.document.getElementById("decision-rail");
@@ -4088,6 +4421,135 @@ test("live dashboard view model cache invalidates on session state changes", asy
     assert.equal(third.summary.runs, 2);
     assert.equal(recomputes, 2);
     assert.equal(third.ledgerEntries.length, 3);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache invalidates on wrapper session config changes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "autoresearch-live-wrapper-cache-"));
+  const wrapper = path.join(root, "wrapper");
+  const target = path.join(root, "target");
+  await mkdir(wrapper, { recursive: true });
+  await mkdir(target, { recursive: true });
+  let recomputes = 0;
+  const readWrapperRefreshSeconds = async () => {
+    const config = JSON.parse(
+      await readFile(path.join(wrapper, "autoresearch.config.json"), "utf8"),
+    );
+    return Number(config.dashboardRefreshSeconds);
+  };
+  const server = await serveAutoresearch({
+    cwd: wrapper,
+    sessionPaths: resolveSessionPaths({ sessionCwd: wrapper, workDir: target }),
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>wrapper cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      return { summary: { runs: await readWrapperRefreshSeconds() } };
+    },
+  });
+
+  try {
+    await writeFile(
+      path.join(wrapper, "autoresearch.config.json"),
+      JSON.stringify({ workingDir: "../target", dashboardRefreshSeconds: 5 }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(target, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "wrapper cache", metricName: "seconds" }),
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(server.workDir, path.resolve(target));
+    assert.equal(first.summary.runs, 5);
+    assert.equal(second.summary.runs, 5);
+    assert.equal(recomputes, 1);
+
+    await writeFile(
+      path.join(wrapper, "autoresearch.config.json"),
+      JSON.stringify({ workingDir: "../target", dashboardRefreshSeconds: 9 }),
+      "utf8",
+    );
+
+    const third = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.equal(third.summary.runs, 9);
+    assert.equal(third.ledgerEntries.length, 2);
+    assert.equal(recomputes, 2);
+  } finally {
+    server.server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard view model cache invalidates on nested research edits within ttl", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-research-cache-"));
+  const researchDir = path.join(dir, "autoresearch.research", "project-study");
+  const qualityGapsPath = path.join(researchDir, "quality-gaps.md");
+  const decisionCapsulePath = path.join(researchDir, "decision-capsule.json");
+  let recomputes = 0;
+  const readResearchDigest = async () => {
+    const [qualityGaps, decisionCapsule] = await Promise.all([
+      readFile(qualityGapsPath, "utf8"),
+      readFile(decisionCapsulePath, "utf8"),
+    ]);
+    return `${qualityGaps.trim()}|${decisionCapsule.trim()}`;
+  };
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>research cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      return { researchDigest: await readResearchDigest() };
+    },
+  });
+
+  try {
+    await mkdir(researchDir, { recursive: true });
+    await writeFile(qualityGapsPath, "- [ ] first gap\n", "utf8");
+    await writeFile(decisionCapsulePath, JSON.stringify({ bottleneck: "first" }), "utf8");
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.match(first.researchDigest, /first gap/);
+    assert.equal(second.researchDigest, first.researchDigest);
+    assert.equal(recomputes, 1);
+
+    await writeFile(qualityGapsPath, "- [x] first gap\n- [ ] second gap\n", "utf8");
+
+    const afterQualityGap = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.match(afterQualityGap.researchDigest, /second gap/);
+    assert.equal(recomputes, 2);
+
+    await writeFile(
+      decisionCapsulePath,
+      JSON.stringify({ bottleneck: "second", next: "inspect cache stamp" }),
+      "utf8",
+    );
+
+    const afterDecisionCapsule = await fetch(`${server.url}view-model.json`).then((res) =>
+      res.json(),
+    );
+
+    assert.match(afterDecisionCapsule.researchDigest, /inspect cache stamp/);
+    assert.equal(recomputes, 3);
   } finally {
     server.server.close();
     await rm(dir, { recursive: true, force: true });
@@ -4635,6 +5097,62 @@ function assertNoMutatingDashboardCommands(value: unknown) {
   assert.doesNotMatch(commands, /\b(?:serve|export|benchmark-lint)\b/i);
   assert.doesNotMatch(commands, /--check-benchmark\b/i);
   assert.doesNotMatch(commands, /\s--\s+\S/i);
+}
+
+function cssHexVariables(css: string) {
+  const root = extractCssBlock(css, ":root");
+  const variables = new Map<string, string>();
+  for (const match of root.matchAll(/(--[\w-]+):\s*(#[\da-fA-F]{6})\s*;/g)) {
+    variables.set(match[1]!, match[2]!);
+  }
+  return variables;
+}
+
+function requiredCssVariable(variables: ReadonlyMap<string, string>, name: string) {
+  const value = variables.get(name);
+  assert.ok(value, `Missing CSS variable ${name}`);
+  return value;
+}
+
+function assertContrastAtLeast(
+  foreground: string,
+  background: string,
+  minimum: number,
+  label: string,
+) {
+  const ratio = contrastRatio(foreground, background);
+  assert.ok(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} is below ${minimum}`);
+}
+
+function contrastRatio(foreground: string, background: string) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance(hex: string) {
+  const [redChannel, greenChannel, blueChannel] = hexToRgb(hex);
+  const red = relativeColorChannel(redChannel);
+  const green = relativeColorChannel(greenChannel);
+  const blue = relativeColorChannel(blueChannel);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function relativeColorChannel(channel: number) {
+  const normalized = channel / 255;
+  return normalized <= 0.03928 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const value = hex.replace("#", "");
+  assert.match(value, /^[\da-fA-F]{6}$/);
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
 }
 
 function extractCssBlock(css: string, marker: string) {

@@ -39,6 +39,13 @@ test("perfection benchmark reports zero quality gaps for the local plugin", asyn
   assert.equal(passed, checks);
 });
 
+test("perfection benchmark does not depend on committed demo dashboard HTML", async () => {
+  const source = await readFile(benchmarkSource, "utf8");
+
+  assert.doesNotMatch(source, /examples\/demo-session\/autoresearch-dashboard\.html/);
+  assert.doesNotMatch(source, /demoExport/);
+});
+
 test("compact read command paths use loadSessionState cache-aware loading", async () => {
   const source = await readFile(path.join(pluginRoot, "scripts", "autoresearch.ts"), "utf8");
   const cliHandlers = await readFile(path.join(pluginRoot, "lib", "cli-handlers.ts"), "utf8");

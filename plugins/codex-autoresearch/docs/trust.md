@@ -167,6 +167,10 @@ Prefer project-local `autoresearch.sh` or `autoresearch.ps1` scripts when possib
 
 Autoresearch does not sandbox benchmark or checks commands. Approved commands run as local shell processes with the current user's permissions. Review generated commands, keep secrets out of command lines and output, and prefer `--command-file` and `--packet-env-file` for fragile setup.
 
+`--command-file` and `--packet-env-file` are trusted local CLI inputs, including when they point outside the working directory. Keep them project-local when possible so reviewers can inspect them with the session. Persisted last-run packets reduce outside-workdir option-file paths to placeholders, but the commands still run with the current user's local permissions.
+
+If catalog or option-file inputs are exposed through a tool surface, keep them behind the existing explicit command gate (`allow_unsafe_command` for tools, `--trust-catalog` for external setup catalogs). Catalog recipes can materialize commands, so inspect the source before admitting them.
+
 `run` and `next` default to `--packet-env-mode inherit`. Use `--packet-env-mode minimal` for a smaller environment (PATH, SystemRoot, TEMP, TMP plus explicit packet env keys).
 
 Evidence redaction is best-effort, not a confidentiality guarantee. Keep sensitive data out of benchmark output and ASI in the first place.
@@ -177,7 +181,7 @@ Partial-result salvage reads only in-workdir artifacts. Oversized or malformed a
 
 ## Privacy and local data
 
-Autoresearch has no hosted backend. Session files, dashboard exports, ASI, packet evidence, and artifact indexes are local project records unless your commands, Git workflow, or external services move them elsewhere.
+Autoresearch has no hosted backend. Session files, dashboard exports, ASI, packet evidence, progress snapshots, pending transaction receipts, and artifact indexes are local project records unless your commands, Git workflow, or external services move them elsewhere. In Git repos, active last-run and progress snapshots live under `.git/autoresearch/`; outside Git, they fall back to `autoresearch.last-run.json` and `autoresearch.progress.json` in the worktree.
 
 See [Privacy](privacy.md) and [Terms](terms.md) for the user-facing policy surfaces.
 

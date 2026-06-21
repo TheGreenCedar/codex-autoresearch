@@ -6,12 +6,14 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
+import { parseSha256Manifest } from "./release-integrity.mjs";
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_TIMEOUT_MS = 120_000;
 const LOCK_RETRY_MS = 250;
 const PACKAGE_NAME = "codex-autoresearch";
 const RELEASE_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
+const DASHBOARD_BUILD_ASSETS = ["dashboard-app.js", "dashboard-app.css"];
 
 export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const { install = true } = options;
@@ -20,18 +22,34 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
   await rebuildStaleSourceRuntime(pluginRoot, target);
-  if (await fileExists(target)) return pathToFileURL(target).href;
+  if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) {
+    return pathToFileURL(target).href;
+  }
   if (!install) throw missingRuntimeError(pluginRoot, target);
 
   await withRuntimeInstallLock(pluginRoot, async () => {
-    if (await fileExists(target)) return;
+    if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) return;
     await installRuntimeFromRelease(pluginRoot, options);
     if (!(await fileExists(target))) {
       throw new Error(`Release runtime did not provide ${path.relative(pluginRoot, target)}.`);
     }
+    if (!(await dashboardBuildReady(pluginRoot))) {
+      throw new Error("Release runtime did not provide assets/dashboard-build/.");
+    }
   });
 
   return pathToFileURL(target).href;
+}
+
+async function dashboardRuntimeReady(pluginRoot) {
+  return await dashboardBuildReady(pluginRoot);
+}
+
+async function dashboardBuildReady(pluginRoot) {
+  const buildDir = path.join(pluginRoot, "assets", "dashboard-build");
+  return (
+    await Promise.all(DASHBOARD_BUILD_ASSETS.map((asset) => fileExists(path.join(buildDir, asset))))
+  ).every(Boolean);
 }
 
 async function rebuildStaleSourceRuntime(pluginRoot, target) {
@@ -39,9 +57,12 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
-  if ((await newestSourceMtime(pluginRoot)) < (await fileMtime(target))) return;
+  const dashboardMissing = !(await dashboardBuildReady(pluginRoot));
+  const targetMtime = await fileMtime(target);
+  if (!dashboardMissing && (await sourceRuntimeFreshByGit(pluginRoot, targetMtime))) return;
+  if (!dashboardMissing && (await newestSourceMtime(pluginRoot)) < targetMtime) return;
 
-  const build = npmBuildInvocation();
+  const build = npmBuildInvocation(dashboardMissing ? "build" : "build:node");
   await run(build.command, build.args, { cwd: pluginRoot });
 }
 
@@ -98,14 +119,29 @@ async function installRuntimeFromRelease(pluginRoot, options = {}) {
     await fs.mkdir(extractDir, { recursive: true });
     await run("tar", ["-xzf", tarballPath, "-C", extractDir]);
 
-    const extractedDist = path.join(extractDir, "package", "dist");
+    const extractedPackage = path.join(extractDir, "package");
+    const extractedDist = path.join(extractedPackage, "dist");
     if (!(await fileExists(extractedDist))) {
       throw new Error(`Release tarball ${artifacts.tarballName} does not contain dist/.`);
     }
-    await verifyReleasePackageManifest(path.join(extractDir, "package"), version);
+    const extractedDashboardBuild = path.join(extractedPackage, "assets", "dashboard-build");
+    if (!(await dashboardBuildReady(extractedPackage))) {
+      throw new Error(
+        `Release tarball ${artifacts.tarballName} does not contain assets/dashboard-build/.`,
+      );
+    }
+    await verifyReleasePackageManifest(extractedPackage, version);
 
     await fs.rm(path.join(pluginRoot, "dist"), { recursive: true, force: true });
     await fs.cp(extractedDist, path.join(pluginRoot, "dist"), { recursive: true });
+    await fs.rm(path.join(pluginRoot, "assets", "dashboard-build"), {
+      recursive: true,
+      force: true,
+    });
+    await fs.mkdir(path.join(pluginRoot, "assets"), { recursive: true });
+    await fs.cp(extractedDashboardBuild, path.join(pluginRoot, "assets", "dashboard-build"), {
+      recursive: true,
+    });
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -152,44 +188,6 @@ export async function verifyRuntimeTarballIntegrity({ tarballPath, checksumPath,
     );
   }
   return { tarballName, sha256: actualHash };
-}
-
-export function parseSha256Manifest(text, expectedFileName) {
-  const entries = [];
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    let hash = "";
-    let fileName = "";
-    const coreutils = line.match(/^([a-fA-F0-9]{64})\s+(.+)$/);
-    const openssl = line.match(/^SHA256\s*\(([^)]+)\)\s*=\s*([a-fA-F0-9]{64})$/i);
-    if (coreutils) {
-      hash = coreutils[1].toLowerCase();
-      fileName = coreutils[2].trim();
-      if (fileName.startsWith("*")) fileName = fileName.slice(1).trimStart();
-    } else if (openssl) {
-      fileName = openssl[1].trim();
-      hash = openssl[2].toLowerCase();
-    } else {
-      throw new Error(
-        `Checksum manifest for ${expectedFileName} must contain a SHA-256 entry generated by sha256sum.`,
-      );
-    }
-    entries.push({ hash, fileName });
-  }
-
-  if (entries.length !== 1) {
-    throw new Error(
-      `Checksum manifest for ${expectedFileName} must contain exactly one asset entry; found ${entries.length}.`,
-    );
-  }
-
-  const entry = entries[0];
-  if (entry.fileName !== expectedFileName) {
-    throw new Error(`Checksum manifest expected asset ${expectedFileName}, got ${entry.fileName}.`);
-  }
-  return entry.hash;
 }
 
 async function verifyReleasePackageManifest(packageDir, expectedVersion) {
@@ -279,6 +277,28 @@ function run(command, args, options = {}) {
   });
 }
 
+function runCapture(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
 async function fileExists(file) {
   try {
     await fs.access(file);
@@ -294,6 +314,103 @@ async function fileMtime(file) {
   } catch {
     return 0;
   }
+}
+
+async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
+  if (!(targetMtime > 0)) return false;
+  const [metadata, status] = await Promise.all([
+    runCapture(
+      "git",
+      [
+        "rev-parse",
+        "--show-toplevel",
+        "--path-format=absolute",
+        "--git-path",
+        "HEAD",
+        "--git-path",
+        "index",
+      ],
+      {
+        cwd: pluginRoot,
+      },
+    ).catch(() => null),
+    runCapture(
+      "git",
+      ["status", "--porcelain=v1", "-uall", "--", "package.json", "lib", "scripts"],
+      {
+        cwd: pluginRoot,
+      },
+    ).catch(() => null),
+  ]);
+  if (!metadata || metadata.code !== 0 || !status || status.code !== 0) return false;
+
+  const [repoRootText, headPathText, indexPathText] = metadata.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!repoRootText || !headPathText || !indexPathText) return false;
+
+  const dirty = dirtyRuntimeSourcePaths({
+    pluginRoot,
+    repoRoot: repoRootText,
+    stdout: status.stdout,
+  });
+  if (dirty.fullScanRequired) return false;
+
+  const markerMtimes = await Promise.all([
+    fileMtime(headPathText),
+    fileMtime(indexPathText),
+    ...dirty.paths.map((file) => fileMtime(file)),
+  ]);
+  return Math.max(0, ...markerMtimes) < targetMtime;
+}
+
+function dirtyRuntimeSourcePaths({ pluginRoot, repoRoot, stdout }) {
+  const paths = [];
+  for (const rawLine of String(stdout || "").split(/\r?\n/)) {
+    if (!rawLine.trim()) continue;
+    const status = rawLine.slice(0, 2);
+    const parsed = parsePorcelainPath(rawLine.slice(3));
+    if (!parsed) continue;
+    if (
+      status.includes("D") ||
+      status.includes("R") ||
+      status.includes("C") ||
+      status.includes("T")
+    ) {
+      return { fullScanRequired: true, paths };
+    }
+    const absolutePath = path.resolve(repoRoot, parsed.replace(/\//g, path.sep));
+    const relativePath = slashPath(path.relative(pluginRoot, absolutePath));
+    if (!isRuntimeSourcePath(relativePath)) continue;
+    paths.push(absolutePath);
+  }
+  return { fullScanRequired: false, paths };
+}
+
+function parsePorcelainPath(text) {
+  const value = String(text || "").trim();
+  if (!value) return "";
+  const renamed = value.lastIndexOf(" -> ");
+  const pathText = renamed >= 0 ? value.slice(renamed + 4) : value;
+  if (!pathText.startsWith('"')) return pathText;
+  try {
+    return JSON.parse(pathText);
+  } catch {
+    return pathText.slice(1, -1);
+  }
+}
+
+function isRuntimeSourcePath(relativePath) {
+  return (
+    relativePath === "package.json" ||
+    ((relativePath.startsWith("lib/") || relativePath.startsWith("scripts/")) &&
+      relativePath.endsWith(".ts"))
+  );
+}
+
+function slashPath(value) {
+  return String(value || "").replace(/\\/g, "/");
 }
 
 async function newestSourceMtime(pluginRoot) {
@@ -314,11 +431,11 @@ async function newestSourceMtime(pluginRoot) {
   );
 }
 
-function npmBuildInvocation() {
+function npmBuildInvocation(scriptName = "build:node") {
   if (process.platform === "win32") {
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm run build:node"] };
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", `npm run ${scriptName}`] };
   }
-  return { command: "npm", args: ["run", "build:node"] };
+  return { command: "npm", args: ["run", scriptName] };
 }
 
 function sleep(ms) {

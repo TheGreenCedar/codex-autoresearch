@@ -25,7 +25,7 @@ export const STATUS_COLORS: Record<string, string> = {
   keep: "#2BA8A2",
   discard: "#EF6C4A",
   crash: "#253936",
-  checks_failed: "#FFD23F",
+  checks_failed: "#7B5200",
 };
 
 export interface ChartDatum {

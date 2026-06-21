@@ -11,13 +11,15 @@ export const quoteForShell = (value) => {
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
 
-const spawnTestProcess = (command, args, cwd, stdio, env = process.env) =>
-  spawn(command, args, {
+const spawnTestProcess = (command, args, cwd, stdio, env) => {
+  const options = {
     cwd,
-    env,
+    ...(env ? { env } : {}),
     windowsHide: true,
     stdio,
-  });
+  };
+  return spawn(command, args, options);
+};
 
 const captureProcessOutput = (child, onStdout) => {
   let stdout = "";

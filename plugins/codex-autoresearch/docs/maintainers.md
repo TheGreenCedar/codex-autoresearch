@@ -65,6 +65,7 @@ Useful targeted checks:
 node --check scripts/autoresearch.mjs
 npm run test:cli
 npm run test:dashboard
+npm run test:dashboard:browser
 node scripts/autoresearch.mjs --help
 npm pack --dry-run --json --ignore-scripts
 git diff --check
@@ -72,7 +73,19 @@ git diff --check
 
 For dashboard or view-model changes, export or serve a dashboard and inspect it. Static code and tests alone do not prove the operator surface is understandable.
 
-When refreshing the checked-in demo, use the public showcase export so workstation paths and transient branch warnings are scrubbed:
+Use `npm run test:dashboard:browser` as the opt-in real-browser accessibility check for dashboard chart/modal focus behavior. It launches an installed Chrome or Edge browser through DevTools, drives keyboard input, captures an ignored modal screenshot under `tmp/`, and runs focused critical assertions for accessible names, dialog semantics, and ARIA references. It intentionally avoids an axe dependency; add axe only when the browser gate becomes a regular CI requirement or needs broader WCAG scanning.
+
+For dashboard or view-model review, write a temporary ignored showcase export in the demo session and compare or open that file:
+
+```bash
+node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
+```
+
+`npm run check` generates its own ignored trust export at `examples/demo-session/tmp/autoresearch-dashboard.check.html`. That generated export must embed the current plugin version, public/showcase flags, scrub workstation paths and transient branch warnings, omit action routes, and match `assets/dashboard-build/dashboard-app.css` plus `assets/dashboard-build/dashboard-app.js` after the exporter's `</style` and `</script` escaping rules.
+
+The legacy checked-in `examples/demo-session/autoresearch-dashboard.html` is no longer the product-gate parity target or the current demo runboard. Example docs should point reviewers to `serve` or ignored `tmp/` showcase exports instead. Do not refresh the legacy fixture just to make routine dashboard UI checks pass.
+
+When intentionally refreshing the legacy fixture, use the public showcase export so workstation paths and transient branch warnings are scrubbed:
 
 ```bash
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
@@ -80,6 +93,22 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 Before publishing, inspect the package artifact itself. Use dry-run pack output
 for routine review, then create and extract a real tarball for release smoke.
+Dashboard runtime assets are ignored package output. `npm run check` builds and
+checks them for review, while release publishing lets `prepack` run the single
+publish build before `npm pack`. A fresh source checkout can generate the assets
+with `npm run build:dashboard`; serving or exporting dashboards without them
+still fails clearly with that command path. Package checks and the release
+workflow share the extracted-package smoke path: both assert dashboard assets are
+in the tarball and smoke an extracted-package dashboard export, not just launcher
+help.
+
+`npm run audit:prod` is advisory only. The plugin package currently declares no
+runtime npm dependencies; the shipped runtime is bundled into `dist/` and
+dashboard assets during the build. Use `audit:prod` as a quick declared
+production-dependency check, not as proof that bundled dev-dependency code has
+been vulnerability-audited. Release trust comes from `npm run check`, the
+tarball checksum, artifact provenance, and extracted-package smoke.
+
 The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
 and ignored in the Git tree. If a Git marketplace source checkout is missing
 `dist/`, the CLI launcher calls `scripts/bootstrap-runtime.mjs` to download the
@@ -89,9 +118,40 @@ exact tarball, verify the packaged name/version, and only then extract `dist/`
 into the plugin cache before importing the runtime. A publishable release
 tarball must include the built runtime, publish the adjacent checksum asset,
 exclude authored source and tests, ship no MCP launcher/config, and pass
-`node <extracted-package>/scripts/autoresearch.mjs --help`.
+`node <extracted-package>/scripts/autoresearch.mjs --help` plus an extracted
+package dashboard export smoke.
 
-Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, builds and smoke-tests the tarball, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
+Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, lets `prepack` build the tarball, smoke-tests the extracted tarball with the package check helper, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
+
+Release provenance is a maintainer/operator gate, not runtime bootstrap. Source
+runtime hydration stays on the adjacent SHA-256 checksum and packaged
+name/version checks so first-run installs do not depend on GitHub CLI,
+attestation APIs, or Sigstore network state. After downloading a published
+tarball and adjacent checksum, use:
+
+```bash
+npm run smoke:release-provenance -- --tarball codex-autoresearch-<version>.tgz --checksum codex-autoresearch-<version>.tgz.sha256 --tag v<version>
+```
+
+The smoke fetches release metadata with `gh api`, runs
+`gh attestation verify <tarball> --repo TheGreenCedar/codex-autoresearch --signer-workflow TheGreenCedar/codex-autoresearch/.github/workflows/release.yml --format json`,
+and then checks the JSON certificate fields instead of relying on
+`--source-ref` or `--source-digest`. It requires the SLSA subject digest,
+tarball SHA-256, release asset digest, and checksum manifest digest to agree,
+then checks the signer SAN, source repository, `refs/heads/main`,
+GitHub-hosted runner, and release target commit.
+
+Check immutable-release status before publishing a release:
+
+```bash
+gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2026-03-10" /repos/TheGreenCedar/codex-autoresearch/immutable-releases
+```
+
+If it returns `{"enabled":false,...}`, a repository admin should enable
+future-release immutability with `PUT /repos/TheGreenCedar/codex-autoresearch/immutable-releases`
+or through the repository Settings > Code security > Releases control. The
+setting applies to future releases; it does not retroactively lock old release
+assets.
 
 ## Skill Progression Map
 

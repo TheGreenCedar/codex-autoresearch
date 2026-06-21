@@ -137,14 +137,19 @@ function boundDashboardStaticExportEntries(entries: LooseObject[]): {
   );
 }
 
-function readDashboardBuildAsset(fileName: string) {
-  const filePath = path.join(DASHBOARD_BUILD_DIR, fileName);
+export function readDashboardBuildAsset(
+  fileName: string,
+  options: { buildDir?: string; pluginRoot?: string } = {},
+) {
+  const buildDir = options.buildDir || DASHBOARD_BUILD_DIR;
+  const pluginRoot = options.pluginRoot || PLUGIN_ROOT;
+  const filePath = path.join(buildDir, fileName);
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
       throw new Error(
-        `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${PLUGIN_ROOT}.`,
+        `Dashboard build asset is missing: ${filePath}. Run npm run build:dashboard from ${pluginRoot}.`,
       );
     }
     throw error;

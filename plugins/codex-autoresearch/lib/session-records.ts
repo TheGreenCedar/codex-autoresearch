@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
+import { resolveSessionPaths } from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
 
 export type SessionRecord = UnknownRecord & Record<string, any>;
@@ -25,7 +26,7 @@ export function createSessionReadCache(
 }
 
 export function jsonlPath(workDir: string): string {
-  return path.join(workDir, "autoresearch.jsonl");
+  return resolveSessionPaths({ workDir }).ledgerPath;
 }
 
 export function appendJsonl(workDir: string, entry: UnknownRecord): void {

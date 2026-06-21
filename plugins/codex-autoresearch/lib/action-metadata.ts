@@ -1,4 +1,8 @@
-import { readoutSafeCommand } from "./dashboard-command-safety.js";
+import {
+  createCommandLookup,
+  resolveCommandByKeys,
+  resolveSafeCommand,
+} from "./safe-command-resolver.js";
 
 export interface ActionMetadata {
   label: string;
@@ -19,7 +23,14 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Resolve preflight",
     commandLabel: "Doctor",
     safeAction: "doctor",
-    fallbackKeys: ["doctorExplain", "doctor", "benchmarkLint", "state"],
+    fallbackKeys: [
+      "setupPlan",
+      "benchmarkLint",
+      "stateCompact",
+      "state",
+      "doctor",
+      "doctorExplain",
+    ],
   }),
   "portfolio-trust-blocker": actionMetadata({
     label: "Inspect portfolio trust",
@@ -152,13 +163,13 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Complete setup",
     commandLabel: "Setup",
     safeAction: "setup-plan",
-    fallbackKeys: ["setup", "setupPlan", "state"],
+    fallbackKeys: ["setupPlan", "stateCompact", "state", "setup"],
   }),
   "benchmark-command": actionMetadata({
     label: "Add benchmark command",
     commandLabel: "Setup",
     safeAction: "setup-plan",
-    fallbackKeys: ["setup", "setupPlan", "benchmarkLint", "state"],
+    fallbackKeys: ["setupPlan", "benchmarkLint", "stateCompact", "state", "setup"],
   }),
   "log-decision": actionMetadata({
     label: "Log last packet",
@@ -175,7 +186,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
   watchdog: actionMetadata({
     label: "Inspect quiet window",
     commandLabel: "Inspect",
-    safeAction: "inspect",
+    safeAction: "state",
     fallbackKeys: ["finalizePreview", "liveDashboard", "doctor", "state"],
   }),
   finalization: actionMetadata({
@@ -267,25 +278,17 @@ export function resolveActionCommand(
   commands: unknown,
   context: { explicitCommand?: unknown } = {},
 ): string {
-  const explicit = concreteCommand(context.explicitCommand);
-  if (explicit) {
-    const command = fallbackCommandForPolicy(kind, explicit);
-    if (command) return command;
-  }
+  const explicit = resolveSafeCommand(context.explicitCommand, fallbackCommandMode(kind));
+  if (explicit) return explicit;
 
   const metadata = actionMetadataForKind(kind);
-  const lookup = commandLookup(commands);
+  const lookup = createCommandLookup(commands);
   if (metadata) {
-    for (const key of metadata.fallbackKeys) {
-      const command = fallbackCommandForPolicy(kind, lookup(key));
-      if (command) return command;
-    }
+    const command = fallbackCommandForPolicy(kind, lookup, metadata.fallbackKeys);
+    if (command) return command;
   }
   if (String(kind || "") === "next-packet") {
-    return (
-      fallbackCommandForPolicy(kind, lookup("next")) ||
-      fallbackCommandForPolicy(kind, lookup("nextRun"))
-    );
+    return fallbackCommandForPolicy(kind, lookup, ["next", "nextRun"]);
   }
   return "";
 }
@@ -296,24 +299,25 @@ export function fallbackCommandForKind(
 ): string {
   const metadata = actionMetadataForKind(kind);
   if (!metadata) return "";
-  for (const key of metadata.fallbackKeys) {
-    const command = fallbackCommandForPolicy(
-      kind,
-      lookup(key) || lookup(spacedKey(key)) || lookup(normalizeActionCommandKey(key)),
-    );
-    if (command) return command;
-  }
-  return "";
+  return fallbackCommandForPolicy(kind, lookup, metadata.fallbackKeys);
 }
 
 export function readoutFallbackCommand(command: unknown): string {
-  return readoutSafeCommand(concreteCommand(command));
+  return resolveSafeCommand(command);
 }
 
-function fallbackCommandForPolicy(kind: unknown, command: unknown): string {
-  const text = concreteCommand(command);
-  if (!text) return "";
-  return operationalFallbackKinds.has(String(kind || "")) ? text : readoutFallbackCommand(text);
+function fallbackCommandForPolicy(
+  kind: unknown,
+  lookup: (key: string) => unknown,
+  keys: Iterable<string>,
+): string {
+  return resolveCommandByKeys(lookup, keys, {
+    mode: fallbackCommandMode(kind),
+  });
+}
+
+function fallbackCommandMode(kind: unknown): "operational" | "readout" {
+  return operationalFallbackKinds.has(String(kind || "")) ? "operational" : "readout";
 }
 
 function actionMetadata({
@@ -328,44 +332,4 @@ function actionMetadata({
   return { label, commandLabel, safeAction, packetBrake, fallbackKeys };
 }
 
-function spacedKey(value: string): string {
-  return value.replace(/[A-Z]/g, (match) => ` ${match.toLowerCase()}`).toLowerCase();
-}
-
-export function normalizeActionCommandKey(value: unknown): string {
-  return String(value || "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[^a-z0-9]+/gi, " ")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
-}
-
-function commandLookup(commands: unknown): (key: string) => string {
-  const entries = new Map<string, string>();
-  const add = (key: unknown, command: unknown) => {
-    const normalized = normalizeActionCommandKey(key);
-    const text = concreteCommand(command);
-    if (normalized && text && !entries.has(normalized)) entries.set(normalized, text);
-  };
-  if (Array.isArray(commands)) {
-    for (const item of commands) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const record = item as Record<string, unknown>;
-      add(record.key, record.command);
-      add(record.name, record.command);
-      add(record.label, record.command);
-    }
-  } else if (commands && typeof commands === "object") {
-    for (const [key, command] of Object.entries(commands as Record<string, unknown>)) {
-      add(key, command);
-    }
-  }
-  return (key: string) => entries.get(normalizeActionCommandKey(key)) || "";
-}
-
-function concreteCommand(command: unknown): string {
-  const text = typeof command === "string" ? command.trim() : "";
-  if (!text || /<[^>]+>/.test(text)) return "";
-  return text;
-}
+export { normalizeActionCommandKey } from "./safe-command-resolver.js";

@@ -19,7 +19,7 @@
   --coral-dark: #b23f27;
   --amber: #c98a12;
   --accent-light: #f5e6c2;
-  --amber-dark: #9a6b0c;
+  --amber-dark: #7b5200;
   --blue: #2f7fb0;
   --graph: #0f8f88;
   --focus: #0f8f88;
@@ -241,16 +241,24 @@ a:focus-visible {
   font-size: 12px;
 }
 
-.live-dot {
+.live-dot,
+.status-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   margin-right: 6px;
   border-radius: 50%;
   background: var(--teal);
+  vertical-align: middle;
+}
+
+.live-dot {
   box-shadow: 0 0 0 4px rgba(28, 181, 173, 0.2);
   animation: pulse-glow 2s infinite ease-in-out;
-  vertical-align: middle;
+}
+
+.status-dot {
+  box-shadow: 0 0 0 1px var(--teal-dark);
 }
 
 @keyframes pulse-glow {
@@ -643,8 +651,8 @@ p {
 }
 
 .evidence-chip.evidence-suspicious {
-  border-color: rgba(201, 138, 18, 0.58);
-  border-left-color: var(--amber);
+  border-color: var(--amber-dark);
+  border-left-color: var(--amber-dark);
   background: rgba(245, 230, 194, 0.5);
 }
 
@@ -1148,7 +1156,7 @@ p {
 }
 
 .segmented-control button.active {
-  background: var(--teal);
+  background: var(--teal-dark);
   color: #fff;
   box-shadow: var(--shadow-teal-glow);
 }
@@ -1201,8 +1209,8 @@ p {
 .legend-swatch.checks_failed,
 .chart-point.checks_failed,
 .chart-point-dot.checks_failed {
-  background: var(--amber);
-  fill: var(--amber);
+  background: var(--amber-dark);
+  fill: var(--amber-dark);
 }
 
 .chart-frame {
@@ -1356,7 +1364,7 @@ p {
 .chart-point-button:hover .chart-point-dot.checks_failed {
   box-shadow:
     0 0 16px rgba(251, 197, 49, 0.9),
-    0 0 0 2px rgba(251, 197, 49, 0.3);
+    0 0 0 2px var(--amber-dark);
 }
 
 .chart-point-button:focus-visible {
@@ -1364,7 +1372,9 @@ p {
 }
 
 .chart-point-button:focus-visible .chart-point-dot {
-  box-shadow: 0 0 0 3px var(--amber);
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 6px var(--amber-dark);
 }
 
 .latest-halo-ui {
@@ -1418,7 +1428,7 @@ p {
 }
 
 .chart-point-wrap:focus-visible .chart-point {
-  stroke: var(--amber);
+  stroke: var(--amber-dark);
   stroke-width: 5;
 }
 
@@ -1429,7 +1439,7 @@ p {
 
 .latest-halo {
   fill: rgba(255, 210, 63, 0.26);
-  stroke: var(--amber);
+  stroke: var(--amber-dark);
   stroke-width: 2;
 }
 
@@ -1954,6 +1964,14 @@ p {
   line-height: 1.45;
 }
 
+.chart-keyboard-help {
+  margin: 0 6px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .metric-details-panel {
   margin-top: 14px;
   border-top: 1px solid var(--soft-line);
@@ -2142,7 +2160,7 @@ p {
 
 .strategy-lane-card .status-pill.warn,
 .evidence-state.warning {
-  border-color: rgba(201, 138, 18, 0.5);
+  border-color: var(--amber-dark);
   color: var(--amber-dark);
   background: rgba(245, 230, 194, 0.58);
 }
@@ -2205,6 +2223,22 @@ p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.42;
+}
+
+.audit-detail-disclosure {
+  border-top: 1px solid var(--soft-line);
+  padding-top: 10px;
+}
+
+.audit-detail-disclosure summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.audit-detail-disclosure .memory-lane {
+  margin-top: 8px;
 }
 
 .truth-panel {

@@ -257,6 +257,10 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
   const watchdog = (viewModel.watchdogSummary || {}) as Record<string, unknown>;
   const warnings = toList(hygiene.warnings);
   const status = String(hygiene.status || "unknown");
+  const activeCwd = String(hygiene.activeCwd || "unknown");
+  const pluginVersion = String(hygiene.pluginVersion || "unknown");
+  const duplicateServerDetection = String(hygiene.duplicateServerDetection || "unavailable");
+  const staleServerDetection = String(hygiene.staleServerDetection || "unavailable");
   return (
     <section
       className="panel process-panel"
@@ -276,16 +280,6 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
       </div>
       <div className="memory-list" id="process-hygiene-detail">
         <div className="memory-lane">
-          <strong>Active cwd</strong>
-          <span>{String(hygiene.activeCwd || "unknown")}</span>
-          <p>{String(hygiene.pluginVersion || "unknown")}</p>
-        </div>
-        <div className="memory-lane">
-          <strong>Server checks</strong>
-          <span>{String(hygiene.duplicateServerDetection || "unavailable")}</span>
-          <p>{String(hygiene.staleServerDetection || "unavailable")}</p>
-        </div>
-        <div className="memory-lane">
           <strong>Quiet window</strong>
           <span>{String(watchdog.status || "unknown")}</span>
           <p>
@@ -294,12 +288,25 @@ export function ProcessHygiene({ viewModel }: { viewModel: DashboardViewModel })
           </p>
         </div>
         {warnings.length ? (
-          <div className="memory-lane">
+          <div className="memory-lane process-warning-lane">
             <strong>Warnings</strong>
             <span>{warnings.length}</span>
             <p>{warnings[0]}</p>
           </div>
         ) : null}
+        <details className="audit-detail-disclosure">
+          <summary>Runtime provenance and server paths</summary>
+          <div className="memory-lane">
+            <strong>Active cwd</strong>
+            <span>{activeCwd}</span>
+            <p>{pluginVersion}</p>
+          </div>
+          <div className="memory-lane">
+            <strong>Server checks</strong>
+            <span>{duplicateServerDetection}</span>
+            <p>{staleServerDetection}</p>
+          </div>
+        </details>
       </div>
     </section>
   );

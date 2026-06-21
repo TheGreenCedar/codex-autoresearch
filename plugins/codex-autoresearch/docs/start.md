@@ -29,6 +29,20 @@ METRIC memory_mb=410
 
 The configured primary metric drives keep/discard decisions. `measure` records baseline or diagnostic evidence without promotion. Secondary metrics explain tradeoffs.
 
+## First successful packet
+
+Start with one baseline packet. Do not optimize yet.
+
+| Step | Action | Done when |
+| --- | --- | --- |
+| 1 | Name the goal, metric, benchmark, checks, and editable scope. | Codex can say what should improve and what files it may touch. |
+| 2 | Run read-only planning only if those essentials are unclear. | `setup-plan` or `prompt-plan` returns a setup path without creating session files. |
+| 3 | Set up the session. | `autoresearch.md`, `autoresearch.jsonl`, and config files exist in the target project. |
+| 4 | Run `doctor --check-benchmark --explain`. | The benchmark emits the primary `METRIC` and trust blockers are visible. |
+| 5 | Run one packet with `next`. | A fresh last-run packet is stored under `.git/autoresearch/` in Git repos, or as a worktree fallback file outside Git. |
+| 6 | Log the packet as `measure`. | Baseline evidence is saved without claiming a keep. |
+| 7 | Read `state --report` or `recommend-next --compact`. | The next action and blockers are explicit before spending another packet. |
+
 ## Codex prompt
 
 Broad prompt:
@@ -53,7 +67,7 @@ Ask for the live dashboard when you want a visual readout or fresh browser state
 
 ## CLI path
 
-From `plugins/codex-autoresearch`:
+Run package-local commands from `plugins/codex-autoresearch`. The `--cwd <project>` argument points at the repo or child package you want to improve; it is not necessarily the package root.
 
 ```bash
 # Optional read-only planning; choose setup-plan for structured inputs or prompt-plan for prose.
@@ -69,7 +83,7 @@ node scripts/autoresearch.mjs finalize-preview --cwd <project>
 
 Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
 
-`setup-plan` and `prompt-plan` are read-only. Use them when essentials are ambiguous; skip them when goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff. Advanced diagnostics (`onboarding-packet`, `benchmark-lint`, `recommend-next`, `partial-results`) are on `--help --all`.
+`setup-plan` and `prompt-plan` are read-only. Use them when essentials are ambiguous; skip them when goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff. Use `node scripts/autoresearch.mjs --help --all` for the full command index.
 
 `benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block because the worktree is dirty, runtime is stale, promotion metadata is missing, or other trust checks fail.
 
@@ -127,12 +141,15 @@ Use `state --report` for a compact terminal readout (`report.text` and `report.j
 | `autoresearch.sh` or `autoresearch.ps1` | Repeatable benchmark entrypoint. |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks. |
 | `autoresearch.ideas.md` | Deferred hypotheses, avoided lanes, and next-action notes. |
-| `autoresearch.last-run.json` | Fallback last-packet record. |
+| `.git/autoresearch/last-run.json` | Git-private active last-packet record written by `next`. |
+| `.git/autoresearch/progress.json` | Git-private active progress snapshot for slow packets. |
+| `autoresearch.last-run.json` | Non-Git fallback last-packet record. |
+| `autoresearch.progress.json` | Non-Git fallback progress snapshot. |
 | `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad. |
 | `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation. |
 | `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation. |
 
-In Git repositories, the pending log-mutation receipt lives under `.git/autoresearch/` instead of the worktree.
+In Git repositories, active last-run packets, progress snapshots, and pending log-mutation receipts live under `.git/autoresearch/` instead of the worktree. The `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` files are fallback paths for sessions outside Git.
 
 ## First packet
 

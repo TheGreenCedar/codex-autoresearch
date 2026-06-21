@@ -52,7 +52,7 @@ Checks: npm test
 Scope: test runner config and test helpers only
 ```
 
-Autoresearch stores loop evidence in local project files and runs approved benchmark/check commands with local process permissions. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
+Autoresearch stores loop evidence in local project files and, in Git repos, active snapshots and pending log receipts under Git-private `.git/autoresearch/`. Outside Git, those transient records fall back to local files such as `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json`. Read [Privacy](plugins/codex-autoresearch/docs/privacy.md), [Terms](plugins/codex-autoresearch/docs/terms.md), and [Trust](plugins/codex-autoresearch/docs/trust.md) before using it on repos with secrets, sensitive data, external APIs, or expensive commands.
 
 Ask for the live dashboard in a side chat when you want a visual readout or need fresh run state in the browser.
 
@@ -88,6 +88,29 @@ Some workspace plugin settings are managed from the Codex Apps/Plugins UI rather
 
 Start a new Codex thread after installation or refresh.
 
+### After install
+
+Open Codex in the repo you want to improve and ask for one measured first packet:
+
+```text
+/goal @Codex Autoresearch measure one baseline packet for this repo before making changes.
+Goal: <what should improve>
+Benchmark: <command that prints METRIC name=value>
+Metric: <metric name>, <higher|lower> is better
+Scope: <files or package Codex may edit>
+```
+
+The first safe ladder is:
+
+1. plan only if the essentials are unclear
+2. set up the session
+3. run `doctor`
+4. run one packet
+5. log it as `measure`
+6. read `state`
+
+See [Start](plugins/codex-autoresearch/docs/start.md) for copyable CLI commands and recovery steps. Use `node scripts/autoresearch.mjs --help --all` from `plugins/codex-autoresearch` for the full command index instead of relying on repeated command lists in the docs.
+
 ## How it works
 
 A normal session follows this shape:
@@ -105,13 +128,20 @@ Autoresearch helps you:
 5. inspect compact state before spending another run
 6. preview finalization readiness before creating reviewable branches
 
-`serve` is an optional live dashboard handoff. Advanced diagnostics (`prompt-plan`, `onboarding-packet`, `recommend-next`, `benchmark-inspect`, `partial-results`, `session-forensics`, `export`) are available with `--help --all` when a run needs deeper repair or recovery.
+`serve` is an optional live dashboard handoff. Advanced diagnostics are discoverable with `node scripts/autoresearch.mjs --help --all` from `plugins/codex-autoresearch` when a run needs deeper repair or recovery.
 
 When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
 
 A benchmark experiment is one measured cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
 
 Autoresearch keeps structured session context — hypothesis, evidence, next action hint, and relevant risk notes — so the next session knows what happened and which path deserves the next attempt.
+
+| Responsibility | What it owns |
+| --- | --- |
+| You | Goal, acceptable scope, benchmark trust, and final review decisions. |
+| Codex | Edits, command execution, evidence reading, and reporting from the current repo. |
+| Autoresearch | Session files, packet evidence, state, dashboard readouts, and finalization previews. |
+| Benchmark/check commands | The local measurement and correctness proof; they run with your normal local process permissions. |
 
 ## When to use it
 

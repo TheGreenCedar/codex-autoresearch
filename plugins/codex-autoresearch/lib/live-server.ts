@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
 import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
+import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
 
 type LooseObject = Record<string, unknown>;
 
@@ -45,6 +46,11 @@ interface LiveSessionSnapshot {
   stamp: string;
 }
 
+interface LiveSessionContext {
+  workDir: string;
+  sessionPaths: SessionPaths;
+}
+
 interface LedgerReadout {
   entries: LooseObject[];
   ledgerBounds: DashboardLedgerBounds;
@@ -55,7 +61,8 @@ interface BoundedLedgerLines extends DashboardLedgerBounds {
 }
 
 export async function serveAutoresearch(args: LooseObject) {
-  const workDir = path.resolve(String(args.working_dir || args.cwd || process.cwd()));
+  const sessionContext = resolveLiveSessionContext(args);
+  const { workDir, sessionPaths } = sessionContext;
   const port = Number(args.port || 0);
   const dashboardHtml = args.dashboardHtml as (context?: LooseObject) => Promise<string>;
   const viewModel = args.viewModel as () => Promise<LooseObject>;
@@ -93,7 +100,7 @@ export async function serveAutoresearch(args: LooseObject) {
           );
           return;
         }
-        const ledgerLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+        const ledgerLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
         send(
           res,
           200,
@@ -105,6 +112,7 @@ export async function serveAutoresearch(args: LooseObject) {
       if (req.method === "GET" && url.pathname === "/view-model.json") {
         const payload = await readCachedLiveViewModel({
           workDir,
+          sessionPaths,
           viewModel,
           nowMs: Date.now(),
           ttlMs: viewModelCacheTtlMs,
@@ -119,6 +127,8 @@ export async function serveAutoresearch(args: LooseObject) {
           workDir,
           dashboard: {
             cwd: workDir,
+            sessionCwd: sessionPaths.sessionCwd,
+            sessionPathIdentity: sessionPathIdentity(sessionPaths),
             liveness: "alive",
             mode: "live-server",
             pid: process.pid,
@@ -219,19 +229,22 @@ function redactLedgerLines(lines: string[], context: LooseObject): string {
 
 async function readCachedLiveViewModel({
   workDir,
+  sessionPaths,
   viewModel,
   nowMs,
   ttlMs,
   cache,
 }: {
   workDir: string;
+  sessionPaths: SessionPaths;
   viewModel: () => Promise<LooseObject>;
   nowMs: number;
   ttlMs: number;
   cache: LiveViewModelCacheState;
 }): Promise<LiveViewModelResult> {
   const cached = cache.current;
-  const snapshot = await liveSessionSnapshot(workDir, {
+  const sessionContext = { workDir, sessionPaths };
+  const snapshot = await liveSessionSnapshot(sessionContext, {
     cached,
     nowMs,
     ttlMs,
@@ -245,7 +258,12 @@ async function readCachedLiveViewModel({
   }
   const pending: LiveViewModelRefresh = {
     fingerprint,
-    promise: buildLiveViewModelRefresh({ workDir, viewModel, ttlMs, fingerprint }),
+    promise: buildLiveViewModelRefresh({
+      sessionContext,
+      viewModel,
+      ttlMs,
+      fingerprint,
+    }),
   };
   cache.pending = pending;
   try {
@@ -258,19 +276,19 @@ async function readCachedLiveViewModel({
 }
 
 async function buildLiveViewModelRefresh({
-  workDir,
+  sessionContext,
   viewModel,
   ttlMs,
   fingerprint,
 }: {
-  workDir: string;
+  sessionContext: LiveSessionContext;
   viewModel: () => Promise<LooseObject>;
   ttlMs: number;
   fingerprint: string;
 }): Promise<LiveViewModelResult> {
   let expectedFingerprint = fingerprint;
   for (let attempt = 0; ; attempt += 1) {
-    const refresh = await buildLiveViewModelBody({ workDir, viewModel });
+    const refresh = await buildLiveViewModelBody({ sessionContext, viewModel });
     if (refresh.completedSnapshot.fingerprint === expectedFingerprint) {
       return liveViewModelResult({
         body: refresh.body,
@@ -293,17 +311,18 @@ async function buildLiveViewModelRefresh({
 }
 
 async function buildLiveViewModelBody({
-  workDir,
+  sessionContext,
   viewModel,
 }: {
-  workDir: string;
+  sessionContext: LiveSessionContext;
   viewModel: () => Promise<LooseObject>;
 }): Promise<{
   body: LooseObject;
   completedAt: number;
   completedSnapshot: LiveSessionSnapshot;
 }> {
-  const ledgerReadout = await readRedactedLedgerEntries(workDir, { workDir });
+  const { workDir, sessionPaths } = sessionContext;
+  const ledgerReadout = await readRedactedLedgerEntries(sessionPaths, { workDir });
   const body = redactEvidenceObject(
     {
       ...compactDashboardTransportViewModel(await viewModel()),
@@ -313,7 +332,7 @@ async function buildLiveViewModelBody({
     { workDir },
   );
   const completedAt = Date.now();
-  const completedSnapshot = await liveSessionSnapshot(workDir, {
+  const completedSnapshot = await liveSessionSnapshot(sessionContext, {
     cached: null,
     nowMs: completedAt,
     ttlMs: 0,
@@ -384,20 +403,29 @@ export async function liveSessionFingerprint(
     cached: LiveViewModelCache | null;
     nowMs: number;
     ttlMs: number;
+    sessionPaths?: SessionPaths;
   },
 ): Promise<string> {
-  return (await liveSessionSnapshot(workDir, options)).fingerprint;
+  return (
+    await liveSessionSnapshot(
+      {
+        workDir: path.resolve(workDir),
+        sessionPaths: options.sessionPaths || resolveSessionPaths({ workDir }),
+      },
+      options,
+    )
+  ).fingerprint;
 }
 
 async function liveSessionSnapshot(
-  workDir: string,
+  sessionContext: LiveSessionContext,
   options: {
     cached: LiveViewModelCache | null;
     nowMs: number;
     ttlMs: number;
   },
 ): Promise<LiveSessionSnapshot> {
-  const stamp = await liveSessionStamp(workDir);
+  const stamp = await liveSessionStamp(sessionContext.sessionPaths);
   if (
     options.cached &&
     options.cached.fingerprintStamp === stamp &&
@@ -405,27 +433,28 @@ async function liveSessionSnapshot(
   ) {
     return { fingerprint: options.cached.fingerprint, stamp };
   }
+  const { sessionPaths } = sessionContext;
   const parts = await Promise.all([
-    fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
-    fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.last-run.json"), "autoresearch.last-run.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
-    fingerprintTree(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
+    fingerprintPath(sessionPaths.ledgerPath, "autoresearch.jsonl"),
+    fingerprintPath(sessionPaths.configPath, "autoresearch.config.json"),
+    fingerprintPath(sessionPaths.lastRunFallbackPath, "autoresearch.last-run.json"),
+    fingerprintPath(sessionPaths.notesPath, "autoresearch.md"),
+    fingerprintPath(sessionPaths.ideasPath, "autoresearch.ideas.md"),
+    fingerprintTree(sessionPaths.researchRoot, "autoresearch.research"),
   ]);
   return { fingerprint: parts.join("|"), stamp };
 }
 
-async function liveSessionStamp(workDir: string): Promise<string> {
-  // TTL-bounded dashboard reuse compares this stamp; a stale stamp can serve briefly
-  // until the next health poll notices ledger/config drift.
+async function liveSessionStamp(sessionPaths: SessionPaths): Promise<string> {
+  // TTL-bounded dashboard reuse compares this stamp before reusing the cached
+  // full fingerprint, so include the bounded research tree metadata here too.
   const parts = await Promise.all([
-    fingerprintPath(path.join(workDir, "autoresearch.jsonl"), "autoresearch.jsonl"),
-    fingerprintPath(path.join(workDir, "autoresearch.config.json"), "autoresearch.config.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.last-run.json"), "autoresearch.last-run.json"),
-    fingerprintPath(path.join(workDir, "autoresearch.md"), "autoresearch.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.ideas.md"), "autoresearch.ideas.md"),
-    fingerprintPath(path.join(workDir, "autoresearch.research"), "autoresearch.research"),
+    fingerprintPath(sessionPaths.ledgerPath, "autoresearch.jsonl"),
+    fingerprintPath(sessionPaths.configPath, "autoresearch.config.json"),
+    fingerprintPath(sessionPaths.lastRunFallbackPath, "autoresearch.last-run.json"),
+    fingerprintPath(sessionPaths.notesPath, "autoresearch.md"),
+    fingerprintPath(sessionPaths.ideasPath, "autoresearch.ideas.md"),
+    fingerprintTree(sessionPaths.researchRoot, "autoresearch.research"),
   ]);
   return parts.join("|");
 }
@@ -485,10 +514,10 @@ function normalizeCacheTtlMs(value: unknown): number {
 }
 
 async function readRedactedLedgerEntries(
-  workDir: string,
+  sessionPaths: SessionPaths,
   context: LooseObject,
 ): Promise<LedgerReadout> {
-  const boundedLines = await readBoundedLedgerLines(path.join(workDir, "autoresearch.jsonl"));
+  const boundedLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
   const parsedEntries = boundedLines.lines.flatMap((line) => {
     try {
       const entry = redactEvidenceObject(JSON.parse(line), context);
@@ -614,4 +643,34 @@ function isFileNotFound(error: unknown): boolean {
 
 function isLooseObject(value: unknown): value is LooseObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function resolveLiveSessionContext(args: LooseObject): LiveSessionContext {
+  const rawSessionPaths = args.sessionPaths;
+  if (isSessionPaths(rawSessionPaths)) {
+    const workDir = path.resolve(
+      String(args.working_dir || rawSessionPaths.targetCwd || args.cwd || process.cwd()),
+    );
+    return { workDir, sessionPaths: rawSessionPaths };
+  }
+  const workDir = path.resolve(String(args.working_dir || args.cwd || process.cwd()));
+  const rawSessionCwd = args.sessionCwd ?? args.session_cwd;
+  return {
+    workDir,
+    sessionPaths: resolveSessionPaths({
+      sessionCwd: rawSessionCwd ? String(rawSessionCwd) : undefined,
+      workDir,
+    }),
+  };
+}
+
+function isSessionPaths(value: unknown): value is SessionPaths {
+  if (!isLooseObject(value)) return false;
+  return (
+    typeof value.targetCwd === "string" &&
+    typeof value.sessionCwd === "string" &&
+    typeof value.ledgerPath === "string" &&
+    typeof value.configPath === "string" &&
+    typeof value.researchRoot === "string"
+  );
 }

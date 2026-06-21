@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "./helpers/sharded-test.js";
-import { JSDOM } from "jsdom";
 import { redactCommandDisplay } from "../lib/evidence-redaction.js";
 import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -19,78 +17,43 @@ import {
 } from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
+import { renderExportedDashboard } from "./helpers/dashboard-export.js";
+import {
+  prepareCurrentTreeFinalizationBlocker,
+  writeDecisionCapsule,
+} from "./helpers/git-fixtures.js";
+import { parseLedger, writeLedger } from "./helpers/ledger.js";
+import { runNode, runShellCommand } from "./helpers/process-fixtures.js";
+import {
+  cliPayload,
+  isolatedRuntimeEnv,
+  pathExists,
+  withAutoresearchTempDir,
+  writeInstalledRuntimeFixture,
+} from "./helpers/cli-session.js";
 import {
   createCliRunner,
   createSpawnedCliRunner,
   quoteForShell,
   runGit,
-  withTempDir as withNamedTempDir,
 } from "./helpers/process.js";
+import {
+  createRuntimeReleaseAsset,
+  escapeRegExp,
+  writeFakeSourcePlugin,
+} from "./helpers/runtime-release-fixtures.js";
+import {
+  addressPort,
+  closeServer,
+  listenOnRandomPort,
+  withReleaseServer,
+} from "./helpers/server.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const runSpawnedCli = createSpawnedCliRunner(cli, pluginRoot);
-const withTempDir = (name, fn) => withNamedTempDir("autoresearch", name, fn);
-const pathExists = async (target: string) => {
-  try {
-    await access(target);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-function isolatedRuntimeEnv(homeDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: homeDir,
-    USERPROFILE: homeDir,
-  };
-}
-
-async function writeInstalledRuntimeFixture(homeDir: string, status: string) {
-  const cacheRoot = path.join(
-    homeDir,
-    ".codex",
-    "plugins",
-    "cache",
-    "thegreencedar-autoresearch",
-    "codex-autoresearch",
-  );
-  const runtimeDir = path.join(cacheRoot, status === "stale" ? "0.0.0" : PLUGIN_VERSION);
-  await mkdir(runtimeDir, { recursive: true });
-  if (status === "stale") {
-    await writeFile(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({ version: "0.0.0" }, null, 2),
-    );
-  } else if (status === "unavailable") {
-    await writeFile(
-      path.join(runtimeDir, "package.json"),
-      JSON.stringify({ version: PLUGIN_VERSION }, null, 2),
-    );
-  }
-}
-
-function cliPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  return (payload.result as Record<string, unknown>) || payload;
-}
-
-async function writeLedger(dir: string, records: Record<string, unknown>[]) {
-  await writeFile(
-    path.join(dir, "autoresearch.jsonl"),
-    records.map((record) => JSON.stringify(record)).join("\n") + "\n",
-  );
-}
-
-function parseLedger(text: string): Record<string, unknown>[] {
-  return text
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
+const withTempDir = withAutoresearchTempDir;
 
 const git = async (cwd, args) => {
   return await runGit(cwd, args);
@@ -460,293 +423,6 @@ test("finalize-preview json exposes missing product-grade claim coverage", async
   });
 });
 
-async function writeDecisionCapsule(dir, slug, overrides = {}) {
-  const capsuleDir = path.join(dir, "autoresearch.research", slug);
-  await mkdir(capsuleDir, { recursive: true });
-  const base = {
-    schemaVersion: 1,
-    kind: "session-decision-capsule",
-    status: "active",
-    enforcement: {
-      mode: "hard-block",
-      canRunNextPacket: false,
-      allowBoundedNext: false,
-      blocksFinalization: true,
-      clearingCondition: "Run benchmark-lint successfully, then acknowledge the capsule.",
-      commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-      triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
-    },
-    bottleneck: "Benchmark wrapper cannot prove the primary METRIC contract.",
-    evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
-    nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    wrongNextActions: ["Do not run next or finalize while benchmark-lint is broken."],
-    doNotRepeat: [],
-    commandBudgetWarnings: [],
-    generatedFrom: {
-      compactions: 0,
-      first: "2026-06-01T13:00:00.000Z",
-      last: "2026-06-01T13:10:00.000Z",
-      toolCounts: {},
-      topCommandHeads: [],
-    },
-    importedAt: "2026-06-01T13:10:00.000Z",
-  };
-  await writeFile(
-    path.join(capsuleDir, "decision-capsule.json"),
-    JSON.stringify({ ...base, ...overrides }, null, 2),
-  );
-}
-
-async function prepareCurrentTreeFinalizationBlocker(dir) {
-  await git(dir, ["init"]);
-  await git(dir, ["config", "user.email", "codex@example.test"]);
-  await git(dir, ["config", "user.name", "Codex Test"]);
-  await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
-  await git(dir, ["add", "base.txt"]);
-  await git(dir, ["commit", "-m", "base"]);
-  await git(dir, ["branch", "-M", "main"]);
-  await git(dir, ["checkout", "-b", "feature"]);
-  await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC seconds=1'\n", "utf8");
-  await writeFile(path.join(dir, "autoresearch.checks.ps1"), "Write-Output 'test ok'\n", "utf8");
-  await runCli([
-    "init",
-    "--cwd",
-    dir,
-    "--name",
-    "current tree finalization",
-    "--metric-name",
-    "seconds",
-  ]);
-  await git(dir, ["add", "autoresearch.jsonl", "autoresearch.ps1", "autoresearch.checks.ps1"]);
-  await git(dir, ["commit", "-m", "init autoresearch"]);
-
-  await mkdir(path.join(dir, "src"), { recursive: true });
-  await writeFile(path.join(dir, "src", "kept.txt"), "kept\n", "utf8");
-  await git(dir, ["add", "src/kept.txt"]);
-  await git(dir, ["commit", "-m", "kept change"]);
-  const keptCommit = (await git(dir, ["rev-parse", "HEAD"])).trim();
-  const keep = await runCli([
-    "log",
-    "--cwd",
-    dir,
-    "--metric",
-    "1",
-    "--status",
-    "keep",
-    "--description",
-    "Keep committed change",
-    "--commit",
-    keptCommit,
-  ]);
-  assert.equal(keep.code, 0, keep.stderr);
-  await git(dir, ["add", "autoresearch.jsonl"]);
-  await git(dir, ["commit", "-m", "log kept run"]);
-
-  await writeFile(path.join(dir, "src", "unlogged.txt"), "support\n", "utf8");
-  await git(dir, ["add", "src/unlogged.txt"]);
-  await git(dir, ["commit", "-m", "unlogged support change"]);
-}
-
-async function runNode(args, { cwd = pluginRoot, env = process.env } = {}) {
-  return await new Promise((resolve) => {
-    const childEnv = { ...env };
-    delete childEnv.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, args, {
-      cwd,
-      env: childEnv,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
-async function runShellCommand(command, { cwd = pluginRoot } = {}) {
-  const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
-  const args =
-    process.platform === "win32"
-      ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
-      : ["-c", command];
-  return await new Promise((resolve) => {
-    const child = spawn(shell, args, {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
-async function listenOnRandomPort(server) {
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-}
-
-async function closeServer(server) {
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-function addressPort(server) {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Server did not bind a TCP port");
-  return address.port;
-}
-
-async function runTar(args, cwd) {
-  const result = await new Promise((resolve) => {
-    const child = spawn("tar", args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-  assert.equal(result.code, 0, `tar ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
-}
-
-async function writeFakeSourcePlugin(dir, version = PLUGIN_VERSION) {
-  const pluginDir = path.join(dir, "source-plugin");
-  const scriptsDir = path.join(pluginDir, "scripts");
-  await mkdir(scriptsDir, { recursive: true });
-  await writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ name: "codex-autoresearch", version }, null, 2),
-    "utf8",
-  );
-  return {
-    pluginDir,
-    importerUrl: pathToFileURL(path.join(scriptsDir, "autoresearch.mjs")).href,
-  };
-}
-
-async function createRuntimeReleaseAsset(
-  dir,
-  {
-    sourceVersion = PLUGIN_VERSION,
-    packageVersion = sourceVersion,
-    packageName = "codex-autoresearch",
-    checksumFileName,
-    checksumHash,
-    writeChecksum = true,
-  } = {},
-) {
-  const releaseDir = path.join(dir, `release-${Math.random().toString(16).slice(2)}`);
-  const packageParent = path.join(dir, `package-parent-${Math.random().toString(16).slice(2)}`);
-  const packageDir = path.join(packageParent, "package");
-  const tarballName = `codex-autoresearch-${sourceVersion}.tgz`;
-  const checksumName = `${tarballName}.sha256`;
-  const tarballPath = path.join(releaseDir, tarballName);
-  const checksumPath = path.join(releaseDir, checksumName);
-
-  await mkdir(path.join(packageDir, "dist", "scripts"), { recursive: true });
-  await mkdir(releaseDir, { recursive: true });
-  await writeFile(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({ name: packageName, version: packageVersion }, null, 2),
-    "utf8",
-  );
-  await writeFile(
-    path.join(packageDir, "dist", "scripts", "autoresearch.mjs"),
-    "export const hydratedRuntime = true;\n",
-    "utf8",
-  );
-
-  await runTar(["-czf", tarballPath, "-C", packageParent, "package"], dir);
-  const actualHash = createHash("sha256")
-    .update(await readFile(tarballPath))
-    .digest("hex");
-  if (writeChecksum) {
-    await writeFile(
-      checksumPath,
-      `${checksumHash || actualHash}  ${checksumFileName || tarballName}\n`,
-      "utf8",
-    );
-  }
-
-  return { releaseDir, tarballName, checksumName, tarballPath, checksumPath, actualHash };
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function withReleaseServer(releaseDir, version, fn) {
-  const server = createServer(async (request, response) => {
-    try {
-      const requestPath = new URL(request.url || "/", `http://${request.headers.host}`).pathname;
-      const fileName = path.basename(decodeURIComponent(requestPath));
-      const bytes = await readFile(path.join(releaseDir, fileName));
-      response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.end(bytes);
-    } catch {
-      response.writeHead(404, { "content-type": "text/plain" });
-      response.end("not found");
-    }
-  });
-  await listenOnRandomPort(server);
-  try {
-    return await fn(`http://127.0.0.1:${addressPort(server)}/releases/download/v${version}`);
-  } finally {
-    await closeServer(server);
-  }
-}
-
-async function renderExportedDashboard(html) {
-  const dom = new JSDOM(html, {
-    pretendToBeVisual: true,
-    runScripts: "dangerously",
-    url: "file:///autoresearch-dashboard.html",
-  });
-  const started = Date.now();
-  while (!dom.window.__AUTORESEARCH_DASHBOARD_READY__) {
-    if (Date.now() - started > 2000)
-      throw new Error("Dashboard React app did not finish rendering.");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  return dom;
-}
-
 test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
   await withTempDir("spawned-contract", async (dir) => {
     const help = await runSpawnedCli(["--help"]);
@@ -958,6 +634,48 @@ test("test shard runner validates jobs and fails closed on discovery gaps", asyn
       `${missingDiscovery.stdout}\n${missingDiscovery.stderr}`,
       /AUTORESEARCH_TEST_COUNT/,
     );
+
+    const missingFile = path.join(dir, "missing-shard-target.test.mjs");
+    const missingFileResult = await runNode([shardRunner, missingFile, "2"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS: "0",
+      },
+    });
+    assert.notEqual(missingFileResult.code, 0);
+    assert.match(
+      `${missingFileResult.stdout}\n${missingFileResult.stderr}`,
+      /Compiled test file is not ready/,
+    );
+
+    const delayedFile = path.join(dir, "delayed-sharded.test.mjs");
+    const delayedWrite = new Promise<void>((resolve, reject) => {
+      setTimeout(() => {
+        writeFile(
+          delayedFile,
+          [
+            "import test from 'node:test';",
+            "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+            "  console.log('AUTORESEARCH_TEST_COUNT 1');",
+            "}",
+            "test('delayed file runs after readiness wait', () => {",
+            "  console.log('DELAYED_EXECUTION_MARKER');",
+            "});",
+          ].join("\n"),
+          "utf8",
+        ).then(resolve, reject);
+      }, 150);
+    });
+    const delayed = await runNode([shardRunner, "--jobs", "1", delayedFile, "2"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS: "2000",
+        CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE: "1",
+      },
+    });
+    await delayedWrite;
+    assert.equal(delayed.code, 0, delayed.stderr);
+    assert.match(`${delayed.stdout}\n${delayed.stderr}`, /DELAYED_EXECUTION_MARKER/);
 
     const unevenShardedFile = path.join(dir, "uneven-sharded.test.mjs");
     await writeFile(
@@ -1748,7 +1466,16 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
 });
 
 test("session-forensics routes context distillation to apply despite stale safe hints", () => {
-  const script = path.join(pluginRoot, "scripts", "autoresearch.mjs");
+  const script = path.join(pluginRoot, "state", "scripts", "autoresearch.mjs");
+  const subcommandFor = (command: string) => {
+    const launcherIndex = command.indexOf("autoresearch.mjs");
+    assert.notEqual(launcherIndex, -1);
+    const tokens = command
+      .slice(launcherIndex + "autoresearch.mjs".length)
+      .trim()
+      .split(/\s+/);
+    return tokens[0];
+  };
   const commands = {
     state: `node ${script} state --cwd C:\\repo --compact`,
     recommendNext: `node ${script} recommend-next --cwd C:\\repo --compact`,
@@ -1771,11 +1498,10 @@ test("session-forensics routes context distillation to apply despite stale safe 
     );
 
     assert.match(command, /session-forensics/);
+    assert.equal(subcommandFor(command), "session-forensics");
     assert.match(command, /--apply/);
     assert.match(command, /--session-jsonl rollout\.jsonl/);
     assert.match(command, /--research-slug session-019e/);
-    assert.doesNotMatch(command, /recommend-next/);
-    assert.doesNotMatch(command, /\bstate\b/);
   }
 });
 
@@ -3396,6 +3122,132 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
     const loggedPayload = JSON.parse(logged.stdout);
     assert.equal(loggedPayload.experiment.metric, 1);
     assert.equal(loggedPayload.lastRunCleared, true);
+  });
+});
+
+test("last-run packet storage redacts run benchmark contract command and option-file metadata", async () => {
+  await withTempDir("last-run-contract-redaction", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      const commandSecret = "command-secret-abcdefghijklmnop";
+      const checksSecret = "checks-secret-zyxwvutsrqpon";
+      const commandFile = path.join(outsideDir, "private-packet.command");
+      const envFile = path.join(outsideDir, ".env.private");
+      await writeFile(
+        commandFile,
+        `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')" -- --api-key ${commandSecret}\n`,
+        "utf8",
+      );
+      await writeFile(envFile, "PACKET_TOKEN=env-secret-qwertyuiop\n", "utf8");
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "redacted contract",
+        "--metric-name",
+        "seconds",
+      ]);
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command-file",
+        commandFile,
+        "--packet-env-file",
+        envFile,
+        "--checks-command",
+        `${quoteForShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+
+      const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+      assert.doesNotMatch(lastRunText, new RegExp(commandSecret));
+      assert.doesNotMatch(lastRunText, new RegExp(checksSecret));
+      assert.doesNotMatch(lastRunText, /private-packet\.command/);
+      assert.doesNotMatch(lastRunText, /\.env\.private/);
+      assert.doesNotMatch(
+        lastRunText,
+        new RegExp(outsideDir.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")),
+      );
+
+      const stored = JSON.parse(lastRunText);
+      const contract = stored.run.benchmarkContract;
+      assert.match(contract.command, /--api-key <redacted>/);
+      assert.match(contract.checksCommand, /--token <redacted>/);
+      assert.equal(contract.commandFile, "<outside-workdir>");
+      assert.equal(contract.envFile, "<env-file>");
+      assert.equal(
+        contract.files.some((file: Record<string, unknown>) =>
+          String(file.path || "").includes("private-packet.command"),
+        ),
+        false,
+      );
+      assert.equal(
+        contract.files.some((file: Record<string, unknown>) =>
+          String(file.path || "").includes(".env.private"),
+        ),
+        false,
+      );
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("last-run packet storage does not corrupt common option-file basenames", async () => {
+  await withTempDir("last-run-common-basename-redaction", async (dir) => {
+    const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      const commandFile = path.join(outsideDir, "run");
+      const envFile = path.join(outsideDir, "env");
+      await writeFile(
+        commandFile,
+        [
+          `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        "common basename contract",
+        "--metric-name",
+        "seconds",
+      ]);
+
+      const packet = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command-file",
+        commandFile,
+        "--packet-env-file",
+        envFile,
+      ]);
+      assert.equal(packet.code, 0, packet.stderr);
+
+      const lastRunText = await readFile(path.join(dir, "autoresearch.last-run.json"), "utf8");
+      assert.match(lastRunText, /ordinary run env node packet text/);
+      assert.doesNotMatch(
+        lastRunText,
+        new RegExp(outsideDir.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")),
+      );
+
+      const stored = JSON.parse(lastRunText);
+      assert.equal(stored.run.benchmarkContract.commandFile, "<outside-workdir>");
+      assert.equal(stored.run.benchmarkContract.envFile, "<env-file>");
+      assert.equal(stored.run.tailOutput.includes("ordinary run env node packet text"), true);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -6359,7 +6211,7 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
 
 test("doctor explain preserves current-tree finalization blockers", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const doctor = await runCli([
@@ -6386,7 +6238,7 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
 
 test("state, recommend-next, doctor, and dashboard share current-tree finalization authority", async () => {
   await withTempDir("shared-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
@@ -6444,7 +6296,7 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
 
 test("next compact refuses current-tree finalization blockers before running packets", async () => {
   await withTempDir("next-current-tree-finalization", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
     const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
@@ -6464,7 +6316,7 @@ test("next compact refuses current-tree finalization blockers before running pac
 
 test("codex goal complete audit blocks current-tree finalization blockers", async () => {
   await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
-    await prepareCurrentTreeFinalizationBlocker(dir);
+    await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
     const result = await runCli([
       "codex-goal-brief",
@@ -7893,6 +7745,57 @@ test("clear dry-run previews deletion targets without removing files", async () 
     assert.ok(payload.targets.includes(researchRoot));
     assert.ok(payload.wouldDelete.includes(researchRoot));
     await access(researchRoot);
+  });
+});
+
+test("clear removes active progress snapshots in fallback and Git-private modes", async () => {
+  await withTempDir("clear-progress-snapshots", async (dir) => {
+    const fallbackProgress = path.join(dir, "autoresearch.progress.json");
+    const fallbackLastRun = path.join(dir, "autoresearch.last-run.json");
+    const fallbackPending = path.join(dir, "autoresearch.pending-transaction.json");
+    await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
+    await writeFile(fallbackLastRun, JSON.stringify({ run: 1 }), "utf8");
+    await writeFile(fallbackPending, JSON.stringify({ run: 1 }), "utf8");
+
+    const fallbackPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
+    assert.equal(fallbackPreview.code, 0, fallbackPreview.stderr);
+    const fallbackPayload = JSON.parse(fallbackPreview.stdout);
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackProgress));
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackLastRun));
+    assert.ok(fallbackPayload.wouldDelete.includes(fallbackPending));
+    await access(fallbackProgress);
+
+    const fallbackClear = await runCli(["clear", "--cwd", dir, "--yes"]);
+    assert.equal(fallbackClear.code, 0, fallbackClear.stderr);
+    await assert.rejects(access(fallbackProgress));
+    await assert.rejects(access(fallbackLastRun));
+    await assert.rejects(access(fallbackPending));
+  });
+
+  await withTempDir("clear-git-progress-snapshots", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    const gitPrivateDir = path.join(dir, ".git", "autoresearch");
+    const gitProgress = path.join(gitPrivateDir, "progress.json");
+    const gitLastRun = path.join(gitPrivateDir, "last-run.json");
+    const fallbackProgress = path.join(dir, "autoresearch.progress.json");
+    await mkdir(gitPrivateDir, { recursive: true });
+    await writeFile(gitProgress, JSON.stringify({ exitState: "running" }), "utf8");
+    await writeFile(gitLastRun, JSON.stringify({ run: 1 }), "utf8");
+    await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
+
+    const gitPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
+    assert.equal(gitPreview.code, 0, gitPreview.stderr);
+    const gitPayload = JSON.parse(gitPreview.stdout);
+    assert.ok(gitPayload.wouldDelete.includes(gitProgress));
+    assert.ok(gitPayload.wouldDelete.includes(gitLastRun));
+    assert.ok(gitPayload.wouldDelete.includes(fallbackProgress));
+    await access(gitProgress);
+
+    const gitClear = await runCli(["clear", "--cwd", dir, "--yes"]);
+    assert.equal(gitClear.code, 0, gitClear.stderr);
+    await assert.rejects(access(gitProgress));
+    await assert.rejects(access(gitLastRun));
+    await assert.rejects(access(fallbackProgress));
   });
 });
 
@@ -9447,7 +9350,10 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     const generatedCommands = statePayload.commands.map((item) => item.command).join("\n");
     assert.ok(statePayload.commands.some((item) => item.label === "State"));
     assert.ok(statePayload.commands.some((item) => item.label === "Quality gap"));
-    assert.doesNotMatch(generatedCommands, /\b(?:serve|export|benchmark-lint)\b/i);
+    assert.doesNotMatch(
+      generatedCommands.replace(/\\/g, "/"),
+      /autoresearch\.mjs\s+(?:serve|export|benchmark-lint)\b/i,
+    );
     assert.doesNotMatch(generatedCommands, /--check-benchmark\b/i);
     for (const item of statePayload.commands) {
       assert.equal(dashboardCommandSafety(item.command).safe, true, item.command);
@@ -9815,6 +9721,29 @@ test("guide, dashboard, and recommend-next share canonical preflight blocker", a
   });
 });
 
+test("recommend-next compact operator checklist uses bounded recovery for empty sessions", async () => {
+  await withTempDir("compact-empty-recovery", async (dir) => {
+    const recommend = await runCli([
+      "recommend-next",
+      "--cwd",
+      dir,
+      "--compact",
+      "--operator-checklist",
+    ]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const payload = JSON.parse(recommend.stdout);
+    const command = payload.operatorChecklist.command || "";
+
+    assert.equal(payload.action.kind, "preflight");
+    assert.match(payload.nextAction, /benchmark command/i);
+    assert.match(payload.operatorChecklist.blocker, /benchmark command/i);
+    assert.match(command, /autoresearch\.mjs\b.*\b(setup-plan|state)\b/);
+    assert.match(command, /--cwd\b/);
+    assert.doesNotMatch(command, /\bdoctor\b.*--explain\b/);
+    assert.doesNotMatch(payload.commands.primary || "", /\bdoctor\b.*--explain\b/);
+  });
+});
+
 test("state and recommend-next expose advisory portfolio guidance", async () => {
   await withTempDir("portfolio-guidance", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "portfolio", "--metric-name", "seconds"]);
@@ -9857,9 +9786,10 @@ test("drift report treats installed routing as removed", async () => {
 });
 
 test("runShell configures a POSIX process group for timeout cleanup", async () => {
-  const [cliShim, bootstrap, runner] = await Promise.all([
+  const [cliShim, bootstrap, releaseIntegrity, runner] = await Promise.all([
     readFile(cli, "utf8"),
     readFile(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs"), "utf8"),
+    readFile(path.join(pluginRoot, "scripts", "release-integrity.mjs"), "utf8"),
     readFile(path.join(pluginRoot, "lib", "runner.ts"), "utf8"),
   ]);
   assert.match(
@@ -9871,10 +9801,13 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     cliShim,
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
   );
+  const checkShim = await readFile(path.join(pluginRoot, "scripts", "check.mjs"), "utf8");
+  assert.match(checkShim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(checkShim, /await import\(await ensureRuntime\("check\.mjs", import\.meta\.url\)\)/);
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
   assert.match(bootstrap, /verifyRuntimeTarballIntegrity/);
   assert.match(bootstrap, /\.tgz\.sha256/);
-  assert.match(bootstrap, /Checksum manifest expected asset/);
+  assert.match(releaseIntegrity, /Checksum manifest expected asset/);
   assert.match(bootstrap, /Release tarball package version mismatch/);
   assert.match(bootstrap, /node scripts\/autoresearch\.mjs --help/);
   assert.match(runner, /detached:\s*process\.platform !== "win32"/);
@@ -9913,7 +9846,10 @@ test("source launcher rebuilds local source runtime before use", async () => {
         {
           name: "codex-autoresearch",
           version: PLUGIN_VERSION,
-          scripts: { "build:node": "node scripts/write-runtime.mjs" },
+          scripts: {
+            build: "node scripts/write-runtime.mjs --dashboard",
+            "build:node": "node scripts/write-runtime.mjs",
+          },
         },
         null,
         2,
@@ -9933,8 +9869,14 @@ test("source launcher rebuilds local source runtime before use", async () => {
         'import path from "node:path";',
         'import { fileURLToPath } from "node:url";',
         'const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");',
+        'const includeDashboard = process.argv.includes("--dashboard");',
         'await mkdir(path.join(root, "dist", "scripts"), { recursive: true });',
         'await writeFile(path.join(root, "dist", "scripts", "autoresearch.mjs"), "export const rebuiltRuntime = true;\\n", "utf8");',
+        "if (includeDashboard) {",
+        '  await mkdir(path.join(root, "assets", "dashboard-build"), { recursive: true });',
+        '  await writeFile(path.join(root, "assets", "dashboard-build", "dashboard-app.js"), "window.__rebuiltDashboard = true;\\n", "utf8");',
+        '  await writeFile(path.join(root, "assets", "dashboard-build", "dashboard-app.css"), "#dashboard-root { color: rgb(1, 2, 3); }\\n", "utf8");',
+        "}",
       ].join("\n"),
       "utf8",
     );
@@ -9949,6 +9891,10 @@ test("source launcher rebuilds local source runtime before use", async () => {
     assert.equal(
       await readFile(new URL(runtimeHref), "utf8"),
       "export const rebuiltRuntime = true;\n",
+    );
+    assert.match(
+      await readFile(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"), "utf8"),
+      /rebuiltDashboard/,
     );
   });
 });
@@ -9971,6 +9917,123 @@ test("source launcher hydrates runtime only after release checksum verification"
       const runtime = await import(`${runtimeHref}?integrity=${Date.now()}`);
       assert.equal(runtime.hydratedRuntime, true);
       await access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"));
+    });
+  });
+});
+
+test("source launcher hydrates packaged dashboard assets before source-shaped export", async () => {
+  await withTempDir("runtime-hydration-dashboard-export", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await mkdir(path.join(pluginDir, "assets"), { recursive: true });
+    await writeFile(
+      path.join(pluginDir, "assets", "template.html"),
+      [
+        "<!doctype html>",
+        '<div id="dashboard-root"></div>',
+        "<style>__AUTORESEARCH_DASHBOARD_CSS__</style>",
+        "<script>__AUTORESEARCH_DASHBOARD_APP__</script>",
+        '<script type="application/json">__AUTORESEARCH_DATA_PAYLOAD__</script>',
+        '<script type="application/json">__AUTORESEARCH_META_PAYLOAD__</script>',
+      ].join("\n"),
+      "utf8",
+    );
+    await assert.rejects(
+      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
+    );
+
+    const runtimeText = [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      'import { fileURLToPath } from "node:url";',
+      "export const hydratedRuntime = true;",
+      "export function exportDashboardHtml(workDir) {",
+      '  const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");',
+      '  const template = fs.readFileSync(path.join(pluginRoot, "assets", "template.html"), "utf8");',
+      '  const app = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js"), "utf8");',
+      '  const css = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css"), "utf8");',
+      "  const html = template",
+      '    .replace("__AUTORESEARCH_DASHBOARD_CSS__", css)',
+      '    .replace("__AUTORESEARCH_DASHBOARD_APP__", app)',
+      '    .replace("__AUTORESEARCH_DATA_PAYLOAD__", JSON.stringify([{ name: "package dashboard smoke" }]))',
+      '    .replace("__AUTORESEARCH_META_PAYLOAD__", JSON.stringify({ deliveryMode: "static-export" }));',
+      '  const outputPath = path.join(workDir, "autoresearch-dashboard.html");',
+      '  fs.writeFileSync(outputPath, html, "utf8");',
+      "  return outputPath;",
+      "}",
+    ].join("\n");
+    const release = await createRuntimeReleaseAsset(dir, {
+      dashboardAppText: 'window.__hydratedDashboardAsset = "release-dashboard-app";\n',
+      dashboardCssText: "#dashboard-root { color: rgb(12, 34, 56); }\n",
+      runtimeText: `${runtimeText}\n`,
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"));
+      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"));
+
+      const runtime = await import(`${runtimeHref}?dashboard=${Date.now()}`);
+      const outputPath = runtime.exportDashboardHtml(dir);
+      const dashboardHtml = await readFile(outputPath, "utf8");
+      assert.match(dashboardHtml, /release-dashboard-app/);
+      assert.match(dashboardHtml, /rgb\(12, 34, 56\)/);
+      assert.match(dashboardHtml, /package dashboard smoke/);
+    });
+  });
+});
+
+test("source launcher does not treat source-shaped runtime as ready without dashboard assets", async () => {
+  await withTempDir("runtime-hydration-existing-runtime-missing-dashboard", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
+    await writeFile(
+      path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"),
+      "export const sourceRuntimeWithoutDashboardAssets = true;\n",
+      "utf8",
+    );
+    await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
+    await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
+    await assert.rejects(
+      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
+    );
+
+    const release = await createRuntimeReleaseAsset(dir, {
+      dashboardAppText: 'window.__hydratedDashboardAsset = "existing-runtime-missing-assets";\n',
+      dashboardCssText: "#dashboard-root { color: rgb(98, 76, 54); }\n",
+      runtimeText: "export const hydratedRuntime = true;\n",
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
+        releaseBaseUrl,
+      });
+
+      assert.equal(
+        await readFile(new URL(runtimeHref), "utf8"),
+        "export const hydratedRuntime = true;\n",
+      );
+      assert.match(
+        await readFile(
+          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"),
+          "utf8",
+        ),
+        /existing-runtime-missing-assets/,
+      );
+      assert.match(
+        await readFile(
+          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"),
+          "utf8",
+        ),
+        /rgb\(98, 76, 54\)/,
+      );
     });
   });
 });
@@ -10005,6 +10068,47 @@ test("source launcher fails closed when release checksum mismatches", async () =
       await assert.rejects(
         () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
         /Release tarball integrity mismatch/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects multi-entry checksum manifests", async () => {
+  await withTempDir("runtime-hydration-multi-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, {
+      checksumText: ({ actualHash, tarballName }) =>
+        `${actualHash}  ${tarballName}\n${"0".repeat(64)}  other.tgz\n`,
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /must contain exactly one asset entry; found 2/,
+      );
+    });
+    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
+  });
+});
+
+test("source launcher rejects unnamed checksum manifests", async () => {
+  await withTempDir("runtime-hydration-unnamed-checksum", async (dir) => {
+    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
+    const release = await createRuntimeReleaseAsset(dir, {
+      checksumText: ({ actualHash }) => `${actualHash}\n`,
+    });
+    const bootstrap = await import(
+      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+    );
+
+    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
+      await assert.rejects(
+        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
+        /must contain a SHA-256 entry generated by sha256sum/,
       );
     });
     await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));

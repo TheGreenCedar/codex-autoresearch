@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { isPathInside } from "./path-containment.js";
-import { RESEARCH_DIR } from "./session-core.js";
+import { AUTORESEARCH_RESEARCH_DIR, resolveSessionPaths } from "./session-paths.js";
 
 export interface SafeResearchPath {
   root: string;
@@ -41,7 +41,7 @@ export async function resolveSafeResearchPath(
 ): Promise<SafeResearchPath> {
   const workDir = path.resolve(cwd || process.cwd());
   const safeSlug = validateResearchSlug(slug);
-  const root = path.join(workDir, RESEARCH_DIR);
+  const root = resolveSessionPaths({ workDir }).researchRoot;
   const outputDir = path.join(root, safeSlug);
   await assertInsideResearchRoot(root, outputDir);
   return { root, slug: safeSlug, outputDir };
@@ -53,7 +53,7 @@ export async function assertInsideResearchRoot(root: string, target: string): Pr
   const rootReal = await realPathForTarget(resolvedRoot);
   const targetReal = await realPathForTarget(resolvedTarget);
   if (!isPathInside(rootReal, targetReal)) {
-    throw new Error(`target path escapes ${RESEARCH_DIR}: ${target}`);
+    throw new Error(`target path escapes ${AUTORESEARCH_RESEARCH_DIR}: ${target}`);
   }
 }
 

@@ -1,21 +1,16 @@
+import {
+  AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_RESEARCH_DIR,
+  AUTORESEARCH_SESSION_FILES,
+} from "./session-paths.js";
+
 export type SessionArtifactMode = "finalization" | "dirty-tree" | "source-checkout";
 export type SessionArtifactPolicy = { mode: SessionArtifactMode };
 
-const SESSION_FILES = new Set([
-  "autoresearch.jsonl",
-  "autoresearch.md",
-  "autoresearch.ideas.md",
-  "autoresearch.config.json",
-  "autoresearch.last-run.json",
-  "autoresearch-dashboard.html",
-  "autoresearch.sh",
-  "autoresearch.ps1",
-  "autoresearch.checks.sh",
-  "autoresearch.checks.ps1",
-]);
+const SESSION_FILES = new Set([...AUTORESEARCH_SESSION_FILES, AUTORESEARCH_DASHBOARD_FILE]);
 
-const RESEARCH_DIR = "autoresearch.research";
-const RESEARCH_DIR_PREFIX = "autoresearch.research/";
+const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
+const RESEARCH_DIR_PREFIX = `${AUTORESEARCH_RESEARCH_DIR}/`;
 export const REPORT_DIRNAME = "autoresearch-finalize";
 export const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b) =>
   a.localeCompare(b),
