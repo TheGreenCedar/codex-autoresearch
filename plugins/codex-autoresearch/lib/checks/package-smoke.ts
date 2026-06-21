@@ -561,9 +561,12 @@ export async function releaseProvenanceIssue(options: ReleaseProvenanceOptions):
 
   const expectedSan = `https://github.com/${signerWorkflow}@refs/heads/main`;
   const expectedRepoUri = `https://github.com/${repo}`;
-  const expectedWorkflowPath = signerWorkflow.slice(`${repo}/`.length);
+  const expectedSignerWorkflowPath = signerWorkflow.slice(`${repo}/`.length);
   const expectedBuilderUri = `https://github.com/${signerWorkflow}@refs/heads/main`;
   for (const entry of matching) {
+    const expectedWorkflowPath =
+      workflowPathFromBuildConfigUri(entry.certificate.buildConfigURI, repo) ||
+      expectedSignerWorkflowPath;
     const issues = [
       requireEqual(
         "certificate subjectAlternativeName",
@@ -708,6 +711,7 @@ function attestationPolicyView(entry: unknown) {
     certificate: {
       githubWorkflowRepository: stringField(certificate, "githubWorkflowRepository"),
       githubWorkflowSHA: stringField(certificate, "githubWorkflowSHA"),
+      buildConfigURI: stringField(certificate, "buildConfigURI"),
       runnerEnvironment: stringField(certificate, "runnerEnvironment"),
       sourceRepositoryDigest: stringField(certificate, "sourceRepositoryDigest"),
       sourceRepositoryRef: stringField(certificate, "sourceRepositoryRef"),
@@ -720,6 +724,7 @@ function attestationPolicyView(entry: unknown) {
     summary: JSON.stringify({
       certificate: {
         githubWorkflowRepository: stringField(certificate, "githubWorkflowRepository"),
+        buildConfigURI: stringField(certificate, "buildConfigURI"),
         sourceRepositoryDigest: stringField(certificate, "sourceRepositoryDigest"),
         sourceRepositoryRef: stringField(certificate, "sourceRepositoryRef"),
         subjectAlternativeName: stringField(certificate, "subjectAlternativeName"),
@@ -732,6 +737,13 @@ function attestationPolicyView(entry: unknown) {
       repository: stringField(workflow, "repository"),
     },
   };
+}
+
+function workflowPathFromBuildConfigUri(buildConfigUri: string, repo: string): string {
+  const prefix = `https://github.com/${repo}/`;
+  const suffix = "@refs/heads/main";
+  if (!buildConfigUri.startsWith(prefix) || !buildConfigUri.endsWith(suffix)) return "";
+  return buildConfigUri.slice(prefix.length, -suffix.length);
 }
 
 function record(value: unknown): Record<string, unknown> {
