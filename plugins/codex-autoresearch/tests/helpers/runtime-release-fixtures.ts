@@ -1,31 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
+import { runProcess } from "./process.js";
 
 async function runTar(args, cwd) {
-  const result = await new Promise((resolve) => {
-    const child = spawn("tar", args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
+  const result = await runProcess("tar", args, cwd);
   assert.equal(result.code, 0, `tar ${args.join(" ")} failed\n${result.stderr}${result.stdout}`);
 }
 

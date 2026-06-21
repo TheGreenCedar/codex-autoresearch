@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { finalizationPlanFingerprint, readAutoresearchLedger } from "../lib/finalization-plan.js";
@@ -7,7 +6,7 @@ import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
 import { AUTORESEARCH_DASHBOARD_FILE, AUTORESEARCH_SESSION_FILES } from "../lib/session-paths.js";
-import { testGitArgs, withTempDir as withNamedTempDir } from "./helpers/process.js";
+import { runProcess, testGitArgs, withTempDir as withNamedTempDir } from "./helpers/process.js";
 import test from "./helpers/sharded-test.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -15,25 +14,7 @@ const finalizer = path.join(pluginRoot, "scripts", "finalize-autoresearch.mjs");
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 
 async function run(command, args, cwd, allowFailure = false) {
-  const result = await new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) =>
-      resolve({ code: -1, stdout, stderr: String(error.message || error) }),
-    );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
+  const result = await runProcess(command, args, cwd);
   if (!allowFailure && result.code !== 0) {
     const commandLine = command + " " + args.join(" ");
     throw new Error(commandLine + " failed:\n" + result.stdout + result.stderr);
