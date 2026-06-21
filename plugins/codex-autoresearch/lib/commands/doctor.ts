@@ -1,4 +1,6 @@
-type LooseObject = Record<string, any>;
+import type { UnknownRecord } from "../types/json.js";
+
+type CommandRecord = UnknownRecord & Record<string, any>;
 
 export type DoctorCommandServiceDeps = Record<string, any>;
 
@@ -42,9 +44,9 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
   const PLUGIN_ROOT = deps.pluginRoot;
   const PLUGIN_VERSION = deps.pluginVersion;
 
-  async function doctorSession(args: LooseObject): Promise<LooseObject> {
+  async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
     const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-    const state: LooseObject = await publicState({ ...args, compact: false });
+    const state: CommandRecord = await publicState({ ...args, compact: false });
     const primaryMetricName =
       args.metric_name ||
       args.metricName ||
@@ -130,7 +132,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     });
     const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
     const publicPreflight = publicCommandPayload(guidance.preflight);
-    const runtimeAuthority = (guidance.runtimeAuthority || null) as LooseObject | null;
+    const runtimeAuthority = (guidance.runtimeAuthority || null) as CommandRecord | null;
     if (runtimeAuthority?.blocking === true) {
       pushUniqueMessage(issues, runtimeAuthority.blocker);
     }
@@ -160,7 +162,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     );
     for (const blocker of loopAuthority.blockers) pushUniqueMessage(issues, blocker);
 
-    const benchmark: LooseObject = {
+    const benchmark: CommandRecord = {
       checked: false,
       command: args.command || "",
       packetEnvMode: null,
@@ -286,7 +288,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
       command: redactCommandDisplay(benchmark.command),
     };
 
-    const result: LooseObject = {
+    const result: CommandRecord = {
       ok: issues.length === 0,
       workDir,
       config: state.config,
@@ -327,7 +329,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     return result;
   }
 
-  async function catalogTrustCheck(config: LooseObject, sessionCwd: string) {
+  async function catalogTrustCheck(config: CommandRecord, sessionCwd: string) {
     const provenance = config.recipeCatalogProvenance || config.recipe_catalog_provenance || null;
     if (!provenance) return { ok: true, issues: [] as string[] };
     return await revalidateRecipeCatalogProvenance(provenance, { catalogBaseDir: sessionCwd });
@@ -342,7 +344,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     bestMetric,
     direction,
     metricName,
-  }: LooseObject) {
+  }: CommandRecord) {
     const current = finiteMetric(currentMetric);
     const best = finiteMetric(bestMetric);
     if (current == null || best == null || best === 0) return "";
@@ -354,7 +356,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     return `Benchmark drift: current ${metricName}=${current} is far worse than historical best ${best}. Treat the old best as historical evidence, not current runtime proof.`;
   }
 
-  function doctorExplanation(result: LooseObject): LooseObject {
+  function doctorExplanation(result: CommandRecord): CommandRecord {
     const runtimeSummary = result.runtimeDriftSummary || null;
     return {
       verdict: result.ok
@@ -384,7 +386,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     };
   }
 
-  function guidanceBlockers(guidance: LooseObject): string[] {
+  function guidanceBlockers(guidance: CommandRecord): string[] {
     const blockers = [
       ...listOption(guidance.gateQuality?.blockers),
       ...(guidance.preflight?.status === "blocked" ? listOption(guidance.preflight?.blockers) : []),
@@ -397,14 +399,14 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     return uniqueStrings(blockers);
   }
 
-  function guidanceWarnings(guidance: LooseObject): string[] {
+  function guidanceWarnings(guidance: CommandRecord): string[] {
     return uniqueStrings([
       ...listOption(guidance.gateQuality?.warnings),
       ...listOption(guidance.preflight?.warnings),
     ]);
   }
 
-  function doctorLoopContractAuthority(decisionEnvelope: LooseObject | null | undefined) {
+  function doctorLoopContractAuthority(decisionEnvelope: CommandRecord | null | undefined) {
     const envelope = decisionEnvelope || {};
     const loopContract = envelope.loopContract || null;
     const canonicalNextAction = envelope.canonicalNextAction || null;
@@ -432,7 +434,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     if (text && !target.includes(text)) target.push(text);
   }
 
-  function hasSharperDoctorBlocker(state: LooseObject, blocker: unknown = ""): boolean {
+  function hasSharperDoctorBlocker(state: CommandRecord, blocker: unknown = ""): boolean {
     if (hasScaffoldBlocker(state.scaffoldHealth)) return true;
     if (
       blocker &&
@@ -456,8 +458,8 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
   }
 
   function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
-    const checks = Array.isArray((scaffoldHealth as LooseObject | null)?.checks)
-      ? (scaffoldHealth as LooseObject).checks
+    const checks = Array.isArray((scaffoldHealth as CommandRecord | null)?.checks)
+      ? (scaffoldHealth as CommandRecord).checks
       : [];
     return checks.some((check: any) => check?.severity === "blocker");
   }

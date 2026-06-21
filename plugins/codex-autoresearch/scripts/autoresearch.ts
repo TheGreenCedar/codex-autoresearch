@@ -409,27 +409,12 @@ const stateCommandService = createStateCommandService({
   verifyDashboardHealthSummary,
   withCanonicalActionCommand,
 });
-const publicSessionConfig = stateCommandService.publicSessionConfig;
-
 async function publicState(args: LooseObject): Promise<LooseObject> {
   return await stateCommandService.publicState(args);
 }
 
-async function publicCompactState(args: {
-  workDir: string;
-  config: LooseObject;
-  codexGoalObjective?: unknown;
-  readCache?: unknown;
-}): Promise<LooseObject> {
-  return await stateCommandService.publicCompactState(args);
-}
-
 function compactPublicState(state: LooseObject): LooseObject {
   return stateCommandService.compactPublicState(state);
-}
-
-async function dashboardHealthForWorkDir(workDir: string): Promise<LooseObject> {
-  return await stateCommandService.dashboardHealthForWorkDir(workDir);
 }
 
 async function finalizationPressureForWorkDir(args: {

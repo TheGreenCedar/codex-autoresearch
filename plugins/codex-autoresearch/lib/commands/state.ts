@@ -1,3 +1,5 @@
+import type { UnknownRecord } from "../types/json.js";
+
 type JsonObject = Record<string, unknown>;
 
 export interface CompactStateBuilderInput {
@@ -234,7 +236,7 @@ function copyIfProvided<T extends object>(target: T, key: string, value: unknown
   if (value !== undefined) (target as JsonObject)[key] = value;
 }
 
-type LooseObject = Record<string, any>;
+type CommandRecord = UnknownRecord & Record<string, any>;
 
 export type StateCommandServiceDeps = Record<string, any>;
 
@@ -298,14 +300,14 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   const PLUGIN_ROOT = deps.pluginRoot;
   const PLUGIN_VERSION = deps.pluginVersion;
 
-  async function publicState(args: LooseObject): Promise<LooseObject> {
+  async function publicState(args: CommandRecord): Promise<CommandRecord> {
     const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
     const compact = boolOption(args.compact, false);
     const report = boolOption(args.report, false);
     const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
     const readCache = args.readCache || createSessionReadCache();
     if (compact || report) {
-      let compactState: LooseObject;
+      let compactState: CommandRecord;
       try {
         compactState = await publicCompactState({
           workDir,
@@ -324,7 +326,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
         });
       }
       if (!report) return compactState;
-      const response: LooseObject = {
+      const response: CommandRecord = {
         ok: compactState.ok !== false,
         workDir,
         report: buildTerminalReport(compactState),
@@ -578,11 +580,11 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     compact,
   }: {
     workDir: string;
-    config: LooseObject;
+    config: CommandRecord;
     codexGoalObjective?: unknown;
     error: unknown;
     compact: boolean;
-  }): LooseObject {
+  }): CommandRecord {
     const ledger = readLedgerRecordsTolerant(workDir);
     const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
       parseErrors: ledger.parseErrors,
@@ -655,10 +657,10 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     readCache,
   }: {
     workDir: string;
-    config: LooseObject;
+    config: CommandRecord;
     codexGoalObjective?: unknown;
     readCache?: unknown;
-  }): Promise<LooseObject> {
+  }): Promise<CommandRecord> {
     const effectiveReadCache = (readCache || createSessionReadCache()) as any;
     const state = loadSessionState(workDir, effectiveReadCache);
     const records = loadSessionRecords(workDir, effectiveReadCache);
@@ -882,10 +884,10 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     warningDetails,
   }: {
     workDir: string;
-    state: LooseObject;
-    qualityGap: LooseObject | null;
-    warningDetails: LooseObject[];
-  }): Promise<LooseObject> {
+    state: CommandRecord;
+    qualityGap: CommandRecord | null;
+    warningDetails: CommandRecord[];
+  }): Promise<CommandRecord> {
     const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
     if (!hasFinalizationEvidence(state)) return cheap;
     return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
@@ -898,18 +900,18 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     }));
   }
 
-  function hasFinalizationEvidence(state: LooseObject): boolean {
+  function hasFinalizationEvidence(state: CommandRecord): boolean {
     const runs = Array.isArray(state.results)
       ? state.results
       : Array.isArray(state.current)
         ? state.current
         : [];
-    return runs.some((run: LooseObject) => isAcceptedCurrentRun(run));
+    return runs.some((run: CommandRecord) => isAcceptedCurrentRun(run));
   }
 
-  function publicSessionConfig(config: unknown): LooseObject {
-    const record = config && typeof config === "object" ? { ...(config as LooseObject) } : {};
-    const output = redactEvidenceObject(record) as LooseObject;
+  function publicSessionConfig(config: unknown): CommandRecord {
+    const record = config && typeof config === "object" ? { ...(config as CommandRecord) } : {};
+    const output = redactEvidenceObject(record) as CommandRecord;
     for (const field of [
       "benchmarkCommand",
       "benchmark_command",
@@ -930,7 +932,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     return redactEvidenceObject(value) as T;
   }
 
-  function compactPublicState(state: LooseObject) {
+  function compactPublicState(state: CommandRecord): CommandRecord {
     const limit = state.limit || {};
     const continuation = state.continuation || {};
     const compactDecisionEnvelope = compactEnvelope(state.decisionEnvelope || state.resumeAudit);
@@ -1159,21 +1161,21 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
       packetDiagnostics: state.packetDiagnostics,
       metricSemanticsWarning: state.metricSemanticsWarning || null,
-    });
+    }) as unknown as CommandRecord;
   }
 
   function commandExecutionBoundaryForState({
     state,
     lastRun,
   }: {
-    state: LooseObject;
-    lastRun?: LooseObject | null;
-  }): LooseObject | null {
+    state: CommandRecord;
+    lastRun?: CommandRecord | null;
+  }): CommandRecord | null {
     const boundary =
       lastRun?.packetEvidence?.commandExecutionBoundary ||
       [...(Array.isArray(state.current) ? state.current : [])]
         .reverse()
-        .map((run: LooseObject) => run.commandExecutionBoundary)
+        .map((run: CommandRecord) => run.commandExecutionBoundary)
         .find(Boolean);
     if (!boundary) return null;
     return {
@@ -1183,7 +1185,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     };
   }
 
-  function compactEnvelope(envelope: LooseObject | null | undefined): LooseObject | null {
+  function compactEnvelope(envelope: CommandRecord | null | undefined): CommandRecord | null {
     if (!envelope) return null;
     return {
       activeSegment: envelope.activeSegment || null,
@@ -1223,8 +1225,8 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   }
 
   function compactScaffoldHealth(
-    scaffoldHealth: LooseObject | null | undefined,
-  ): LooseObject | null {
+    scaffoldHealth: CommandRecord | null | undefined,
+  ): CommandRecord | null {
     if (!scaffoldHealth) return null;
     return {
       ok: scaffoldHealth.ok,
@@ -1240,7 +1242,9 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     };
   }
 
-  function compactFinalizationReadiness(readiness: LooseObject | null | undefined): LooseObject {
+  function compactFinalizationReadiness(
+    readiness: CommandRecord | null | undefined,
+  ): CommandRecord {
     return {
       available: readiness?.available !== false,
       ready: readiness?.ready === null ? null : readiness?.ready === true,
@@ -1252,8 +1256,8 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   }
 
   function compactExperimentEconomics(
-    economics: LooseObject | null | undefined,
-  ): LooseObject | null {
+    economics: CommandRecord | null | undefined,
+  ): CommandRecord | null {
     if (!economics) return null;
     return {
       runtimeClass: economics.runtimeClass,
@@ -1266,7 +1270,9 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     };
   }
 
-  function compactLaneLifecycle(laneLifecycle: LooseObject | null | undefined): LooseObject | null {
+  function compactLaneLifecycle(
+    laneLifecycle: CommandRecord | null | undefined,
+  ): CommandRecord | null {
     if (!laneLifecycle) return null;
     const lanes = Array.isArray(laneLifecycle.lanes) ? laneLifecycle.lanes : [];
     return {
@@ -1294,7 +1300,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     };
   }
 
-  function compactRuntimeAuthority(value: LooseObject | null | undefined): LooseObject | null {
+  function compactRuntimeAuthority(value: CommandRecord | null | undefined): CommandRecord | null {
     if (!value) return null;
     return {
       sourceRuntime: value.sourceRuntime || null,
@@ -1307,8 +1313,8 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   }
 
   function compactPortfolioRecommendation(
-    value: LooseObject | null | undefined,
-  ): LooseObject | null {
+    value: CommandRecord | null | undefined,
+  ): CommandRecord | null {
     if (!value) return null;
     return {
       kind: value.kind || "insufficient-evidence",
@@ -1319,7 +1325,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     };
   }
 
-  async function dashboardHealthForWorkDir(workDir: string): Promise<LooseObject> {
+  async function dashboardHealthForWorkDir(workDir: string): Promise<CommandRecord> {
     const record = await readServeRegistry(workDir);
     return verifyDashboardHealthSummary(
       buildServeRegistryHealthInput(workDir, record, {
