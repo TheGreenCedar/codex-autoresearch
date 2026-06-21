@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
+import { compactFinalizationReadiness } from "../state-finalization-readout.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -1239,19 +1240,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
               .map((check: any) => check.message || check.code)
               .slice(0, 6)
           : [],
-    };
-  }
-
-  function compactFinalizationReadiness(
-    readiness: CommandRecord | null | undefined,
-  ): CommandRecord {
-    return {
-      available: readiness?.available !== false,
-      ready: readiness?.ready === null ? null : readiness?.ready === true,
-      productGradeReady: readiness?.productGradeReady !== false,
-      productGradeIssue: readiness?.productGradeIssue || null,
-      nextAction: readiness?.nextAction || readiness?.recommendation || "",
-      warnings: Array.isArray(readiness?.warnings) ? readiness.warnings.slice(0, 3) : [],
     };
   }
 
