@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   findSourceHygieneOffenders,
   findLooseObjectCompatibilityOffenders,
@@ -62,6 +62,7 @@ export const dashboardGeneratedDemoExport = `examples/demo-session/${dashboardDe
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
+  "plugins/codex-autoresearch/scripts/release-integrity.mjs",
 ];
 
 const requiredRootIgnoreSentinels = [
@@ -315,6 +316,7 @@ async function runPackageArtifactCheck() {
       "dist/scripts/autoresearch.mjs",
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
+      "scripts/release-integrity.mjs",
       "scripts/finalize-autoresearch.mjs",
       "skills/codex-autoresearch/SKILL.md",
     ];
@@ -865,6 +867,19 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
   if (!packedEntries.has("scripts/bootstrap-runtime.mjs")) {
     problems.push("scripts/bootstrap-runtime.mjs is missing from the package");
   }
+  let releaseIntegrity = "";
+  try {
+    releaseIntegrity = await fsp.readFile(
+      path.join(ROOT, "scripts", "release-integrity.mjs"),
+      "utf8",
+    );
+  } catch (error) {
+    problems.push(`scripts/release-integrity.mjs could not be read: ${String(error)}`);
+  }
+  if (!packedEntries.has("scripts/release-integrity.mjs")) {
+    problems.push("scripts/release-integrity.mjs is missing from the package");
+  }
+  const runtimeIntegritySource = `${bootstrap}\n${releaseIntegrity}`;
   for (const expected of [
     "github.com/TheGreenCedar/codex-autoresearch/releases/download",
     "${PACKAGE_NAME}-${version}.tgz",
@@ -876,8 +891,8 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
     "dist",
     "Run `node scripts/autoresearch.mjs --help`",
   ]) {
-    if (!bootstrap.includes(expected)) {
-      problems.push(`scripts/bootstrap-runtime.mjs should contain ${expected}`);
+    if (!runtimeIntegritySource.includes(expected)) {
+      problems.push(`release runtime integrity scripts should contain ${expected}`);
     }
   }
 
@@ -1047,7 +1062,7 @@ function optionValue(args: string[], name: string): string {
   return "";
 }
 
-async function releaseChecksumIssue(tarball: string, checksumPath: string): Promise<string> {
+export async function releaseChecksumIssue(tarball: string, checksumPath: string): Promise<string> {
   let checksumText = "";
   try {
     checksumText = await fsp.readFile(checksumPath, "utf8");
@@ -1055,23 +1070,12 @@ async function releaseChecksumIssue(tarball: string, checksumPath: string): Prom
     return `Checksum file could not be read at ${checksumPath}: ${String(error)}`;
   }
 
-  const expectedHash = checksumText.match(/\b[a-f0-9]{64}\b/i)?.[0]?.toLowerCase() || "";
-  if (!expectedHash) return `Checksum file ${checksumPath} does not contain a SHA-256 hash.`;
-
-  const namedFiles = checksumText
-    .split(/\r?\n/)
-    .map(
-      (line) =>
-        line
-          .trim()
-          .match(/^[a-f0-9]{64}\s+\*?(.+)$/i)?.[1]
-          ?.trim() || "",
-    )
-    .filter(Boolean)
-    .map((file) => path.basename(file));
   const tarballName = path.basename(tarball);
-  if (namedFiles.length && !namedFiles.includes(tarballName)) {
-    return `Checksum file names ${namedFiles.join(", ")} but release tarball is ${tarballName}.`;
+  let expectedHash = "";
+  try {
+    expectedHash = await parseStrictSha256Manifest(checksumText, tarballName);
+  } catch (error) {
+    return String(error instanceof Error ? error.message : error);
   }
 
   const bytes = await fsp.readFile(tarball);
@@ -1080,6 +1084,15 @@ async function releaseChecksumIssue(tarball: string, checksumPath: string): Prom
     return `Checksum mismatch for ${tarballName}: expected ${expectedHash}, got ${actualHash}.`;
   }
   return "";
+}
+
+async function parseStrictSha256Manifest(text: string, expectedFileName: string): Promise<string> {
+  const releaseIntegrity = (await import(
+    pathToFileURL(path.join(ROOT, "scripts", "release-integrity.mjs")).href
+  )) as {
+    parseSha256Manifest: (text: string, expectedFileName: string) => string;
+  };
+  return releaseIntegrity.parseSha256Manifest(text, expectedFileName);
 }
 
 async function runPackageSmokeCommands(extractDir: string) {

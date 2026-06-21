@@ -571,6 +571,8 @@ const checks = [
       const packageFiles = (pkg.files || []).join("\n");
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
       const bootstrap = await readText("scripts/bootstrap-runtime.mjs");
+      const releaseIntegrity = await readText("scripts/release-integrity.mjs");
+      const runtimeIntegritySource = `${bootstrap}\n${releaseIntegrity}`;
       const release = await readRootText(".github/workflows/release.yml");
       const tagPushTrigger = /push:\s*\n\s*tags:/m.test(release);
       return ignoresDist &&
@@ -585,7 +587,7 @@ const checks = [
         autoresearchLauncher.includes('ensureRuntime("autoresearch.mjs"') &&
         !packageFiles.includes(".mcp.json") &&
         !packageFiles.includes("autoresearch-mcp") &&
-        includesAll(bootstrap, [
+        includesAll(runtimeIntegritySource, [
           "github.com/TheGreenCedar/codex-autoresearch/releases/download",
           "${PACKAGE_NAME}-${version}.tgz",
           "verifyRuntimeTarballIntegrity",
