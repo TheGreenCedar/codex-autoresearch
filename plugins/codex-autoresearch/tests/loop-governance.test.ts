@@ -13,6 +13,7 @@ import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { buildBudgetStatus } from "../lib/benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "../lib/loop-governance.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import { firstSafeCommand, resolveCommandByKeys } from "../lib/safe-command-resolver.js";
 import { buildDecisionEnvelope } from "../lib/session-core.js";
 import {
   buildSessionDecisionCapsule,
@@ -689,6 +690,25 @@ test("readout action fallback skips process-starting fallback commands", () => {
   assert.equal(
     resolveActionCommand("decision-capsule", commands),
     "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
+  );
+});
+
+test("shared safe command resolver preserves operational commands but filters readouts", () => {
+  const processStarting = "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo";
+  const inspectOnly = "node scripts/autoresearch.mjs state --cwd C:/repo --compact";
+  const lookup = new Map([
+    ["benchmarkLint", processStarting],
+    ["placeholder", "node scripts/autoresearch.mjs state --cwd <project>"],
+    ["stateCompact", inspectOnly],
+  ]);
+
+  assert.equal(firstSafeCommand([processStarting, inspectOnly], "operational"), processStarting);
+  assert.equal(firstSafeCommand([processStarting, inspectOnly], "readout"), inspectOnly);
+  assert.equal(
+    resolveCommandByKeys((key) => lookup.get(key), ["placeholder", "stateCompact"], {
+      mode: "readout",
+    }),
+    inspectOnly,
   );
 });
 
