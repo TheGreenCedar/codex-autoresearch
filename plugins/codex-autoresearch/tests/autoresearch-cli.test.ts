@@ -635,6 +635,48 @@ test("test shard runner validates jobs and fails closed on discovery gaps", asyn
       /AUTORESEARCH_TEST_COUNT/,
     );
 
+    const missingFile = path.join(dir, "missing-shard-target.test.mjs");
+    const missingFileResult = await runNode([shardRunner, missingFile, "2"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS: "0",
+      },
+    });
+    assert.notEqual(missingFileResult.code, 0);
+    assert.match(
+      `${missingFileResult.stdout}\n${missingFileResult.stderr}`,
+      /Compiled test file is not ready/,
+    );
+
+    const delayedFile = path.join(dir, "delayed-sharded.test.mjs");
+    const delayedWrite = new Promise<void>((resolve, reject) => {
+      setTimeout(() => {
+        writeFile(
+          delayedFile,
+          [
+            "import test from 'node:test';",
+            "if (process.env.CODEX_AUTORESEARCH_TEST_DISCOVER === '1') {",
+            "  console.log('AUTORESEARCH_TEST_COUNT 1');",
+            "}",
+            "test('delayed file runs after readiness wait', () => {",
+            "  console.log('DELAYED_EXECUTION_MARKER');",
+            "});",
+          ].join("\n"),
+          "utf8",
+        ).then(resolve, reject);
+      }, 150);
+    });
+    const delayed = await runNode([shardRunner, "--jobs", "1", delayedFile, "2"], {
+      env: {
+        ...process.env,
+        CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS: "2000",
+        CODEX_AUTORESEARCH_TEST_SHARD_VERBOSE: "1",
+      },
+    });
+    await delayedWrite;
+    assert.equal(delayed.code, 0, delayed.stderr);
+    assert.match(`${delayed.stdout}\n${delayed.stderr}`, /DELAYED_EXECUTION_MARKER/);
+
     const unevenShardedFile = path.join(dir, "uneven-sharded.test.mjs");
     await writeFile(
       unevenShardedFile,
