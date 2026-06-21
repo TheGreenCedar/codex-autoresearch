@@ -21,7 +21,7 @@ The job: make one measured improvement loop trustworthy enough that a human can 
 - For qualitative or deep-research improvement loops, start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It creates the scratchpad, configures `quality_gap`, validates the command, and records the first baseline as `measure` unless `--no-baseline-log` is passed.
 - Use advanced diagnostics only when needed. Check `node scripts/autoresearch.mjs --help --all` from the package root before naming a less common command.
 - Use `new-segment` when the active segment is maxed, stale, phase-changing, or no longer comparable.
-- Prefer CLI JSON and durable session files over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, `autoresearch.last-run.json`, and `autoresearch.research/<slug>/`.
+- Prefer CLI JSON and durable session state over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, active last-run/progress snapshots under `.git/autoresearch/` in Git repos, fallback `autoresearch.last-run.json` / `autoresearch.progress.json` outside Git, and `autoresearch.research/<slug>/`.
 - Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.
 - Before another packet, read `recommend-next --compact` or `state --compact`; obey blockers. Compact-state field names: `docs/concepts.md#state-fields`.
 - `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.

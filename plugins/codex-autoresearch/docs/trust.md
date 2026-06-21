@@ -181,7 +181,7 @@ Partial-result salvage reads only in-workdir artifacts. Oversized or malformed a
 
 ## Privacy and local data
 
-Autoresearch has no hosted backend. Session files, dashboard exports, ASI, packet evidence, and artifact indexes are local project records unless your commands, Git workflow, or external services move them elsewhere.
+Autoresearch has no hosted backend. Session files, dashboard exports, ASI, packet evidence, progress snapshots, pending transaction receipts, and artifact indexes are local project records unless your commands, Git workflow, or external services move them elsewhere. In Git repos, active last-run and progress snapshots live under `.git/autoresearch/`; outside Git, they fall back to `autoresearch.last-run.json` and `autoresearch.progress.json` in the worktree.
 
 See [Privacy](privacy.md) and [Terms](terms.md) for the user-facing policy surfaces.
 
