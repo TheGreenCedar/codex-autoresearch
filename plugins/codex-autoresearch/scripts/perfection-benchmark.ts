@@ -558,7 +558,7 @@ const checks = [
   },
   {
     id: "release-tarball-runtime",
-    file: ".gitignore, package.json, scripts/*.mjs, .github/workflows/release.yml",
+    file: ".gitignore, package.json, scripts/autoresearch.mjs, scripts/bootstrap-runtime.mjs, scripts/release-integrity.mjs, .github/workflows/release.yml",
     description:
       "Source checkouts keep generated dist out of Git while release tarballs include the built runtime used by public launchers.",
     run: async () => {
@@ -568,7 +568,8 @@ const checks = [
         .map((line) => line.trim())
         .some((line) => line === "dist/" || line === "/dist/" || line === "dist");
       const pkg = await readJson("package.json");
-      const packageFiles = (pkg.files || []).join("\n");
+      const packageFileEntries = (pkg.files || []).map(String);
+      const packageFiles = packageFileEntries.join("\n");
       const autoresearchLauncher = await readText("scripts/autoresearch.mjs");
       const bootstrap = await readText("scripts/bootstrap-runtime.mjs");
       const releaseIntegrity = await readText("scripts/release-integrity.mjs");
@@ -579,10 +580,19 @@ const checks = [
         !tagPushTrigger &&
         includesAll(packageFiles, [
           "dist/lib/",
-          "dist/scripts/",
-          "scripts/*.mjs",
+          "dist/scripts/autoresearch.mjs",
+          "dist/scripts/check.mjs",
+          "dist/scripts/check-runner.mjs",
+          "dist/scripts/finalize-autoresearch.mjs",
+          "scripts/autoresearch.mjs",
+          "scripts/bootstrap-runtime.mjs",
+          "scripts/check.mjs",
+          "scripts/finalize-autoresearch.mjs",
+          "scripts/release-integrity.mjs",
           ".codex-plugin/",
         ]) &&
+        !packageFileEntries.includes("dist/scripts/") &&
+        !packageFileEntries.includes("scripts/*.mjs") &&
         autoresearchLauncher.includes("./bootstrap-runtime.mjs") &&
         autoresearchLauncher.includes('ensureRuntime("autoresearch.mjs"') &&
         !packageFiles.includes(".mcp.json") &&
@@ -648,8 +658,11 @@ const checks = [
         ]) &&
         includesAll(await readText("lib/checks/package-smoke.ts"), [
           '"dist/scripts/check.mjs"',
+          '"dist/scripts/check-runner.mjs"',
           '"dist/lib/checks/package-smoke.mjs"',
           '"scripts/check.mjs"',
+          "ALLOWED_PACKAGED_SOURCE_SCRIPTS",
+          "ALLOWED_PACKAGED_DIST_SCRIPTS",
           "runReleasePackageSmokePhase",
           "runPackageRuntimeSmokeFromTarball",
           "runExtractedPackageDashboardExportSmoke",
