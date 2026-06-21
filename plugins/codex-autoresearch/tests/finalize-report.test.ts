@@ -6,6 +6,7 @@ import { finalizationPlanFingerprint, readAutoresearchLedger } from "../lib/fina
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
+import { AUTORESEARCH_DASHBOARD_FILE, AUTORESEARCH_SESSION_FILES } from "../lib/session-paths.js";
 import { testGitArgs, withTempDir as withNamedTempDir } from "./helpers/process.js";
 import test from "./helpers/sharded-test.js";
 
@@ -84,6 +85,16 @@ test("session artifact modes preserve finalization, dirty tree, and source check
     assert.equal(
       isAutoresearchSessionArtifact(file, "source-checkout"),
       sourceCheckout,
+      `${file} source-checkout`,
+    );
+  }
+
+  for (const file of [...AUTORESEARCH_SESSION_FILES, AUTORESEARCH_DASHBOARD_FILE]) {
+    assert.equal(isAutoresearchSessionArtifact(file, "finalization"), true, `${file} constant`);
+    assert.equal(isAutoresearchSessionArtifact(file, "dirty-tree"), true, `${file} dirty-tree`);
+    assert.equal(
+      isAutoresearchSessionArtifact(file, "source-checkout"),
+      true,
       `${file} source-checkout`,
     );
   }
