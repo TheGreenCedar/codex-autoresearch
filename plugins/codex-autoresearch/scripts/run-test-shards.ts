@@ -1,5 +1,9 @@
 import path from "node:path";
+import { access } from "node:fs/promises";
 import { runCommand } from "./check-runner.js";
+
+const DEFAULT_TEST_FILE_READY_TIMEOUT_MS = 10_000;
+const TEST_FILE_READY_POLL_MS = 100;
 
 type ShardResult = {
   code: number | null;
@@ -57,6 +61,41 @@ function parsePositiveInteger(value: unknown, label: string): number {
     );
   }
   return parsed;
+}
+
+function parseNonNegativeInteger(value: unknown, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
+async function waitForTestFile(file: string): Promise<void> {
+  const timeoutMs = parseNonNegativeInteger(
+    process.env.CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS ??
+      DEFAULT_TEST_FILE_READY_TIMEOUT_MS,
+    "CODEX_AUTORESEARCH_TEST_SHARD_FILE_READY_TIMEOUT_MS",
+  );
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      await access(file);
+      return;
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== "object" ||
+        (error as { code?: unknown }).code !== "ENOENT" ||
+        Date.now() - startedAt >= timeoutMs
+      ) {
+        throw new Error(
+          `Compiled test file is not ready: ${file}\nRun npm run build:node before the compiled shard gate.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, TEST_FILE_READY_POLL_MS));
+    }
+  }
 }
 
 function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
@@ -162,6 +201,7 @@ function printResult(result: ShardResult): void {
 
 const startedAt = Date.now();
 const { jobs, specs } = parseArgs(process.argv.slice(2));
+await Promise.all(specs.map((spec) => waitForTestFile(spec.file)));
 const tasks = (
   await Promise.all(
     specs.map(async (spec) => {
