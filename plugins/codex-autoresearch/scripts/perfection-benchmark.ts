@@ -196,9 +196,9 @@ const checks = [
           "![Codex Autoresearch live dashboard",
           "plugins/codex-autoresearch/assets/showcase/dashboard-demo.png",
           "plugins/codex-autoresearch/docs/index.md",
+          "plugins/codex-autoresearch/docs/start.md",
           "plugins/codex-autoresearch/docs/workflows.md",
           "plugins/codex-autoresearch/docs/architecture.md",
-          "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
         ]) &&
         !root.includes("static report screenshot") &&
         !root.includes("Static read-only export")

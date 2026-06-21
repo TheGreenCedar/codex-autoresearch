@@ -60,7 +60,7 @@ Ask for the live dashboard in a side chat when you want a visual readout or need
 
 Your unit tests take too long. You want wall-clock seconds, not a gut feeling. You give Codex a tight scope — test runner config and helpers only — and a benchmark like `npm test -- --runInBand` with seconds as the metric.
 
-Codex sets up the loop, runs `doctor` to verify the benchmark contract, then runs measured experiments: change something scoped, run the benchmark, log the result, check state before the next attempt. When a change sticks, `finalize-preview` checks whether the evidence is ready for review branch creation.
+Codex sets up the loop, verifies the benchmark contract, then runs measured experiments: change something scoped, run the benchmark, record the result, and compare against the previous evidence. When a change sticks, Autoresearch previews whether the evidence is ready for review branch creation.
 
 The payoff is a kept change you can inspect and merge — not "Codex said it's faster." See [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md) for the full narrated loop.
 
@@ -75,14 +75,16 @@ For normal Codex use, install the plugin through the Codex plugin flow for your 
 Choose:
 
 ```text
-TheGreenCedar Autoresearch -> codex-autoresearch -> Install plugin
+TheGreenCedar -> codex-autoresearch -> Install plugin
 ```
 
 If your Codex build exposes terminal marketplace management for source marketplaces, add or refresh this marketplace first:
 
 ```bash
-codex plugin marketplace add TheGreenCedar/codex-autoresearch
+codex plugin marketplace add TheGreenCedar/AgentPluginMarketplace
 ```
+
+The marketplace source is `TheGreenCedar/AgentPluginMarketplace`; this repository remains the plugin source.
 
 Some workspace plugin settings are managed from the Codex Apps/Plugins UI rather than the terminal. Use the UI path when the CLI marketplace command is unavailable.
 
@@ -97,40 +99,25 @@ Open Codex in the repo you want to improve and ask for one measured first packet
 Goal: <what should improve>
 Benchmark: <command that prints METRIC name=value>
 Metric: <metric name>, <higher|lower> is better
-Scope: <files or package Codex may edit>
+Scope: <allowed files or packages>
 ```
 
-The first safe ladder is:
+A baseline measurement before code changes gives every later attempt something real to beat.
 
-1. plan only if the essentials are unclear
-2. set up the session
-3. run `doctor`
-4. run one packet
-5. log it as `measure`
-6. read `state`
-
-See [Start](plugins/codex-autoresearch/docs/start.md) for copyable CLI commands and recovery steps. Use `node scripts/autoresearch.mjs --help --all` from `plugins/codex-autoresearch` for the full command index instead of relying on repeated command lists in the docs.
+See [Start](plugins/codex-autoresearch/docs/start.md) for copyable first-run prompts and recovery steps.
 
 ## How it works
 
-A normal session follows this shape:
+Autoresearch helps Codex turn an improvement request into a bounded evidence loop:
 
-```text
-setup -> doctor -> next -> log -> state -> finalize-preview
-```
+1. establish the goal, metric, benchmark, checks, and allowed scope
+2. measure a baseline before changing code
+3. run small attempts and compare them against the same metric
+4. keep the useful work, discard weak attempts, and preview what is ready for review
 
-Autoresearch helps you:
+The live dashboard is optional. It is a read-only way to see freshness, blockers, run history, and finalization readiness when a terminal summary is not enough.
 
-1. set up the target repo, goal, primary metric, benchmark, checks, and scoped edit surface
-2. verify the benchmark contract and optional checks with `doctor`
-3. run one measured benchmark experiment with `next`
-4. record the result and evidence for the next decision
-5. inspect compact state before spending another run
-6. preview finalization readiness before creating reviewable branches
-
-`serve` is an optional live dashboard handoff. Advanced diagnostics are discoverable with `node scripts/autoresearch.mjs --help --all` from `plugins/codex-autoresearch` when a run needs deeper repair or recovery.
-
-When you use Codex Goal mode, `codex-goal-brief` turns Autoresearch state into a Goal objective draft and completion audit. It does not mutate Codex Goal state.
+When you use Codex Goal mode, Autoresearch can summarize session state into a clearer objective and completion audit.
 
 A benchmark experiment is one measured cycle: make a scoped change, run the benchmark, inspect the metric, and record the evidence.
 
@@ -149,7 +136,7 @@ Use Codex Autoresearch when:
 
 * the goal can be measured
 * the benchmark is repeatable
-* benchmark-contract files can be protected from quiet drift
+* the benchmark inputs are stable and reviewable
 * known tradeoffs can be expressed as secondary metric constraints
 * correctness checks exist or can be added
 * the editable scope is small enough to review
@@ -164,7 +151,7 @@ Use a regular Codex task when:
 * the benchmark is flaky or very expensive
 * the metric can improve by weakening the benchmark
 
-Keep protected benchmark folders small, or point Autoresearch at a compact manifest/contract file instead of a large generated, cache, fixture, or data directory; large or deep folders can make `next` refuse until the benchmark surface is narrowed.
+Avoid huge generated, cache, fixture, or data directories as the trusted benchmark surface. Compact, reviewable benchmark inputs make the evidence easier to trust.
 
 ## Questions
 
@@ -178,15 +165,15 @@ Yes, for optimization loops. The plugin can help you create one. You define the 
 
 ### Will it change the git history without my approval?
 
-Kept work uses scoped commit paths you configure. Finalization starts with a read-only preview; approved finalizer commands create review branches, and you approve merges. Discard cleanup respects scoped revert paths. See [Trust](plugins/codex-autoresearch/docs/trust.md).
+No. Finalization starts with a read-only preview, review branches are explicit, and you approve merges. See [Trust](plugins/codex-autoresearch/docs/trust.md).
 
 ### What if Codex goes in circles?
 
-Budgets, `state --report`, and the dashboard readout surface stop/rescope signals. If attempts repeat without progress, it will either do its best to find a solution or stop and ask you to tighten scope, fix a flaky benchmark, etc.
+Budgets and the dashboard readout surface stop/rescope signals. If attempts repeat without progress, it will either report the best evidence it found or ask you to tighten scope, fix a flaky benchmark, or change the measurement.
 
 ### Is the dashboard required?
 
-No. The CLI does setup, runs, logging, and finalization. The dashboard is an optional live readout when run freshness or visual context helps.
+No. The dashboard is an optional live readout when freshness or visual context helps.
 
 ### How is this different from "just optimize my tests"?
 
@@ -212,7 +199,7 @@ The dashboard answers three questions:
 
 Audit view includes the deeper trace: metric formulas, lane state, watchdog quiet windows, runtime provenance, run diagnostics, finalization readiness, evidence history, and handoff details.
 
-The dashboard is a read-only visual aid; setup, packet runs, logging, and finalization stay in the CLI. See [Architecture](plugins/codex-autoresearch/docs/architecture.md#dashboard-boundary).
+The dashboard is a read-only visual aid. It does not run experiments, mutate session state, or finalize work. See [Architecture](plugins/codex-autoresearch/docs/architecture.md#dashboard-boundary).
 
 ## Quality-gap loops
 
@@ -229,16 +216,7 @@ Turn accepted findings into a quality-gap loop, implement them, and keep the liv
 
 Ask the plugin to finalize once a loop has useful kept work mixed with exploratory history.
 
-Finalization should:
-
-1. select only approved current evidence
-2. exclude session artifacts from review branches unless requested
-3. keep exploratory or superseded evidence audit-visible but out of review branches
-4. block evidence that was later invalidated or reverted
-5. show dirty-tree, overlap, semantic-safety, and final-tree coverage warnings
-6. prepare clean review branches or a current-final-tree plan
-7. preserve metric evidence and verification commands
-8. leave cleanup until review branches are verified
+Finalization previews what is ready for review, what evidence supports it, and what still blocks trust. It keeps exploratory or superseded evidence visible for audit without forcing it into the review branch.
 
 ## Docs
 
@@ -248,32 +226,20 @@ Finalization should:
 * [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md)
 * [Changelog](CHANGELOG.md)
 
-Full map: [Docs index](plugins/codex-autoresearch/docs/index.md), [workflows](plugins/codex-autoresearch/docs/workflows.md), [architecture](plugins/codex-autoresearch/docs/architecture.md), and Codex contract at `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
+Full map: [Docs index](plugins/codex-autoresearch/docs/index.md), [workflows](plugins/codex-autoresearch/docs/workflows.md), and [architecture](plugins/codex-autoresearch/docs/architecture.md).
 
 ## Development
 
 The plugin and dashboard source are written in TypeScript and developed on Node.js 24 or newer.
-
-The package uses `tsdown` for Node builds, `tsgo` for typechecking, `oxlint` for linting, `oxfmt` for formatting, Vite for the dashboard, and `npm-run-all2` for combined gates.
 
 From `plugins/codex-autoresearch`:
 
 ```bash
 npm install
 npm run check
-npm test
-node scripts/autoresearch.mjs --help
 ```
 
-Targeted checks:
-
-```bash
-npm run typecheck
-npm run lint
-npm run format:check
-node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
-git diff --check
-```
+See [Maintainers](plugins/codex-autoresearch/docs/maintainers.md) for release, packaging, and verification details.
 
 ## Update or remove
 
@@ -288,8 +254,8 @@ Then choose the installed `codex-autoresearch` plugin and use the available refr
 If your Codex build exposes terminal marketplace management for source marketplaces, these commands may be available:
 
 ```bash
-codex plugin marketplace upgrade thegreencedar-autoresearch
-codex plugin marketplace remove thegreencedar-autoresearch
+codex plugin marketplace upgrade TheGreenCedar
+codex plugin marketplace remove TheGreenCedar
 ```
 
 `marketplace remove` removes the source marketplace registration. It may not uninstall an already installed workspace plugin. Prefer the plugin UI for installed-plugin refresh/uninstall actions, and use terminal marketplace commands only for source registration when your Codex build supports them.
