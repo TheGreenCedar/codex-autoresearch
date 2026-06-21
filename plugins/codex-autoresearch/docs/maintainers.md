@@ -126,8 +126,16 @@ Do not push release tags by hand. After a synchronized version bump lands on `ma
 Release provenance is a maintainer/operator gate, not runtime bootstrap. Source
 runtime hydration stays on the adjacent SHA-256 checksum and packaged
 name/version checks so first-run installs do not depend on GitHub CLI,
-attestation APIs, or Sigstore network state. After downloading a published
-tarball and adjacent checksum, use:
+attestation APIs, or Sigstore network state.
+
+Before running the release-provenance smoke, confirm:
+
+- `gh` is installed and authenticated for `TheGreenCedar/codex-autoresearch`.
+- Network access to GitHub release metadata and attestation APIs is available.
+- The release context is present: downloaded tarball, adjacent checksum file,
+  expected `v<version>` tag, and release target commit.
+
+After downloading a published tarball and adjacent checksum, use:
 
 ```bash
 npm run smoke:release-provenance -- --tarball codex-autoresearch-<version>.tgz --checksum codex-autoresearch-<version>.tgz.sha256 --tag v<version>

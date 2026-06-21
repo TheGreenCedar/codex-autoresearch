@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   errorMessage,
   indent,
@@ -14,6 +12,9 @@ import {
 } from "./check-common.js";
 import { dashboardExportAssetIssues, type DashboardExportAssets } from "./demo-trust.js";
 import { resolveNpmCommand } from "./npm-command.js";
+import { fileSha256, parseStrictSha256Manifest, releaseChecksumIssue } from "./package-checksum.js";
+
+export { releaseChecksumIssue };
 
 interface PackageEntry {
   path?: string;
@@ -458,30 +459,6 @@ async function runPackageRuntimeSmokeFromTarball(tarball: string, extractDir: st
   return true;
 }
 
-export async function releaseChecksumIssue(tarball: string, checksumPath: string): Promise<string> {
-  let checksumText = "";
-  try {
-    checksumText = await fsp.readFile(checksumPath, "utf8");
-  } catch (error) {
-    return `Checksum file could not be read at ${checksumPath}: ${String(error)}`;
-  }
-
-  const tarballName = path.basename(tarball);
-  let expectedHash = "";
-  try {
-    expectedHash = await parseStrictSha256Manifest(checksumText, tarballName);
-  } catch (error) {
-    return String(error instanceof Error ? error.message : error);
-  }
-
-  const bytes = await fsp.readFile(tarball);
-  const actualHash = createHash("sha256").update(bytes).digest("hex");
-  if (actualHash !== expectedHash) {
-    return `Checksum mismatch for ${tarballName}: expected ${expectedHash}, got ${actualHash}.`;
-  }
-  return "";
-}
-
 export interface ReleaseProvenanceOptions {
   attestationJson: string;
   checksumPath: string;
@@ -625,21 +602,6 @@ export async function releaseProvenanceIssue(options: ReleaseProvenanceOptions):
   return `No matching attestation satisfied release provenance policy:\n${matching
     .map((entry) => entry.summary)
     .join("\n")}`;
-}
-
-async function parseStrictSha256Manifest(text: string, expectedFileName: string): Promise<string> {
-  const releaseIntegrity = (await import(
-    pathToFileURL(path.join(ROOT, "scripts", "release-integrity.mjs")).href
-  )) as {
-    parseSha256Manifest: (text: string, expectedFileName: string) => string;
-  };
-  return releaseIntegrity.parseSha256Manifest(text, expectedFileName);
-}
-
-async function fileSha256(file: string): Promise<string> {
-  return createHash("sha256")
-    .update(await fsp.readFile(file))
-    .digest("hex");
 }
 
 function parseJsonObject(text: string, label: string): Record<string, unknown> {
