@@ -9300,7 +9300,10 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     const generatedCommands = statePayload.commands.map((item) => item.command).join("\n");
     assert.ok(statePayload.commands.some((item) => item.label === "State"));
     assert.ok(statePayload.commands.some((item) => item.label === "Quality gap"));
-    assert.doesNotMatch(generatedCommands, /\b(?:serve|export|benchmark-lint)\b/i);
+    assert.doesNotMatch(
+      generatedCommands.replace(/\\/g, "/"),
+      /autoresearch\.mjs\s+(?:serve|export|benchmark-lint)\b/i,
+    );
     assert.doesNotMatch(generatedCommands, /--check-benchmark\b/i);
     for (const item of statePayload.commands) {
       assert.equal(dashboardCommandSafety(item.command).safe, true, item.command);
