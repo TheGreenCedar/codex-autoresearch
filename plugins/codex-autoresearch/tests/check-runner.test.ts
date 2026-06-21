@@ -299,6 +299,29 @@ test("release provenance smoke accepts matching checksum, release asset, and cer
   });
 });
 
+test("release provenance smoke accepts reusable release workflow caller path", async () => {
+  await withTempDir("release-provenance-reusable-", async (dir) => {
+    const fixture = await writeReleaseProvenanceFixture(dir);
+    const attestations = structuredClone(fixture.attestations);
+    const certificate = attestations[0].verificationResult.signature.certificate;
+    certificate.buildConfigURI =
+      "https://github.com/TheGreenCedar/codex-autoresearch/.github/workflows/auto-release.yml@refs/heads/main";
+    attestations[0].verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.path =
+      ".github/workflows/auto-release.yml";
+
+    assert.equal(
+      await releaseProvenanceIssue({
+        attestationJson: JSON.stringify(attestations),
+        checksumPath: fixture.checksum,
+        releaseJson: JSON.stringify(fixture.release),
+        targetCommit: fixture.commit,
+        tarball: fixture.tarball,
+      }),
+      "",
+    );
+  });
+});
+
 test("release provenance smoke rejects certificate policy drift", async () => {
   await withTempDir("release-provenance-ref-", async (dir) => {
     const fixture = await writeReleaseProvenanceFixture(dir);
