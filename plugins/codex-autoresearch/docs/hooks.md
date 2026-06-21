@@ -38,7 +38,7 @@ Goal-aware reminders:
 
 `Stop`:
 
-- warn when `autoresearch.last-run.json` exists
+- warn when an active last-run packet exists under `.git/autoresearch/` or the non-Git fallback `autoresearch.last-run.json`
 - warn when continuation says the loop is still active
 - suggest `state --compact` before final reporting
 - suggest `codex-goal-brief --cwd <project>` before reporting goal completion

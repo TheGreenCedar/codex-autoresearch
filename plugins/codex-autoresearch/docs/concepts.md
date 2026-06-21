@@ -106,8 +106,12 @@ The durable state files written into the target project:
 | `autoresearch.sh` / `.ps1` | Repeatable benchmark entrypoint |
 | `autoresearch.checks.sh` / `.ps1` | Optional correctness gate |
 | `autoresearch.ideas.md` | Deferred hypotheses, rejected lanes, next-action notes |
-| `autoresearch.last-run.json` | Fallback last-packet record |
+| `.git/autoresearch/last-run.json` | Git-private active last-packet record written by `next`. |
+| `.git/autoresearch/progress.json` | Git-private active progress snapshot for slow packets. |
+| `autoresearch.last-run.json` | Non-Git fallback last-packet record. |
+| `autoresearch.progress.json` | Non-Git fallback progress snapshot. |
 | `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad for evidence-backed qualitative work. |
+| `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation. |
 | `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation after interrupted keep/discard automation. |
 
 See [Start](start.md#session-files).

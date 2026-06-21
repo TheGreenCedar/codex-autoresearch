@@ -39,7 +39,7 @@ Start with one baseline packet. Do not optimize yet.
 | 2 | Run read-only planning only if those essentials are unclear. | `setup-plan` or `prompt-plan` returns a setup path without creating session files. |
 | 3 | Set up the session. | `autoresearch.md`, `autoresearch.jsonl`, and config files exist in the target project. |
 | 4 | Run `doctor --check-benchmark --explain`. | The benchmark emits the primary `METRIC` and trust blockers are visible. |
-| 5 | Run one packet with `next`. | `autoresearch.last-run.json` records fresh packet evidence. |
+| 5 | Run one packet with `next`. | A fresh last-run packet is stored under `.git/autoresearch/` in Git repos, or as a worktree fallback file outside Git. |
 | 6 | Log the packet as `measure`. | Baseline evidence is saved without claiming a keep. |
 | 7 | Read `state --report` or `recommend-next --compact`. | The next action and blockers are explicit before spending another packet. |
 
@@ -141,12 +141,15 @@ Use `state --report` for a compact terminal readout (`report.text` and `report.j
 | `autoresearch.sh` or `autoresearch.ps1` | Repeatable benchmark entrypoint. |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks. |
 | `autoresearch.ideas.md` | Deferred hypotheses, avoided lanes, and next-action notes. |
-| `autoresearch.last-run.json` | Fallback last-packet record. |
+| `.git/autoresearch/last-run.json` | Git-private active last-packet record written by `next`. |
+| `.git/autoresearch/progress.json` | Git-private active progress snapshot for slow packets. |
+| `autoresearch.last-run.json` | Non-Git fallback last-packet record. |
+| `autoresearch.progress.json` | Non-Git fallback progress snapshot. |
 | `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad. |
 | `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation. |
 | `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation. |
 
-In Git repositories, the pending log-mutation receipt lives under `.git/autoresearch/` instead of the worktree.
+In Git repositories, active last-run packets, progress snapshots, and pending log-mutation receipts live under `.git/autoresearch/` instead of the worktree. The `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` files are fallback paths for sessions outside Git.
 
 ## First packet
 
