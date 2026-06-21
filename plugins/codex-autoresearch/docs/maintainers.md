@@ -65,12 +65,15 @@ Useful targeted checks:
 node --check scripts/autoresearch.mjs
 npm run test:cli
 npm run test:dashboard
+npm run test:dashboard:browser
 node scripts/autoresearch.mjs --help
 npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
 For dashboard or view-model changes, export or serve a dashboard and inspect it. Static code and tests alone do not prove the operator surface is understandable.
+
+Use `npm run test:dashboard:browser` as the opt-in real-browser accessibility check for dashboard chart/modal focus behavior. It launches an installed Chrome or Edge browser through DevTools, drives keyboard input, captures an ignored modal screenshot under `tmp/`, and runs focused critical assertions for accessible names, dialog semantics, and ARIA references. It intentionally avoids an axe dependency; add axe only when the browser gate becomes a regular CI requirement or needs broader WCAG scanning.
 
 For dashboard or view-model review, write a temporary ignored showcase export in the demo session and compare or open that file:
 

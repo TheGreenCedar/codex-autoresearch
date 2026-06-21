@@ -55,6 +55,7 @@
     "test:cli": "run-s build:node test:compiled:cli",
     "test:perf": "run-s build:node test:compiled:perf",
     "test:dashboard": "run-s build:node build:dashboard test:compiled:dashboard",
+    "test:dashboard:browser": "npm run build:dashboard && node --test tests/dashboard-browser-a11y.test.mjs",
     "test:finalize": "run-s build:node test:compiled:finalize",
     "test:core": "run-s build:node test:compiled:core",
     "check:product": "npm run build:node && node scripts/check.mjs",
