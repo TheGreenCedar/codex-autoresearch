@@ -21,6 +21,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 - Redacted benchmark-contract command text, checks command text, option-file paths, and env-file labels from persisted last-run packet storage.
 - Source-shaped plugin runtime hydration now copies packaged dashboard build assets so `export` and `serve` keep working after `assets/dashboard-build/` became ignored/generated.
+- Source-checkout launcher readiness now requires dashboard build assets before reporting the runtime ready, so missing `assets/dashboard-build/` triggers hydration instead of a later dashboard export failure.
 
 ## 2.4.0 - 2026-06-18
 

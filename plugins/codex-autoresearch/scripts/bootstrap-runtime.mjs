@@ -42,8 +42,7 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
 }
 
 async function dashboardRuntimeReady(pluginRoot) {
-  if (await dashboardBuildReady(pluginRoot)) return true;
-  return await isSourceDevelopmentCheckout(pluginRoot);
+  return await dashboardBuildReady(pluginRoot);
 }
 
 async function dashboardBuildReady(pluginRoot) {
@@ -53,23 +52,17 @@ async function dashboardBuildReady(pluginRoot) {
   ).every(Boolean);
 }
 
-async function isSourceDevelopmentCheckout(pluginRoot) {
-  return (
-    (await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts"))) &&
-    (await fileExists(path.join(pluginRoot, "tsdown.config.ts")))
-  );
-}
-
 async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
+  const dashboardMissing = !(await dashboardBuildReady(pluginRoot));
   const targetMtime = await fileMtime(target);
-  if (await sourceRuntimeFreshByGit(pluginRoot, targetMtime)) return;
-  if ((await newestSourceMtime(pluginRoot)) < targetMtime) return;
+  if (!dashboardMissing && (await sourceRuntimeFreshByGit(pluginRoot, targetMtime))) return;
+  if (!dashboardMissing && (await newestSourceMtime(pluginRoot)) < targetMtime) return;
 
-  const build = npmBuildInvocation();
+  const build = npmBuildInvocation(dashboardMissing ? "build" : "build:node");
   await run(build.command, build.args, { cwd: pluginRoot });
 }
 
@@ -438,11 +431,11 @@ async function newestSourceMtime(pluginRoot) {
   );
 }
 
-function npmBuildInvocation() {
+function npmBuildInvocation(scriptName = "build:node") {
   if (process.platform === "win32") {
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm run build:node"] };
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", `npm run ${scriptName}`] };
   }
-  return { command: "npm", args: ["run", "build:node"] };
+  return { command: "npm", args: ["run", scriptName] };
 }
 
 function sleep(ms) {
