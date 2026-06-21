@@ -20,9 +20,10 @@ test("real browser keeps chart point modal keyboard flow accessible", async () =
 
   const html = await dashboardHtml();
   const server = await serveHtml(html);
-  const browser = await launchBrowser(browserExecutable);
+  let browser;
 
   try {
+    browser = await launchBrowser(browserExecutable);
     const client = await CdpClient.connect(browser.wsUrl);
     try {
       const page = await openPage(client, server.url);
@@ -78,8 +79,8 @@ test("real browser keeps chart point modal keyboard flow accessible", async () =
       await client.close();
     }
   } finally {
+    await browser?.close();
     await server.close();
-    await browser.close();
   }
 });
 
@@ -185,41 +186,68 @@ async function launchBrowser(executable) {
     ],
     { stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
   );
-  const wsUrl = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("Timed out waiting for Chrome DevTools endpoint."));
-    }, 15000);
-    browser.once("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Browser exited before DevTools was ready with code ${code}.`));
-    });
-    browser.stderr.on("data", (chunk) => {
-      const match = String(chunk).match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (!match) return;
-      clearTimeout(timeout);
-      resolve(match[1]);
-    });
-    browser.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  let wsUrl;
+  try {
+    wsUrl = await waitForDevToolsEndpoint(browser);
+  } catch (error) {
+    await closeBrowserProcess(browser, userDataDir);
+    throw error;
+  }
   return {
     wsUrl,
-    async close() {
-      if (!browser.killed) browser.kill();
-      if (browser.exitCode == null && browser.signalCode == null) {
-        await new Promise((resolve) => {
-          const timeout = setTimeout(resolve, 2000);
-          browser.once("exit", () => {
-            clearTimeout(timeout);
-            resolve();
-          });
-        });
-      }
-      await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    },
+    close: () => closeBrowserProcess(browser, userDataDir),
   };
+}
+
+function waitForDevToolsEndpoint(browser) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish(reject, new Error("Timed out waiting for Chrome DevTools endpoint."));
+    }, 15000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      browser.off("exit", onExit);
+      browser.off("error", onError);
+      browser.stderr.off("data", onData);
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const onExit = (code) => {
+      finish(reject, new Error(`Browser exited before DevTools was ready with code ${code}.`));
+    };
+    const onError = (error) => {
+      finish(reject, error);
+    };
+    const onData = (chunk) => {
+      const match = String(chunk).match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) finish(resolve, match[1]);
+    };
+
+    browser.once("exit", onExit);
+    browser.once("error", onError);
+    browser.stderr.on("data", onData);
+  });
+}
+
+async function closeBrowserProcess(browser, userDataDir) {
+  if (browser.exitCode == null && browser.signalCode == null && !browser.killed) {
+    browser.kill();
+  }
+  if (browser.exitCode == null && browser.signalCode == null) {
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 2000);
+      browser.once("exit", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+  await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 class CdpClient {
