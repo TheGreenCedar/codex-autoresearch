@@ -639,6 +639,7 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
     path.join(pluginRoot, "lib", "checks", "package-smoke.ts"),
     "utf8",
   );
+  const packageJson = JSON.parse(await readFile(path.join(pluginRoot, "package.json"), "utf8"));
   const codeql = await readFile(path.join(repoRoot, ".github", "workflows", "codeql.yml"), "utf8");
 
   assert.match(autoRelease, /branches:\s*\n\s*-\s*main/);
@@ -664,6 +665,23 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
   assert.match(packageSmoke, /runExtractedPackageDashboardExportSmoke/);
   assert.match(packageSmoke, /check-source-hygiene/);
   assert.match(packageSmoke, /"--phase", "source-hygiene"/);
+  assert.match(packageSmoke, /ALLOWED_PACKAGED_SOURCE_SCRIPTS/);
+  assert.match(packageSmoke, /ALLOWED_PACKAGED_DIST_SCRIPTS/);
+  assert.equal(packageJson.files.includes("dist/scripts/"), false);
+  assert.equal(packageJson.files.includes("scripts/*.mjs"), false);
+  for (const file of [
+    "dist/scripts/autoresearch.mjs",
+    "dist/scripts/check.mjs",
+    "dist/scripts/check-runner.mjs",
+    "dist/scripts/finalize-autoresearch.mjs",
+    "scripts/autoresearch.mjs",
+    "scripts/bootstrap-runtime.mjs",
+    "scripts/check.mjs",
+    "scripts/finalize-autoresearch.mjs",
+    "scripts/release-integrity.mjs",
+  ]) {
+    assert.ok(packageJson.files.includes(file), `${file} is explicitly packaged`);
+  }
   assert.match(release, /gh release create/);
   assert.match(release, /--target "\$GITHUB_SHA"/);
 

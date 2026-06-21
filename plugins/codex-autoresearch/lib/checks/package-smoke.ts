@@ -28,6 +28,21 @@ type PackageManifestParse =
   | { ok: true; manifest: PackageManifest | undefined }
   | { error: string; ok: false };
 
+const ALLOWED_PACKAGED_SOURCE_SCRIPTS = new Set([
+  "scripts/autoresearch.mjs",
+  "scripts/bootstrap-runtime.mjs",
+  "scripts/check.mjs",
+  "scripts/finalize-autoresearch.mjs",
+  "scripts/release-integrity.mjs",
+]);
+
+const ALLOWED_PACKAGED_DIST_SCRIPTS = new Set([
+  "dist/scripts/autoresearch.mjs",
+  "dist/scripts/check.mjs",
+  "dist/scripts/check-runner.mjs",
+  "dist/scripts/finalize-autoresearch.mjs",
+]);
+
 export async function runPackageArtifactCheck() {
   console.log("\n== package ==");
 
@@ -77,6 +92,8 @@ export async function runPackageArtifactCheck() {
       "dist/lib/tool-schemas.mjs",
       "dist/scripts/autoresearch.mjs",
       "dist/scripts/check.mjs",
+      "dist/scripts/check-runner.mjs",
+      "dist/scripts/finalize-autoresearch.mjs",
       "dist/lib/checks/check-common.mjs",
       "dist/lib/checks/demo-trust.mjs",
       "dist/lib/checks/npm-command.mjs",
@@ -112,9 +129,16 @@ export async function runPackageArtifactCheck() {
       packedPaths.has(file),
     );
     const leakedExamples = Array.from(packedPaths).filter((file) => file.startsWith("examples/"));
+    const leakedScriptPaths = packageScriptLeaks(packedPaths);
     const wrapperProblems = await packageWrapperProblems(packedEntries);
 
-    if (missing.length || unexpected.length || leakedExamples.length || wrapperProblems.length) {
+    if (
+      missing.length ||
+      unexpected.length ||
+      leakedExamples.length ||
+      leakedScriptPaths.length ||
+      wrapperProblems.length
+    ) {
       console.log("fail package-artifact");
       if (missing.length) {
         console.log(indent(`Missing packaged files:\n${missing.join("\n")}`));
@@ -124,6 +148,11 @@ export async function runPackageArtifactCheck() {
       }
       if (leakedExamples.length) {
         console.log(indent(`Leaked examples files in package:\n${leakedExamples.join("\n")}`));
+      }
+      if (leakedScriptPaths.length) {
+        console.log(
+          indent(`Leaked non-runtime scripts in package:\n${leakedScriptPaths.join("\n")}`),
+        );
       }
       if (wrapperProblems.length) {
         console.log(indent(`Broken package launchers:\n${wrapperProblems.join("\n")}`));
@@ -297,6 +326,20 @@ function packagePathSet(packInfo: PackageManifest | undefined) {
 
 function packageEntryMap(packInfo: PackageManifest | undefined) {
   return new Map((packInfo?.files || []).map((entry) => [normalizedPackagePath(entry), entry]));
+}
+
+function packageScriptLeaks(packedPaths: Set<string>) {
+  return Array.from(packedPaths)
+    .filter((file) => {
+      if (file.startsWith("scripts/") && file.endsWith(".mjs")) {
+        return !ALLOWED_PACKAGED_SOURCE_SCRIPTS.has(file);
+      }
+      if (file.startsWith("dist/scripts/") && file.endsWith(".mjs")) {
+        return !ALLOWED_PACKAGED_DIST_SCRIPTS.has(file);
+      }
+      return false;
+    })
+    .sort();
 }
 
 function normalizedPackagePath(entry: PackageEntry) {
