@@ -4462,6 +4462,68 @@ test("live dashboard view model cache invalidates on wrapper session config chan
   }
 });
 
+test("live dashboard view model cache invalidates on nested research edits within ttl", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-research-cache-"));
+  const researchDir = path.join(dir, "autoresearch.research", "project-study");
+  const qualityGapsPath = path.join(researchDir, "quality-gaps.md");
+  const decisionCapsulePath = path.join(researchDir, "decision-capsule.json");
+  let recomputes = 0;
+  const readResearchDigest = async () => {
+    const [qualityGaps, decisionCapsule] = await Promise.all([
+      readFile(qualityGapsPath, "utf8"),
+      readFile(decisionCapsulePath, "utf8"),
+    ]);
+    return `${qualityGaps.trim()}|${decisionCapsule.trim()}`;
+  };
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>research cache</title>",
+    viewModel: async () => {
+      recomputes += 1;
+      return { researchDigest: await readResearchDigest() };
+    },
+  });
+
+  try {
+    await mkdir(researchDir, { recursive: true });
+    await writeFile(qualityGapsPath, "- [ ] first gap\n", "utf8");
+    await writeFile(decisionCapsulePath, JSON.stringify({ bottleneck: "first" }), "utf8");
+
+    const first = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    const second = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.match(first.researchDigest, /first gap/);
+    assert.equal(second.researchDigest, first.researchDigest);
+    assert.equal(recomputes, 1);
+
+    await writeFile(qualityGapsPath, "- [x] first gap\n- [ ] second gap\n", "utf8");
+
+    const afterQualityGap = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+
+    assert.match(afterQualityGap.researchDigest, /second gap/);
+    assert.equal(recomputes, 2);
+
+    await writeFile(
+      decisionCapsulePath,
+      JSON.stringify({ bottleneck: "second", next: "inspect cache stamp" }),
+      "utf8",
+    );
+
+    const afterDecisionCapsule = await fetch(`${server.url}view-model.json`).then((res) =>
+      res.json(),
+    );
+
+    assert.match(afterDecisionCapsule.researchDigest, /inspect cache stamp/);
+    assert.equal(recomputes, 3);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("live dashboard view model cache starts its ttl after slow recomputes finish", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-cache-slow-"));
   let recomputes = 0;
