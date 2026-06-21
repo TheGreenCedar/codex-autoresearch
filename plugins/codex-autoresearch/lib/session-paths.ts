@@ -24,8 +24,6 @@ export const AUTORESEARCH_SESSION_FILES = [
   AUTORESEARCH_PENDING_TRANSACTION_FILE,
 ] as const;
 
-export type SessionStorageMode = "repo";
-
 export interface ResolveSessionPathsInput {
   cwd?: string;
   sessionCwd?: string;
@@ -33,7 +31,7 @@ export interface ResolveSessionPathsInput {
 }
 
 export interface SessionPaths {
-  mode: SessionStorageMode;
+  mode: "repo";
   targetCwd: string;
   sessionCwd: string;
   sessionDir: string;
