@@ -11,6 +11,8 @@ import {
   dashboardGeneratedDemoExport,
   demoDashboardExportCommand,
   releaseChecksumIssue,
+  releaseProvenanceGhVerifyArgs,
+  releaseProvenanceIssue,
   resolveNpmCommand,
 } from "../scripts/check.js";
 
@@ -213,6 +215,81 @@ test("release package smoke rejects unnamed checksum manifests", async () => {
   });
 });
 
+test("release provenance smoke builds gh attestation verification without flaky source flags", () => {
+  const args = releaseProvenanceGhVerifyArgs("codex-autoresearch-2.4.0.tgz", {
+    repo: "TheGreenCedar/codex-autoresearch",
+    signerWorkflow: "TheGreenCedar/codex-autoresearch/.github/workflows/release.yml",
+  });
+
+  assert.deepEqual(args, [
+    "attestation",
+    "verify",
+    "codex-autoresearch-2.4.0.tgz",
+    "--repo",
+    "TheGreenCedar/codex-autoresearch",
+    "--signer-workflow",
+    "TheGreenCedar/codex-autoresearch/.github/workflows/release.yml",
+    "--format",
+    "json",
+  ]);
+  assert.equal(args.includes("--source-ref"), false);
+  assert.equal(args.includes("--source-digest"), false);
+});
+
+test("release provenance smoke accepts matching checksum, release asset, and certificate policy", async () => {
+  await withTempDir("release-provenance-ok-", async (dir) => {
+    const fixture = await writeReleaseProvenanceFixture(dir);
+
+    assert.equal(
+      await releaseProvenanceIssue({
+        attestationJson: JSON.stringify(fixture.attestations),
+        checksumPath: fixture.checksum,
+        releaseJson: JSON.stringify(fixture.release),
+        targetCommit: fixture.commit,
+        tarball: fixture.tarball,
+      }),
+      "",
+    );
+  });
+});
+
+test("release provenance smoke rejects certificate policy drift", async () => {
+  await withTempDir("release-provenance-ref-", async (dir) => {
+    const fixture = await writeReleaseProvenanceFixture(dir);
+    const attestations = structuredClone(fixture.attestations);
+    attestations[0].verificationResult.signature.certificate.sourceRepositoryRef = "refs/heads/dev";
+
+    assert.match(
+      await releaseProvenanceIssue({
+        attestationJson: JSON.stringify(attestations),
+        checksumPath: fixture.checksum,
+        releaseJson: JSON.stringify(fixture.release),
+        targetCommit: fixture.commit,
+        tarball: fixture.tarball,
+      }),
+      /No matching attestation satisfied release provenance policy/,
+    );
+  });
+});
+
+test("release provenance smoke rejects release asset digest drift", async () => {
+  await withTempDir("release-provenance-asset-", async (dir) => {
+    const fixture = await writeReleaseProvenanceFixture(dir);
+    fixture.release.assets[0].digest = `sha256:${"0".repeat(64)}`;
+
+    assert.match(
+      await releaseProvenanceIssue({
+        attestationJson: JSON.stringify(fixture.attestations),
+        checksumPath: fixture.checksum,
+        releaseJson: JSON.stringify(fixture.release),
+        targetCommit: fixture.commit,
+        tarball: fixture.tarball,
+      }),
+      /Release asset digest for codex-autoresearch-2\.4\.0\.tgz expected/,
+    );
+  });
+});
+
 async function withTempDir(prefix: string, fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
   try {
@@ -220,4 +297,84 @@ async function withTempDir(prefix: string, fn: (dir: string) => Promise<void>): 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+async function writeReleaseProvenanceFixture(dir: string) {
+  const repo = "TheGreenCedar/codex-autoresearch";
+  const workflowPath = ".github/workflows/release.yml";
+  const workflow = `${repo}/${workflowPath}`;
+  const commit = "622959562359e2c608f2bfa8e6fa91340751d7af";
+  const tarballName = "codex-autoresearch-2.4.0.tgz";
+  const checksumName = `${tarballName}.sha256`;
+  const tarball = path.join(dir, tarballName);
+  const checksum = path.join(dir, checksumName);
+  const bytes = "release tarball";
+  const tarballHash = createHash("sha256").update(bytes).digest("hex");
+  const checksumText = `${tarballHash}  ${tarballName}\n`;
+  const checksumHash = createHash("sha256").update(checksumText).digest("hex");
+
+  await writeFile(tarball, bytes, "utf8");
+  await writeFile(checksum, checksumText, "utf8");
+
+  const release = {
+    assets: [
+      { digest: `sha256:${tarballHash}`, name: tarballName },
+      { digest: `sha256:${checksumHash}`, name: checksumName },
+    ],
+    target_commitish: commit,
+  };
+  const attestations = [
+    {
+      verificationResult: {
+        signature: {
+          certificate: {
+            githubWorkflowRepository: repo,
+            githubWorkflowSHA: commit,
+            runnerEnvironment: "github-hosted",
+            sourceRepositoryDigest: commit,
+            sourceRepositoryRef: "refs/heads/main",
+            sourceRepositoryURI: `https://github.com/${repo}`,
+            subjectAlternativeName: `https://github.com/${workflow}@refs/heads/main`,
+          },
+        },
+        statement: {
+          predicate: {
+            buildDefinition: {
+              externalParameters: {
+                workflow: {
+                  path: workflowPath,
+                  ref: "refs/heads/main",
+                  repository: `https://github.com/${repo}`,
+                },
+              },
+              internalParameters: {
+                github: {
+                  runner_environment: "github-hosted",
+                },
+              },
+              resolvedDependencies: [
+                {
+                  digest: { gitCommit: commit },
+                  uri: `git+https://github.com/${repo}@refs/heads/main`,
+                },
+              ],
+            },
+            runDetails: {
+              builder: {
+                id: `https://github.com/${workflow}@refs/heads/main`,
+              },
+            },
+          },
+          subject: [
+            {
+              digest: { sha256: tarballHash },
+              name: tarballName,
+            },
+          ],
+        },
+      },
+    },
+  ];
+
+  return { attestations, checksum, commit, release, tarball };
 }
