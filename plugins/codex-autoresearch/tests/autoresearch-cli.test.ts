@@ -1424,7 +1424,16 @@ test("session-forensics supports dry-run and safe apply capsule writes", async (
 });
 
 test("session-forensics routes context distillation to apply despite stale safe hints", () => {
-  const script = path.join(pluginRoot, "scripts", "autoresearch.mjs");
+  const script = path.join(pluginRoot, "state", "scripts", "autoresearch.mjs");
+  const subcommandFor = (command: string) => {
+    const launcherIndex = command.indexOf("autoresearch.mjs");
+    assert.notEqual(launcherIndex, -1);
+    const tokens = command
+      .slice(launcherIndex + "autoresearch.mjs".length)
+      .trim()
+      .split(/\s+/);
+    return tokens[0];
+  };
   const commands = {
     state: `node ${script} state --cwd C:\\repo --compact`,
     recommendNext: `node ${script} recommend-next --cwd C:\\repo --compact`,
@@ -1447,11 +1456,10 @@ test("session-forensics routes context distillation to apply despite stale safe 
     );
 
     assert.match(command, /session-forensics/);
+    assert.equal(subcommandFor(command), "session-forensics");
     assert.match(command, /--apply/);
     assert.match(command, /--session-jsonl rollout\.jsonl/);
     assert.match(command, /--research-slug session-019e/);
-    assert.doesNotMatch(command, /recommend-next/);
-    assert.doesNotMatch(command, /\bstate\b/);
   }
 });
 
