@@ -617,7 +617,7 @@ const checks = [
   },
   {
     id: "release-workflow-safeguards",
-    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml, scripts/check.ts",
+    file: "../../.github/workflows/auto-release.yml, ../../.github/workflows/release.yml, ../../.github/workflows/codeql.yml, scripts/check.ts, lib/checks/package-smoke.ts",
     description:
       "Release automation keeps version sync, branch, CodeQL, package, tarball, and duplicate-release safeguards.",
     run: async () => {
@@ -646,7 +646,7 @@ const checks = [
           "gh release create",
           '--target "$GITHUB_SHA"',
         ]) &&
-        includesAll(await readText("scripts/check.ts"), [
+        includesAll(await readText("lib/checks/package-smoke.ts"), [
           "runReleasePackageSmokePhase",
           "runPackageRuntimeSmokeFromTarball",
           "runExtractedPackageDashboardExportSmoke",
