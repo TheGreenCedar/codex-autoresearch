@@ -712,16 +712,44 @@ test("source checkout reports missing dashboard build assets with build guidance
   );
 });
 
-test("compiled dashboard tests build ignored dashboard assets before reading them", () => {
+test("dashboard test scripts build ignored dashboard assets once before dashboard tests", () => {
   const packageJson = JSON.parse(
     readFileSync(path.join(resolvePackageRoot(import.meta.url), "package.json"), "utf8"),
   );
-  const script = String(packageJson.scripts?.["test:compiled:dashboard"] || "");
+  const scripts = packageJson.scripts || {};
+  const compiledDashboardScript = String(scripts["test:compiled:dashboard"] || "");
 
-  assert.match(script, /\bbuild:dashboard\b/);
+  assert.doesNotMatch(compiledDashboardScript, /\bbuild:dashboard\b/);
+  assert.match(compiledDashboardScript, /\bnode --test\b/);
+
+  for (const [name, nextScript] of [
+    ["test", "test:compiled"],
+    ["test:dashboard", "test:compiled:dashboard"],
+  ]) {
+    const script = String(scripts[name] || "");
+
+    assert.equal(
+      script.split(/\s+/).filter((part) => part === "build:dashboard").length,
+      1,
+      `${name} must build generated dashboard assets exactly once.`,
+    );
+    assert.ok(
+      script.indexOf("build:dashboard") < script.indexOf(nextScript),
+      `${name} must build generated dashboard assets before running dashboard tests.`,
+    );
+  }
+
+  const checkScript = readFileSync(
+    path.join(resolvePackageRoot(import.meta.url), "scripts", "check.ts"),
+    "utf8",
+  );
   assert.ok(
-    script.indexOf("build:dashboard") < script.indexOf("node --test"),
-    "test:compiled:dashboard must build generated dashboard assets before dashboardHtml reads them.",
+    checkScript.indexOf("runDashboardBuildWithParity") < checkScript.indexOf("runProductPhase"),
+    "npm run check must prove dashboard build parity before compiled product tests.",
+  );
+  assert.ok(
+    checkScript.indexOf("runProductPhase") < checkScript.indexOf("runPackageArtifactCheck"),
+    "npm run check must keep package artifact/runtime smoke after product tests.",
   );
 });
 
