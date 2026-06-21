@@ -20,6 +20,7 @@ import {
   summarizeServeRegistry,
   writeServeRegistry,
 } from "../lib/dashboard-server-registry.js";
+import { resolveSessionPaths, sessionPathIdentity } from "../lib/session-paths.js";
 import { withTempDir } from "./helpers/process.js";
 
 async function requestText(url: string, headers: Record<string, string> = {}) {
@@ -44,8 +45,10 @@ async function requestText(url: string, headers: Record<string, string> = {}) {
 test("serve dashboard command reuses a healthy registry instead of starting another server", async () => {
   await withTempDir("autoresearch", "serve-registry-reuse", async (dir) => {
     const startedAt = "2026-06-08T00:00:00.000Z";
+    const sessionPaths = resolveSessionPaths({ workDir: dir });
     const existing = await serveAutoresearch({
       cwd: dir,
+      sessionPaths,
       port: 0,
       pluginVersion: PLUGIN_VERSION,
       startedAt,
@@ -61,6 +64,8 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
         startedAt,
         version: PLUGIN_VERSION,
         healthUrl: new URL("health", existing.url).toString(),
+        sessionCwd: sessionPaths.sessionCwd,
+        sessionPathIdentity: sessionPathIdentity(sessionPaths),
       });
 
       let serveAttempts = 0;
@@ -78,7 +83,7 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
         pluginVersion: PLUGIN_VERSION,
         readJsonl: () => [],
         resolveOutputInside: () => "",
-        resolveWorkDir: () => ({ workDir: dir, config: {} }),
+        resolveWorkDir: () => ({ workDir: dir, config: {}, sessionPaths }),
         serveAutoresearch: async () => {
           serveAttempts += 1;
           throw new Error("healthy registry should be reused");
@@ -99,6 +104,86 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
       assert.equal(result.healthUrl, new URL("health", existing.url).toString());
       assert.equal(result.pid, process.pid);
       assert.match(result.recoveryCommand, /node scripts\/autoresearch\.mjs serve --cwd /);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        existing.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+test("serve dashboard command does not reuse target-cwd registry for wrapper session cwd", async () => {
+  await withTempDir("autoresearch", "serve-registry-wrapper-session", async (root) => {
+    const wrapper = path.join(root, "wrapper");
+    const target = path.join(root, "target");
+    await mkdir(wrapper, { recursive: true });
+    await mkdir(target, { recursive: true });
+    const targetSessionPaths = resolveSessionPaths({ workDir: target });
+    const wrapperSessionPaths = resolveSessionPaths({ sessionCwd: wrapper, workDir: target });
+    const startedAt = "2026-06-08T00:00:00.000Z";
+    const existing = await serveAutoresearch({
+      cwd: target,
+      sessionPaths: targetSessionPaths,
+      port: 0,
+      pluginVersion: PLUGIN_VERSION,
+      startedAt,
+      dashboardHtml: async () => "<!doctype html><title>target session</title>",
+      viewModel: async () => ({ ok: true }),
+    });
+    const fakeServer = {
+      on() {
+        return fakeServer;
+      },
+    };
+
+    try {
+      await writeServeRegistry(target, {
+        pid: existing.pid,
+        port: existing.port,
+        cwd: target,
+        startedAt,
+        version: PLUGIN_VERSION,
+        healthUrl: new URL("health", existing.url).toString(),
+        sessionCwd: targetSessionPaths.sessionCwd,
+        sessionPathIdentity: sessionPathIdentity(targetSessionPaths),
+      });
+
+      let serveAttempts = 0;
+      const { serveDashboard } = createDashboardCommands({
+        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+        buildDriftReport: async () => ({ ok: true }),
+        dashboardCommands: () => [],
+        dashboardHtml: () => "",
+        dashboardSettings: () => ({}),
+        dashboardViewModel: async () => ({}),
+        operationProgress: (options) => options,
+        pluginRoot: process.cwd(),
+        pluginVersion: PLUGIN_VERSION,
+        readJsonl: () => [],
+        resolveOutputInside: () => "",
+        resolveWorkDir: () => ({ workDir: target, config: {}, sessionPaths: wrapperSessionPaths }),
+        serveAutoresearch: async () => {
+          serveAttempts += 1;
+          return {
+            debugLedger: false,
+            port: 9,
+            server: fakeServer,
+            url: "http://127.0.0.1:9/",
+            workDir: target,
+          };
+        },
+        shellQuote: JSON.stringify,
+        writeFile: async () => {},
+      });
+
+      const result = await serveDashboard({ cwd: wrapper });
+
+      assert.equal(serveAttempts, 1);
+      assert.equal(result.registryReused, false);
+      assert.equal(result.url, "http://127.0.0.1:9/");
+      const record = await readServeRegistry(target);
+      assert.equal(record?.sessionCwd, path.resolve(wrapper));
+      assert.equal(record?.sessionPathIdentity, sessionPathIdentity(wrapperSessionPaths));
     } finally {
       await new Promise<void>((resolve, reject) => {
         existing.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));
@@ -131,6 +216,7 @@ test("serve dashboard resolves config fresh for deferred live view model", async
       resolveWorkDir: () => ({
         workDir: dir,
         config: { dashboardRefreshSeconds: 1, version: configVersion },
+        sessionPaths: resolveSessionPaths({ workDir: dir }),
       }),
       serveAutoresearch: async (options) => {
         capturedViewModel = options.viewModel;

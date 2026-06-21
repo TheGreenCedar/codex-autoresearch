@@ -8,6 +8,8 @@ export interface DashboardHealthInput {
   pid?: unknown;
   registryPath?: unknown;
   cwd?: unknown;
+  sessionCwd?: unknown;
+  sessionPathIdentity?: unknown;
   version?: unknown;
   startedAt?: unknown;
   previous?: unknown;
@@ -21,6 +23,8 @@ export interface DashboardHealthSummary {
   healthUrl: string;
   registryPath: string;
   cwd: string;
+  sessionCwd: string;
+  sessionPathIdentity: string;
   version: string;
   mode: string;
   lastReadAt: string;
@@ -41,6 +45,8 @@ export function buildDashboardHealthSummary(input: DashboardHealthInput): Dashbo
     healthUrl: healthUrlFromUrl(url),
     registryPath: cleanString(input.registryPath),
     cwd: cleanString(input.cwd),
+    sessionCwd: cleanString(input.sessionCwd),
+    sessionPathIdentity: cleanString(input.sessionPathIdentity),
     version: cleanString(input.version),
     mode: "",
     lastReadAt: "",
@@ -132,9 +138,20 @@ function dashboardHealthDetails(payload: unknown): { mode: string; lastReadAt: s
 function dashboardMatchesSummary(dashboard: unknown, summary: DashboardHealthSummary): boolean {
   const port = recordValue(dashboard, "port");
   const cwd = cleanString(recordValue(dashboard, "cwd"));
+  const sessionCwd = cleanString(recordValue(dashboard, "sessionCwd"));
+  const sessionPathIdentity = cleanString(recordValue(dashboard, "sessionPathIdentity"));
   const version = cleanString(recordValue(dashboard, "version"));
   if (summary.port !== null && port !== summary.port) return false;
   if (summary.cwd && (!cwd || !samePathText(cwd, summary.cwd))) return false;
+  if (
+    summary.sessionPathIdentity &&
+    (!sessionPathIdentity || sessionPathIdentity !== summary.sessionPathIdentity)
+  ) {
+    return false;
+  }
+  if (summary.sessionCwd && (!sessionCwd || !samePathText(sessionCwd, summary.sessionCwd))) {
+    return false;
+  }
   if (summary.version && (!version || version !== summary.version)) return false;
   return true;
 }

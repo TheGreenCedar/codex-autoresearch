@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
 import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
-import { resolveSessionPaths, type SessionPaths } from "./session-paths.js";
+import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
 
 type LooseObject = Record<string, unknown>;
 
@@ -127,6 +127,8 @@ export async function serveAutoresearch(args: LooseObject) {
           workDir,
           dashboard: {
             cwd: workDir,
+            sessionCwd: sessionPaths.sessionCwd,
+            sessionPathIdentity: sessionPathIdentity(sessionPaths),
             liveness: "alive",
             mode: "live-server",
             pid: process.pid,

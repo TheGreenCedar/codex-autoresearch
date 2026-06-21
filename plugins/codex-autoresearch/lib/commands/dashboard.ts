@@ -9,7 +9,7 @@ import {
 } from "../dashboard-server-registry.js";
 import { compactDashboardTransportViewModel } from "../dashboard-transport.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
-import type { SessionPaths } from "../session-paths.js";
+import { sessionPathIdentity, type SessionPaths } from "../session-paths.js";
 
 type LooseObject = Record<string, any>;
 type DashboardCommandListOptions = {
@@ -238,6 +238,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
     const { workDir, sessionPaths } = deps.resolveWorkDir(args.working_dir || args.cwd);
+    const expectedSessionPathIdentity = sessionPathIdentity(sessionPaths);
     const debugLedger = deps.boolOption(args.debugLedger ?? args.debug_ledger, false);
     const liveReadCache = deps.createSessionReadCache?.({ invalidateOnLedgerChange: true });
     let liveUrl = "";
@@ -247,6 +248,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
         expectedVersion: deps.pluginVersion,
         timeoutMs: 500,
         debugLedger,
+        sessionPaths,
       });
       dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
       if (reusableRegistry.reusable) {
@@ -324,6 +326,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       pid: process.pid,
       port: Number(serveResult.port),
       cwd: workDir,
+      sessionCwd: sessionPaths.sessionCwd,
+      sessionPathIdentity: expectedSessionPathIdentity,
       startedAt: startedAtIso,
       version: deps.pluginVersion,
       healthUrl,
@@ -339,6 +343,8 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       pid: process.pid,
       registryPath: registryWrite.path,
       cwd: workDir,
+      sessionCwd: sessionPaths.sessionCwd,
+      sessionPathIdentity: expectedSessionPathIdentity,
       version: deps.pluginVersion,
       startedAt: startedAtIso,
       previous: registrySummary,
