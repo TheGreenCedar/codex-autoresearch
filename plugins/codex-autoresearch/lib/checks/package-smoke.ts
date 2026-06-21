@@ -349,6 +349,7 @@ function normalizedPackagePath(entry: PackageEntry) {
 async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) {
   const wrappers = [
     ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
+    ["scripts/check.mjs", 'ensureRuntime("check.mjs"'],
     ["scripts/finalize-autoresearch.mjs", 'ensureRuntime("finalize-autoresearch.mjs"'],
   ];
   const problems: string[] = [];
