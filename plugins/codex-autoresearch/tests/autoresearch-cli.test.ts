@@ -9759,6 +9759,9 @@ test("runShell configures a POSIX process group for timeout cleanup", async () =
     cliShim,
     /await import\(await ensureRuntime\("autoresearch\.mjs", import\.meta\.url\)\)/,
   );
+  const checkShim = await readFile(path.join(pluginRoot, "scripts", "check.mjs"), "utf8");
+  assert.match(checkShim, /import \{ ensureRuntime \} from "\.\/bootstrap-runtime\.mjs"/);
+  assert.match(checkShim, /await import\(await ensureRuntime\("check\.mjs", import\.meta\.url\)\)/);
   assert.match(bootstrap, /path\.join\(pluginRoot, "dist", "scripts", entrypoint\)/);
   assert.match(bootstrap, /verifyRuntimeTarballIntegrity/);
   assert.match(bootstrap, /\.tgz\.sha256/);
