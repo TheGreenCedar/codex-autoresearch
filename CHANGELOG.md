@@ -10,6 +10,9 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Changed
 
+- Added an opt-in maintainer browser accessibility check for the dashboard
+  chart/modal keyboard flow without changing dashboard behavior or adding
+  browser-test dependencies.
 - Added a maintainer release-provenance smoke command that combines strict
   tarball/checksum/release-asset digest checks with `gh attestation verify`
   JSON certificate policy checks, without changing runtime hydration.
