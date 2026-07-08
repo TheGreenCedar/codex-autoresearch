@@ -23,7 +23,7 @@ import {
   writeDecisionCapsule,
 } from "./helpers/git-fixtures.js";
 import { parseLedger, writeLedger } from "./helpers/ledger.js";
-import { runNode, runShellCommand } from "./helpers/process-fixtures.js";
+import { runNode } from "./helpers/process-fixtures.js";
 import {
   cliPayload,
   isolatedRuntimeEnv,
@@ -6412,9 +6412,17 @@ test("stale packet compact state recommends replacement next command", async () 
     assert.equal(recommendPayload.commands.primary, statePayload.commands.replaceLast);
     assert.match(recommendPayload.commands.primary, /\bnext\b/);
 
-    const replacement = await runShellCommand(statePayload.commands.replaceLast, {
-      cwd: pluginRoot,
-    });
+    const replacement = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "always",
+      "--checks-command",
+      checksCommand,
+    ]);
     assert.equal(replacement.code, 0, replacement.stderr);
     const replacementPayload = JSON.parse(replacement.stdout);
     assert.equal(replacementPayload.decision.metric, 3);
