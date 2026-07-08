@@ -152,10 +152,10 @@ export function runtimeReleaseArtifacts(versionInput, options = {}) {
   const tag = `v${version}`;
   const tarballName = `${PACKAGE_NAME}-${version}.tgz`;
   const checksumName = `${PACKAGE_NAME}-${version}.tgz.sha256`;
-  const baseUrl = String(
+  const baseUrl = stripTrailingSlashes(
     options.releaseBaseUrl ||
       `https://github.com/TheGreenCedar/codex-autoresearch/releases/download/${tag}`,
-  ).replace(/\/+$/, "");
+  );
   return {
     version,
     tag,
@@ -164,6 +164,12 @@ export function runtimeReleaseArtifacts(versionInput, options = {}) {
     tarballUrl: `${baseUrl}/${tarballName}`,
     checksumUrl: `${baseUrl}/${checksumName}`,
   };
+}
+
+function stripTrailingSlashes(value) {
+  let text = String(value);
+  while (text.endsWith("/")) text = text.slice(0, -1);
+  return text;
 }
 
 function normalizeReleaseVersion(versionInput) {

@@ -7601,6 +7601,7 @@ test("keep logs fail instead of recording success when git commit fails", async 
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["config", "core.hooksPath", ".git/hooks"]);
     await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
@@ -9897,6 +9898,20 @@ test("source launcher rebuilds local source runtime before use", async () => {
       /rebuiltDashboard/,
     );
   });
+});
+
+test("runtime release artifacts trim trailing slashes without regex matching", async () => {
+  const bootstrap = await import(
+    pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
+  );
+  const artifacts = bootstrap.runtimeReleaseArtifacts("1.2.3", {
+    releaseBaseUrl: "https://example.invalid/releases////",
+  });
+
+  assert.equal(
+    artifacts.tarballUrl,
+    "https://example.invalid/releases/codex-autoresearch-1.2.3.tgz",
+  );
 });
 
 test("source launcher hydrates runtime only after release checksum verification", async () => {
