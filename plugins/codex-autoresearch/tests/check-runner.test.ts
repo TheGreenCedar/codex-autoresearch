@@ -15,6 +15,7 @@ import {
   releaseProvenanceIssue,
   resolveNpmCommand,
 } from "../scripts/check.js";
+import { runProcess } from "./helpers/process.js";
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
   assert.throws(
@@ -40,6 +41,28 @@ test("check runner leaves native commands unchanged", () => {
     command: "node",
     args: ["--version"],
   });
+});
+
+const normalizeExecutablePath = (value: string) => {
+  const normalized = path.resolve(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+};
+
+test("test process helper preserves the current node executable and refuses other absolute commands", async () => {
+  const result = await runProcess(
+    process.execPath,
+    ["-e", "process.stdout.write(process.execPath)"],
+    {
+      cwd: process.cwd(),
+    },
+  );
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(normalizeExecutablePath(result.stdout), normalizeExecutablePath(process.execPath));
+
+  await assert.rejects(
+    () => runProcess(path.join(process.cwd(), "unlisted-node"), ["--version"], process.cwd()),
+    /Refusing to spawn unlisted test command/,
+  );
 });
 
 test("npm resolver uses npm_execpath as a shell-free npm entrypoint", async () => {

@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.5.1 - 2026-07-07
+
 ### Changed
 
 - Clarified release-provenance smoke maintainer prerequisites for `gh`
@@ -16,6 +18,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Fixed
 
+- Removed CodeQL-flagged regex and test process-spawn patterns from runtime
+  hydration and test helpers.
 - Fixed release provenance smoke validation for auto-release runs that call the reusable release workflow, where the certificate signer is `release.yml` but the SLSA predicate records `auto-release.yml` as the caller workflow path.
 
 ## 2.5.0 - 2026-06-21

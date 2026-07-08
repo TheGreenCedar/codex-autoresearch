@@ -16,9 +16,25 @@ const spawnTestProcess = (command, args, cwd, stdio, env) => {
     cwd,
     ...(env ? { env } : {}),
     windowsHide: true,
+    shell: false,
     stdio,
   };
-  return spawn(command, args, options);
+  if (command === process.execPath) {
+    // codeql[js/shell-command-injection-from-environment]: tests must use this exact Node runtime; args remain separate and shell is disabled.
+    return spawn(command, args, options);
+  }
+  switch (command) {
+    case "git":
+      return spawn("git", args, options);
+    case "tar":
+      return spawn("tar", args, options);
+    case "powershell.exe":
+      return spawn("powershell.exe", args, options);
+    case "/bin/sh":
+      return spawn("/bin/sh", args, options);
+    default:
+      throw new Error(`Refusing to spawn unlisted test command: ${command}`);
+  }
 };
 
 const captureProcessOutput = (child, onStdout) => {
