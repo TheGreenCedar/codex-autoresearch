@@ -27,10 +27,6 @@ const spawnTestProcess = (command, args, cwd, stdio, env) => {
       return spawn("git", args, options);
     case "tar":
       return spawn("tar", args, options);
-    case "powershell.exe":
-      return spawn("powershell.exe", args, options);
-    case "sh":
-      return spawn("sh", args, options);
     default:
       throw new Error(`Refusing to spawn unlisted test command: ${command}`);
   }
