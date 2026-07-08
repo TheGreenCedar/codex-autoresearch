@@ -13,7 +13,7 @@ export async function runNode(args, { cwd = pluginRoot, env = process.env } = {}
 }
 
 export async function runShellCommand(command, { cwd = pluginRoot } = {}) {
-  const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
+  const shell = process.platform === "win32" ? "powershell.exe" : "sh";
   const args =
     process.platform === "win32"
       ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
