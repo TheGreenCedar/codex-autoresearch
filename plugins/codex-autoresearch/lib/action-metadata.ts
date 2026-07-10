@@ -13,6 +13,13 @@ export interface ActionMetadata {
 }
 
 export const ACTION_METADATA: Record<string, ActionMetadata> = {
+  "termination-failed": actionMetadata({
+    label: "Verify process termination",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "doctor"],
+    packetBrake: true,
+  }),
   "gate-quality": actionMetadata({
     label: "Repair gate quality",
     commandLabel: "Doctor",

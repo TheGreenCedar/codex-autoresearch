@@ -42,6 +42,15 @@ export function analyzeExperimentEconomics({
   const runs = Array.isArray(state.current) ? state.current : [];
   const recentRuns = runs.slice(-thresholds.repeatedSmallProbeWindow);
   const warnings: ExperimentEconomicsWarning[] = [];
+  if (progress?.terminationFailed === true || progress?.exitState === "termination_failed") {
+    warnings.push({
+      code: "termination_failed",
+      message: "The prior process tree may still be alive because termination was not proven.",
+      recommendation:
+        "Verify the reported PID and descendants are absent before clearing retained progress.",
+      details: { termination: progress.termination || null },
+    });
+  }
   const lastDuration =
     finiteMetric(lastRun?.run?.durationSeconds) ??
     finiteMetric(progress?.elapsedSeconds) ??

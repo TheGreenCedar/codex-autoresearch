@@ -217,6 +217,8 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
           );
           benchmark.exitCode = run.exitCode;
           benchmark.timedOut = run.timedOut;
+          benchmark.termination = run.termination;
+          benchmark.terminationFailed = run.terminationFailed;
           benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
           benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[primaryMetricName]) != null;
           benchmark.progress = buildRunProgress({
@@ -229,6 +231,11 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
             issues.push(
               `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
             );
+            if (run.terminationFailed) {
+              warnings.push(
+                "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+              );
+            }
           } else if (!benchmark.emitsPrimary) {
             benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
             issues.push(benchmark.metricError);

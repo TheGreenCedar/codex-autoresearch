@@ -230,9 +230,18 @@ async function candidatesFromModelCommand(
   if (!command) return [];
   const result = await runBoundedShell(command, cwd, timeoutSeconds);
   if (result.exitCode !== 0 || result.timedOut) {
-    throw new Error(
-      `model-command failed${result.timedOut ? " (timed out)" : ""}: ${result.output}`,
-    );
+    const pid = result.termination?.pid;
+    const error = new Error(
+      result.terminationFailed
+        ? `model-command failed (timed out): process-tree termination is unproven for PID ${pid || "unknown"}. Verify the reported PID and descendants are absent before removing the retained progress marker. Output: ${result.output}`
+        : `model-command failed${result.timedOut ? " (timed out)" : ""}: ${result.output}`,
+    ) as Error & { code?: string; termination?: unknown; terminationFailed?: boolean };
+    if (result.terminationFailed) {
+      error.code = "termination_failed";
+      error.termination = result.termination;
+      error.terminationFailed = true;
+    }
+    throw error;
   }
   let parsed;
   try {

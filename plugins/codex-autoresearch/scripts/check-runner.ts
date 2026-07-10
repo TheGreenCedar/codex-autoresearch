@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
-import { killProcess } from "../lib/runner.js";
 import { StringDecoder } from "node:string_decoder";
+import {
+  terminateAfterTimeout,
+  terminateProcessTree,
+  type ProcessTreeTermination,
+  type ProcessTreeTerminator,
+} from "../lib/runner.js";
 
 export type CommandSpec = [label: string, command: string, args: string[]];
 
@@ -9,6 +14,8 @@ export interface CommandResult {
   label: string;
   stderr: string;
   stdout: string;
+  termination: ProcessTreeTermination | null;
+  terminationFailed: boolean;
   timedOut: boolean;
 }
 
@@ -23,8 +30,17 @@ export function runCommand(
     cwd,
     env,
     streamOutput = false,
+    terminateProcessTree: terminate = terminateProcessTree,
+    terminationTimeoutMs,
     timeoutSeconds = 300,
-  }: { cwd: string; env?: NodeJS.ProcessEnv; streamOutput?: boolean; timeoutSeconds?: number },
+  }: {
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    streamOutput?: boolean;
+    terminateProcessTree?: ProcessTreeTerminator;
+    terminationTimeoutMs?: number;
+    timeoutSeconds?: number;
+  },
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let resolved: ResolvedSpawnCommand;
@@ -36,6 +52,8 @@ export function runCommand(
         code: -1,
         stdout: "",
         stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+        termination: null,
+        terminationFailed: false,
         timedOut: false,
       });
       return;
@@ -53,23 +71,29 @@ export function runCommand(
     const stderrDecoder = new StringDecoder("utf8");
     let settled = false;
     let timedOut = false;
-    let timeoutFallback: NodeJS.Timeout | undefined;
+    let termination: ProcessTreeTermination | null = null;
     const finish = (result: CommandResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      if (timeoutFallback) clearTimeout(timeoutFallback);
       resolve(result);
     };
     const timeout = setTimeout(
       () => {
         timedOut = true;
         stderr += `Command timed out after ${Math.max(1, timeoutSeconds)} seconds.\n`;
-        killProcess(child.pid);
-        timeoutFallback = setTimeout(
-          () => finish({ label, code: null, stdout, stderr, timedOut: true }),
-          5000,
-        );
+        void terminateAfterTimeout(child.pid, terminate, terminationTimeoutMs).then((result) => {
+          termination = result;
+          finish({
+            label,
+            code: null,
+            stdout,
+            stderr,
+            termination,
+            terminationFailed: !termination.proven,
+            timedOut: true,
+          });
+        });
       },
       Math.max(1, timeoutSeconds) * 1000,
     );
@@ -83,13 +107,34 @@ export function runCommand(
       stderr += text;
       if (streamOutput) process.stderr.write(text);
     });
-    child.on("error", (error) =>
-      finish({ label, code: -1, stdout, stderr: `${stderr}${error.message}\n`, timedOut }),
-    );
+    child.on("error", (error) => {
+      if (timedOut) {
+        stderr += `${error.message}\n`;
+        return;
+      }
+      finish({
+        label,
+        code: -1,
+        stdout,
+        stderr: `${stderr}${error.message}\n`,
+        termination,
+        terminationFailed: false,
+        timedOut,
+      });
+    });
     child.on("close", (code) => {
       stdout += stdoutDecoder.end();
       stderr += stderrDecoder.end();
-      finish({ label, code: timedOut ? null : code, stdout, stderr, timedOut });
+      if (timedOut) return;
+      finish({
+        label,
+        code,
+        stdout,
+        stderr,
+        termination,
+        terminationFailed: false,
+        timedOut,
+      });
     });
   });
 }

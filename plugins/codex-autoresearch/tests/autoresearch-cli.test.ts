@@ -24,6 +24,7 @@ import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { resolveSessionPaths, sessionPathIdentity } from "../lib/session-paths.js";
 import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
+import { persistTerminationFailure } from "../scripts/autoresearch.js";
 import {
   PARTIAL_RESULT_ARTIFACT_MAX_BYTES,
   PARTIAL_RESULT_ARTIFACT_MAX_ROWS,
@@ -1193,7 +1194,7 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
       checks,
       [
         "for (let index = 0; index < 200; index += 1) process.stdout.write(`check-${index}\\n`);",
-        "setTimeout(() => {}, 5000);",
+        "setTimeout(() => {}, 30000);",
       ].join("\n"),
     );
 
@@ -1211,10 +1212,175 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const progress = payload.packetEvidence.progressSnapshot;
-    assert.equal(progress.exitState, "timed_out");
+    assert.equal(progress.exitState, "timed_out", JSON.stringify(progress.termination));
     assert.equal(progress.timeoutPhase, "checks");
+    assert.equal(progress.terminationFailed, false);
+    assert.equal(payload.run.checks.termination.proven, true);
+    assert.deepEqual(progress.termination, payload.run.checks.termination);
     assert.ok(progress.generation >= 4);
     assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), false);
+  });
+});
+
+test("unproven process-tree termination blocks state, next, and standalone run", async () => {
+  await withTempDir("termination-failed-blocker", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "termination blocker",
+      "--metric-name",
+      "seconds",
+    ]);
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    await writeFile(
+      progressPath,
+      JSON.stringify({
+        generation: 3,
+        packetId: "packet-1-active",
+        commandClass: "node script",
+        startedAt: new Date().toISOString(),
+        lastOutputAt: new Date().toISOString(),
+        timeoutSeconds: 1,
+        timeoutPhase: "benchmark",
+        exitState: "termination_failed",
+        artifactRoot: ".",
+        latestArtifactRow: "heartbeat=heartbeat.txt",
+        elapsedSeconds: 1,
+        staleProgressReason: "",
+        finalArtifactSummary: "1 artifact linked",
+        terminationFailed: true,
+        termination: {
+          attempted: true,
+          escalated: true,
+          method: process.platform === "win32" ? "windows-taskkill-tree" : "posix-process-group",
+          pid: 4242,
+          platform: process.platform,
+          proven: false,
+          reason: "injected_termination_failure",
+          remainingPids: [4242],
+          trackedPids: [4242],
+        },
+      }),
+    );
+    const sideEffect = path.join(dir, "should-not-run.txt");
+    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+      `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran')`,
+    )}`;
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.loopContract.canRunNextPacket, false);
+    assert.equal(statePayload.loopContract.blockers[0].kind, "termination-failed");
+    assert.equal(statePayload.experimentEconomics.progress.exitState, "termination_failed");
+
+    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(next.code, 0, next.stderr);
+    const nextPayload = JSON.parse(next.stdout);
+    assert.equal(nextPayload.code, "termination_failed");
+    assert.equal(nextPayload.loopContract.canRunNextPacket, false);
+    assert.equal(nextPayload.progress.termination.pid, 4242);
+
+    const run = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.notEqual(run.code, 0);
+    assert.match(run.stderr, /termination_failed/i);
+    assert.equal(await pathExists(progressPath), true);
+    assert.equal(await pathExists(sideEffect), false);
+  });
+});
+
+test("non-packet termination failure persists the same packet brake", async () => {
+  await withTempDir("external-termination-failed-blocker", async (dir) => {
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "external termination blocker",
+      "--metric-name",
+      "seconds",
+    ]);
+    await persistTerminationFailure(dir, "benchmark-inspect", {
+      terminationFailed: true,
+      termination: {
+        attempted: true,
+        escalated: true,
+        method: "none",
+        pid: 5151,
+        platform: process.platform,
+        proven: false,
+        reason: "injected_termination_failure",
+        remainingPids: [5151],
+        trackedPids: [5151],
+      },
+    });
+
+    const progress = JSON.parse(
+      await readFile(path.join(dir, "autoresearch.progress.json"), "utf8"),
+    );
+    assert.equal(progress.exitState, "termination_failed");
+    assert.equal(progress.termination.pid, 5151);
+
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const payload = JSON.parse(next.stdout);
+    assert.equal(payload.code, "termination_failed");
+    assert.equal(payload.progress.termination.pid, 5151);
+  });
+});
+
+test("benchmark inspection holds the session lock through process execution", async () => {
+  await withTempDir("inspect-session-lock", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "inspect lock", "--metric-name", "seconds"]);
+    const ready = path.join(dir, "inspect-ready.txt");
+    const release = path.join(dir, "inspect-release.txt");
+    const sideEffect = path.join(dir, "overlap.txt");
+    const inspectScript = [
+      "const fs = require('node:fs')",
+      `fs.writeFileSync(${JSON.stringify(ready)}, 'ready')`,
+      `const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('METRIC seconds=1'); } }, 25)`,
+    ].join(";");
+    let inspected: Awaited<ReturnType<typeof runSpawnedCli>>;
+    const inspect = runSpawnedCli([
+      "benchmark-inspect",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e ${quoteForShell(inspectScript)}`,
+      "--timeout-seconds",
+      "30",
+    ]);
+    try {
+      for (let attempt = 0; attempt < 100 && !(await pathExists(ready)); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.equal(await pathExists(ready), true, "inspect command did not start");
+
+      const overlap = await runSpawnedCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        `${quoteForShell(process.execPath)} -e ${quoteForShell(
+          `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran'); console.log('METRIC seconds=1')`,
+        )}`,
+      ]);
+      assert.notEqual(overlap.code, 0);
+      assert.match(overlap.stderr, /mutation is already running/i);
+      assert.equal(await pathExists(sideEffect), false);
+    } finally {
+      await writeFile(release, "release", "utf8");
+      inspected = await inspect;
+    }
+    assert.equal(inspected.code, 0, inspected.stderr);
   });
 });
 

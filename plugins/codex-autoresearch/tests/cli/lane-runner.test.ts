@@ -3,6 +3,7 @@ import { access, chmod, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
+import { createLaneRunnerCommand } from "../../lib/commands/lane-runner.js";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import { createCliRunner, runGit, runProcess, withTempDir } from "../helpers/process.js";
 
@@ -15,6 +16,77 @@ const longText = (label: string, length: number) =>
 
 const delimitedItems = (label: string, count: number, length: number) =>
   Array.from({ length: count }, (_, index) => longText(`${label}-${index + 1}`, length)).join("; ");
+
+test("lane-runner stops before post-run probes when termination is unproven", async () => {
+  let postRunProbeCalled = false;
+  let synthesisCalled = false;
+  const laneRunner = createLaneRunnerCommand({
+    appendJsonl: () => {},
+    assertNoDirtyPathsOutsideWriteScope: async () => {},
+    assertWriteScopeIntegrity: async () => {
+      postRunProbeCalled = true;
+    },
+    boolOption: (value, fallback = false) => (value == null ? fallback : Boolean(value)),
+    buildParallelOrchestrationContext: () => ({
+      parallelLanes: [{ id: "unsafe-lane", label: "Unsafe lane", mode: "implementation" }],
+    }),
+    commandLooksUnsafeForWriteScope: () => false,
+    currentState: () => ({ config: {}, segment: 1 }),
+    dashboardSettings: () => ({}),
+    latestLaneResults: () => [],
+    normalizeLaneMode: (value) => String(value),
+    normalizeParallelLane: (lane) => lane,
+    normalizeRelativePaths: (value) => (Array.isArray(value) ? value.map(String) : []),
+    positiveIntegerOption: (value, fallback) => Number(value || fallback),
+    readJsonl: () => [],
+    resolveLaneWorktree: async (_workDir, worktreePath) => worktreePath,
+    resolveWorkDir: (value) => ({ workDir: value, config: {} }),
+    runProcess: async () => {
+      throw new Error("runProcess should not be called");
+    },
+    runShell: async () =>
+      ({
+        exitCode: null,
+        timedOut: true,
+        terminationFailed: true,
+        termination: {
+          attempted: true,
+          escalated: true,
+          method: "none",
+          pid: 4242,
+          platform: process.platform,
+          proven: false,
+          reason: "injected_termination_failure",
+          remainingPids: [4242],
+          trackedPids: [4242],
+        },
+        durationSeconds: 1,
+        output: "partial output",
+      }) as never,
+    synthesizeLaneDecision: () => {
+      synthesisCalled = true;
+      return {};
+    },
+    tailText: (text) => text,
+    writeScopeSnapshot: async () => ({}),
+  });
+
+  const result = await laneRunner({
+    cwd: process.cwd(),
+    laneId: "unsafe-lane",
+    mode: "implementation",
+    command: "node task.mjs",
+    writeScope: ["src"],
+    yes: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "termination_failed");
+  assert.equal(result.result.commandResult.termination.pid, 4242);
+  assert.equal(result.coordinatorRecommendation.status, "blocked");
+  assert.equal(postRunProbeCalled, false);
+  assert.equal(synthesisCalled, false);
+});
 
 test("lane-runner big_idea mode is read-only, approval-gated, and bounded", async () => {
   await withTempDir("autoresearch", "lane-runner-big-idea", async (dir) => {
