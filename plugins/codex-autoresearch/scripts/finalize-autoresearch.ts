@@ -24,12 +24,17 @@ import {
   REPORT_DIRNAME,
   isAutoresearchSessionArtifact,
 } from "../lib/session-artifacts.js";
-import { parseCliArgs, type ParsedCliArgs } from "../lib/cli/args.js";
+import {
+  CliUsageError,
+  cliDebugRequested,
+  parseFinalizerCliArgs,
+  type ParsedAutoresearchArgs,
+} from "../lib/cli/options.js";
 
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
-type CliArgs = ParsedCliArgs & LooseObject;
+type CliArgs = ParsedAutoresearchArgs & LooseObject;
 type RunEntry = LooseObject & {
   commit?: string;
   description?: string;
@@ -115,6 +120,10 @@ function usage() {
 Usage:
   node scripts/finalize-autoresearch.mjs plan --cwd <repo> --output groups.json [--goal short-slug] [--trunk main] [--collapse-overlap]
   node scripts/finalize-autoresearch.mjs --cwd <repo> groups.json
+
+Options:
+  -h, --help  Show this help.
+  --debug     Include a stack trace when finalization fails.
 
 groups.json:
 {
@@ -1204,11 +1213,11 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   return plan;
 }
 
-async function main() {
-  const cli = parseCliArgs(process.argv.slice(2)) as CliArgs;
+async function main(argv: string[]) {
+  const cli = parseFinalizerCliArgs(argv) as CliArgs;
   const command = cli._[0];
   const file = command;
-  if (!file || file === "--help" || file === "-h") {
+  if (!file || cli.help) {
     console.log(usage());
     return;
   }
@@ -1545,8 +1554,14 @@ function posixQuote(value: unknown): string {
   return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
-main().catch((error: unknown) => {
+const argv = process.argv.slice(2);
+let debug = false;
+try {
+  debug = cliDebugRequested(argv, true);
+  await main(argv);
+} catch (error: unknown) {
   const failure = error as FinalizePhaseError;
-  console.error(failure.stack || failure.message || String(failure));
+  const message = debug && failure.stack ? failure.stack : failure.message || String(failure);
+  console.error(error instanceof CliUsageError ? `${message}\n\n${usage()}` : message);
   process.exitCode = 1;
-});
+}
