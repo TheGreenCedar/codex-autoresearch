@@ -29,6 +29,7 @@ import {
 } from "../lib/partial-results.js";
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
+import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
 import { renderExportedDashboard } from "./helpers/dashboard-export.js";
 import {
   prepareCurrentTreeFinalizationBlocker,
@@ -949,12 +950,209 @@ test("state surfaces active runner progress while next is still executing", asyn
     }
     await writeFile(releaseFile, "go\n", "utf8");
     assert.equal(progress?.exitState, "running");
+    assert.equal(Number.isSafeInteger(progress?.generation), true);
     assert.match(progress?.packetId || "", /active/);
 
     const exitCode = await new Promise((resolve) => child.on("close", resolve));
     assert.equal(exitCode, 0, stderr);
     const packetPayload = JSON.parse(stdout);
     assert.equal(packetPayload.packetEvidence.progressSnapshot.exitState, "completed");
+    await assert.rejects(access(path.join(dir, "autoresearch.progress.json")));
+  });
+});
+
+test("active progress writer serializes delayed writes and coalesces newer generations", async () => {
+  const writes: number[] = [];
+  let releaseFirstWrite = () => {};
+  let markFirstWriteStarted = () => {};
+  const firstWriteStarted = new Promise<void>((resolve) => {
+    markFirstWriteStarted = resolve;
+  });
+  const firstWriteReleased = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  const writer = createCoalescingProgressWriter({
+    initialGeneration: 4,
+    minWriteIntervalMs: 0,
+    write: async (snapshot) => {
+      if (snapshot.generation === 5) {
+        markFirstWriteStarted();
+        await firstWriteReleased;
+      }
+      writes.push(snapshot.generation);
+    },
+  });
+
+  assert.equal(writer.queue({ exitState: "running" }).generation, 5);
+  await firstWriteStarted;
+  assert.equal(writer.queue({ exitState: "running" }).generation, 6);
+  assert.equal(writer.queue({ exitState: "running" }).generation, 7);
+  const closing = writer.close();
+  releaseFirstWrite();
+  await closing;
+
+  assert.deepEqual(writes, [5, 7]);
+  assert.throws(() => writer.queue({ exitState: "running" }), /closed/);
+});
+
+test("active progress writer closes after rejection without replaying pending generations", async () => {
+  const writes: number[] = [];
+  let markWriteStarted = () => {};
+  let releaseWrite = () => {};
+  const writeStarted = new Promise<void>((resolve) => {
+    markWriteStarted = resolve;
+  });
+  const writeReleased = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const writer = createCoalescingProgressWriter({
+    minWriteIntervalMs: 0,
+    write: async (snapshot) => {
+      writes.push(snapshot.generation);
+      markWriteStarted();
+      await writeReleased;
+      throw new Error("hostile progress write rejection");
+    },
+  });
+
+  writer.queue({ exitState: "running" });
+  await writeStarted;
+  writer.queue({ exitState: "running" });
+  const closing = writer.close();
+  releaseWrite();
+
+  await assert.rejects(closing, /hostile progress write rejection/);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(writes, [1]);
+  assert.throws(() => writer.queue({ exitState: "running" }), /closed/);
+});
+
+test("standalone run removes active progress after an exception before writer close", async () => {
+  await withTempDir("standalone-progress-cleanup", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "cleanup", "--metric-name", "seconds"]);
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    await writeFile(
+      progressPath,
+      JSON.stringify({ exitState: "running", generation: 7, packetId: "stale-active" }),
+    );
+
+    const result = await runCli([
+      "run",
+      "--cwd",
+      dir,
+      "--command-file",
+      "missing-command-file.txt",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /ENOENT/);
+    assert.equal(await pathExists(progressPath), false);
+  });
+});
+
+test("active progress deletion propagates wrong-entry-type failures", async () => {
+  await withTempDir("progress-delete-failure", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "delete failure", "--metric-name", "seconds"]);
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    await mkdir(progressPath);
+
+    const result = await runCli([
+      "run",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Write target must be a regular file/);
+    assert.match(result.stderr, /Failed to remove active progress snapshot/);
+    assert.equal((await stat(progressPath)).isDirectory(), true);
+  });
+});
+
+test("next removes active progress when terminal packet persistence fails", async () => {
+  await withTempDir("terminal-packet-progress-cleanup", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "terminal cleanup", "--metric-name", "seconds"]);
+    await mkdir(path.join(dir, "autoresearch.last-run.json"));
+
+    const result = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Write target must be a regular file/);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), false);
+  });
+});
+
+test("chatty completion and failure cannot resurrect active progress", async () => {
+  for (const [name, exitCode, expectedState] of [
+    ["completed", 0, "completed"],
+    ["failed", 7, "failed"],
+  ] as const) {
+    await withTempDir(`chatty-progress-${name}`, async (dir) => {
+      await runCli(["init", "--cwd", dir, "--name", name, "--metric-name", "seconds"]);
+      const script = path.join(dir, "chatty.mjs");
+      await writeFile(
+        script,
+        [
+          "for (let index = 0; index < 2000; index += 1) process.stdout.write(`row-${index}\\n`);",
+          "console.log('METRIC seconds=1');",
+          `process.exitCode = ${exitCode};`,
+        ].join("\n"),
+      );
+
+      const result = await runCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      ]);
+      assert.equal(result.code, 0, result.stderr);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.packetEvidence.progressSnapshot.exitState, expectedState);
+      assert.ok(payload.packetEvidence.progressSnapshot.generation >= 2);
+      assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), false);
+    });
+  }
+});
+
+test("checks-phase timeout flushes its newest generation before cleanup", async () => {
+  await withTempDir("checks-progress-timeout", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "checks timeout", "--metric-name", "seconds"]);
+    const checks = path.join(dir, "checks.mjs");
+    await writeFile(
+      checks,
+      [
+        "for (let index = 0; index < 200; index += 1) process.stdout.write(`check-${index}\\n`);",
+        "setTimeout(() => {}, 5000);",
+      ].join("\n"),
+    );
+
+    const result = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+      "--checks-command",
+      `${quoteForShell(process.execPath)} ${quoteForShell(checks)}`,
+      "--checks-timeout-seconds",
+      "1",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const progress = payload.packetEvidence.progressSnapshot;
+    assert.equal(progress.exitState, "timed_out");
+    assert.equal(progress.timeoutPhase, "checks");
+    assert.ok(progress.generation >= 4);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), false);
   });
 });
 
