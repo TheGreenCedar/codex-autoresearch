@@ -11,7 +11,9 @@ import {
   FINALIZATION_EVIDENCE_COMPONENT_KEYS,
   assertGeneratedPlanMetadata,
   buildFinalizationEvidenceState,
+  commitReferencesMatch,
   finalizationPlanFingerprint,
+  isFinalizationEvidenceTransition,
   normalizeFinalizationEvidenceFingerprint,
   readAutoresearchLedger,
   type FinalizationEvidenceFingerprint,
@@ -494,18 +496,12 @@ function markdownEscape(text: string): string {
 function runEvidenceForCommit(entries: RunEntry[], hash: string): RunEntry | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const run = entries[index];
-    const commit = String(run.commit || "");
-    if (commitMatchesHash(commit, hash)) {
+    if (!isFinalizationEvidenceTransition(run)) continue;
+    if (commitReferencesMatch(run.commit, hash)) {
       return isAcceptedCurrentRun(run) ? run : null;
     }
   }
   return null;
-}
-
-function commitMatchesHash(commit: unknown, hash: string): boolean {
-  if (!commit) return false;
-  const text = String(commit);
-  return hash.startsWith(text) || text.startsWith(hash.slice(0, 12));
 }
 
 async function readAutoresearchJsonl(cwd: string): Promise<RunEntry[]> {
@@ -536,8 +532,8 @@ async function commitParent(hash: string, base: string, cwd: string): Promise<st
 function parseCommitStatus(entries: RunEntry[], hash: string): RunEntry | null {
   const matching: RunEntry[] = [];
   for (const entry of entries) {
-    const commit = String(entry.commit || "");
-    if (commitMatchesHash(commit, hash)) matching.push(entry);
+    if (isFinalizationEvidenceTransition(entry) && commitReferencesMatch(entry.commit, hash))
+      matching.push(entry);
   }
   return matching.at(-1) || null;
 }

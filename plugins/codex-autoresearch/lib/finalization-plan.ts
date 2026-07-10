@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
-import { evidenceStatusForRun, isAcceptedCurrentRun } from "./evidence-registry.js";
+import {
+  evidenceStatusForRun,
+  isAcceptedCurrentRun,
+  isKeepRun,
+  isRejectedRun,
+} from "./evidence-registry.js";
 import {
   buildProductClaimCoverage,
   evidenceTextFromRun,
@@ -41,6 +46,8 @@ export type FinalizationEvidenceState = {
   fingerprint: FinalizationEvidenceFingerprint;
   productClaimCoverage: ProductClaimCoverage;
 };
+
+const MINIMUM_COMMIT_REFERENCE_LENGTH = 7;
 
 export async function readAutoresearchLedger(
   cwd: string,
@@ -105,7 +112,11 @@ export function buildFinalizationEvidenceState(
     let ledgerIndex = -1;
     for (let index = 0; index < ledgerEntries.length; index += 1) {
       const candidate = ledgerEntries[index];
-      if (!commitRefsMatch(candidate?.commit, commit)) continue;
+      if (
+        !isFinalizationEvidenceTransition(candidate) ||
+        !commitReferencesMatch(candidate?.commit, commit)
+      )
+        continue;
       entry = candidate;
       ledgerIndex = index;
     }
@@ -128,7 +139,10 @@ export function buildFinalizationEvidenceState(
       .map((entry, ledgerIndex) => ({ commit: "", entry, ledgerIndex }))
       .filter(
         ({ entry }) =>
-          entry?.run != null && !String(entry.commit || "").trim() && isAcceptedCurrentRun(entry),
+          entry?.run != null &&
+          !String(entry.commit || "").trim() &&
+          isFinalizationEvidenceTransition(entry) &&
+          isAcceptedCurrentRun(entry),
       ),
   ].sort((left, right) => left.ledgerIndex - right.ledgerIndex);
   const acceptedCommits = commitStates
@@ -203,6 +217,33 @@ export function normalizeFinalizationEvidenceFingerprint(value: unknown): LooseO
       FINALIZATION_EVIDENCE_COMPONENT_KEYS.map((key) => [key, String(components[key] || "")]),
     ),
   };
+}
+
+export function commitReferencesMatch(left: unknown, right: unknown): boolean {
+  const a = String(left || "")
+    .trim()
+    .toLowerCase();
+  const b = String(right || "")
+    .trim()
+    .toLowerCase();
+  const valid = (value: string) =>
+    value.length >= MINIMUM_COMMIT_REFERENCE_LENGTH &&
+    value.length <= 64 &&
+    /^[0-9a-f]+$/.test(value);
+  if (!valid(a) || !valid(b)) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (longer.length !== 40 && longer.length !== 64) return false;
+  if ((shorter.length === 40 || shorter.length === 64) && shorter.length !== longer.length)
+    return false;
+  return longer.startsWith(shorter);
+}
+
+export function isFinalizationEvidenceTransition(entry: LooseObject | null | undefined): boolean {
+  const type = String(entry?.type || "")
+    .trim()
+    .toLowerCase();
+  if (type && type !== "run") return false;
+  return isKeepRun(entry) || isRejectedRun(entry);
 }
 
 export function finalizationPlanFingerprintMaterial(plan: LooseObject): LooseObject {
@@ -286,11 +327,6 @@ function finalizationEvidenceStatusLabel(entry: LooseObject | null): string {
   if (!entry) return "unlogged";
   if (String(entry.status || "") === "keep") return evidenceStatusForRun(entry);
   return String(entry.status || "unlogged");
-}
-
-function commitRefsMatch(value: unknown, commit: string): boolean {
-  const ref = String(value || "").trim();
-  return Boolean(ref && (commit === ref || commit.startsWith(ref) || ref.startsWith(commit)));
 }
 
 function latestSessionGoal(entries: LooseObject[]): string {

@@ -8,6 +8,7 @@ import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
 import {
   buildFinalizationEvidenceState,
+  commitReferencesMatch,
   finalizationPlanFingerprint,
   readAutoresearchLedger,
 } from "./finalization-plan.js";
@@ -829,7 +830,7 @@ async function buildSemanticSafety({
         (run) =>
           run.run > group.run &&
           run.commit &&
-          commitRefsMayMatch(run.commit, group.commit) &&
+          commitReferencesMatch(run.commit, group.commit) &&
           run.status !== "keep" &&
           explicitEvidenceInvalidationText(run),
       );
@@ -882,12 +883,6 @@ async function keptCommitWasReverted(workDir: string, group: RunGroup): Promise<
       const [, subject = ""] = line.split("\x1f");
       return /^Revert\s+/i.test(subject) || subject.includes(group.shortCommit);
     });
-}
-
-function commitRefsMayMatch(left: unknown, right: unknown): boolean {
-  const a = String(left || "");
-  const b = String(right || "");
-  return Boolean(a && b && (a.startsWith(b) || b.startsWith(a)));
 }
 
 function explicitEvidenceInvalidationText(run: LooseObject): string {

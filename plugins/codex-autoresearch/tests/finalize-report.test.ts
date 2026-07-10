@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { finalizationPlanFingerprint, readAutoresearchLedger } from "../lib/finalization-plan.js";
+import {
+  commitReferencesMatch,
+  finalizationPlanFingerprint,
+  readAutoresearchLedger,
+} from "../lib/finalization-plan.js";
 import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
@@ -92,6 +96,13 @@ testWithTempRoot(
   "finalization plan helpers keep fingerprint and ledger contracts stable",
   "autoresearch-finalization-plan-",
   async (root) => {
+    const fullHash = "0123456789abcdef0123456789abcdef01234567";
+    assert.equal(commitReferencesMatch(fullHash.slice(0, 12), fullHash), true);
+    assert.equal(commitReferencesMatch(fullHash.slice(0, 12).toUpperCase(), fullHash), true);
+    assert.equal(commitReferencesMatch(fullHash.slice(0, 6), fullHash), false);
+    assert.equal(commitReferencesMatch(`${fullHash.slice(0, 12)}not-a-hash`, fullHash), false);
+    assert.equal(commitReferencesMatch(`${fullHash}abcd`, fullHash), false);
+
     const plan = {
       source_branch: "codex/autoresearch",
       planned_at: "ignored",
@@ -1986,21 +1997,56 @@ testWithTempRoot(
     assert.match(staleResult.stderr, /product-claim coverage inputs/i);
 
     const audit = await createEvidencePlanFixture(root, "audit-only");
+    const malformedCommit = `${audit.commit.slice(0, 12)}not-a-hash`;
     await fsp.appendFile(
       path.join(audit.repo, "autoresearch.jsonl"),
       [
-        JSON.stringify({ type: "diagnostic", note: "Audit context only" }),
-        JSON.stringify({ run: 99, status: "measure", metric: 1, description: "Audit probe" }),
+        JSON.stringify({
+          type: "diagnostic",
+          status: "discard",
+          commit: audit.commit,
+          note: "Audit context only",
+        }),
+        JSON.stringify({
+          type: "context",
+          status: "keep",
+          evidenceStatus: "rejected",
+          commit: audit.commit,
+          note: "Context only",
+        }),
+        JSON.stringify({
+          type: "run",
+          run: 99,
+          status: "measure",
+          commit: audit.commit,
+          metric: 1,
+          description: "Audit probe",
+        }),
+        JSON.stringify({
+          type: "run",
+          run: 100,
+          status: "keep",
+          evidenceStatus: "rejected",
+          commit: malformedCommit,
+          description: "Malformed rejection reference",
+        }),
         "",
       ].join("\n"),
       "utf8",
     );
     const auditResult = await run(process.execPath, [finalizer, audit.output], audit.repo);
     assert.match(auditResult.stdout, /Review branches:/);
+
+    const malformedKeep = await createEvidencePlanFixture(root, "malformed-keep", {
+      commitRef: (commit) => `${commit.slice(0, 12)}not-a-hash`,
+    });
+    assert.deepEqual(malformedKeep.plan.kept_commits, []);
+    assert.deepEqual(malformedKeep.plan.groups, []);
+    assert.equal(malformedKeep.plan.excluded_commits[0]?.status, "unlogged");
   },
 );
 
-async function createEvidencePlanFixture(root, name) {
+async function createEvidencePlanFixture(root, name, options = {}) {
   const repo = path.join(root, name);
   await fsp.mkdir(repo, { recursive: true });
   await git(["init", "-b", "main"], repo);
@@ -2027,7 +2073,7 @@ async function createEvidencePlanFixture(root, name) {
         status: "keep",
         evidenceStatus: "accepted",
         metric: 1,
-        commit,
+        commit: options.commitRef ? options.commitRef(commit) : commit,
         description: "Accepted change",
         evidence: "correctness checks passed",
       }),
@@ -2038,7 +2084,7 @@ async function createEvidencePlanFixture(root, name) {
   await run(process.execPath, [finalizer, "plan", "--output", output, "--goal", name], repo);
   const plan = JSON.parse(await fsp.readFile(output, "utf8"));
   assert.ok(plan.accepted_evidence_fingerprint?.fingerprint);
-  return { commit, output, repo };
+  return { commit, output, plan, repo };
 }
 
 testWithTempRoot(
