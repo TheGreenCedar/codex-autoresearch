@@ -3,6 +3,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { resolveSessionPaths } from "./session-paths.js";
+import { checkedAppendFileSync } from "./checked-write.js";
 import type { UnknownRecord } from "./types/json.js";
 
 export type SessionRecord = UnknownRecord & Record<string, any>;
@@ -30,7 +31,8 @@ export function jsonlPath(workDir: string): string {
 }
 
 export function appendJsonl(workDir: string, entry: UnknownRecord): void {
-  fs.appendFileSync(jsonlPath(workDir), `${JSON.stringify(entry)}\n`);
+  const paths = resolveSessionPaths({ workDir });
+  checkedAppendFileSync(paths.sessionDir, paths.ledgerPath, `${JSON.stringify(entry)}\n`);
 }
 
 export function readJsonl(workDir: string): SessionRecord[] {

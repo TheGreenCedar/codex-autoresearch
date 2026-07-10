@@ -2,7 +2,7 @@
 
 ## The short version
 
-Be direct, useful, and decent to each other. This project is about making measured Codex loops less fragile, not about making contributors walk through broken glass to prove they belong here.
+Be direct, useful, and decent to each other. People should be able to report a problem or challenge a decision without being treated as the problem.
 
 ## Expected behavior
 
@@ -21,10 +21,12 @@ Be direct, useful, and decent to each other. This project is about making measur
 
 ## Reporting
 
-For ordinary project behavior problems, open an issue or contact the maintainer listed in `plugins/codex-autoresearch/package.json`.
+Report conduct problems privately to `albertnajjar@outlook.com`. Do not open a public issue if the report identifies people or includes private messages, logs, credentials, or unpublished work.
 
 For vulnerabilities or sensitive reports, follow `SECURITY.md` instead of opening a public issue.
 
+The maintainer will acknowledge a conduct report, limit disclosure to what is needed to investigate it, and explain any action that can be shared without exposing the reporter or other affected people. Anonymous or incomplete reports may be harder to investigate, but they will not be dismissed for that reason alone.
+
 ## Enforcement
 
-Maintainers may edit, hide, lock, or delete comments; close issues; block accounts; or take other reasonable steps to keep the project usable. The goal is not ceremony. The goal is a project where people can report real problems and make the tool better without the whole room catching fire.
+Maintainers may edit, hide, lock, or delete comments; close issues; block accounts; or take other reasonable steps to keep the project usable. Enforcement should protect contributors and the work, not win an argument.

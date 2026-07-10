@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -20,6 +30,7 @@ import {
 } from "../lib/session-core.js";
 import { buildCheapFinalizationPressure } from "../lib/session-read-model.js";
 import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
+import { isPublicCatalogAddress } from "../lib/recipes.js";
 import {
   isMetricEligibleStatus,
   isPromotionalStatus,
@@ -50,10 +61,18 @@ import {
 } from "../lib/partial-results.js";
 import { buildResearchIntegrity } from "../lib/truth-signals.js";
 import {
+  commandClassFor,
   createProgressSnapshot,
   progressSnapshotFromRun,
   staleProgressReason,
 } from "../lib/runner-progress.js";
+import { assertSafeWriteTarget, checkedAtomicWriteFile } from "../lib/checked-write.js";
+import {
+  sessionMutationLockLocation,
+  sessionRecoveryLockPath,
+  withSessionMutationLock,
+} from "../lib/session-mutation-lock.js";
+import { clearFilesWithWarnings } from "../lib/commands/log.js";
 import {
   assertInsideResearchRoot,
   resolveSafeResearchPath,
@@ -133,6 +152,181 @@ test("runner minimal env mode keeps explicit env without inheriting unrelated pa
       delete process.env[parentKey];
     }
   });
+});
+
+test("remote catalog address validation accepts only globally routable IPs", () => {
+  for (const address of [
+    "127.0.0.1",
+    "10.0.0.1",
+    "192.0.2.1",
+    "198.51.100.1",
+    "203.0.113.1",
+    "::1",
+    "::ffff:7f00:1",
+    "2001:db8::1",
+    "fc00::1",
+    "fe80::1",
+    "ff02::1",
+  ]) {
+    assert.equal(isPublicCatalogAddress(address), false, address);
+  }
+  assert.equal(isPublicCatalogAddress("8.8.8.8"), true);
+  assert.equal(isPublicCatalogAddress("2606:4700:4700::1111"), true);
+});
+
+test("progress command classes never persist executable paths or arguments", () => {
+  assert.equal(
+    commandClassFor("C:\\Users\\secret\\node.exe C:\\private\\bench.mjs --token raw"),
+    "node script",
+  );
+  assert.equal(commandClassFor("TOKEN=raw npm run private-task -- --secret raw"), "npm run");
+});
+
+test("checked writes allow canonicalized ancestors but reject linked parents inside the root", async (t) => {
+  await withTempDir("checked-write-linked-root", async (dir) => {
+    const outside = path.join(dir, "outside");
+    const link = path.join(dir, "linked");
+    await mkdir(path.join(outside, "session"), { recursive: true });
+    try {
+      await symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory links are unavailable: ${String(error)}`);
+      return;
+    }
+    const aliasedRoot = path.join(link, "session");
+    const configPath = path.join(aliasedRoot, "autoresearch.config.json");
+    const boundTarget = await assertSafeWriteTarget(aliasedRoot, configPath);
+    assert.equal(isPathInside(await realpath(aliasedRoot), boundTarget), true);
+    await checkedAtomicWriteFile(aliasedRoot, configPath, "{}\n");
+    assert.equal(await readFile(configPath, "utf8"), "{}\n");
+    const canonicalLock = path.join(await realpath(aliasedRoot), ".autoresearch-mutation.lock");
+    await withSessionMutationLock(aliasedRoot, "canonical-lock", async () => {
+      await access(canonicalLock);
+    });
+    await assert.rejects(access(canonicalLock));
+    await writeFile(
+      canonicalLock,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale", timestamp: new Date(0).toISOString(), token: "dead" })}\n`,
+    );
+    let recoveredCanonicalLock = false;
+    await withSessionMutationLock(aliasedRoot, "recover-canonical-lock", async () => {
+      recoveredCanonicalLock = true;
+    });
+    assert.equal(recoveredCanonicalLock, true);
+    await assert.rejects(access(canonicalLock));
+
+    const escaped = path.join(dir, "escaped");
+    const linkedParent = path.join(aliasedRoot, "linked-parent");
+    await mkdir(escaped, { recursive: true });
+    await symlink(escaped, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(
+      checkedAtomicWriteFile(
+        aliasedRoot,
+        path.join(linkedParent, "autoresearch.config.json"),
+        '{"unsafe":true}\n',
+      ),
+      /symlink, junction, or file/,
+    );
+  });
+});
+
+test("checked atomic writes remove temporary files after write failure", async () => {
+  await withTempDir("checked-write-failure-cleanup", async (dir) => {
+    const bytes = new Uint8Array(8);
+    structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
+    await assert.rejects(
+      checkedAtomicWriteFile(dir, path.join(dir, "autoresearch.config.json"), bytes),
+    );
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
+      [],
+    );
+  });
+});
+
+test("session mutation locks block live owners and reclaim dead owners", async () => {
+  await withTempDir("session-mutation-lock", async (dir) => {
+    const lockPath = path.join(dir, ".autoresearch-mutation.lock");
+    const beforeGit = await sessionMutationLockLocation(dir);
+    if (typeof process.getuid === "function") {
+      assert.match(path.basename(beforeGit.root), new RegExp(`uid-${process.getuid()}$`));
+      const rootStat = await stat(beforeGit.root);
+      assert.equal(rootStat.uid, process.getuid());
+      assert.equal(rootStat.mode & 0o077, 0);
+    } else {
+      assert.match(path.basename(beforeGit.root), /user-[a-f0-9]{16}$/);
+    }
+    await mkdir(path.join(dir, ".git"));
+    const afterGit = await sessionMutationLockLocation(dir);
+    assert.equal(afterGit.path, beforeGit.path, "git init must not move the lock");
+    assert.equal(isPathInside(dir, beforeGit.path), false, "locks must stay outside the worktree");
+    await writeFile(
+      lockPath,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale", timestamp: new Date(0).toISOString(), token: "dead" })}\n`,
+    );
+    let recovered = false;
+    await withSessionMutationLock(dir, "recover", async () => {
+      recovered = true;
+    });
+    assert.equal(recovered, true);
+    await assert.rejects(access(lockPath));
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = withSessionMutationLock(dir, "first", async () => await gate);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await assert.rejects(
+      withSessionMutationLock(dir, "second", async () => {}),
+      /already running/,
+    );
+    release();
+    await first;
+  });
+});
+
+test("parallel dead-owner recovery admits exactly one session mutation", async () => {
+  await withTempDir("session-mutation-lock-race", async (dir) => {
+    const lockPath = path.join(dir, ".autoresearch-mutation.lock");
+    const recoveryPath = sessionRecoveryLockPath(lockPath, "dead");
+    await writeFile(
+      lockPath,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale", timestamp: new Date(0).toISOString(), token: "dead" })}\n`,
+    );
+    await writeFile(
+      recoveryPath,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale-recovery", timestamp: new Date(0).toISOString(), token: "dead-recovery" })}\n`,
+    );
+    let actions = 0;
+    const contenders = await Promise.allSettled(
+      ["first", "second"].map((command) =>
+        withSessionMutationLock(dir, command, async () => {
+          actions += 1;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }),
+      ),
+    );
+    assert.equal(actions, 1);
+    assert.equal(contenders.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(contenders.filter((result) => result.status === "rejected").length, 1);
+    await assert.rejects(access(lockPath));
+    await assert.rejects(access(recoveryPath));
+  });
+});
+
+test("last-run cleanup keeps non-missing failures as structured warnings", async () => {
+  const warnings = await clearFilesWithWarnings(
+    ["C:\\private\\autoresearch\\last-run.json"],
+    async () => {
+      const error = new Error("EACCES C:\\private\\autoresearch\\last-run.json");
+      (error as Error & { code: string }).code = "EACCES";
+      throw error;
+    },
+    { workDir: "C:\\private" },
+  );
+  assert.equal(warnings[0].code, "last_run_cleanup_failed");
+  assert.doesNotMatch(warnings[0].message, /C:\\private/i);
 });
 
 test("metricless crash and checks_failed entries remain metricless in current state", async () => {
@@ -1007,7 +1201,7 @@ test("runner progress and experiment economics expose timeout and stale-progress
   });
 
   assert.equal(progress.packetId, "packet-1");
-  assert.equal(progress.commandClass, "npm test --");
+  assert.equal(progress.commandClass, "npm test");
   assert.equal(progress.timeoutPhase, "benchmark");
   assert.equal(progress.exitState, "timed_out");
   assert.equal(progress.latestArtifactRow, "rows=out/rows.json");

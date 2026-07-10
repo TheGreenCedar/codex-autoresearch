@@ -1,7 +1,7 @@
-# Showcase Assets
+# Showcase assets
 
-`dashboard-demo.png` is the public README snapshot. Capture it from the served live dashboard, not from the static HTML export. Keep it compact and trend-first: show the useful first operator surface, especially the packet trend, below-chart trust state, readout freshness, and next-action readiness, but do not use a full-page dashboard capture.
+`dashboard-demo.png` is the screenshot in the public README. Capture it from the live dashboard, not a static export. Keep the frame tight enough to read at README width: show the packet trend, trust state, freshness, and next action without capturing the whole page.
 
-When the dashboard UI changes, refresh the screenshot from a demo or local sample session and keep the frame focused on the useful surface. Avoid screenshots that expose local absolute paths, personal data, browser chrome, cropped text, or unnecessary vertical scroll depth.
+When the dashboard UI changes, refresh the screenshot from a demo or local sample session and keep the frame focused on the useful surface. Before committing it, render the README at its normal content width and confirm that the full session title is visible, the chart labels remain legible, and no local absolute paths or personal data appear. Avoid browser chrome, cropped text, hover overlays, or unnecessary vertical scroll depth.
 
-The plugin manifest may use compact SVG or PNG screenshots, and the root README should also stay compact. The README image should read as a read-only product snapshot, not a full-page report export or a dashboard-side action surface.
+The plugin manifest may use compact SVG or PNG screenshots. In every surface, the image should look like a read-only product snapshot, not a control panel or a full-page report.

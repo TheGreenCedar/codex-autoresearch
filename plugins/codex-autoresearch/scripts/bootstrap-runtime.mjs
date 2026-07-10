@@ -11,7 +11,10 @@ import { parseSha256Manifest } from "./release-integrity.mjs";
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_TIMEOUT_MS = 120_000;
 const LOCK_RETRY_MS = 250;
+const MAX_LOCK_RECOVERY_DEPTH = 16;
 const PACKAGE_NAME = "codex-autoresearch";
+const RELEASE_REPOSITORY = "TheGreenCedar/codex-autoresearch";
+const RELEASE_WORKFLOW = `${RELEASE_REPOSITORY}/.github/workflows/release.yml`;
 const RELEASE_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
 const DASHBOARD_BUILD_ASSETS = ["dashboard-app.js", "dashboard-app.css"];
 
@@ -58,11 +61,18 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
   if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
 
   const dashboardMissing = !(await dashboardBuildReady(pluginRoot));
-  const targetMtime = await fileMtime(target);
-  if (!dashboardMissing && (await sourceRuntimeFreshByGit(pluginRoot, targetMtime))) return;
-  if (!dashboardMissing && (await newestSourceMtime(pluginRoot)) < targetMtime) return;
+  const outputMtime = Math.min(
+    await fileMtime(target),
+    ...(await Promise.all(
+      DASHBOARD_BUILD_ASSETS.map((asset) =>
+        fileMtime(path.join(pluginRoot, "assets", "dashboard-build", asset)),
+      ),
+    )),
+  );
+  if (!dashboardMissing && (await sourceRuntimeFreshByGit(pluginRoot, outputMtime))) return;
+  if (!dashboardMissing && (await newestSourceMtime(pluginRoot)) < outputMtime) return;
 
-  const build = npmBuildInvocation(dashboardMissing ? "build" : "build:node");
+  const build = npmBuildInvocation("build");
   await run(build.command, build.args, { cwd: pluginRoot });
 }
 
@@ -116,6 +126,8 @@ async function installRuntimeFromRelease(pluginRoot, options = {}) {
       checksumPath,
       tarballName: artifacts.tarballName,
     });
+    await verifyRuntimeAttestation(tarballPath);
+    await verifyRuntimeArchive(tarballPath);
     await fs.mkdir(extractDir, { recursive: true });
     await run("tar", ["-xzf", tarballPath, "-C", extractDir]);
 
@@ -196,7 +208,129 @@ export async function verifyRuntimeTarballIntegrity({ tarballPath, checksumPath,
   return { tarballName, sha256: actualHash };
 }
 
-async function verifyReleasePackageManifest(packageDir, expectedVersion) {
+export function runtimeAttestationArgs(tarballPath) {
+  return [
+    "attestation",
+    "verify",
+    tarballPath,
+    "--repo",
+    RELEASE_REPOSITORY,
+    "--signer-workflow",
+    RELEASE_WORKFLOW,
+  ];
+}
+
+export async function verifyRuntimeAttestation(tarballPath, commandRunner = runCapture) {
+  let result;
+  try {
+    result = await commandRunner("gh", runtimeAttestationArgs(tarballPath));
+  } catch (error) {
+    throw new Error(
+      `Release runtime hydration requires GitHub CLI and network access: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (result.code !== 0) {
+    throw new Error(
+      `Release runtime attestation verification failed for ${path.basename(tarballPath)}: ${result.stderr.trim() || result.stdout.trim() || `gh exited with code ${result.code}`}`,
+    );
+  }
+}
+
+export async function verifyRuntimeArchive(tarballPath) {
+  const [namesResult, verboseResult] = await Promise.all([
+    runCapture("tar", ["-tzf", tarballPath]),
+    runCapture("tar", ["-tvzf", tarballPath]),
+  ]);
+  if (namesResult.code !== 0 || verboseResult.code !== 0) {
+    throw new Error(
+      `Release tarball manifest could not be read: ${namesResult.stderr.trim() || verboseResult.stderr.trim() || "tar failed"}`,
+    );
+  }
+  const names = nonEmptyLines(namesResult.stdout);
+  const verbose = nonEmptyLines(verboseResult.stdout);
+  if (!names.length || names.length !== verbose.length) {
+    throw new Error("Release tarball manifest is empty or inconsistent.");
+  }
+  validateRuntimeArchiveEntries(
+    names.map((name, index) => ({ name, type: verbose[index].trimStart()[0] || "" })),
+  );
+}
+
+export function validateRuntimeArchiveEntries(entries) {
+  for (const entry of entries) {
+    const name = String(entry?.name || "");
+    const type = String(entry?.type || "");
+    if (type !== "-" && type !== "d") {
+      throw new Error(
+        `Release tarball contains unsupported entry type ${JSON.stringify(type)}: ${name}`,
+      );
+    }
+    if (
+      !name ||
+      name.includes("\\") ||
+      name.includes("\0") ||
+      name.startsWith("/") ||
+      /^[A-Za-z]:/.test(name)
+    ) {
+      throw new Error(`Release tarball contains an unsafe path: ${JSON.stringify(name)}.`);
+    }
+    const segments = name.split("/").filter(Boolean);
+    if (
+      segments[0] !== "package" ||
+      segments.some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new Error(`Release tarball entry must stay under package/: ${JSON.stringify(name)}.`);
+    }
+    const relativeName = segments.slice(1).join("/");
+    if (type === "-" && !isExpectedRuntimeArchiveFile(relativeName)) {
+      throw new Error(`Release tarball contains an unexpected file: ${JSON.stringify(name)}.`);
+    }
+    if (type === "d" && !isExpectedRuntimeArchiveDirectory(relativeName)) {
+      throw new Error(`Release tarball contains an unexpected directory: ${JSON.stringify(name)}.`);
+    }
+  }
+}
+
+function isExpectedRuntimeArchiveFile(name) {
+  if ([".codex-plugin/plugin.json", "LICENSE", "package.json"].includes(name)) return true;
+  if (/^assets\/[^/]+\.template$/.test(name)) return true;
+  if (/^assets\/dashboard-build\/dashboard-app\.(?:css|js)$/.test(name)) return true;
+  if (/^assets\/(?:icon|logo)\.svg$/.test(name)) return true;
+  if (/^assets\/showcase\/(?:dashboard-demo\.png|showcase\.md)$/.test(name)) return true;
+  if (name === "assets/template.html") return true;
+  if (/^dist\/lib\/.+\.mjs$/.test(name)) return true;
+  if (
+    /^dist\/scripts\/(?:autoresearch|check|check-runner|finalize-autoresearch)\.mjs$/.test(name)
+  ) {
+    return true;
+  }
+  if (/^docs\/.+\.md$/.test(name)) return true;
+  if (
+    /^scripts\/(?:autoresearch|bootstrap-runtime|check|finalize-autoresearch|release-integrity)\.mjs$/.test(
+      name,
+    )
+  ) {
+    return true;
+  }
+  return /^skills\/codex-autoresearch\/(?:SKILL\.md|agents\/openai\.yaml|references\/.+\.md)$/.test(
+    name,
+  );
+}
+
+function isExpectedRuntimeArchiveDirectory(name) {
+  if (!name) return true;
+  return [".codex-plugin", "assets", "dist", "docs", "scripts", "skills"].some(
+    (root) => name === root || name.startsWith(`${root}/`),
+  );
+}
+
+function nonEmptyLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0);
+}
+
+export async function verifyReleasePackageManifest(packageDir, expectedVersion) {
   const manifestPath = path.join(packageDir, "package.json");
   let pkg;
   try {
@@ -219,28 +353,130 @@ async function verifyReleasePackageManifest(packageDir, expectedVersion) {
   }
 }
 
-async function withRuntimeInstallLock(pluginRoot, fn) {
+export async function withRuntimeInstallLock(pluginRoot, fn) {
   const lockPath = path.join(pluginRoot, ".codex-autoresearch-runtime.lock");
   const started = Date.now();
   let handle;
+  const owner = {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  };
 
   while (!handle) {
     try {
-      handle = await fs.open(lockPath, "wx");
+      handle = await createRuntimeLock(lockPath, owner);
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      if (Date.now() - started > LOCK_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for runtime install lock at ${lockPath}.`);
+      const currentOwner = await readRuntimeInstallLock(lockPath);
+      if (currentOwner && !isPidAlive(currentOwner.pid)) {
+        const recoveryOwner = {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          token: `${owner.token}-recovery-${Math.random().toString(16).slice(2)}`,
+        };
+        const claims = await acquireRuntimeRecoveryAuthority(lockPath, currentOwner, recoveryOwner);
+        if (claims) {
+          try {
+            const confirmedOwner = await readRuntimeInstallLock(lockPath);
+            if (confirmedOwner?.token === currentOwner.token && !isPidAlive(confirmedOwner.pid)) {
+              await fs.rm(lockPath);
+              handle = await createRuntimeLock(lockPath, owner);
+            }
+          } finally {
+            await releaseRuntimeRecoveryClaims(claims);
+          }
+        }
       }
-      await sleep(LOCK_RETRY_MS);
     }
+    if (handle) break;
+    if (Date.now() - started > LOCK_TIMEOUT_MS) {
+      throw new Error(`Timed out waiting for runtime install lock at ${lockPath}.`);
+    }
+    await sleep(LOCK_RETRY_MS);
   }
 
   try {
     await fn();
   } finally {
     await handle.close().catch(() => {});
+    await releaseRuntimeLock(lockPath, owner.token);
+  }
+}
+
+export function runtimeRecoveryLockPath(lockPath, ownerToken, parentToken = "") {
+  const identity = createHash("sha256")
+    .update(`${ownerToken}:${parentToken}`)
+    .digest("hex")
+    .slice(0, 20);
+  return `${lockPath}.recovery-${identity}`;
+}
+
+async function acquireRuntimeRecoveryAuthority(lockPath, deadOwner, owner) {
+  const claims = [];
+  let parentToken = "";
+  for (let depth = 0; depth < MAX_LOCK_RECOVERY_DEPTH; depth += 1) {
+    const recoveryPath = runtimeRecoveryLockPath(lockPath, deadOwner.token, parentToken);
+    try {
+      const handle = await createRuntimeLock(recoveryPath, owner);
+      await handle.close();
+      claims.push({ path: recoveryPath, token: owner.token });
+      return claims;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    const currentOwner = await readRuntimeInstallLock(recoveryPath);
+    if (!currentOwner || isPidAlive(currentOwner.pid)) return null;
+    claims.push({ path: recoveryPath, token: currentOwner.token });
+    parentToken = currentOwner.token;
+  }
+  throw new Error("Runtime install lock recovery exceeded the dead-owner depth limit.");
+}
+
+async function releaseRuntimeRecoveryClaims(claims) {
+  for (const claim of [...claims].reverse()) {
+    await releaseRuntimeLock(claim.path, claim.token);
+  }
+}
+
+async function createRuntimeLock(lockPath, owner) {
+  const handle = await fs.open(lockPath, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
+    await handle.sync();
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => {});
     await fs.rm(lockPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function releaseRuntimeLock(lockPath, token) {
+  const currentOwner = await readRuntimeInstallLock(lockPath);
+  if (currentOwner?.token === token) {
+    await fs.rm(lockPath, { force: true }).catch(() => {});
+  }
+}
+
+async function readRuntimeInstallLock(lockPath) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    if (!Number.isSafeInteger(parsed?.pid) || parsed.pid < 1 || typeof parsed?.token !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
   }
 }
 
@@ -342,7 +578,18 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
     ).catch(() => null),
     runCapture(
       "git",
-      ["status", "--porcelain=v1", "-uall", "--", "package.json", "lib", "scripts"],
+      [
+        "status",
+        "--porcelain=v1",
+        "-uall",
+        "--",
+        "package.json",
+        "lib",
+        "scripts",
+        "dashboard/src",
+        "vite.dashboard.config.ts",
+        "assets/template.html",
+      ],
       {
         cwd: pluginRoot,
       },
@@ -407,9 +654,12 @@ function parsePorcelainPath(text) {
   }
 }
 
-function isRuntimeSourcePath(relativePath) {
+export function isRuntimeSourcePath(relativePath) {
   return (
     relativePath === "package.json" ||
+    relativePath === "vite.dashboard.config.ts" ||
+    relativePath === "assets/template.html" ||
+    relativePath.startsWith("dashboard/src/") ||
     ((relativePath.startsWith("lib/") || relativePath.startsWith("scripts/")) &&
       relativePath.endsWith(".ts"))
   );
@@ -420,16 +670,12 @@ function slashPath(value) {
 }
 
 async function newestSourceMtime(pluginRoot) {
-  const files = ["package.json"];
-  for (const dir of ["lib", "scripts"]) {
+  const files = ["package.json", "vite.dashboard.config.ts", "assets/template.html"];
+  for (const dir of ["lib", "scripts", "dashboard/src"]) {
     const entries = await fs
       .readdir(path.join(pluginRoot, dir), { recursive: true })
       .catch(() => []);
-    files.push(
-      ...entries
-        .filter((entry) => String(entry).endsWith(".ts"))
-        .map((entry) => path.join(dir, entry)),
-    );
+    files.push(...entries.map((entry) => path.join(dir, entry)));
   }
   return Math.max(
     0,

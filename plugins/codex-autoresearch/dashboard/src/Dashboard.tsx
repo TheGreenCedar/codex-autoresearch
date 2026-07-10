@@ -43,7 +43,13 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     viewModel,
   } = useDashboardSession({ initialEntries, initialMeta });
   const mode = dashboardMode(meta);
-  const readout = useMemo(() => buildReadout(session, viewModel), [session, viewModel]);
+  const ledgerBounds = meta.ledgerBounds || viewModel.ledgerBounds;
+  const invalidLedgerEntryCount =
+    normalized.invalidLedgerEntryCount + finiteNonNegative(ledgerBounds?.invalidLedgerEntryCount);
+  const readout = useMemo(
+    () => buildReadout(session, viewModel, invalidLedgerEntryCount),
+    [invalidLedgerEntryCount, session, viewModel],
+  );
   const { liveEnabled, liveStatus, refreshLiveData, setLiveEnabled } = useLiveDashboard({
     meta,
     mode,
@@ -126,11 +132,7 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
         </section>
 
-        <Ledger
-          session={session}
-          readout={readout}
-          ledgerBounds={meta.ledgerBounds || viewModel.ledgerBounds}
-        />
+        <Ledger session={session} readout={readout} ledgerBounds={ledgerBounds} />
 
         {auditView ? (
           <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">
@@ -167,4 +169,9 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       </div>
     </div>
   );
+}
+
+function finiteNonNegative(value: unknown): number {
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }

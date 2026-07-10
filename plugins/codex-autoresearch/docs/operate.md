@@ -1,232 +1,119 @@
-# Operate
+# Run or resume a session
 
-Use this page while running or resuming a loop. The benchmark is useful only when the next action is backed by current evidence.
+Autoresearch is designed to survive a closed terminal, a compacted Codex task, or a week away from the project. When you come back, start from the files and the current repository state. Chat history can explain context, but the ledger is the record.
 
-## Resume
+## Resume from the current state
 
-Start with read-only context:
+These commands are for a source checkout and run from `plugins/codex-autoresearch`. If you installed through Codex, ask `@Codex Autoresearch` to run them for you.
 
 ```bash
-node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
-node scripts/autoresearch.mjs state --cwd <project> --compact
 node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
+node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
 node scripts/autoresearch.mjs doctor --cwd <project> --explain
 ```
 
-For broad qualitative new requests, `research-start --cwd <project> --slug <slug> --goal "<goal>"` is the golden path. It keeps scratchpad seeding, `quality_gap` setup, benchmark validation, first baseline measurement, and resume commands together. Use `prompt-plan` first when you need read-only planning before creating files.
+Read the blocker and next command before the supporting detail. A normal result may send you to another experiment, but it may also ask you to repair a stale packet, separate dirty files, refresh the runtime, start a new segment, or preview finalization. Follow that action before reaching for `next` out of habit.
 
-CLI commands return structured content; prefer `--json-full`, `--compact`, or the written session files over scraping prose.
+The main session files are `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md`. Research sessions also have an active folder under `autoresearch.research/<slug>/`. Read them before changing the project.
 
-### Resume readout — what to check
-
-Read `state --report` top-down: blockers, next action, next command, then supporting context. Field names are in [state-fields](concepts.md#state-fields).
-
-| Symptom | Likely cause | What to do |
-| --- | --- | --- |
-| Next action says repair, not `next` | Goal mismatch, decision capsule, or loop contract block | Follow the named command; see [Resume checklist](#resume-checklist) |
-| `source-dirty` | Unrelated source files in the worktree | Clean, stash, or scope dirty files before keep/discard or finalization |
-| `session-artifacts-dirty` only | `autoresearch.*` or research scratchpad files dirty | Safe for read/run work; stash or commit session files before branch-changing finalization |
-| Dashboard liveness missing | No served dashboard or stale export | Run `serve --cwd <project>`; do not trust an old `file://` export |
-| Watchdog fired | Eight-hour quiet window with no progress | Inspect process, finalize kept work, or rescope — do not blindly run another packet |
-| `metricSemanticsWarning` | Segment or metric changed | Treat active and historical bests as not directly comparable |
-| Gap metric at zero but not promotable | `researchIntegrity` says dev-only | Run finalization preview, promotion gate, or new segment before more same-metric packets |
-| Runtime drift reported | Source checkout differs from installed plugin | Inspect active runtime before claiming source behavior is live |
-
-`goalFrame.authoritativeGoal` and `operatorHandoff.goal` are the research objective on resume. The latest prompt is an instruction unless goal-frame data says it matches the durable goal. A mismatched objective blocks broad packet and finalization work until repaired.
-
-## Budgets
-
-Setup can record `packetBudget`, `wallClockBudgetSeconds`, and `budgetNote`. Exhausted budgets are stop/rescope signals: extend the budget, start a new segment, preview finalization, or decide what to trade off next.
+For a compact handoff to another Codex session, use:
 
 ```bash
-node scripts/autoresearch.mjs config --cwd <project> --packet-budget <n>
-node scripts/autoresearch.mjs config --cwd <project> --wall-clock-budget-seconds <n>
+node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
 ```
 
-Pass empty values to clear budget fields: `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""`.
+If the terminal report, compact state, and dashboard name different next actions, stop. They are projections of the same session and should agree.
 
-Packet and wall-clock budgets are not API spend tracking. Autoresearch only tracks configured packet count and elapsed wall-clock unless an external integration supplies separate spend evidence.
+## Run and log an experiment
 
-## Resume checklist
-
-The compact checklist is the shortest safe continuation path after compaction or a long pause:
+Before a benchmark run, check the tree and ask the session whether another packet is allowed:
 
 ```bash
+git status --short
 node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
 ```
 
-It returns one command, one safety reason, one blocker, one evidence role, and one source. If any governance readout blocks packet work, clear that action before `next`. See [state-fields](concepts.md#state-fields) for field names.
-
-Read existing files before editing:
-
-- `autoresearch.md`
-- `autoresearch.jsonl`
-- `autoresearch.ideas.md`
-- `autoresearch.research/<slug>/` for research loops
-
-When the best evidence lives in a previous Codex session JSONL, import only a bounded capsule:
+Then run one packet:
 
 ```bash
-node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run
-node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --apply
+node scripts/autoresearch.mjs next --cwd <project>
 ```
 
-The command writes `session-digest.md`, `decisions.jsonl`, `quality-gaps.md`, and `evidence-index.json` under `autoresearch.research/<slug>/`, plus `decision-capsule.json` — a carry-forward note with bottleneck, evidence, next experiment, and wrong next actions. Summarize the one carry-forward conclusion in ASI or `autoresearch.ideas.md` after importing.
+`next` is the command that writes a reusable last-run packet. `run` is only a raw probe, so a later `log --from-last` cannot reuse it.
 
-Hard capsules block generic `next` and finalization until benchmark repair, a fresh segment, or explicit acknowledgement. Bounded-next capsules allow only explicit bounded packet work such as `next --timeout-seconds <n> --command-file <path>`.
+After the command finishes, inspect the metric, the checks, the diff, and `git status`. Then record the decision from the saved packet:
 
-## Friction recovery
+```bash
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Reuse the parsed config between test files"
+```
 
-When a done claim is rejected because accuracy, lazy behavior, ranking quality, or product-grade proof was not tested, stop packet work and downgrade to an experimental primitive. Run `state --compact` or `recommend-next --compact`, inspect claim coverage, and add missing acceptance proof before finalization uses product-grade language.
+The five statuses have deliberately narrow meanings:
 
-When benchmark-contract drift is intentional, use `new-segment` instead of editing the ledger by hand. A fresh segment is the boundary where a new benchmark command, protected path set, metric name, direction, or unit becomes authoritative.
+| Status | When it fits |
+| --- | --- |
+| `measure` | A baseline, environment check, no-change result, or diagnostic. It never commits or reverts work. |
+| `keep` | The metric is finite, required checks passed, and the scoped change is worth preserving. |
+| `discard` | The packet measured successfully, but the change is not worth keeping. Logging may clean the configured or explicit experiment paths. |
+| `crash` | The benchmark failed before it produced usable metric evidence. Logging may clean the configured or explicit experiment paths. |
+| `checks_failed` | A metric exists, but the correctness check failed. Logging may clean the configured or explicit experiment paths. |
 
-When run numbers duplicate, segments look stale, or manual log entries were edited, inspect the ledger before another packet:
+Pass `--revert-paths` when the cleanup scope should be narrower than configured commit paths. Check `git status --short --branch` before logging any status that may mutate Git.
+
+Use `--from-last` rather than copying a metric out of the terminal. If inline JSON is awkward in the current shell, put metrics or the structured experiment note in a file and pass `--metrics-file` or `--asi-json-file`.
+
+Detailed output stores that structured experiment note in the `asi` field. It should say what Codex expected, what the evidence showed, why a rejected path should stay rejected, and what experiment would be sensible next. A useful note prevents the next session from rediscovering the same dead end.
+
+Every log returns a continuation. If `continuation.shouldContinue` is true, another loop action is expected. If `continuation.forbidFinalAnswer` is true, Codex should not report the goal as finished. A repair, budget stop, segment change, or finalization action takes priority over another experiment.
+
+## Repair the layer that failed
+
+Do not rerun an expensive benchmark until you know what the previous run failed to answer. The CLI has cheaper commands for that:
+
+- `benchmark-lint` checks whether the primary metric can be parsed.
+- `benchmark-inspect` shows what the benchmark command actually does.
+- `checks-inspect --cwd <project> --command "<checks>"` isolates the correctness command.
+- `partial-results --cwd <project> --from-last` looks for useful artifacts from a timed-out packet.
+- `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run` distills a bounded decision from an older Codex session.
+- `research-fanout --dry-run` helps when the serial idea path has gone stale.
+
+Partial results remain diagnostic measurements; they do not become promotion evidence simply because they were expensive to obtain.
+
+If run numbers are duplicated, segments look wrong, or the ledger was edited by hand, inspect it before doing anything else:
 
 ```bash
 node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json
 ```
 
-Use `ledger-doctor --repair --yes` only after reviewing the JSON health summary and deciding the run-number repair is the right fix. After the repair, verify the returned `backupPath` before doing more packet work.
-
-When the dashboard handoff matters:
+The guarded repair writes a backup first:
 
 ```bash
-node scripts/autoresearch.mjs serve --cwd <project>
+node scripts/autoresearch.mjs ledger-doctor --cwd <project> --repair --yes
 ```
 
-Use the live URL for fresh status. Use `export` only for a static read-only snapshot.
+Review the health summary before repair and verify the returned `backupPath` afterward.
 
-When exploration output gets oversized, use bounded file reads, `rg` on known paths, `partial-results --from-last`, `session-forensics --dry-run`, or an evidence index — not raw command body dumps.
+## Budgets and segments
 
-When a foreground shell has completed and stdin is closed, stop polling that session. Restart only after a precondition changed.
-
-## Dashboard
-
-Serve the live local readout:
+Packet and wall-clock budgets keep a session from quietly expanding into the rest of the week:
 
 ```bash
-node scripts/autoresearch.mjs serve --cwd <project>
+node scripts/autoresearch.mjs config --cwd <project> --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after one focused pass"
 ```
 
-Use it for:
+These are experiment and elapsed-time limits, not billing meters. When a budget is exhausted, decide whether to extend it, narrow the work, finalize what is useful, or stop.
 
-- chart-led readiness: next action, evidence status, lanes, watchdog, finalization pressure
-- trust blockers and runtime provenance
-- best kept change and recent failure
-- metric trajectory and lane evidence
-- copyable report and handoff packet
-
-Static exports are offline snapshots:
+Start a new segment when the benchmark, metric, direction, protected paths, or phase of work changes enough that the old numbers are no longer directly comparable:
 
 ```bash
-node scripts/autoresearch.mjs export --cwd <project>
+node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
+node scripts/autoresearch.mjs new-segment --cwd <project> --reason "New benchmark phase" --yes
 ```
 
-The dashboard is a read-only visual aid; setup, packet runs, logging, and finalization stay in the CLI. See [Architecture](architecture.md#dashboard-boundary).
+The old history stays in the ledger. Run doctor again before the first packet in the new segment.
 
-The process-hygiene panel reports what the snapshot can actually know. It cannot enumerate random old localhost servers outside the current process; that gap is labeled instead of faked.
+## Research sessions and parallel lanes
 
-## Packet loop
-
-Do not rerun a heavy packet just because the loop is still open. First check whether a cheaper action suffices: `partial-results --from-last`, `benchmark-inspect`, `benchmark-lint`, `checks-inspect`, `session-forensics --dry-run`, `research-fanout --dry-run`, or a narrower `next --timeout-seconds <n> --command-file <path>`.
-
-`benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
-
-Normal loop:
-
-```bash
-node scripts/autoresearch.mjs next --cwd <project>
-git status --short
-node scripts/autoresearch.mjs state --cwd <project> --compact
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
-node scripts/autoresearch.mjs state --cwd <project> --compact
-```
-
-The `git status` and `state` checkpoint before `log` is deliberate. Do not let keep/discard automation touch unrelated dirty files, stale packets, pending log transactions, protected benchmark files, or paths outside configured `commitPaths` / `revertPaths`.
-
-`next` is the packet-producing command. `run` is a raw benchmark probe; do not expect `log --from-last` to reuse it.
-
-For shells where inline JSON is fragile:
-
-```bash
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --metrics-file metrics.json
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change" --asi-json-file asi.json
-```
-
-If a packet crashes or times out after writing artifact rows:
-
-```bash
-node scripts/autoresearch.mjs partial-results --cwd <project> --from-last
-node scripts/autoresearch.mjs partial-results --cwd <project> --record <candidate-id>
-```
-
-Recorded partial results are diagnostic `measure` evidence only — never promotion-grade.
-
-Packet commands may print optional task manifests:
-
-```text
-ARTIFACT task_manifest=out/task-manifest.json
-```
-
-Autoresearch indexes task diagnostics inside packet evidence. Malformed manifests or path escapes are quarantined without invalidating unrelated primary metric evidence.
-
-If `log --from-last` says there is no loggable packet or the packet is stale:
-
-```bash
-node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --metric <value> --status measure --description "Diagnostic measurement"
-```
-
-Statuses:
-
-- `keep`: finite metric and a change worth preserving.
-- `discard`: finite metric but not worth keeping.
-- `measure`: finite metric for baselines, no-change checks, or diagnostics. Never stages, commits, reverts, or becomes finalizer evidence.
-- `crash`: benchmark failed before usable metric evidence.
-- `checks_failed`: metric exists but correctness checks failed.
-
-Logged runs carry an evidence status. Defaults: `accepted` for `keep`, `provisional` for `measure`, `rejected` for discard/crash/check failures. Override with `--evidence-status` only when the evidence role really differs.
-
-After logging, read the continuation result. If the continuation says the loop is still active, continue the loop before treating the run as complete. Choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
-
-## Parallel research lanes
-
-When a loop spends hours on one serial idea path:
-
-```bash
-node scripts/autoresearch.mjs research-fanout --cwd <project> --dry-run
-node scripts/autoresearch.mjs research-fanout --cwd <project> --lanes 6 --yes
-node scripts/autoresearch.mjs lane-runner --cwd <project> --lane-id read-only-scout --summary "Evidence found" --recommendation "Run one measured packet for the chosen hypothesis" --yes
-```
-
-Fanout plans are segment-scoped: after `new-segment`, run a fresh `research-fanout --yes` for the new segment.
-
-Dispatch scout lanes in parallel first. Read-only scout lanes do not need a worktree and fail closed for mutating commands unless explicitly allowed. Implementation lanes need `--worktree <path>` or `--write-scope <paths>` before mutating commands run.
-
-Use `lane-runner --mode big_idea` for distant architecture hypotheses. Big-idea lanes are advice-only and require human approval before measured packet work. `--human-approval` writes a durable scoped approval record; expired or mismatched approvals do not satisfy the current gate.
-
-## ASI
-
-ASI is the structured memory saved with a packet decision — the context the next run needs so it does not repeat the same mistake.
-
-```json
-{
-  "hypothesis": "What was expected to improve",
-  "evidence": "Metric/check proof",
-  "rollback_reason": "Why a rejected path should not return",
-  "next_action_hint": "The next safest measured step",
-  "lane": "distant-scout",
-  "family": "parser-cache",
-  "risk": "low",
-  "expected_delta": "-5% seconds"
-}
-```
-
-## Quality-gap loops
-
-For broad research, product study, docs, UX, and architecture:
+A qualitative session keeps evidence in `sources.md`, judgment in `synthesis.md`, and accepted work in `quality-gaps.md`. The main commands are:
 
 ```bash
 node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
@@ -234,36 +121,16 @@ node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug>
 node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug>
 ```
 
-`research-start` creates the scratchpad, configures `quality_gap`, validates the command, records the first baseline as `measure`, and prints the resume commands. Add `--no-baseline-log` when the first baseline should stay out of the ledger.
+Closing the checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
 
-Scratchpad under `autoresearch.research/<slug>/`:
+When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Start with read-only work. An implementation lane needs a worktree or an explicit write scope, and a large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
 
-| File or folder | Role |
-| --- | --- |
-| `brief.md` | Request, audience, constraints, success criteria |
-| `plan.md`, `tasks.md` | Independent work streams |
-| `sources.md` | Source, date checked, supported claim, confidence |
-| `synthesis.md` | Current merged answer |
-| `quality-gaps.md` | Accepted checklist measured by the loop |
-| `notes/`, `deliverables/` | Evidence and requested artifacts |
-
-`quality_gap=0` closes the accepted checklist for the current round — see [Concepts](concepts.md#quality-gap). The readout also exposes `qualityRound.closed` and `freshRoundSuggested`.
-
-## Fresh segment
-
-When a session is maxed, stale, or entering a new phase:
+## Use the dashboard when it helps
 
 ```bash
-node scripts/autoresearch.mjs new-segment --cwd <project> --dry-run
-node scripts/autoresearch.mjs new-segment --cwd <project> --reason "fresh phase" --yes
+node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
-This appends a new config segment to `autoresearch.jsonl` and preserves old history. Use it for intentional benchmark-contract changes; run `doctor --check-benchmark --explain` before the next packet.
+The printed loopback URL shows live state. `export` writes a static snapshot that is useful for review but cannot prove the current packet is fresh. Neither form runs experiments or changes the session.
 
-## Finalization pressure
-
-Kept commits are review backlog. When kept runs, missing commit metadata, finalization warnings, or watchdog pressure stack up, the dashboard marks finalization pressure and pushes `finalize-preview` or rescoping ahead of more packets. That does not create branches by itself.
-
----
-
-Previous: [Walkthrough](walkthrough.md) · Next: [Trust](trust.md) — metric integrity, drift, and Git safety.
+Once accepted work is starting to pile up, stop adding packets and move to [Finish](finish.md).

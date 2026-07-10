@@ -1,185 +1,156 @@
 ---
 name: codex-autoresearch
-description: Run Codex Autoresearch end to end from one plugin skill. Use when Codex should start, resume, inspect, dashboard, deep-research, iterate, log, or finalize measured optimization loops using autoresearch.md, autoresearch.jsonl, quality_gap scratchpads, or the local CLI helpers.
+description: Run or resume a measured improvement loop in a local project. Use for benchmark-driven optimization, qualitative quality-gap research, packet logging, dashboard readouts, recovery, and review-branch finalization backed by autoresearch session files.
 ---
 
 # Codex Autoresearch
 
-This is the one skill surface and the only Codex-facing skill. Do not route users to old subskills, slash commands, or separate dashboard/finalizer skills.
-
-Default state machine:
+Turn an improvement request into a measured, resumable loop. Report the metric, decision, evidence, next action, and real publication state. Do not replace them with a generic claim that the project is "better."
 
 ```text
 setup -> doctor -> next -> log -> state -> finalize-preview
 ```
 
-The job: make one measured improvement loop trustworthy enough that a human can follow it and a future session can resume it.
+Use this as the only Codex-facing Autoresearch skill. Do not route to retired subskills, slash commands, or MCP surfaces.
 
-## For Codex
+## Establish the working truth
 
-- Use the short command path unless the session is ambiguous or blocked: `setup`, `doctor`, `next`, `log`, `state`, then `finalize-preview`.
-- For qualitative or deep-research improvement loops, start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It creates the scratchpad, configures `quality_gap`, validates the command, and records the first baseline as `measure` unless `--no-baseline-log` is passed.
-- Use advanced diagnostics only when needed. Check `node scripts/autoresearch.mjs --help --all` from the package root before naming a less common command.
-- Use `new-segment` when the active segment is maxed, stale, phase-changing, or no longer comparable.
-- Prefer CLI JSON and durable session state over chat memory: `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, active last-run/progress snapshots under `.git/autoresearch/` in Git repos, fallback `autoresearch.last-run.json` / `autoresearch.progress.json` outside Git, and `autoresearch.research/<slug>/`.
-- Keep every packet decision recoverable through `METRIC name=value`, packet evidence, ASI, continuation data, promotion labels, and the ledger.
-- Before another packet, read `recommend-next --compact` or `state --compact`; obey blockers. Compact-state field names: `docs/concepts.md#state-fields`.
-- `benchmark-lint` must prove the primary `METRIC` contract before product packets are trusted.
-- Configure `commitPaths` or pass `--commit-paths` for kept results in Git repos.
-
-## For the user
-
-- Plain-language prompts work: "/goal @Codex Autoresearch improve this repo."
-- Ask only for essentials that materially change setup: goal, benchmark, primary metric, direction, scope, or correctness checks.
-- For shippable, product, or final requests, identify product claims before setup. Retrieval, search, ranking, lazy behavior, accessibility, safety, or performance work needs a quality constraint or checks path before promotion.
-- Stay on the CLI happy path unless setup is ambiguous, the user asks for the dashboard, packet freshness needs a browser readout, or the canonical action is blocked.
-- Report the story: what was tried, what the metric means, the keep/discard/measure/crash/checks decision, the next move, blockers, optional dashboard URL, and verification.
-
-## Documentation awareness
-
-Use docs only as needed; do not load everything by default.
-
-- Start/resume or normal operation: `docs/start.md`, `docs/operate.md`, and `references/loop-operations.md`.
-- Dashboard, trust, drift, protected paths, unsafe commands, and redaction: `docs/trust.md`, `docs/architecture.md`, and `references/dashboard-trust.md`.
-- Deep research, quality gaps, fanout, finalization, or subagent handoffs: `docs/finish.md`, `docs/workflows.md`, and `references/research-finalize.md`.
-- Troubleshooting: `docs/troubleshooting.md`.
-- Control-plane failures or cross-surface disagreement: `docs/control-plane.md`.
+1. Identify the repository or child package that owns the work.
+2. Run `git status --short --branch`; preserve unrelated changes.
+3. When changing Autoresearch itself, use the checkout in this repository:
+   - wrapper root: `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`
+   - package root: `node scripts/autoresearch.mjs ...`
+4. Treat source and installed-plugin behavior as different until their version and built-entrypoint fingerprint match.
 
 ## Start or resume
 
-1. Identify the owning repo or child package before Git, installs, tests, builds, or autoresearch commands.
-2. Check Git status and work around unrelated dirty files.
-3. If this repo is the target, use the repo-local plugin. From the wrapper root: `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`. From the package root: `node scripts/autoresearch.mjs ...`.
-4. Read `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md` when present.
-5. Use `setup-plan` for read-only setup guidance when essentials are unclear. Use `setup` only when essentials are known and files should be created.
-6. Run `doctor --cwd <project> --check-benchmark --explain` before the first trusted packet or any drift-sensitive metric.
-7. Use the happy path first: `setup -> doctor -> next -> log -> state -> finalize-preview`.
-8. Before another packet, read `recommend-next --compact` or `state --compact`; obey blockers; open detailed diagnostics only when the canonical action is blocked, stale, or unclear.
-9. Use `state --report` for a terminal-first `report.text`. Governance fields are listed in `docs/concepts.md#state-fields`.
-10. Run `serve --cwd <project>`, verify liveness, and provide the live dashboard URL only when the user asks, the browser readout matters, or CLI state is not enough.
-11. For retrieval/search/ranking/performance work, require quality constraints before promotion.
-12. Treat optional `task_manifest` packet evidence as audit data; quarantine malformed manifests and path escapes without invalidating unrelated metric evidence.
-13. Treat benchmark-shaped fixes as diagnostic until proven otherwise. Row-specific detector or citation work is diagnostic repair until holdout, repeat, breadth, or promotion gate proves the broader claim.
-14. If `session-forensics` imports benchmark-overfit or row-specific steering feedback, treat the decision capsule as a trust blocker.
-15. Treat runtime freshness as unavailable unless installed runtime version and built-entrypoint fingerprint can be inspected and matched.
+For a new session:
 
-Happy-path CLI from `plugins/codex-autoresearch`:
+1. Get the goal, benchmark, primary metric, direction, correctness checks, editable scope, and any real budget.
+2. Use `prompt-plan` or `setup-plan` when one of those is unclear. Both are read-only.
+3. Run `setup` only after the contract is clear enough to create files.
+4. Configure `commitPaths` before a keep may commit source changes.
+5. Run `doctor --cwd <project> --check-benchmark --explain` before trusting the first packet.
+6. Record the baseline with `next`, then `log --from-last --status measure`.
+
+For an existing session:
+
+1. Read [loop operations](references/loop-operations.md).
+2. Read `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, and the active `autoresearch.research/<slug>/` folder when present.
+3. Run `state --report`, `recommend-next --compact --operator-checklist`, and `doctor --explain`.
+4. Keep `goalFrame.authoritativeGoal` authoritative unless the user deliberately replaces it. If a new request would change the benchmark, metric, edit scope, or final claim, treat it as a possible replacement and resolve that choice before packet work.
+5. Follow the printed blocker or command. If the CLI, report, and dashboard disagree, stop mutation and diagnose the shared state.
+
+Happy path from the package root:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd <project> --name "<session>" --metric-name <metric> --direction lower --benchmark-command "<command>"
+node scripts/autoresearch.mjs setup --cwd <project> --name "<session>" --metric-name <metric> --direction lower --benchmark-command "<command>" --checks-command "<checks>"
+node scripts/autoresearch.mjs config --cwd <project> --commit-paths "<editable-paths>"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-## Active loop contract
-
-After `next`, log the packet. After `log`, read the returned continuation object.
-
-- Only `next` writes a reusable last-run packet. `run` remains a raw benchmark probe.
-- Use `log --from-last` instead of retyping parsed metrics.
-- `keep`, ordinary `discard`, and `measure` require a finite primary metric.
-- Use `measure` for non-promotional evidence: baselines, no-change probes, environment checks, and diagnostics.
-- `crash` and `checks_failed` can be logged without inventing sentinel metrics.
-- Treat `review_required` metrics as provisional until ASI acknowledges the review outcome.
-- If `autoresearch.config.json` contains `fixedControl`, treat the named artifact as control truth. Do not rerun commands matching `forbiddenCommandPatterns` unless the user explicitly accepts `--allow-fixed-control-rerun`; prefer `reuseCommandHint`.
-- If run numbers duplicate, segments look stale, or manual log entries were edited, run `ledger-doctor --cwd <project> --json` before another packet. Use `ledger-doctor --repair --yes` only after reviewing the JSON health summary; after repair, verify the returned `backupPath`.
-- Read parsed metrics and promotion readiness separately. New keeps default to exploratory unless repeat, holdout, breadth, or explicit promotion metadata make the evidence promotable.
-- The loop contract is the authority for whether to spend another packet. `sourceCleanliness.blocks.nextPacket=false` only says source dirtiness is not the blocker.
-- Control-plane contracts are packet brakes too: goal mismatches, missing scoped approvals, stale process residue, unsupported broad claims, and unsafe finalization runways outrank another packet.
-- When the metric improves because the benchmark was steered toward known answers, say so.
-- If `continuation.shouldContinue` is true, choose the next hypothesis from ASI, experiment memory, `autoresearch.ideas.md`, or dashboard lane guidance.
-- If `continuation.forbidFinalAnswer` is true, continue with progress updates instead of returning a final answer.
-- Respect packet and wall-clock budgets.
-- If correctness checks fail, run `checks-inspect` before deciding.
-- Stop when the user interrupts, the limit or budget is reached, benchmark/checks are blocked, cleanup would be unsafe, a fresh segment is needed, or the goal is genuinely exhausted.
-
-## Codex-only Goal completion
-
-- Use `completionAudit` before a parent agent calls `update_goal(status="complete")`.
-- Do not complete a parent Codex Goal while the continuation says the loop is still active.
-- Keep Goal state in Codex; Autoresearch only provides `codex-goal-brief` and completion-audit evidence.
-
-CLI fallback:
+After the baseline, implement one bounded hypothesis inside the configured paths, then run and log one packet:
 
 ```bash
-node scripts/autoresearch.mjs next --cwd <project> --compact
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Describe the kept change"
+node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "<what changed>" --asi-json-file <path>
 node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
 
-## Dashboard
+The ASI file must contain the real hypothesis, evidence, rollback reason when rejected, and next action. Use `discard`, `crash`, or `checks_failed` instead of `keep` when the evidence requires it. Run `finalize-preview` only when canonical state routes to finalization.
 
-Use the served dashboard when a live readout is useful:
+## Run one packet at a time
 
-- Use `scripts/autoresearch.mjs serve --cwd <project>`.
-- Share the served `http://127.0.0.1:<port>/` URL by default.
-- Static exports are read-only snapshots; serve a fresh dashboard when packet freshness matters.
-- Readout only. Use the CLI to do the work.
-- The live server accepts only loopback Host headers, sends defensive headers, and keeps the raw ledger endpoint disabled unless `--debug-ledger` is explicitly used.
+Use `next` for a reusable packet. Treat `run` as a raw probe that `log --from-last` cannot reuse.
 
-## Deep research loops
+After `next`:
 
-Use a deep-research loop for broad, qualitative, product-study, UX, architecture, or documentation prompts. Study, accept gaps, measure `quality_gap`, close credible candidates, then start a fresh round when the question is still alive.
+1. Inspect the metric, checks, artifacts, diff, and Git state.
+2. Log with `--from-last`; do not copy parsed metrics back into the command.
+3. Add a structured experiment note (ASI) with the hypothesis, evidence, rollback reason for rejected work, and useful next action. Use `--asi-json-file <path>` when inline JSON would be fragile in the current shell.
+4. Read the returned continuation before doing anything else.
 
-1. Start with `research-start --cwd <project> --slug <slug> --goal "<goal>"`. It seeds `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates the command, records the first baseline as `measure`, and prints the resume commands. Use `--no-baseline-log` only when that first baseline should not be recorded.
-2. Keep sources dated and claim-specific in `autoresearch.research/<slug>/sources.md`.
-3. Write the judgment pass in `synthesis.md`: filter hallucinations, separate evidence from inference.
-4. Turn accepted findings into `quality-gaps.md`.
-5. Measure with `quality-gap --cwd <project> --research-slug <slug> --list`.
-6. Preview candidates with `gap-candidates`; apply only credible high-impact gaps.
-7. Log implementation or rejection with ASI.
-8. Start a fresh round before claiming there are no more high-impact gaps.
+When accepted work was committed outside Autoresearch, verify the commit and log the keep with `--commit <hash>` so finalization retains real commit evidence.
 
-`quality_gap=0` only means the accepted checklist for the current round is closed. Read `freshRoundSuggested`, `researchIntegrity`, `sourceCleanliness`, finalization readiness, and plateau reason fields before deciding next steps.
+| Status | Use it for |
+| --- | --- |
+| `measure` | Baselines, no-change checks, environment probes, and diagnostics. Never stage, commit, revert, or finalize it. |
+| `keep` | A finite primary metric, passing required checks, and a change worth preserving inside safe Git scope. |
+| `discard` | A finite metric and a change not worth keeping; logging may clean the configured or explicit experiment paths. |
+| `crash` | A benchmark that failed before usable metric evidence existed. Do not invent a sentinel value; logging may clean the configured or explicit experiment paths. |
+| `checks_failed` | A metric exists, but the required correctness proof failed; logging may clean the configured or explicit experiment paths. |
 
-For crashed or timed-out packets with artifact rows, use `partial-results --from-last` before rerunning expensive work.
+Obey these brakes:
 
-## Finalize
+- Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
+- Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
+- Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.
+- Continue when `continuation.shouldContinue=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
+- Let blockers, budget stops, segment changes, and finalization outrank another packet.
+- Treat `benchmark-lint` as a parser check, not proof that the benchmark represents the product.
+- Require the checks implied by the claim: accuracy, behavior, accessibility, safety, data integrity, or performance.
+- Keep `review_required` results provisional until the structured note records the review.
+- Treat benchmark-keyed fixes, static citations, scorer edits, and row-specific detectors as diagnostic until repeat, holdout, breadth, or a promotion gate supports the broader claim.
 
-Use finalization when noisy loop history has useful kept commits.
+Use [loop operations](references/loop-operations.md) for partial results, failed checks, ledger repair, budgets, Git scope, and segment changes. Use [dashboard and trust](references/dashboard-trust.md) for fixed controls, runtime drift, protected paths, redaction, and promotion claims.
+
+## Research broad or qualitative work
+
+Use a quality-gap loop for docs, UX, product study, architecture, or research:
+
+```bash
+node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
+```
+
+Keep dated claims in `sources.md`, judgment in `synthesis.md`, and accepted work in `quality-gaps.md`. Preview additions with `gap-candidates`, then log implementation or rejection with ASI.
+
+Treat `quality_gap=0` as closure of the accepted checklist for this round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the wider question is finished or needs another discovery round.
+
+Read [research, lanes, and finalization](references/research-finalize.md) before fanout, parallel implementation, or review-branch work.
+
+## Show the dashboard only when it helps
+
+```bash
+node scripts/autoresearch.mjs serve --cwd <project>
+```
+
+Verify the server and give the user its `http://127.0.0.1:<port>/` URL. Use `export` for a portable snapshot.
+
+Keep both forms read-only. Run setup, packets, logging, gap work, export, and finalization through the CLI. A static export cannot prove current packet freshness.
+
+## Finalize accepted work
 
 1. Run `finalize-preview --cwd <project>` before branch creation.
-2. Keep only accepted/current `status: "keep"` evidence.
-3. Compare product claim coverage against accepted evidence.
-4. If coverage is missing, report experimental status. Use "Experimental review branch only: product-grade proof is missing."
-5. Treat previews and plans as read-only.
-6. Review dirty tree, stale plan, overlap, semantic safety, and excluded-file warnings.
-7. Session artifacts are excluded by default. Use `--include-session-artifacts` only when the reviewer explicitly wants them.
-8. When state reports `current-tree-finalization`, run `finalize-current-tree --cwd <project> --exclude-session-artifacts`. Do not substitute generic `finalize-preview` as the primary command.
-9. Ask before creating branches unless the user already approved finalization.
-10. Runway order: preview, approve, create review branches, verify, merge into trunk, verify the merge, cleanup.
-11. Do not suggest branch cleanup until merge verification has succeeded.
-12. Classify existing review branches before reuse.
-13. Report created review branches, files, metric improvement, claim coverage, verification, runway status, and remaining risk.
+2. For normal finalization, include only accepted, current keeps and exclude session artifacts by default.
+3. Compare the intended claim with the accepted checks and measurements. If proof is missing, say: "Experimental review branch only: product-grade proof is missing."
+4. When canonical state reports `current-tree-finalization`, treat it as a separate recovery contract: review the entire clean non-session branch diff, exact file set, exclusions, claim evidence, and generated plan, then use `finalize-current-tree --cwd <project> --exclude-session-artifacts`.
+5. Ask before creating branches unless the user already approved finalization.
+6. Verify the branch union, exclusions, summaries, metrics, and checks before handoff.
 
-## Subagent handoffs
+Report the real runway: preview, approved, branches created, locally verified, pushed or PR, CI, merged, merge verified, then cleanup. Do not collapse those stages or suggest cleanup before the merge is verified.
 
-When Codex uses subagents to work on Autoresearch itself:
+## Keep parent ownership clear
 
-- Each lane states scope, evidence source, decision, handoff artifact, and tests.
-- No nested subagents.
-- Do not run overlapping write lanes. Split by ownership first, then merge through one parent context.
-- Reviewers should check the decision-envelope contract, packet freshness, dashboard read-only behavior, finalization artifact policy, and docs/changelog sync.
+Run `codex-goal-brief` and inspect its `completionAudit` field before the parent calls `update_goal(status="complete")`. Keep Goal state in Codex; use Autoresearch only for the evidence.
 
-## Verification
+When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
 
-Use the narrowest relevant check while iterating. Before claiming plugin work is done, run from `plugins/codex-autoresearch`:
+## Load only the documentation you need
+
+- first run: [Start](../../docs/start.md)
+- normal operation or resume: [Operate](../../docs/operate.md)
+- safety or runtime questions: [Trust](../../docs/trust.md)
+- review branches: [Finish](../../docs/finish.md)
+- symptom lookup: [Troubleshooting](../../docs/troubleshooting.md)
+- cross-surface disagreement: [Control plane](../../docs/control-plane.md)
+
+Before claiming plugin work is done, run from `plugins/codex-autoresearch`:
 
 ```bash
 npm run check
 ```
 
-Targeted checks:
-
-```bash
-npm test
-node scripts/autoresearch.mjs --help
-node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
-node scripts/autoresearch.mjs benchmark-lint --cwd .
-node scripts/autoresearch.mjs checks-inspect --cwd . --command "npm test"
-git diff --check
-```
+For docs-only work, also inspect the rendered Markdown and command text, then run `git diff --check`. The package gate checks local Markdown links.

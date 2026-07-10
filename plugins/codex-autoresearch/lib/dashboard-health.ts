@@ -137,19 +137,11 @@ function dashboardHealthDetails(payload: unknown): { mode: string; lastReadAt: s
 
 function dashboardMatchesSummary(dashboard: unknown, summary: DashboardHealthSummary): boolean {
   const port = recordValue(dashboard, "port");
-  const cwd = cleanString(recordValue(dashboard, "cwd"));
-  const sessionCwd = cleanString(recordValue(dashboard, "sessionCwd"));
-  const sessionPathIdentity = cleanString(recordValue(dashboard, "sessionPathIdentity"));
+  const sessionIdentity = cleanString(recordValue(dashboard, "sessionIdentity"));
   const version = cleanString(recordValue(dashboard, "version"));
   if (summary.port !== null && port !== summary.port) return false;
-  if (summary.cwd && (!cwd || !samePathText(cwd, summary.cwd))) return false;
-  if (
-    summary.sessionPathIdentity &&
-    (!sessionPathIdentity || sessionPathIdentity !== summary.sessionPathIdentity)
-  ) {
-    return false;
-  }
-  if (summary.sessionCwd && (!sessionCwd || !samePathText(sessionCwd, summary.sessionCwd))) {
+  if ((summary.cwd || summary.sessionCwd) && !summary.sessionPathIdentity) return false;
+  if (summary.sessionPathIdentity && sessionIdentity !== summary.sessionPathIdentity) {
     return false;
   }
   if (summary.version && (!version || version !== summary.version)) return false;
@@ -166,13 +158,4 @@ function quoteCommandArg(value: string): string {
 
 function cleanString(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function samePathText(left: string, right: string): boolean {
-  return normalizePathText(left) === normalizePathText(right);
-}
-
-function normalizePathText(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

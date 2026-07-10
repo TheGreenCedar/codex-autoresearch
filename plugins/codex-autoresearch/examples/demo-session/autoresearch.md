@@ -23,11 +23,11 @@ The demo is intentionally self-contained. Its configured `commitPaths` point onl
 ## Constraints
 
 - Keep the run log reproducible for docs and screenshots.
-- Preserve ASI on every packet so hover, modal, and ledger views stay meaningful.
+- Preserve the structured experiment note on every packet so hover, modal, and ledger views stay meaningful.
 - Keep correctness checks green before treating a faster path as promotion-ready.
 
 ## Baseline
 
-- Baseline packet: `10s`
+- Baseline packet: `10s`, logged as `measure`
 - Best kept packet: `5.62s`
 - Latest tracked memory footprint: `216 MB`

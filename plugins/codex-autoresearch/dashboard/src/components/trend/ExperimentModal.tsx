@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { formatImprovement, formatMetric } from "../../model";
 import type { DashboardReadout, RunMetricBreakdown } from "../../types";
-import { focusFallback, getFocusableDialogElements } from "./focus";
+import { getFocusableDialogElements } from "./focus";
 import {
   formatChartAxisValue,
   formatMemoryValue,
@@ -15,13 +15,11 @@ export function ExperimentModal({
   point,
   valueMode,
   readout,
-  restoreFocusSelector,
   onClose,
 }: {
   point: ChartDatum;
   valueMode: ValueMode;
   readout: DashboardReadout;
-  restoreFocusSelector: string;
   onClose: () => void;
 }) {
   const breakdown = point.breakdown;
@@ -30,12 +28,7 @@ export function ExperimentModal({
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
-  const requestClose = () => {
-    onClose();
-    window.setTimeout(() => {
-      focusFallback(restoreFocusSelector)?.focus();
-    }, 600);
-  };
+  const requestClose = onClose;
   const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();

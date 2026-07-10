@@ -427,6 +427,8 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
             checkBenchmark: args.checkBenchmark,
             checkInstalled: args.checkInstalled,
             explain: args.explain,
+            revalidateCatalog: args.revalidateCatalog,
+            packetEnvMode: args.packetEnvMode,
             timeoutSeconds: args.timeoutSeconds,
             allowFixedControlRerun: args.allowFixedControlRerun,
           })),

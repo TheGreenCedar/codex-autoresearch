@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { buildChart, DASHBOARD_CHART_MAX_POINTS } from "../dashboard/src/model/chart.js";
 import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
+import { normalizeEntries } from "../dashboard/src/model/entries.js";
 import { buildReadout } from "../dashboard/src/model/readout.js";
 import { asiText } from "../dashboard/src/model/asi.js";
 import type { SessionRun } from "../dashboard/src/types.js";
@@ -91,6 +92,7 @@ test("dashboard chart downsamples long histories while preserving anchor points"
       improvement: null,
       recentRuns: runs.slice(-4),
       plottedRuns: runs,
+      invalidLedgerEntryCount: 0,
       metricDefinition: {
         requestedMode: "raw",
         mode: "raw",
@@ -119,7 +121,7 @@ test("dashboard chart downsamples long histories while preserving anchor points"
   assert.ok(chart.points.some((point) => point.run === bestRun));
 });
 
-test("dashboard chart does not attach an omitted best value to the first visible run", () => {
+test("dashboard summary cannot override the best accepted visible keep", () => {
   const runs: SessionRun[] = Array.from({ length: 4 }, (_, index) => ({
     run: index + 102,
     metric: index + 102,
@@ -139,10 +141,104 @@ test("dashboard chart does not attach an omitted best value to the first visible
   });
   const chart = buildChart(session, readout);
 
-  assert.equal(readout.best, 1);
-  assert.equal(readout.bestRun, null);
-  assert.match(chart.summary, /Best value 1s is outside the visible ledger window/);
-  assert.doesNotMatch(chart.summary, /Best #102 at 1s/);
+  assert.equal(readout.best, 102);
+  assert.equal(readout.bestRun?.run, 102);
+  assert.match(chart.summary, /Best #102 at 102s/);
+});
+
+test("dashboard uses measure 10 as the raw and weighted baseline before keep 8", () => {
+  const runs: SessionRun[] = [
+    {
+      run: 1,
+      metric: 10,
+      status: "measure",
+      description: "Baseline measure",
+      metrics: { memory_mb: 100 },
+      asi: {},
+      segment: 0,
+    },
+    {
+      run: 2,
+      metric: 8,
+      status: "keep",
+      description: "Accepted improvement",
+      metrics: { memory_mb: 100 },
+      asi: {},
+      segment: 0,
+    },
+    {
+      run: 3,
+      metric: 6,
+      status: "discard",
+      description: "Rejected shortcut",
+      metrics: { memory_mb: 100 },
+      asi: {},
+      segment: 0,
+    },
+  ];
+  const summary = { summary: { segment: 0, baseline: 10, best: 6 } };
+  const raw = buildReadout(
+    {
+      segment: 0,
+      config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
+      runs,
+    },
+    summary,
+  );
+  const weighted = buildReadout(
+    {
+      segment: 0,
+      config: {
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
+        metricDefinition: { mode: "weighted_cost", weights: { time: 0.7, memory: 0.3 } },
+      },
+      runs,
+    },
+    summary,
+  );
+
+  assert.equal(raw.baseline, 10);
+  assert.equal(raw.baselineRun?.status, "measure");
+  assert.equal(raw.best, 8);
+  assert.equal(raw.bestRun?.status, "keep");
+  assert.equal(weighted.baseline, 1);
+  assert.equal(weighted.baselineRun?.status, "measure");
+  assert.equal(weighted.best, 0.86);
+  assert.equal(weighted.bestRun?.status, "keep");
+});
+
+test("dashboard ledger normalization skips malformed rows without expanding segment arrays", () => {
+  const normalized = normalizeEntries([
+    dashboardConfigEntry({ name: "hostile ledger", metricName: "score" }),
+    { type: "run", run: 1, metric: 1, status: "keep", segment: 5_000_000 },
+    { type: "run", run: 2, metric: 2, status: "unknown" },
+    { type: "run", run: 3, metric: 3, status: "keep", segment: -1 },
+    { type: "run", run: 4, metric: 4, status: "keep", segment: 1.5 },
+    { type: "run", run: 5, metric: 5, status: "keep", segment: Number.MAX_SAFE_INTEGER + 1 },
+    { type: "run", run: 6, metric: 6 },
+    { type: "event", message: "Legitimate non-run ledger record" },
+  ] as any);
+
+  assert.deepEqual(
+    normalized.segments.map((segment) => segment.segment),
+    [0, 5_000_000],
+  );
+  assert.equal(normalized.latestSegment, 5_000_000);
+  assert.equal(normalized.segments.at(-1)?.runs.length, 1);
+  assert.equal(normalized.invalidLedgerEntryCount, 5);
+
+  const maxed = normalizeEntries([
+    dashboardConfigEntry({ name: "max segment", metricName: "score" }),
+    { type: "run", run: 1, metric: 1, status: "keep", segment: Number.MAX_SAFE_INTEGER },
+    dashboardConfigEntry({ name: "cannot advance", metricName: "score" }),
+  ] as any);
+  assert.deepEqual(
+    maxed.segments.map((segment) => segment.segment),
+    [0, Number.MAX_SAFE_INTEGER],
+  );
+  assert.equal(maxed.invalidLedgerEntryCount, 1);
 });
 
 test("dashboard chart crash copy distinguishes visible crashes from plotted crashes", () => {
@@ -202,6 +298,7 @@ test("dashboard chart handles very large histories without spread limits", () =>
       improvement: null,
       recentRuns: runs.slice(-4),
       plottedRuns: runs,
+      invalidLedgerEntryCount: 0,
       metricDefinition: {
         requestedMode: "raw",
         mode: "raw",
@@ -712,6 +809,11 @@ test("source checkout reports missing dashboard build assets with build guidance
   );
 });
 
+test("dashboard build stays within the shipped JavaScript and CSS budgets", () => {
+  assert.ok(Buffer.byteLength(readDashboardBuildAsset("dashboard-app.js"), "utf8") <= 650 * 1024);
+  assert.ok(Buffer.byteLength(readDashboardBuildAsset("dashboard-app.css"), "utf8") <= 50 * 1024);
+});
+
 test("dashboard test scripts build ignored dashboard assets once before dashboard tests", () => {
   const packageJson = JSON.parse(
     readFileSync(path.join(resolvePackageRoot(import.meta.url), "package.json"), "utf8"),
@@ -903,55 +1005,71 @@ test("dashboard signals Product proof when claim coverage blocks release readine
   assert.match(JSON.stringify(model.signals), /Product proof missing|claim coverage/i);
 });
 
-test("dashboard source keeps proof signals below the chart", () => {
-  const dashboardSource = readFileSync(
-    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "Dashboard.tsx"),
-    "utf8",
+test("dashboard renders proof signals below the chart", async () => {
+  const { dom, getById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "signal order", metricName: "seconds", metricUnit: "s" }),
+      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+    ],
+    emptyCommandMeta(),
+    chartLayoutOptions(),
   );
+  const chart = getById("trend-panel");
+  const signals = getById("v2-release-signals");
 
-  assert.doesNotMatch(dashboardSource, /proofSignalsFirst/);
-  assert.doesNotMatch(dashboardSource, /SignalStrip[^>]+priority/);
   assert.ok(
-    dashboardSource.indexOf("<TrendPanel") <
-      dashboardSource.indexOf("<SignalStrip view={view} viewModel={viewModel} />"),
+    chart.compareDocumentPosition(signals) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     "signal strip should render only after the chart panel",
   );
 });
 
-test("dashboard source keeps chart tab stops to selected and evidence-critical points", () => {
-  const chartSource = readFileSync(
-    path.join(
-      resolvePackageRoot(import.meta.url),
-      "dashboard",
-      "src",
-      "components",
-      "trend",
-      "TrendChartFigure.tsx",
-    ),
-    "utf8",
+test("dashboard exposes one chart Tab stop and arrow keys move it", async () => {
+  const { dom, getById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "chart focus", metricName: "seconds", metricUnit: "s" }),
+      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+      { type: "run", run: 2, metric: 4, status: "discard", description: "Rejected" },
+      { type: "run", run: 3, metric: 3, status: "keep", description: "Latest" },
+    ],
+    emptyCommandMeta(),
+    chartLayoutOptions(),
   );
+  const chart = getById("trend-chart");
+  await waitFor(
+    () => chart.querySelectorAll(".chart-point-button").length === 3,
+    "Chart points did not render.",
+  );
+  const points = [...chart.querySelectorAll<HTMLButtonElement>(".chart-point-button")];
+  const tabbable = points.filter((point) => point.tabIndex === 0);
 
-  assert.match(chartSource, /tabIndex=\{tabbable \? 0 : -1\}/);
-  assert.match(chartSource, /onKeyDown=\{\(event\) =>/);
-  assert.match(chartSource, /payload\.runNumber === selectedRunNumber/);
-  assert.match(chartSource, /payload\.latest/);
-  assert.match(chartSource, /payload\.best/);
-  assert.match(chartSource, /payload\.status === "discard"/);
-  assert.match(chartSource, /payload\.status === "crash"/);
-  assert.match(chartSource, /payload\.status === "checks_failed"/);
+  assert.equal(tabbable.length, 1);
+  assert.equal(tabbable[0]?.dataset.chartRun, "3");
+  tabbable[0]?.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+  );
+  await waitFor(
+    () => dom.window.document.activeElement?.getAttribute("data-chart-run") === "2",
+    "ArrowLeft did not move chart focus to the previous point.",
+  );
+  assert.equal(points.filter((point) => point.tabIndex === 0).length, 1);
+  assert.equal(points.find((point) => point.tabIndex === 0)?.dataset.chartRun, "2");
 });
 
-test("dashboard ledger source uses native table semantics", () => {
-  const ledgerSource = readFileSync(
-    path.join(resolvePackageRoot(import.meta.url), "dashboard", "src", "components", "Ledger.tsx"),
-    "utf8",
+test("dashboard ledger uses native table semantics", async () => {
+  const { getById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "ledger semantics", metricName: "seconds", metricUnit: "s" }),
+      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+    ],
+    emptyCommandMeta(),
   );
+  const table = getById("ledger-scroll").querySelector("table");
 
-  assert.match(ledgerSource, /<table aria-label=\{/);
-  assert.match(ledgerSource, /<thead className="ledger-header">/);
-  assert.match(ledgerSource, /<tbody id="ledger-body">/);
-  assert.match(ledgerSource, /<tr className=\{`ledger-row/);
-  assert.doesNotMatch(ledgerSource, /role="table"|role="row"|role="cell"/);
+  assert.equal(table?.tagName, "TABLE");
+  assert.equal(table?.querySelector("thead")?.tagName, "THEAD");
+  assert.equal(getById("ledger-body").tagName, "TBODY");
+  assert.equal(table?.querySelector("tr.ledger-row")?.tagName, "TR");
+  assert.equal(table?.querySelector("[role=table],[role=row],[role=cell]"), null);
 });
 
 test("dashboard segment transition command matches its safe action metadata", () => {
@@ -1103,20 +1221,13 @@ test("dashboard chart does not place interactive point buttons under an image ro
     { type: "run", run: 2, metric: 4, status: "keep", description: "Improved", confidence: 2 },
   ];
 
-  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), chartLayoutOptions());
   const chart = getById("trend-chart");
-  const buttons = [...dom.window.document.querySelectorAll(".chart-point-button")];
-  const chartSource = readFileSync(
-    path.join(
-      resolvePackageRoot(import.meta.url),
-      "dashboard",
-      "src",
-      "components",
-      "trend",
-      "TrendChartFigure.tsx",
-    ),
-    "utf8",
+  await waitFor(
+    () => chart.querySelectorAll(".chart-point-button").length === 2,
+    "Chart points did not render.",
   );
+  const buttons = [...dom.window.document.querySelectorAll(".chart-point-button")];
 
   assert.equal(chart.getAttribute("role"), null);
   assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
@@ -1124,9 +1235,11 @@ test("dashboard chart does not place interactive point buttons under an image ro
     getById("chart-keyboard-help").textContent || "",
     /arrow keys move through history/i,
   );
-  assert.match(chartSource, /className="chart-point-button"/);
-  assert.match(chartSource, /aria-current=\{payload\.runNumber === selectedRunNumber/);
-  assert.doesNotMatch(chartSource, /aria-describedby="trend-chart-selected chart-keyboard-help"/);
+  assert.equal(
+    buttons.filter((button) => button.getAttribute("aria-current") === "true").length,
+    1,
+  );
+  assert.equal(buttons.filter((button) => (button as HTMLButtonElement).tabIndex === 0).length, 1);
   for (const button of buttons) {
     assert.equal(button.closest('[role="img"]'), null);
     assert.equal(button.getAttribute("aria-describedby"), "chart-keyboard-help");
@@ -1135,6 +1248,42 @@ test("dashboard chart does not place interactive point buttons under an image ro
   }
   assert.match(getById("trend-chart-selected").textContent || "", /Selected chart point:/);
   dom.window.close();
+});
+
+test("dashboard restores chart focus after the experiment modal unmounts", async () => {
+  const { dom } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "modal focus", metricName: "seconds", metricUnit: "s" }),
+      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+      { type: "run", run: 2, metric: 4, status: "keep", description: "Improved" },
+    ],
+    emptyCommandMeta(),
+    chartLayoutOptions(),
+  );
+  await waitFor(
+    () => dom.window.document.querySelectorAll(".chart-point-button").length === 2,
+    "Chart points did not render.",
+  );
+  const opener = dom.window.document.querySelector<HTMLButtonElement>(
+    '.chart-point-button[tabindex="0"]',
+  );
+  assert.ok(opener);
+  const openerRun = opener.dataset.chartRun;
+  opener.focus();
+  opener.click();
+  await waitFor(
+    () => dom.window.document.activeElement?.classList.contains("modal-close") === true,
+    "Modal close button did not receive focus.",
+  );
+  dom.window.document.querySelector<HTMLButtonElement>(".modal-close")?.click();
+  await waitFor(
+    () => dom.window.document.querySelector('[role="dialog"]') == null,
+    "Experiment modal did not unmount.",
+  );
+  await waitFor(
+    () => dom.window.document.activeElement?.getAttribute("data-chart-run") === openerRun,
+    "Chart point opener did not regain focus.",
+  );
 });
 
 test("dashboard side rail distinguishes live and static status affordances", async () => {
@@ -1408,6 +1557,47 @@ test("dashboard renders the full run log without blank scroll space", async () =
   assert.match(ledgerHtml, /#1<\/td>/);
 });
 
+test("dashboard renders the newest 100 of 5,000 rows and loads older rows in batches", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "large ledger", metricName: "seconds", metricUnit: "s" }),
+    ...Array.from({ length: 5_000 }, (_, index) => ({
+      type: "run",
+      run: index + 1,
+      metric: null,
+      status: "crash",
+      description: `Run ${index + 1}`,
+    })),
+  ];
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
+
+  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 100);
+  assert.match(getById("ledger-note").textContent || "", /4900 older runs available/);
+  const loadOlder = [...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Load 100 older",
+  );
+  assert.ok(loadOlder);
+  loadOlder.click();
+  await waitFor(
+    () => getById("ledger-body").querySelectorAll("tr").length === 200,
+    "Ledger did not load the next 100 older rows.",
+  );
+  assert.match(getById("ledger-note").textContent || "", /4800 older runs available/);
+});
+
+test("dashboard reports malformed ledger entries that were ignored", async () => {
+  const { getById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "malformed ledger", metricName: "seconds", metricUnit: "s" }),
+      { type: "run", run: 1, metric: 5, status: "keep", description: "Valid" },
+      { type: "run", run: 2, metric: 4, status: "not-a-status", description: "Invalid" },
+    ],
+    emptyCommandMeta({ ledgerBounds: { invalidLedgerEntryCount: 2 } }),
+  );
+
+  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 1);
+  assert.match(getById("ledger-note").textContent || "", /3 invalid ledger entries ignored/);
+});
+
 test("dashboard labels bounded static export ledgers as partial", async () => {
   const entries = [
     dashboardConfigEntry({ name: "bounded export", metricName: "seconds", metricUnit: "s" }),
@@ -1431,11 +1621,11 @@ test("dashboard labels bounded static export ledgers as partial", async () => {
 
   assert.match(
     getById("ledger-note").textContent,
-    /12 visible runs \/ newest first \/ 101 older ledger entries omitted/,
+    /12 runs \/ newest first \/ 101 older ledger entries omitted from snapshot/,
   );
   assert.match(
     getById("ledger-scroll").querySelector("table")?.getAttribute("aria-label") || "",
-    /12 visible runs, 101 older ledger entries omitted/,
+    /12 shown, 101 older ledger entries omitted from snapshot/,
   );
 });
 
@@ -1926,54 +2116,7 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
     })),
   ];
 
-  const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), {
-    beforeParse(window) {
-      window.ResizeObserver = class {
-        callback: ResizeObserverCallback;
-
-        constructor(callback: ResizeObserverCallback) {
-          this.callback = callback;
-        }
-
-        observe(target: Element) {
-          this.callback([
-            {
-              target,
-              contentRect: {
-                width: 960,
-                height: 350,
-                top: 0,
-                left: 0,
-                bottom: 350,
-                right: 960,
-                x: 0,
-                y: 0,
-              },
-            },
-          ]);
-        }
-
-        disconnect() {}
-        unobserve() {}
-      };
-
-      window.HTMLElement.prototype.getBoundingClientRect = function () {
-        return {
-          width: 960,
-          height: 350,
-          top: 0,
-          left: 0,
-          bottom: 350,
-          right: 960,
-          x: 0,
-          y: 0,
-          toJSON() {
-            return this;
-          },
-        };
-      };
-    },
-  });
+  const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), chartLayoutOptions());
   const buttons = Array.from(dom.window.document.querySelectorAll("button"));
   const timestampButton = buttons.find((button) => button.textContent?.trim() === "Timestamp");
   assert.ok(timestampButton, "Missing timestamp axis toggle");
@@ -4182,7 +4325,7 @@ test("served dashboard live refresh starts by default and can be stopped", async
   );
   assert.match(
     getById("ledger-note").textContent,
-    /2 visible runs \/ newest first \/ 25 older ledger entries omitted/,
+    /2 runs \/ newest first \/ 25 older ledger entries omitted from snapshot/,
   );
   assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -4326,6 +4469,38 @@ test("live dashboard ledger bounds count omitted raw ledger history before parsi
     });
     assert.equal(snapshot.ledgerEntries[0].type, "config");
     assert.equal(snapshot.ledgerEntries[1].run, 5);
+  } finally {
+    server.server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live dashboard reports malformed ledger rows inside the visible window", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "autoresearch-live-invalid-ledger-"));
+  const server = await serveAutoresearch({
+    cwd: dir,
+    port: 0,
+    viewModelCacheTtlMs: 60_000,
+    pluginVersion: "0.test",
+    dashboardHtml: async () => "<!doctype html><title>invalid ledger</title>",
+    viewModel: async () => ({ summary: { runs: 1 } }),
+  });
+
+  try {
+    await writeFile(
+      path.join(dir, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "config", name: "invalid ledger", metricName: "seconds" }),
+        "{malformed",
+        JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
+    assert.equal(snapshot.ledgerEntries.length, 2);
+    assert.equal(snapshot.ledgerBounds.invalidLedgerEntryCount, 1);
   } finally {
     server.server.close();
     await rm(dir, { recursive: true, force: true });
@@ -5097,6 +5272,60 @@ function assertNoMutatingDashboardCommands(value: unknown) {
   assert.doesNotMatch(commands, /\b(?:serve|export|benchmark-lint)\b/i);
   assert.doesNotMatch(commands, /--check-benchmark\b/i);
   assert.doesNotMatch(commands, /\s--\s+\S/i);
+}
+
+function chartLayoutOptions() {
+  return {
+    beforeParse(window: Window) {
+      window.ResizeObserver = class {
+        callback: ResizeObserverCallback;
+
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback;
+        }
+
+        observe(target: Element) {
+          this.callback(
+            [
+              {
+                target,
+                contentRect: {
+                  width: 960,
+                  height: 350,
+                  top: 0,
+                  left: 0,
+                  bottom: 350,
+                  right: 960,
+                  x: 0,
+                  y: 0,
+                },
+              } as ResizeObserverEntry,
+            ],
+            this as unknown as ResizeObserver,
+          );
+        }
+
+        disconnect() {}
+        unobserve() {}
+      } as unknown as typeof ResizeObserver;
+
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return {
+          width: 960,
+          height: 350,
+          top: 0,
+          left: 0,
+          bottom: 350,
+          right: 960,
+          x: 0,
+          y: 0,
+          toJSON() {
+            return this;
+          },
+        };
+      };
+    },
+  };
 }
 
 function cssHexVariables(css: string) {

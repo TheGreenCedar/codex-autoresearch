@@ -1,7 +1,8 @@
 import type { DashboardEntry, DashboardMeta } from "./types";
 
 const BASELINE_SECONDS = 10;
-const BASELINE_MEMORY_MB = 420;
+const BASELINE_MEMORY_MB = 178;
+const FINAL_MEMORY_MB = 216;
 
 export const DEMO_ENTRIES: DashboardEntry[] = [
   {
@@ -113,8 +114,8 @@ export const DEMO_META: DashboardMeta = {
       promotable: false,
     },
     evidenceLedger: {
-      counts: { accepted: 54, provisional: 0, rejected: 46, superseded: 0 },
-      acceptedCurrent: 54,
+      counts: { accepted: 53, provisional: 0, rejected: 46, superseded: 0 },
+      acceptedCurrent: 53,
     },
     watchdogSummary: {
       status: "tracking",
@@ -127,7 +128,12 @@ export const DEMO_META: DashboardMeta = {
     },
     aiSummary: {
       title: "Promotion candidate is visible",
-      happened: ["100 runs logged", "54 kept", "46 rejected, failed, or crashed"],
+      happened: [
+        "100 runs logged",
+        "53 kept",
+        "1 baseline measure",
+        "46 rejected, failed, or crashed",
+      ],
       plan: [
         "Keep the faster index path only if the 216 MB memory profile stays stable under correctness checks.",
         "Use the weighted score as the cockpit summary, then inspect the raw time and memory split below the chart.",
@@ -174,15 +180,16 @@ function demoSeconds(run: number): number {
 
 function demoMemory(run: number): number {
   if (run === 1) return BASELINE_MEMORY_MB;
-  const slope = 420 - (run - 1) * 2.05;
-  const wave = Math.cos(run / 5.2) * 7;
-  const spike = [22, 41, 63, 88].includes(run) ? 18 : 0;
-  return Math.max(216, Math.round(slope + wave + spike));
+  if (run === 100) return FINAL_MEMORY_MB;
+  const slope = BASELINE_MEMORY_MB + ((run - 1) * (FINAL_MEMORY_MB - BASELINE_MEMORY_MB)) / 99;
+  const wave = Math.cos(run / 5.2) * 2;
+  const spike = [22, 41, 63, 88].includes(run) ? 4 : 0;
+  return Math.max(BASELINE_MEMORY_MB, Math.round(slope + wave + spike));
 }
 
 function demoStatus(run: number): string {
+  if (run === 1) return "measure";
   if (
-    run === 1 ||
     run === 8 ||
     run === 13 ||
     run === 21 ||

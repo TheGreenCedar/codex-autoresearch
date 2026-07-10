@@ -431,8 +431,19 @@ test("live dashboard health endpoint exposes read-only process metadata", async 
       assert.equal(payload.dashboard.pid, process.pid);
       assert.equal(payload.dashboard.port, result.port);
       assert.equal(payload.dashboard.version, PLUGIN_VERSION);
-      assert.equal(payload.dashboard.startedAt, startedAt);
-      assert.equal(payload.dashboard.actions, undefined);
+      assert.equal(
+        payload.dashboard.sessionIdentity,
+        sessionPathIdentity(resolveSessionPaths({ workDir: dir })),
+      );
+      assert.deepEqual(Object.keys(payload.dashboard).sort(), [
+        "liveness",
+        "mode",
+        "pid",
+        "port",
+        "sessionIdentity",
+        "version",
+      ]);
+      assert.doesNotMatch(JSON.stringify(payload), new RegExp(dir.replaceAll("\\", "\\\\"), "i"));
     } finally {
       await new Promise<void>((resolve, reject) => {
         result.server.close((error: Error | undefined) => (error ? reject(error) : resolve()));

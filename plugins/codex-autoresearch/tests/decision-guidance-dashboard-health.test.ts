@@ -11,6 +11,7 @@ const baseInput = {
   port: 60106,
   pid: 1234,
   cwd: "C:/work/project",
+  sessionPathIdentity: "session-identity",
   version: "2.0.2",
   startedAt: "2026-06-01T00:00:00.000Z",
   registryPath: "C:/work/project/.git/autoresearch/serve-registry.json",
@@ -149,7 +150,7 @@ test("dashboard health verification treats version mismatch as stale", async () 
         ok: true,
         dashboard: {
           port: 60106,
-          cwd: "C:/work/project",
+          sessionIdentity: "session-identity",
           version: "2.0.1",
           liveness: "alive",
         },
@@ -170,7 +171,32 @@ test("dashboard health verification treats version mismatch as stale", async () 
   }
 });
 
-test("dashboard health verification requires the requested cwd", async () => {
+test("dashboard health verification accepts matching opaque identity and version", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        dashboard: {
+          port: 60106,
+          sessionIdentity: "session-identity",
+          version: "2.0.2",
+          liveness: "alive",
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+
+  try {
+    const summary = await verifyDashboardHealthSummary({ ...baseInput, timeoutMs: 1000 });
+    assert.equal(summary.liveness, "alive");
+    assert.equal(summary.stale, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("dashboard health verification requires the opaque session identity", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
     new Response(
@@ -206,7 +232,7 @@ test("dashboard health verification requires ok=true even when dashboard says al
         ok: false,
         dashboard: {
           port: 60106,
-          cwd: "C:/work/project",
+          sessionIdentity: "session-identity",
           version: "2.0.2",
           liveness: "alive",
         },

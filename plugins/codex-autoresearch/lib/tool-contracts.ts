@@ -1,4 +1,4 @@
-import { actionPolicyForTool } from "./tool-registry.js";
+import { actionPolicyForTool, toolMetadata } from "./tool-registry.js";
 import {
   TOOL_STYLE_UNSAFE_COMMAND_GATE,
   toolSchemaRequiresUnsafeCommandGate,
@@ -19,6 +19,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   best: objectSchema("Best kept run summary."),
   backupPath: stringSchema("Backup file path written before ledger repair."),
   benchmark: objectSchema("Benchmark doctor check result."),
+  catalogTrust: objectSchema("Stored recipe catalog provenance revalidation status."),
   blockingAction: objectSchema("Loop-governance action that refused a packet run."),
   candidates: arraySchema(objectSchema("Candidate quality-gap item."), "Candidate items."),
   canonicalNextAction: objectSchema("Canonical loop-governance next action."),
@@ -591,6 +592,7 @@ const CONTRACTS = {
       "git",
       "benchmarkContract",
       "benchmark",
+      "catalogTrust",
       "issues",
       "warnings",
       "warningDetails",
@@ -629,29 +631,6 @@ const CONTRACTS = {
     ]),
   },
 };
-
-const READ_ONLY_TOOLS = new Set([
-  "setup_plan",
-  "prompt_plan",
-  "onboarding_packet",
-  "recommend_next",
-  "codex_goal_bridge",
-  "list_recipes",
-  "read_state",
-  "measure_quality_gap",
-  "finalize_preview",
-]);
-
-const DESTRUCTIVE_TOOLS = new Set(["log_experiment", "clear_session"]);
-const CONDITIONALLY_OPEN_WORLD_TOOLS = new Set([
-  "guided_setup",
-  "benchmark_inspect",
-  "benchmark_lint",
-  "checks_inspect",
-  "doctor_session",
-  "gap_candidates",
-  "lane_runner",
-]);
 
 type ToolName = keyof typeof CONTRACTS;
 type ToolSchema = {
@@ -711,14 +690,17 @@ export function outputContractFor(name: string) {
 }
 
 function toolHintAnnotations(name: string, inputSchema: JsonSchema) {
-  const readOnly = READ_ONLY_TOOLS.has(name);
   const policy = actionPolicyForTool(name);
-  const openWorld = policy === "process_start" || CONDITIONALLY_OPEN_WORLD_TOOLS.has(name);
+  const metadata = toolMetadata(name);
+  const readOnly =
+    (policy === "read" || policy === "preview") && metadata?.conditionallyMutating !== true;
+  const destructive = policy === "git_mutation" || policy === "destructive";
+  const openWorld = policy === "process_start" || metadata?.openWorld === true;
   const unsafeCommandGate = toolSchemaRequiresUnsafeCommandGate(name, inputSchema);
   return {
     title: humanizeToolName(name),
     readOnlyHint: readOnly,
-    destructiveHint: DESTRUCTIVE_TOOLS.has(name),
+    destructiveHint: destructive,
     idempotentHint: readOnly,
     openWorldHint: openWorld,
     unsafeCommandGate: unsafeCommandGate ? TOOL_STYLE_UNSAFE_COMMAND_GATE : undefined,

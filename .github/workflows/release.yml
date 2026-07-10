@@ -31,9 +31,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Enforce third-party action pinning
+      - name: Enforce action pinning
         run: node .github/scripts/check-workflow-policy.mjs
 
   test:
@@ -48,10 +48,10 @@ jobs:
         working-directory: plugins/codex-autoresearch
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           cache: 'npm'
@@ -62,6 +62,12 @@ jobs:
 
       - name: Run full check gate
         run: npm run check
+
+      - name: Run required Chrome dashboard smoke
+        if: runner.os == 'Linux'
+        env:
+          CODEX_AUTORESEARCH_BROWSER: /usr/bin/google-chrome
+        run: npm run test:dashboard:browser
 
       - name: Run CLI smoke test
         run: node scripts/autoresearch.mjs --help
@@ -82,7 +88,9 @@ jobs:
         working-directory: plugins/codex-autoresearch
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
 
       - name: Refuse non-main release
         run: |
@@ -93,7 +101,7 @@ jobs:
           fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           cache: 'npm'
@@ -109,8 +117,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${INPUT_VERSION#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Release version must look like 1.2.3, got $INPUT_VERSION."
+          if ! node -e "const semver=require('semver'); if (!semver.valid(process.argv[1])) process.exit(1);" "$version"; then
+            echo "::error::Release version is not valid SemVer: $INPUT_VERSION."
             exit 1
           fi
           package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
@@ -121,8 +129,15 @@ jobs:
             echo "::error::Input version $version does not match package.json $package_version, package-lock.json $lock_version, package-lock root $lock_root_version, and plugin.json $manifest_version."
             exit 1
           fi
+          latest_version="$(git tag --list 'v*' | node -e "const semver=require('semver'); let input=''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const versions=input.split(/\\s+/).map(value => value.replace(/^v/, '')).filter(semver.valid); process.stdout.write(versions.sort(semver.rcompare)[0] || ''); });")"
+          if [ -n "$latest_version" ] && ! node -e "const semver=require('semver'); if (!semver.gt(process.argv[1], process.argv[2])) process.exit(1);" "$version" "$latest_version"; then
+            echo "::error::Release version $version must be greater than the latest existing version $latest_version."
+            exit 1
+          fi
+          prerelease="$(node -e "const semver=require('semver'); process.stdout.write(semver.prerelease(process.argv[1]) ? 'true' : 'false');" "$version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Refuse existing tag or release
         env:
@@ -149,7 +164,7 @@ jobs:
           sha256sum -c "$tarball.sha256"
 
       - name: Attest package provenance
-        uses: actions/attest@v4
+        uses: actions/attest@f6bf1532d7d6793fce74eac584813a8eee607999 # v4
         with:
           subject-path: plugins/codex-autoresearch/codex-autoresearch-${{ steps.version.outputs.version }}.tgz
 
@@ -170,11 +185,16 @@ jobs:
           set -euo pipefail
           tarball="codex-autoresearch-${VERSION}.tgz"
           checksum="$tarball.sha256"
+          release_flags=()
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            release_flags+=(--prerelease --latest=false)
+          fi
           gh release create "$TAG" "$tarball#$tarball" "$checksum#$checksum" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes
+            --generate-notes \
+            "${release_flags[@]}"
 
       - name: Smoke release provenance
         env:

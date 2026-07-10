@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Autoresearch"
-  short_description: "Run measured Codex optimization loops"
-  default_prompt: "@Codex Autoresearch improve this project. Set up or resume the loop, run measured experiments, log decisions with structured evidence, serve the live dashboard when useful, and finalize kept work when ready."
+  short_description: "Run measured, resumable improvement loops"
+  default_prompt: "Use $codex-autoresearch to measure a baseline, run scoped experiments, and show me the next safe action."

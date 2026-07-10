@@ -2,6 +2,7 @@ export interface DashboardLedgerBounds {
   maxEntries: number;
   omittedEntries: number;
   truncated: boolean;
+  invalidLedgerEntryCount?: number;
 }
 
 export interface BoundedDashboardLedgerEntries<T> extends DashboardLedgerBounds {
