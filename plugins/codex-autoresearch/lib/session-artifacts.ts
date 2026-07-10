@@ -17,7 +17,8 @@ export const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b
 );
 
 export function isAutoresearchSessionArtifact(file: string, mode: SessionArtifactMode): boolean {
-  const normalized = String(file || "").replace(/\\/g, "/");
+  const value = String(file || "");
+  const normalized = process.platform === "win32" ? value.replace(/\\/g, "/") : value;
   return shouldExcludeSessionArtifact(normalized, { mode });
 }
 

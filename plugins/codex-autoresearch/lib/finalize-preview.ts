@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
+import { parseNameStatusZ } from "./git-paths.js";
 import {
   buildFinalizationEvidenceState,
   commitReferencesMatch,
@@ -82,7 +84,7 @@ export async function finalizePreview(args: LooseObject) {
   }
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
-  const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
+  const dirty = (await git(["status", "--porcelain=v1", "-z"], workDir)).stdout;
   emitProgress(args, "finalize-preview", "reading autoresearch ledger and kept commits");
   const ledgerEntries = await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
@@ -548,7 +550,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
   emitProgress(args, "finalize-current-tree", "classifying session artifacts and review files");
   const fileSelection = selectCurrentTreeFiles(allFiles, Boolean(excludeSessionArtifacts));
   const files = fileSelection.includedFiles;
-  const dirty = (await git(["status", "--porcelain"], workDir)).stdout.trim();
+  const dirty = (await git(["status", "--porcelain=v1", "-z"], workDir)).stdout;
   if (dirty)
     warnings.push("Working tree is dirty; current-tree plan requires a clean source branch.");
   if (!branch)
@@ -779,12 +781,10 @@ async function readLedgerEntries(cwd: string): Promise<LooseObject[]> {
 }
 
 async function changedFilesForCommit(hash: string, cwd: string): Promise<string[]> {
-  const result = await git(["show", "--name-only", "--format=", hash], cwd);
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((file) => !isAutoresearchSessionArtifact(file, "source-checkout"));
+  const result = await git(["show", "--name-status", "-z", "-M", "--format=", hash], cwd);
+  return uniqueSortedGitPaths(result.stdout).filter(
+    (file) => !isAutoresearchSessionArtifact(file, "source-checkout"),
+  );
 }
 
 async function changedFilesBetween(
@@ -793,13 +793,16 @@ async function changedFilesBetween(
   cwd: string,
   filterSession = true,
 ): Promise<string[]> {
-  const result = await git(["diff", "--name-only", `${left}..${right}`], cwd);
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const result = await git(["diff", "--name-status", "-z", "-M", `${left}..${right}`], cwd);
+  return uniqueSortedGitPaths(result.stdout)
     .filter((file) => !filterSession || !isAutoresearchSessionArtifact(file, "source-checkout"))
     .sort((a, b) => a.localeCompare(b));
+}
+
+function uniqueSortedGitPaths(output: string): string[] {
+  return [...new Set(parseNameStatusZ(output).flatMap((entry) => entry.paths))].sort((a, b) =>
+    a.localeCompare(b),
+  );
 }
 
 async function commitHashesBetween(left: string, right: string, cwd: string): Promise<string[]> {
@@ -961,16 +964,22 @@ async function gitOk(args: string[], cwd: string): Promise<GitResult> {
     const child = spawn("git", args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
     });
     child.on("error", (error) =>
       resolve({ code: -1, stdout, stderr: String(error.message || error) }),
     );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      resolve({ code, stdout, stderr });
+    });
   });
   return { ...result, ok: result.code === 0 };
 }

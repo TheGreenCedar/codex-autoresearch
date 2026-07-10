@@ -1341,6 +1341,68 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "finalization preserves both hostile paths in a rename",
+  "autoresearch-finalize-hostile-rename-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(path.join(repo, "src"), { recursive: true });
+    const original =
+      process.platform === "win32" ? "src/old 雪.txt" : 'src/ old " -> 雪\\line\n.txt ';
+    const current =
+      process.platform === "win32" ? "src/new 雪.txt" : 'src/ new " -> 雪\\line\n.txt ';
+
+    await git(["init", "-b", "main"], repo);
+    await git(["config", "user.email", "codex@example.invalid"], repo);
+    await git(["config", "user.name", "Codex Test"], repo);
+    await writeFile(path.join(repo, original), "kept\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+
+    await git(["switch", "-c", "codex/autoresearch-hostile-rename"], repo);
+    await fsp.rename(path.join(repo, original), path.join(repo, current));
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "rename hostile path"], repo);
+    const kept = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({
+          type: "config",
+          name: "hostile rename",
+          metricName: "score",
+          bestDirection: "higher",
+        }),
+        JSON.stringify({
+          run: 1,
+          status: "keep",
+          metric: 1,
+          description: "rename hostile path",
+          commit: kept.slice(0, 12),
+        }),
+        "",
+      ].join("\n"),
+    );
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "log kept rename"], repo);
+
+    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const payload = JSON.parse(preview.stdout);
+    assert.deepEqual(payload.groups[0].files, [current, original].sort());
+    assert.equal(payload.finalTreeCoverage.covered, true);
+
+    const planPath = path.join(repo, "groups.json");
+    const planned = await run(
+      process.execPath,
+      [finalizer, "plan", "--cwd", repo, "--output", planPath],
+      repo,
+    );
+    assert.equal(planned.code, 0, planned.stderr);
+    const plan = JSON.parse(await fsp.readFile(planPath, "utf8"));
+    assert.deepEqual(plan.groups[0].files, [current, original].sort());
+  },
+);
+
+testWithTempRoot(
   "finalize-current-tree packages the current non-session diff",
   "autoresearch-finalize-current-tree-",
   async (root) => {

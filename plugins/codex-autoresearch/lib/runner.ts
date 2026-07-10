@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const OUTPUT_MAX_LINES = 20;
@@ -360,6 +361,8 @@ export async function runProcess(
     });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let lastOutputAt: string | null = null;
@@ -422,10 +425,10 @@ export async function runProcess(
       Math.max(1, Number(timeoutSeconds) || 1) * 1000,
     );
     child.stdout.on("data", (chunk) => {
-      appendOutput("stdout", chunk.toString("utf8"));
+      appendOutput("stdout", stdoutDecoder.write(chunk));
     });
     child.stderr.on("data", (chunk) => {
-      appendOutput("stderr", chunk.toString("utf8"));
+      appendOutput("stderr", stderrDecoder.write(chunk));
     });
     child.on("error", (error) => {
       finish({
@@ -435,6 +438,8 @@ export async function runProcess(
       });
     });
     child.on("close", (code) => {
+      appendOutput("stdout", stdoutDecoder.end());
+      appendOutput("stderr", stderrDecoder.end());
       finish({ exitCode: code, stdout, stderr });
     });
   });

@@ -6,6 +6,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   symlink,
@@ -4384,6 +4385,43 @@ test("lane-runner refuses write-scope when unrelated dirty files already exist",
   });
 });
 
+test("lane-runner treats the source of a hostile rename as dirty outside write scope", async () => {
+  await withTempDir("lane-runner-write-scope-hostile-rename", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
+    const original = process.platform === "win32" ? "outside 雪.txt" : "outside -> 雪.txt";
+    const current = process.platform === "win32" ? "src/inside 雪.txt" : "src/inside -> 雪.txt";
+    await writeFile(path.join(dir, original), "move me\n", "utf8");
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await rename(path.join(dir, original), path.join(dir, current));
+
+    const result = await runCli([
+      "lane-runner",
+      "--cwd",
+      dir,
+      "--lane-id",
+      "implementation-candidate",
+      "--mode",
+      "implementation",
+      "--write-scope",
+      "src",
+      "--command",
+      "node -e \"require('fs').writeFileSync('src/owned.txt','after')\"",
+      "--summary",
+      "Owned write.",
+      "--yes",
+    ]);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /dirty files outside scope/);
+    assert.match(result.stderr, /outside(?: ->)? 雪\.txt/);
+  });
+});
+
 test("lane-runner ignores completed lane results from older segments", async () => {
   await withTempDir("lane-runner-segment-results", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "quality_gap"]);
@@ -5802,6 +5840,59 @@ test("stale last-run packets are rejected when dirty file contents change withou
       "keep",
       "--description",
       "Old packet after dirty content edit",
+      "--allow-add-all",
+    ]);
+    assert.notEqual(stale.code, 0);
+    assert.match(stale.stderr, /dirty file contents changed/);
+  });
+});
+
+test("dirty fingerprints preserve hostile Git filenames", async () => {
+  await withTempDir("stale-last-run-hostile-dirty-path", async (dir) => {
+    const file = process.platform === "win32" ? "tracked 雪.txt" : ' tracked " -> 雪\\line\n.txt ';
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, file), "base\n", "utf8");
+    await git(dir, ["add", file]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "hostile dirty path",
+      "--metric-name",
+      "seconds",
+    ]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, file), "dirty before packet\n", "utf8");
+
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
+    assert.ok(lastRun.history.git.dirtyFileFingerprints.some((entry) => entry.path === file));
+
+    await writeFile(path.join(dir, file), "dirty after packet\n", "utf8");
+    const stale = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Hostile dirty path changed",
       "--allow-add-all",
     ]);
     assert.notEqual(stale.code, 0);

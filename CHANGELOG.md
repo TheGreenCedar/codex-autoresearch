@@ -10,6 +10,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Fixed
 
+- Git-derived trust paths now use NUL-delimited porcelain, name-status, and tracked-file output, preserving hostile filenames and both sides of renames across protected benchmark checks, dirty/write scopes, fingerprints, source hygiene, runtime freshness, and finalization.
 - State, terminal report, `recommend-next`, and dashboard readouts now agree on one strongest next action and command; stale progress, stale packets, artifact recovery, setup, and failed-check decisions remain distinct, weaker portfolio advice is suppressed while blocked, session continuation is separated from packet permission, and absent or metricless kept evidence no longer masquerades as an incumbent.
 - Autoresearch and finalizer CLI parsing now rejects unknown root and command options, validates explicit boolean values, supports root and command `-h`/`--help`, preserves camel/kebab aliases plus repeated list and `--` passthrough behavior, and reports expected usage failures without stack traces unless `--debug` is explicit.
 - Dashboard exports and live readouts now reject missing, malformed, or version-incompatible payloads instead of substituting polished demo evidence. Demo data requires an explicit development/showcase marker, failure states show safe recovery guidance and provenance, and failed live refreshes visibly retain only the last validated readout.

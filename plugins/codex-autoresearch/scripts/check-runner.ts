@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { killProcess } from "../lib/runner.js";
+import { StringDecoder } from "node:string_decoder";
 
 export type CommandSpec = [label: string, command: string, args: string[]];
 
@@ -48,6 +49,8 @@ export function runCommand(
     });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let settled = false;
     let timedOut = false;
     let timeoutFallback: NodeJS.Timeout | undefined;
@@ -71,21 +74,23 @@ export function runCommand(
       Math.max(1, timeoutSeconds) * 1000,
     );
     child.stdout.on("data", (chunk) => {
-      const text = chunk.toString("utf8");
+      const text = stdoutDecoder.write(chunk);
       stdout += text;
       if (streamOutput) process.stdout.write(text);
     });
     child.stderr.on("data", (chunk) => {
-      const text = chunk.toString("utf8");
+      const text = stderrDecoder.write(chunk);
       stderr += text;
       if (streamOutput) process.stderr.write(text);
     });
     child.on("error", (error) =>
       finish({ label, code: -1, stdout, stderr: `${stderr}${error.message}\n`, timedOut }),
     );
-    child.on("close", (code) =>
-      finish({ label, code: timedOut ? null : code, stdout, stderr, timedOut }),
-    );
+    child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      finish({ label, code: timedOut ? null : code, stdout, stderr, timedOut });
+    });
   });
 }
 
