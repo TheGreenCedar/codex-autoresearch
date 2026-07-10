@@ -12,7 +12,7 @@ import {
   productClaimCoverageFingerprintMaterial,
   type ProductClaimCoverage,
 } from "./product-claim-coverage.js";
-import { jsonlPath } from "./session-records.js";
+import { jsonlPath, parseJsonlRecord } from "./session-records.js";
 
 export type LooseObject = Record<string, any>;
 
@@ -60,21 +60,16 @@ export async function readAutoresearchLedger(
       .map((line, index) => {
         const trimmed = line.trim();
         if (!trimmed) return null;
-        try {
-          return {
-            ...JSON.parse(trimmed),
-            ...(mode === "strict" ? { __line: index + 1 } : {}),
-          };
-        } catch (error) {
-          const parseError = error as Error;
-          throw new Error(`Corrupt autoresearch.jsonl at line ${index + 1}: ${parseError.message}`);
-        }
+        return {
+          ...parseJsonlRecord(trimmed, jsonlPath(cwd), index + 1),
+          ...(mode === "strict" ? { __line: index + 1 } : {}),
+        };
       })
       .filter((entry): entry is LooseObject => Boolean(entry));
   } catch (error) {
     const readError = error as Error & { code?: string };
     if (readError?.code === "ENOENT") return [];
-    if (/^Corrupt autoresearch\.jsonl at line \d+:/.test(readError.message || "")) throw error;
+    if (/^Corrupt autoresearch\.jsonl at line \d+\b/.test(readError.message || "")) throw error;
     throw new Error(`Could not read autoresearch.jsonl: ${readError.message || readError}`);
   }
 }

@@ -82,4 +82,6 @@ The live dashboard serves current local state over loopback. An export is a port
 
 If dashboard data or metadata injection is missing, malformed, or declares an incompatible payload version, the readout shows a payload-unavailable screen instead of session evidence. Regenerate the static export or restart `serve` using the recovery command on that screen. Demo data appears only in an explicit `--showcase` export or the development server with `?showcase=1`, and the dashboard labels that provenance. A rejected live refresh leaves the last validated readout visible with a failure label; it never replaces that evidence with demo data.
 
-The ledger is append-only. If it is corrupt, report the file and line and use `ledger-doctor`; do not continue from a silently truncated history.
+The ledger is append-only. Every non-empty line must be a JSON object record; primitives and arrays are corrupt even when their JSON syntax is valid. Autoresearch reports the file, physical line, observed JSON kind, and `ledger-doctor --cwd <project> --json` recovery command. Diagnostic reads may preserve the remaining valid rows for inspection, but invalid rows block accepted-state and finalization trust instead of silently truncating history.
+
+`ledger-doctor` currently materializes the remaining valid records while building its tolerant diagnostic report. This known local-recovery limitation does not make those records accepted evidence while any line is invalid.

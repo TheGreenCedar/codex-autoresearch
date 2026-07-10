@@ -402,6 +402,13 @@ export interface LedgerBounds {
   omittedEntries?: number;
   maxEntries?: number;
   invalidLedgerEntryCount?: number;
+  invalidLedgerEntries?: Array<{
+    file?: string;
+    line?: number;
+    kind?: string;
+    message?: string;
+    command?: string;
+  }>;
 }
 
 export interface DashboardMeta {

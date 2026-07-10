@@ -20,6 +20,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 - Read-only scout lanes now parse commands without a shell and execute only a strict Git read-only argv allowlist. Interpreters, shells, mutation-capable Git forms, network/process-spawning surfaces, and the old `--allow-non-git-command` escape are refused before execution; Git porcelain is reported only as best-effort post-run detection, not containment.
 - Finalization now preserves pre-existing review and verification branches during rollback, deletes only branches created by the current invocation, and fails visibly when branch restoration or cleanup cannot complete.
 - Serialized and coalesced active packet progress writes so terminal cleanup cannot be undone by a delayed older snapshot; progress generations remain ordered across interrupted runs, cleanup also runs after writer or packet failures, and non-missing deletion errors are reported.
+- Every Autoresearch ledger reader now rejects valid JSON values that are not object records, reports the file, physical line, observed JSON kind, and `ledger-doctor` recovery command, and keeps invalid rows diagnostic-only across state, finalization, export, and live dashboard reads.
 
 ## 2.6.0 - 2026-07-09
 

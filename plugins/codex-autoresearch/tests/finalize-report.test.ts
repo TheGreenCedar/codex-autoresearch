@@ -264,6 +264,12 @@ testWithTempRoot(
       () => readAutoresearchLedger(root, { mode: "strict" }),
       /Corrupt autoresearch\.jsonl at line 1/,
     );
+
+    await writeFile(path.join(root, "autoresearch.jsonl"), '{}\n\n"wrong shape"\n');
+    await assert.rejects(
+      () => readAutoresearchLedger(root, { mode: "strict" }),
+      /Corrupt autoresearch\.jsonl at line 3 .*Observed JSON kind: string.*ledger-doctor/,
+    );
   },
 );
 

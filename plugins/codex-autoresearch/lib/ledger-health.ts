@@ -1,7 +1,12 @@
 import fs from "node:fs";
 
-import { jsonlPath } from "./session-records.js";
-import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
+import {
+  jsonlPath,
+  ledgerRecordIssue,
+  parseJsonlRecord,
+  type LedgerRecordIssue,
+} from "./session-records.js";
+import type { UnknownRecord } from "./types/json.js";
 
 export type LedgerRecord = UnknownRecord;
 
@@ -11,10 +16,7 @@ export interface LedgerRunRange {
   count: number;
 }
 
-export interface LedgerParseError {
-  line: number;
-  message: string;
-}
+export type LedgerParseError = LedgerRecordIssue;
 
 export interface LedgerHealth {
   ok: boolean;
@@ -68,20 +70,11 @@ export function readLedgerRecordsTolerant(workDir: string): TolerantLedgerRead {
     const line = rawLine.trim();
     if (!line) return;
     try {
-      const parsed: unknown = JSON.parse(line);
-      if (isUnknownRecord(parsed)) {
-        records.push(parsed);
-        return;
-      }
-      parseErrors.push({
-        line: index + 1,
-        message: "Expected JSON object ledger entry.",
-      });
+      records.push(parseJsonlRecord(line, ledgerPath, index + 1));
     } catch (error) {
-      parseErrors.push({
-        line: index + 1,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const issue = ledgerRecordIssue(error);
+      if (issue) parseErrors.push(issue);
+      else throw error;
     }
   });
   return { ledgerPath, records, parseErrors };

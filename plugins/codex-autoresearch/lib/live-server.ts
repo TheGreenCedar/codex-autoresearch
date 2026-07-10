@@ -9,12 +9,14 @@ import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
 import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
 import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
+import { ledgerRecordIssue, parseJsonlRecord } from "./session-records.js";
 
 type LooseObject = Record<string, unknown>;
 
 export const LIVE_LEDGER_MAX_ENTRIES = 5000;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES = 200;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_DEPTH = 2;
+const LIVE_LEDGER_INVALID_SAMPLE_LIMIT = 20;
 const LIVE_VIEW_MODEL_REFRESH_RETRY_LIMIT = 1;
 
 interface LiveViewModelCache {
@@ -58,7 +60,12 @@ interface LedgerReadout {
 }
 
 interface BoundedLedgerLines extends DashboardLedgerBounds {
-  lines: string[];
+  lines: BoundedLedgerLine[];
+}
+
+interface BoundedLedgerLine {
+  line: number;
+  text: string;
 }
 
 export async function serveAutoresearch(args: LooseObject) {
@@ -106,7 +113,7 @@ export async function serveAutoresearch(args: LooseObject) {
           res,
           200,
           "application/jsonl; charset=utf-8",
-          redactLedgerLines(ledgerLines.lines, { workDir }),
+          redactLedgerLines(ledgerLines.lines, sessionPaths.ledgerPath, { workDir }),
         );
         return;
       }
@@ -209,14 +216,19 @@ function isAllowedHostHeader(host: string | string[] | undefined, activePort: nu
   );
 }
 
-function redactLedgerLines(lines: string[], context: LooseObject): string {
+function redactLedgerLines(
+  lines: BoundedLedgerLine[],
+  ledgerPath: string,
+  context: LooseObject,
+): string {
   return lines
-    .map((line) => {
-      if (!line.trim()) return line;
+    .map(({ line, text }) => {
       try {
-        return JSON.stringify(redactEvidenceObject(JSON.parse(line), context));
+        return JSON.stringify(
+          redactEvidenceObject(parseJsonlRecord(text, ledgerPath, line), context),
+        );
       } catch {
-        return redactEvidenceText(line, context);
+        return redactEvidenceText(text, context);
       }
     })
     .join("\n");
@@ -515,14 +527,21 @@ async function readRedactedLedgerEntries(
 ): Promise<LedgerReadout> {
   const boundedLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
   const entries: LooseObject[] = [];
+  const invalidLedgerEntries: NonNullable<DashboardLedgerBounds["invalidLedgerEntries"]> = [];
   let invalidLedgerEntryCount = 0;
-  for (const line of boundedLines.lines) {
+  for (const { line, text } of boundedLines.lines) {
     try {
-      const entry = redactEvidenceObject(JSON.parse(line), context);
-      if (isLooseObject(entry)) entries.push(entry);
-      else invalidLedgerEntryCount += 1;
-    } catch {
-      invalidLedgerEntryCount += 1;
+      entries.push(
+        redactEvidenceObject(parseJsonlRecord(text, sessionPaths.ledgerPath, line), context),
+      );
+    } catch (error) {
+      const issue = ledgerRecordIssue(error);
+      if (issue) {
+        invalidLedgerEntryCount += 1;
+        if (invalidLedgerEntries.length < LIVE_LEDGER_INVALID_SAMPLE_LIMIT) {
+          invalidLedgerEntries.push(issue);
+        }
+      } else throw error;
     }
   }
   return {
@@ -531,7 +550,7 @@ async function readRedactedLedgerEntries(
       maxEntries: boundedLines.maxEntries,
       omittedEntries: boundedLines.omittedEntries,
       truncated: boundedLines.truncated,
-      ...(invalidLedgerEntryCount ? { invalidLedgerEntryCount } : {}),
+      ...(invalidLedgerEntryCount ? { invalidLedgerEntryCount, invalidLedgerEntries } : {}),
     },
   };
 }
@@ -544,9 +563,10 @@ async function readBoundedLedgerLines(filePath: string): Promise<BoundedLedgerLi
     .catch((error: unknown) => (isFileNotFound(error) ? null : Promise.reject(error)));
   if (!stats) return empty;
 
-  const lines: string[] = [];
+  const lines: BoundedLedgerLine[] = [];
   let totalLines = 0;
-  let latestConfigBeforeTail: string | null = null;
+  let sourceLine = 0;
+  let latestConfigBeforeTail: BoundedLedgerLine | null = null;
 
   if (maxEntries <= 0) {
     return { ...empty, truncated: stats.size > 0 };
@@ -556,10 +576,11 @@ async function readBoundedLedgerLines(filePath: string): Promise<BoundedLedgerLi
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const rawLine of reader) {
-      const line = String(rawLine).trim();
-      if (!line) continue;
+      sourceLine += 1;
+      const text = String(rawLine).trim();
+      if (!text) continue;
       totalLines += 1;
-      lines.push(line);
+      lines.push({ line: sourceLine, text });
       if (lines.length > maxEntries) {
         const removed = lines.shift();
         if (isConfigLedgerLine(removed)) latestConfigBeforeTail = removed || null;
@@ -585,7 +606,7 @@ async function readBoundedLedgerLines(filePath: string): Promise<BoundedLedgerLi
   };
 }
 
-function tailNeedsGoverningConfig(lines: string[]): boolean {
+function tailNeedsGoverningConfig(lines: BoundedLedgerLine[]): boolean {
   const firstRunOffset = lines.findIndex(isRunLedgerLine);
   if (firstRunOffset < 0) return false;
   for (let index = firstRunOffset; index >= 0; index -= 1) {
@@ -594,7 +615,7 @@ function tailNeedsGoverningConfig(lines: string[]): boolean {
   return true;
 }
 
-function trimBoundLedgerLines(lines: string[], maxEntries: number): string[] {
+function trimBoundLedgerLines(lines: BoundedLedgerLine[], maxEntries: number): BoundedLedgerLine[] {
   const bounded = [...lines];
   while (bounded.length > maxEntries) {
     const removable = bounded.findIndex((line, index) => index > 0 && !isConfigLedgerLine(line));
@@ -603,27 +624,26 @@ function trimBoundLedgerLines(lines: string[], maxEntries: number): string[] {
   return bounded;
 }
 
-function isConfigLedgerLine(line: string | undefined): boolean {
+function isConfigLedgerLine(line: BoundedLedgerLine | undefined): boolean {
   return ledgerLineType(line) === "config";
 }
 
-function isRunLedgerLine(line: string | undefined): boolean {
+function isRunLedgerLine(line: BoundedLedgerLine | undefined): boolean {
   return ledgerLineType(line) === "run";
 }
 
-function ledgerLineType(line: string | undefined): "config" | "run" | "other" {
+function ledgerLineType(line: BoundedLedgerLine | undefined): "config" | "run" | "other" {
   if (!line) return "other";
   if (
-    !line.includes('"type"') &&
-    !line.includes('"run"') &&
-    !line.includes('"metric"') &&
-    !line.includes('"status"')
+    !line.text.includes('"type"') &&
+    !line.text.includes('"run"') &&
+    !line.text.includes('"metric"') &&
+    !line.text.includes('"status"')
   ) {
     return "other";
   }
   try {
-    const entry = JSON.parse(line);
-    if (!isLooseObject(entry)) return "other";
+    const entry = parseJsonlRecord(line.text, "autoresearch.jsonl", line.line);
     if (entry.type === "config") return "config";
     if (
       entry.type === "run" ||

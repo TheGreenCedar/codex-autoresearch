@@ -3,6 +3,13 @@ export interface DashboardLedgerBounds {
   omittedEntries: number;
   truncated: boolean;
   invalidLedgerEntryCount?: number;
+  invalidLedgerEntries?: Array<{
+    file: string;
+    line: number;
+    kind: string;
+    message: string;
+    command: string;
+  }>;
 }
 
 export interface BoundedDashboardLedgerEntries<T> extends DashboardLedgerBounds {

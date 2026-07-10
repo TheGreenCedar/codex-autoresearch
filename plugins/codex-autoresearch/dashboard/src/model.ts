@@ -23,7 +23,6 @@ export {
   metricValueForRun,
   resolveMetricDefinition,
 } from "./model/metric-definition";
-export { parseJsonl, parseJsonObject } from "./model/parsing";
 export { recordFrom } from "./model/records";
 export { bestRunFor, buildReadout } from "./model/readout";
 export { statusCounts } from "./model/status";

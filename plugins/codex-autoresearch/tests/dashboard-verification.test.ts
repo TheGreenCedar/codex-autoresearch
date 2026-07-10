@@ -4689,7 +4689,7 @@ test("live dashboard reports malformed ledger rows inside the visible window", a
       path.join(dir, "autoresearch.jsonl"),
       [
         JSON.stringify({ type: "config", name: "invalid ledger", metricName: "seconds" }),
-        "{malformed",
+        "null",
         JSON.stringify({ type: "run", run: 1, status: "keep", metric: 1 }),
         "",
       ].join("\n"),
@@ -4699,6 +4699,12 @@ test("live dashboard reports malformed ledger rows inside the visible window", a
     const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
     assert.equal(snapshot.ledgerEntries.length, 2);
     assert.equal(snapshot.ledgerBounds.invalidLedgerEntryCount, 1);
+    assert.equal(snapshot.ledgerBounds.invalidLedgerEntries[0].line, 2);
+    assert.equal(snapshot.ledgerBounds.invalidLedgerEntries[0].kind, "null");
+    assert.match(snapshot.ledgerBounds.invalidLedgerEntries[0].file, /^<workdir>[\\/]/);
+    assert.match(snapshot.ledgerBounds.invalidLedgerEntries[0].message, /ledger-doctor/);
+    assert.equal(JSON.stringify(snapshot).includes(dir), false);
+    assert.equal(JSON.stringify(snapshot).includes(dir.replaceAll("\\", "/")), false);
   } finally {
     server.server.close();
     await rm(dir, { recursive: true, force: true });

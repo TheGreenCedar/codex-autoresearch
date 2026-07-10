@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { ledgerRecordIssue, parseJsonlRecords } from "../lib/session-records.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const benchmarkSource = path.join(pluginRoot, "scripts", "perfection-benchmark.ts");
@@ -44,6 +45,36 @@ test("perfection benchmark does not depend on committed demo dashboard HTML", as
 
   assert.doesNotMatch(source, /examples\/demo-session\/autoresearch-dashboard\.html/);
   assert.doesNotMatch(source, /demoExport/);
+});
+
+test("perfection demo ledger validation rejects wrong-shaped and malformed rows", async () => {
+  const source = await readFile(benchmarkSource, "utf8");
+  const fixturePath = path.join(pluginRoot, "examples/demo-session/autoresearch.jsonl");
+  const valid = JSON.stringify({ type: "config", metricName: "seconds" });
+  const corruptions = [
+    { row: "[]", line: 2, kind: "array" },
+    { row: "{malformed", line: 3, kind: "invalid-json" },
+  ];
+
+  for (const corruption of corruptions) {
+    const lines = [valid, JSON.stringify({ run: 1, status: "measure", metric: 10 }), valid];
+    lines[corruption.line - 1] = corruption.row;
+    assert.throws(
+      () => parseJsonlRecords(lines.join("\n"), fixturePath),
+      (error) => {
+        const issue = ledgerRecordIssue(error);
+        assert.ok(issue);
+        assert.equal(issue.line, corruption.line);
+        assert.equal(issue.kind, corruption.kind);
+        assert.match(issue.message, /ledger-doctor --cwd <project> --json/);
+        return true;
+      },
+    );
+  }
+
+  assert.match(source, /parseJsonlRecords\(\s*demoJsonl,/);
+  assert.doesNotMatch(source, /startsWith\('\{"run":'\)/);
+  assert.doesNotMatch(source, /JSON\.parse\(line\)/);
 });
 
 test("compact read command paths use loadSessionState cache-aware loading", async () => {
