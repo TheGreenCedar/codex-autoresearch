@@ -87,6 +87,38 @@ test("portfolio advisor reports low confidence for insufficient evidence", () =>
   assert.match(recommendation.reason, /low confidence|No measured packet/i);
 });
 
+test("portfolio advisor never treats absent metrics as an incumbent", () => {
+  for (const best of [null, undefined, "", "   "]) {
+    const recommendation = recommendPortfolioDirection({
+      runtimeDrift: { installedRuntime: "fresh" },
+      gateQuality: { posture: "correctness" },
+      preflight: { status: "ready" },
+      laneLifecycle: { plannedLanes: [] },
+      experimentMemory: null,
+      best,
+      current: [],
+    });
+
+    assert.equal(recommendation.kind, "insufficient-evidence", String(best));
+    assert.doesNotMatch(recommendation.evidence.join("\n"), /best metric/i, String(best));
+  }
+
+  const metriclessKeep = recommendPortfolioDirection({
+    runtimeDrift: { installedRuntime: "fresh" },
+    gateQuality: { posture: "correctness" },
+    preflight: { status: "ready" },
+    laneLifecycle: { plannedLanes: [] },
+    experimentMemory: {
+      kept: [{ status: "keep", metric: null }],
+      diversityGuidance: { id: "incumbent-confirmation" },
+    },
+    best: null,
+    current: [],
+  });
+  assert.equal(metriclessKeep.kind, "insufficient-evidence");
+  assert.equal(metriclessKeep.evidence.includes("1 current kept run"), false);
+});
+
 test("experiment memory groups repeated setting families and detects plateau risk", () => {
   const runs = [
     kept(1, 100, "Baseline BGE b512 r1", { hypothesis: "BGE base b512 repeat 1" }),

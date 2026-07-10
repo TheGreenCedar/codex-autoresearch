@@ -2650,6 +2650,7 @@ function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
   const minimalEnvelope = envelope
     ? {
         activeSegment: envelope.activeSegment || null,
+        nextAction: envelope.nextAction || compact.nextAction || "",
         canonicalNextAction: canonicalNextAction || envelope.canonicalNextAction || null,
         finalizationReadiness: envelope.finalizationReadiness || null,
         latestPacketFreshness: envelope.latestPacketFreshness || null,
@@ -5768,17 +5769,6 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       lastRun?.packetEvidence?.progressSnapshot ||
       null,
   });
-  const portfolioRecommendation = recommendPortfolioDirection({
-    runtimeDrift: guidance.runtimeDriftSummary,
-    gateQuality: guidance.gateQuality,
-    preflight: guidance.preflight,
-    laneLifecycle,
-    laneResults: laneLifecycle.latestResults,
-    packetDiagnostics,
-    experimentMemory: memory,
-    best: state.best,
-    current: state.current,
-  });
   const readModel = buildSessionReadModel({
     workDir,
     config,
@@ -5807,28 +5797,48 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     logLast: guidedCommands.logLast || "",
     setup: guidedCommands.setup || "",
   };
+  const decisionInput = {
+    state: {
+      ...stateWithQualityGap,
+      ...controlPlane,
+      limit: iterationLimitInfo(state, config),
+    },
+    nextAction: continuation.nextAction,
+    lastRunFreshness,
+    warningDetails: warnings,
+    scaffoldHealth,
+    researchIntegrity,
+    qualityGap,
+    finalization: effectiveFinalizePreview,
+    experimentEconomics,
+    salvageCandidates: partialResults.candidates,
+    workflowFriction,
+    experimentMemory: memory,
+    setupState: decisionSetupState(dashboardGuidedSetup, dashboardSetupPlan),
+    watchdog: watchdogSummary,
+  };
+  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
+  const portfolioRecommendation =
+    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
+      ? null
+      : recommendPortfolioDirection({
+          runtimeDrift: guidance.runtimeDriftSummary,
+          gateQuality: guidance.gateQuality,
+          preflight: guidance.preflight,
+          laneLifecycle,
+          laneResults: laneLifecycle.latestResults,
+          packetDiagnostics,
+          experimentMemory: memory,
+          best: state.best,
+          current: state.current,
+        });
   const decisionEnvelope = withCanonicalActionCommand(
-    buildDecisionEnvelope({
-      state: {
-        ...stateWithQualityGap,
-        portfolioRecommendation,
-        ...controlPlane,
-        limit: iterationLimitInfo(state, config),
-      },
-      nextAction: continuation.nextAction,
-      lastRunFreshness,
-      warningDetails: warnings,
-      scaffoldHealth,
-      researchIntegrity,
-      qualityGap,
-      finalization: effectiveFinalizePreview,
-      experimentEconomics,
-      salvageCandidates: partialResults.candidates,
-      workflowFriction,
-      experimentMemory: memory,
-      setupState: decisionSetupState(dashboardGuidedSetup, dashboardSetupPlan),
-      watchdog: watchdogSummary,
-    }),
+    portfolioRecommendation
+      ? buildDecisionEnvelope({
+          ...decisionInput,
+          state: { ...decisionInput.state, portfolioRecommendation },
+        })
+      : preliminaryDecisionEnvelope,
     canonicalCommandHints,
   );
   const enrichedState = {

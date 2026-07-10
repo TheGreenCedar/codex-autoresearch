@@ -1,3 +1,5 @@
+import { finiteMetric } from "./session-core.js";
+
 export type PortfolioRecommendationKind =
   | "trust-blocker"
   | "exploit-best"
@@ -89,13 +91,11 @@ export function recommendPortfolioDirection(input: PortfolioAdvisorInput): Portf
     });
   }
 
-  const keptRuns = arrayValue(memory?.kept);
-  const hasBest = Number.isFinite(Number(input.best));
-  if (
-    /incumbent|exploit|confirm/i.test(stringValue(diversityGuidance?.id)) ||
-    keptRuns.length > 0 ||
-    hasBest
-  ) {
+  const keptRuns = arrayValue(memory?.kept).filter(
+    (run) => finiteMetric(recordOrNull(run)?.metric) != null,
+  );
+  const hasBest = finiteMetric(input.best) != null;
+  if (keptRuns.length > 0 || hasBest) {
     if (keptRuns.length > 0) evidence.push(`${keptRuns.length} current kept run`);
     if (hasBest) evidence.push(`best metric: ${String(input.best)}`);
     return recommendation({

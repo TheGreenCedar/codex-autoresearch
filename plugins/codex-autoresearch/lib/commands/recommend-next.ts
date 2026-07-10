@@ -373,6 +373,7 @@ function buildBoundedCompactState(compact: JsonObject): JsonObject {
       activeSegment: decisionEnvelope?.activeSegment ?? null,
       latestPacketFreshness: decisionEnvelope?.latestPacketFreshness ?? null,
       finalizationReadiness: decisionEnvelope?.finalizationReadiness ?? null,
+      nextAction: decisionEnvelope?.nextAction ?? null,
       operatorReadout: boundedOperatorReadout(recordOrNull(decisionEnvelope?.operatorReadout)),
       watchdog: decisionEnvelope?.watchdog ?? null,
       portfolioRecommendation: boundedPortfolioRecommendation(
@@ -392,6 +393,7 @@ function boundedDecisionEnvelope(envelope: JsonObject | null): JsonObject | null
     activeSegment: envelope.activeSegment ?? null,
     latestPacketFreshness: envelope.latestPacketFreshness ?? null,
     finalizationReadiness: envelope.finalizationReadiness ?? null,
+    nextAction: envelope.nextAction ?? null,
     canonicalNextAction: envelope.canonicalNextAction ?? null,
     loopContract: boundedLoopContract(recordOrNull(envelope.loopContract)),
     operatorReadout: boundedOperatorReadout(recordOrNull(envelope.operatorReadout)),

@@ -153,6 +153,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "setup-plan",
     fallbackKeys: ["replaceLast", "setup", "setupPlan", "state"],
   }),
+  "active-progress": actionMetadata({
+    label: "Inspect active progress",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["stateCompact", "state", "partialResults"],
+  }),
   "partial-salvage": actionMetadata({
     label: "Review partial results",
     commandLabel: "Partial",

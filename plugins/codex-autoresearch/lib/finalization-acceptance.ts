@@ -75,7 +75,7 @@ function concreteCommand(command: unknown): string {
 }
 
 function commandInvokesNextPacket(command: string): boolean {
-  return /\bnext\b|next_experiment/i.test(command);
+  return /(?:^|\s)next(?:\s|$)|next_experiment/i.test(command);
 }
 
 function commandInvokesFinalization(command: string): boolean {

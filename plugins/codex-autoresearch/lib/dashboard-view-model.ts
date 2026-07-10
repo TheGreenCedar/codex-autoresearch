@@ -550,7 +550,7 @@ function summarizeDecisionEnvelope({
     measurements,
     envelope,
   });
-  if (canonicalSummary && canonicalSummary.kind !== "next-packet") return canonicalSummary;
+  if (canonicalSummary) return canonicalSummary;
 
   let summary = {
     kind: "continue",

@@ -354,6 +354,8 @@ test("core metric helpers do not coerce invalid values to numeric zero", async (
   assert.equal(finiteMetric("0"), 0);
   assert.equal(finiteMetric(" 0 "), 0);
   assert.equal(finiteMetric("-1.5e+2"), -150);
+  assert.equal(finiteMetric(null), null);
+  assert.equal(finiteMetric(undefined), null);
   assert.equal(finiteMetric(""), null);
   assert.equal(finiteMetric("   "), null);
   assert.equal(finiteMetric(false), null);
