@@ -27,6 +27,11 @@ type WindowsProcessIdentitySnapshot = {
   reason: string;
 };
 type WindowsProcessIdentityQuery = (pids: number[]) => Promise<WindowsProcessIdentitySnapshot>;
+type WindowsProcessIdentityVerification = {
+  pids: number[];
+  proven: boolean;
+  reason: string;
+};
 
 export interface ProcessTreeTermination {
   attempted: boolean;
@@ -760,29 +765,26 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
   const entries = mergeProcessEntries(snapshot.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
   const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true);
-  let identityFailureReason = "";
-  const identityFailurePids = new Set<number>();
-  let forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
+  const forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
+  let preForceVerification: WindowsProcessIdentityVerification | null = null;
   if (forcedRemaining.length > 0) {
-    const verification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
-    if (!verification.proven) {
-      identityFailureReason = verification.reason;
-      for (const remainingPid of verification.pids) identityFailurePids.add(remainingPid);
-    } else if (verification.pids.length > 0) {
-      await taskkillPids(verification.pids, true);
+    preForceVerification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
+    if (preForceVerification.proven && preForceVerification.pids.length > 0) {
+      await taskkillPids(preForceVerification.pids, true);
     }
   }
-  remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
-  if (remainingPids.length > 0) {
-    const verification = await verifyWindowsProcessIdentities(entries, remainingPids);
-    if (!verification.proven) {
-      identityFailureReason ||= verification.reason;
-      for (const remainingPid of verification.pids) identityFailurePids.add(remainingPid);
-    } else {
-      remainingPids = verification.pids;
-    }
+  const finalCandidates = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
+  let finalVerification: WindowsProcessIdentityVerification | null = null;
+  if (finalCandidates.length > 0) {
+    finalVerification = await verifyWindowsProcessIdentities(entries, finalCandidates);
   }
-  remainingPids = [...new Set([...remainingPids, ...identityFailurePids])];
+  const identityVerification = authoritativeWindowsIdentityVerification(
+    preForceVerification,
+    finalCandidates,
+    finalVerification,
+  );
+  remainingPids = identityVerification.pids;
+  const identityFailureReason = identityVerification.proven ? "" : identityVerification.reason;
   const proven =
     snapshot.proven && second.proven && !identityFailureReason && remainingPids.length === 0;
   return terminationResult(
@@ -1049,7 +1051,7 @@ export async function verifyWindowsProcessIdentities(
   entries: Array<Pick<ProcessIdentity, "pid" | "started">>,
   pids: number[],
   query: WindowsProcessIdentityQuery = windowsProcessIdentities,
-): Promise<{ pids: number[]; proven: boolean; reason: string }> {
+): Promise<WindowsProcessIdentityVerification> {
   const candidates = [...new Set(pids)];
   const snapshot = await query(candidates);
   if (!snapshot.proven) {
@@ -1062,6 +1064,26 @@ export async function verifyWindowsProcessIdentities(
     ),
     proven: true,
     reason: snapshot.reason,
+  };
+}
+
+export function authoritativeWindowsIdentityVerification(
+  preForce: WindowsProcessIdentityVerification | null,
+  finalCandidates: number[],
+  finalVerification: WindowsProcessIdentityVerification | null,
+): WindowsProcessIdentityVerification {
+  const candidates = [...new Set(finalCandidates)];
+  if (candidates.length === 0) {
+    return { pids: [], proven: true, reason: "windows_process_identities_absent" };
+  }
+  if (finalVerification) return finalVerification;
+  return {
+    pids: candidates,
+    proven: false,
+    reason:
+      preForce?.proven === false
+        ? preForce.reason
+        : "windows_process_identity_verification_missing",
   };
 }
 

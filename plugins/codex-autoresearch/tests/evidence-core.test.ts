@@ -31,6 +31,7 @@ import {
 } from "../lib/session-core.js";
 import { buildCheapFinalizationPressure } from "../lib/session-read-model.js";
 import {
+  authoritativeWindowsIdentityVerification,
   parseMetricLines,
   runProcess,
   runShell,
@@ -225,7 +226,14 @@ test(
           assert.equal(result.terminationFailed, false, JSON.stringify(result.termination));
           assert.equal(result.termination?.proven, true);
           assert.equal(fixturePids.length, 3, result.fullOutput);
-          for (const pid of fixturePids) assert.equal(processIsAlive(pid), false, `PID ${pid}`);
+          for (const pid of fixturePids) {
+            assert.equal(
+              result.termination?.trackedPids.includes(pid),
+              true,
+              `untracked PID ${pid}`,
+            );
+            assert.equal(isStubbornFixtureProcess(pid), false, `fixture PID ${pid}`);
+          }
         }
       } finally {
         await Promise.all(
@@ -301,6 +309,46 @@ test("Windows identity-query failure keeps every candidate PID unproven", async 
   assert.equal(result.proven, false);
   assert.equal(result.reason, "windows_process_identity_enumeration_failed");
   assert.deepEqual(result.pids, [41, 42]);
+});
+
+test("transient pre-force identity-query failure yields to final absence proof", () => {
+  const preForceFailure = {
+    pids: [41, 42],
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  };
+  const finalAbsence = {
+    pids: [],
+    proven: true,
+    reason: "windows_process_identities_enumerated",
+  };
+
+  assert.deepEqual(
+    authoritativeWindowsIdentityVerification(preForceFailure, [41, 42], finalAbsence),
+    {
+      pids: [],
+      proven: true,
+      reason: "windows_process_identities_enumerated",
+    },
+  );
+  assert.deepEqual(authoritativeWindowsIdentityVerification(preForceFailure, [], null), {
+    pids: [],
+    proven: true,
+    reason: "windows_process_identities_absent",
+  });
+});
+
+test("final Windows identity-query failure remains fail closed", () => {
+  const finalFailure = {
+    pids: [41, 42],
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  };
+  assert.deepEqual(authoritativeWindowsIdentityVerification(null, [41, 42], finalFailure), {
+    pids: [41, 42],
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  });
 });
 
 test("remote catalog address validation accepts only globally routable IPs", () => {
