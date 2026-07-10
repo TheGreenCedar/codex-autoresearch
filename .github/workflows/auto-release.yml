@@ -27,9 +27,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Enforce third-party action pinning
+      - name: Enforce action pinning
         run: node .github/scripts/check-workflow-policy.mjs
 
   detect-version:
@@ -42,9 +42,18 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+
+      - name: Install release policy dependency
+        working-directory: plugins/codex-autoresearch
+        run: npm ci --ignore-scripts --prefer-offline --no-audit
 
       - name: Compare package versions
         id: version
@@ -78,6 +87,11 @@ jobs:
             fi
           fi
 
+          if [ -z "$old_version" ]; then
+            echo "::error::Could not establish the previous package version; automatic release fails closed."
+            exit 1
+          fi
+
           echo "Previous package version: ${old_version:-<missing>}"
           echo "Current package version: $new_version"
 
@@ -88,8 +102,8 @@ jobs:
             exit 0
           fi
 
-          if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Package version must look like 1.2.3, got $new_version."
+          if ! (cd plugins/codex-autoresearch && node -e "const semver=require('semver'); const [oldVersion,newVersion]=process.argv.slice(1); if (!semver.valid(oldVersion) || !semver.valid(newVersion) || semver.prerelease(newVersion) || !semver.gt(newVersion, oldVersion)) process.exit(1);" "$old_version" "$new_version"); then
+            echo "::error::Automatic releases require a stable version strictly greater than $old_version; got $new_version."
             exit 1
           fi
 

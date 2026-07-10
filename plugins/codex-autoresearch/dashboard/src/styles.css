@@ -2415,6 +2415,13 @@ p {
   border-collapse: collapse;
 }
 
+.ledger-load-more {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--soft-line);
+  padding: 12px;
+}
+
 .ledger-header {
   position: sticky;
   top: 0;

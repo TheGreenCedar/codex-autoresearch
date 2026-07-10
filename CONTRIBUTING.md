@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for improving Codex Autoresearch. The best contributions make one measured loop easier to trust, resume, debug, or review.
+The best contributions make a measured loop easier to trust, resume, debug, or review.
 
 ## Before opening an issue
 
@@ -25,6 +25,8 @@ If Autoresearch itself looks broken, confusing, stale, or under-documented, plea
 - Work from `plugins/codex-autoresearch` for package checks.
 
 ## Local setup
+
+You need Node.js 24 or newer, npm, and Git.
 
 From the package root:
 
@@ -57,4 +59,4 @@ Please include:
 
 For dashboard or screenshot-visible UI changes, include visual evidence or explain why it was not possible.
 
-For benchmark-loop behavior, include the relevant metric, status decision, and ASI/evidence path when available.
+For benchmark-loop behavior, include the relevant metric, status decision, and structured experiment-note or evidence path when available.

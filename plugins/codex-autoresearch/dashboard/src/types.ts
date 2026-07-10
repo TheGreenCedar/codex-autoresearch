@@ -68,6 +68,7 @@ export interface DashboardEntry {
 export interface NormalizedEntries {
   segments: SessionSegment[];
   latestSegment: number;
+  invalidLedgerEntryCount: number;
 }
 
 export interface DashboardSummary {
@@ -398,6 +399,7 @@ export interface LedgerBounds {
   truncated?: boolean;
   omittedEntries?: number;
   maxEntries?: number;
+  invalidLedgerEntryCount?: number;
 }
 
 export interface DashboardMeta {
@@ -462,6 +464,7 @@ export interface DashboardReadout {
   recentRuns: SessionRun[];
   plottedRuns: SessionRun[];
   metricDefinition: WeightedMetricDefinition;
+  invalidLedgerEntryCount: number;
 }
 
 export interface ChartPoint {

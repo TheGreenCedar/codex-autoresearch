@@ -1,186 +1,165 @@
-# Maintainers
+# Maintainer guide
 
-This repository is a wrapper for the Codex Autoresearch plugin. The active package root is `plugins/codex-autoresearch`.
+The repository root is a wrapper. The product package is `plugins/codex-autoresearch`; run package commands there.
 
-Doc voice and audience rules: [STYLE.md](STYLE.md).
+## Repository map
 
-## Repo Shape
+| Surface | Purpose |
+| --- | --- |
+| root `README.md` | Public product front door |
+| root `CHANGELOG.md` | User-facing release history |
+| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Codex execution contract |
+| `plugins/codex-autoresearch/docs/` | User and maintainer documentation |
+| `plugins/codex-autoresearch/lib/`, `scripts/` | Authored runtime source |
+| `plugins/codex-autoresearch/dashboard/src/` | Dashboard source |
+| `plugins/codex-autoresearch/tests/` | Product contracts and regression tests |
 
-- Root `README.md` is the public front door.
-- Narrow archive READMEs may exist under `docs/`, but they are not first-run onboarding.
-- Root `CHANGELOG.md` is the release-note surface for user-facing changes.
-- The main skill is `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md`.
-- Topic docs live in `plugins/codex-autoresearch/docs/`.
-- Human-facing topic docs are `concepts.md`, `start.md`, `walkthrough.md`, `operate.md`, `trust.md`, `finish.md`, `recipes.md`, `troubleshooting.md`, and `hooks.md`.
-- Internal planning archives are not first-run onboarding.
+Audience and voice rules live in [Documentation style](STYLE.md).
 
-Do not assume root-level npm scripts exist. Package scripts live in `plugins/codex-autoresearch/package.json`.
+## Run the local source
 
-## Local Plugin Routing
-
-When this repo is the target, use the repo-local plugin before any globally installed or marketplace-cache copy. Installed cache drift is common; inspect the active runtime before treating source changes as live behavior.
+Prefer the repository checkout over a globally installed or marketplace-cached copy when changing this project.
 
 From the wrapper root:
 
 ```bash
 node plugins/codex-autoresearch/scripts/autoresearch.mjs --help
-node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark
-node plugins/codex-autoresearch/scripts/autoresearch.mjs next --cwd plugins/codex-autoresearch
-node plugins/codex-autoresearch/scripts/autoresearch.mjs export --cwd plugins/codex-autoresearch
+node plugins/codex-autoresearch/scripts/autoresearch.mjs doctor --cwd plugins/codex-autoresearch --check-benchmark --explain
+node plugins/codex-autoresearch/scripts/autoresearch.mjs state --cwd plugins/codex-autoresearch --report
 ```
 
-From `plugins/codex-autoresearch`, use:
+From the package root:
 
 ```bash
 node scripts/autoresearch.mjs --help
-node scripts/autoresearch.mjs doctor --cwd . --check-benchmark
+node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
 ```
 
-## User-Facing Change Sync
+Installed cache drift is common. Verify the active version and built-entrypoint fingerprint before describing source changes as live installed behavior.
 
-When behavior, command surfaces, dashboard behavior, migration behavior, or finalization behavior changes, keep these surfaces synchronized:
+## Keep user surfaces in sync
 
-- root `README.md` for public promise and short getting-started path
-- root `CHANGELOG.md` for release notes and migration notes
-- `skills/codex-autoresearch/SKILL.md` for Codex operator behavior
-- closest topic doc under `docs/`
-- relevant tests and `scripts/perfection-benchmark.mjs` expectations
-- CLI help and internal tool schemas when tool or command contracts change
+When behavior, commands, dashboard wording, safety rules, finalization, packaging, or migration changes, update the smallest complete set:
 
-For non-versioned user-facing changes, refresh the newest dated changelog entry. Removed invocation surfaces need migration notes.
+- README for the public promise and first run
+- CHANGELOG for shipped user impact and migration notes
+- SKILL for Codex behavior
+- nearest topic doc
+- CLI help and tool schemas for command contracts
+- tests and `scripts/perfection-benchmark.mjs` where drift should fail the product gate
+
+Rewrite stale guidance instead of appending a second version. Removed invocation paths need a migration note.
 
 ## Verification
 
-Use the narrowest relevant check while iterating. Before claiming plugin work is done, run the product gate from `plugins/codex-autoresearch`:
+Node.js 24 or newer is the supported development floor.
 
-Develop and verify the local source checkout on Node.js 24 or newer. The package metadata and CI matrix treat Node 24 as the supported development floor.
+The final package gate is:
 
 ```bash
 npm run check
 ```
 
-Useful targeted checks:
+Useful focused checks:
 
 ```bash
-node --check scripts/autoresearch.mjs
+npm run typecheck
+npm run lint
+npm run format:check
 npm run test:cli
 npm run test:dashboard
-npm run test:dashboard:browser
+npm run test:finalize
+npm run test:core
 node scripts/autoresearch.mjs --help
 npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
-For dashboard or view-model changes, export or serve a dashboard and inspect it. Static code and tests alone do not prove the operator surface is understandable.
+For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
 
-Use `npm run test:dashboard:browser` as the opt-in real-browser accessibility check for dashboard chart/modal focus behavior. It launches an installed Chrome or Edge browser through DevTools, drives keyboard input, captures an ignored modal screenshot under `tmp/`, and runs focused critical assertions for accessible names, dialog semantics, and ARIA references. It intentionally avoids an axe dependency; add axe only when the browser gate becomes a regular CI requirement or needs broader WCAG scanning.
+## Dashboard review
 
-For dashboard or view-model review, write a temporary ignored showcase export in the demo session and compare or open that file:
+Tests do not prove that the dashboard is understandable. Serve or export the demo and inspect it after dashboard source, view-model, copy, or asset changes:
 
 ```bash
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
 
-`npm run check` generates its own ignored trust export at `examples/demo-session/tmp/autoresearch-dashboard.check.html`. That generated export must embed the current plugin version, public/showcase flags, scrub workstation paths and transient branch warnings, omit action routes, and match `assets/dashboard-build/dashboard-app.css` plus `assets/dashboard-build/dashboard-app.js` after the exporter's `</style` and `</script` escaping rules.
+`npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures an ignored screenshot under `tmp/`, and checks modal focus restoration, one chart Tab stop with arrow-key navigation, live refresh, mobile layout, reduced motion, 100-row ledger pagination, accessible names, dialog semantics, and ARIA references. It is not a manual screen-reader validation.
 
-The legacy checked-in `examples/demo-session/autoresearch-dashboard.html` is no longer the product-gate parity target or the current demo runboard. Example docs should point reviewers to `serve` or ignored `tmp/` showcase exports instead. Do not refresh the legacy fixture just to make routine dashboard UI checks pass.
-
-When intentionally refreshing the legacy fixture, use the public showcase export so workstation paths and transient branch warnings are scrubbed:
+The checked-in `examples/demo-session/autoresearch-dashboard.html` is a legacy fixture, not the normal review target. Routine checks use ignored exports under `tmp/`. Refresh the legacy file only when the fixture itself intentionally changes:
 
 ```bash
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
 ```
 
-Before publishing, inspect the package artifact itself. Use dry-run pack output
-for routine review, then create and extract a real tarball for release smoke.
-Dashboard runtime assets are ignored package output. `npm run check` builds and
-checks them for review, while release publishing lets `prepack` run the single
-publish build before `npm pack`. A fresh source checkout can generate the assets
-with `npm run build:dashboard`; serving or exporting dashboards without them
-still fails clearly with that command path. Package checks and the release
-workflow share the extracted-package smoke path: both assert dashboard assets are
-in the tarball and smoke an extracted-package dashboard export, not just launcher
-help.
+## Package shape and runtime hydration
 
-`npm run audit:prod` is advisory only. The plugin package currently declares no
-runtime npm dependencies; the shipped runtime is bundled into `dist/` and
-dashboard assets during the build. Use `audit:prod` as a quick declared
-production-dependency check, not as proof that bundled dev-dependency code has
-been vulnerability-audited. Release trust comes from `npm run check`, the
-tarball checksum, artifact provenance, and extracted-package smoke.
+`dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.
 
-The shipped `scripts/*.mjs` shims depend on `dist/`, but `dist/` is generated
-and ignored in the Git tree. If a Git marketplace source checkout is missing
-`dist/`, the CLI launcher calls `scripts/bootstrap-runtime.mjs` to download the
-matching GitHub release tarball plus
-`codex-autoresearch-<version>.tgz.sha256`, verify the SHA-256 entry names that
-exact tarball, verify the packaged name/version, and only then extract `dist/`
-into the plugin cache before importing the runtime. A publishable release
-tarball must include the built runtime, publish the adjacent checksum asset,
-exclude authored source and tests, ship no MCP launcher/config, and pass
-`node <extracted-package>/scripts/autoresearch.mjs --help` plus an extracted
-package dashboard export smoke.
+`npm run check` builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
-Do not push release tags by hand. After a synchronized version bump lands on `main`, the `Auto Release` GitHub Actions workflow compares the previous and current package versions and calls the reusable `Release` workflow when the package version changed. The release workflow still runs the checks, lets `prepack` build the tarball, smoke-tests the extracted tarball with the package check helper, refuses pre-existing tags, and only then creates the GitHub release/tag with the tarball asset attached. Use manual `Release` dispatch only as an explicit recovery path with the package version. This keeps update clients on the previous release until the new install artifact exists.
+If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. There is no unverified fallback.
 
-Release provenance is a maintainer/operator gate, not runtime bootstrap. Source
-runtime hydration stays on the adjacent SHA-256 checksum and packaged
-name/version checks so first-run installs do not depend on GitHub CLI,
-attestation APIs, or Sigstore network state.
+A release tarball must:
 
-Before running the release-provenance smoke, confirm:
+- include plugin metadata, docs, skill, launcher shims, compiled `dist/`, and dashboard assets
+- exclude authored source, tests, local state, MCP config, and stale MCP launchers
+- pass `node <extracted-package>/scripts/autoresearch.mjs --help`
+- pass an extracted-package dashboard export smoke
 
-- `gh` is installed and authenticated for `TheGreenCedar/codex-autoresearch`.
-- Network access to GitHub release metadata and attestation APIs is available.
-- The release context is present: downloaded tarball, adjacent checksum file,
-  expected `v<version>` tag, and release target commit.
+`npm run audit:prod` is advisory. The package declares no runtime npm dependencies, but its bundled runtime is built from development dependencies. Release trust comes from the product gate, checksum, provenance, and extracted-package smoke.
 
-After downloading a published tarball and adjacent checksum, use:
+## Release flow
+
+Do not push release tags by hand.
+
+After a synchronized version bump lands on `main`, the `Auto Release` workflow accepts only a strictly increasing stable SemVer and calls the reusable `Release` workflow. That workflow runs checks, builds through `prepack`, packs and extracts the artifact, refuses an existing tag, then creates the GitHub release and tag with the tarball and checksum.
+
+Use manual `Release` dispatch only as a recovery path with the package version. A manual prerelease is published with GitHub's prerelease flag and does not move `latest`. Manual downgrades are rejected too.
+
+## Release provenance smoke
+
+Before the smoke, confirm:
+
+- `gh` is installed and authenticated for `TheGreenCedar/codex-autoresearch`
+- GitHub release metadata and attestation APIs are reachable
+- the tarball, adjacent checksum, expected `v<version>` tag, and release target commit are known
+
+Then run:
 
 ```bash
 npm run smoke:release-provenance -- --tarball codex-autoresearch-<version>.tgz --checksum codex-autoresearch-<version>.tgz.sha256 --tag v<version>
 ```
 
-The smoke fetches release metadata with `gh api`, runs
-`gh attestation verify <tarball> --repo TheGreenCedar/codex-autoresearch --signer-workflow TheGreenCedar/codex-autoresearch/.github/workflows/release.yml --format json`,
-and then checks the JSON certificate fields instead of relying on
-`--source-ref` or `--source-digest`. It requires the SLSA subject digest,
-tarball SHA-256, release asset digest, and checksum manifest digest to agree,
-then checks the signer SAN, source repository, `refs/heads/main`,
-GitHub-hosted runner, and release target commit.
+The smoke reads release metadata with `gh api`, runs:
 
-Check immutable-release status before publishing a release:
+```bash
+gh attestation verify <tarball> --repo TheGreenCedar/codex-autoresearch --signer-workflow TheGreenCedar/codex-autoresearch/.github/workflows/release.yml --format json
+```
+
+It verifies that the SLSA subject, local tarball, release asset, and checksum manifest digests agree. It also checks signer SAN, source repository, `refs/heads/main`, GitHub-hosted runner, and release target commit.
+
+Check immutable-release status before publishing:
 
 ```bash
 gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2026-03-10" /repos/TheGreenCedar/codex-autoresearch/immutable-releases
 ```
 
-If it returns `{"enabled":false,...}`, a repository admin should enable
-future-release immutability with `PUT /repos/TheGreenCedar/codex-autoresearch/immutable-releases`
-or through the repository Settings > Code security > Releases control. The
-setting applies to future releases; it does not retroactively lock old release
-assets.
+If disabled, a repository admin can enable it through the API or Settings > Code security > Releases. The setting applies only to future releases.
 
-## Skill Progression Map
+## Turn repeated failures into gates
 
-Use recurring PR and review evidence to choose the next hardening drill. Each drill should leave a product safeguard behind, not just a private note.
+When the same class of bug shows up twice, leave behind a narrow check instead of another paragraph telling maintainers to be careful. Test the boundary that failed: a leak fixture for redaction, a route test for dashboard mutation, a pack-and-extract smoke for release shape, or a prompt case for command routing. Keep prose out of the assertion unless the exact text is itself the contract.
 
-| Skill track | Evidence pattern | Practice task | Validation gate |
-| --- | --- | --- | --- |
-| Security evidence hygiene | CodeQL or review findings around escaping, redaction, receipts, paths, env files, or stack traces | Add a failing leak fixture, fix the boundary, and prove dashboard/live/session payloads stay scrubbed | `npm run test:core` plus `npm run test:cli` for full-product export cases |
-| Release workflow design | Failed or brittle release, tag, tarball, package, or version-surface behavior | Turn the release invariant into a workflow or product-check assertion before changing the workflow | `npm run check`, workflow YAML review, CodeQL, auto-release, and release workflow evidence |
-| Prompt taxonomy and regression design | Natural-language goals routed to the wrong benchmark or loop type | Add prompt-plan cases for qualitative quality-gap loops and explicit measured contracts | `npm run test:cli` |
-| Dashboard/operator UX contracts | Dashboard copy or controls imply live mutation, stale truth, or unclear next action | Remove the misleading affordance and test live/static mode, toolbar state, and absent action routes | `npm run test:dashboard` plus live-server route checks |
-| Cross-surface release discipline | Docs, skill guidance, changelog, demo export, package metadata, or version surfaces drift | Update the nearest user/operator surface and add product-gate coverage when drift would be easy to repeat | `npm run check`, `git diff --check`, and demo export leak/version inspection |
+## Version surfaces
 
-## Version Surfaces
-
-For a version bump, update all version surfaces together:
+Update these together:
 
 - `plugins/codex-autoresearch/package.json`
 - `plugins/codex-autoresearch/package-lock.json`
 - `plugins/codex-autoresearch/.codex-plugin/plugin.json`
 - root `CHANGELOG.md`
-- any tests or docs that intentionally assert or display the version
+- tests or docs that intentionally display or assert the version
 
-If installed Codex behavior differs from source, refresh or inspect the versioned cache under the user's Codex plugin cache before changing source again. Typical drift layers are wrong cwd, stale marketplace cache, old versioned cache, runtime hydration, and slow full-CLI imports.
+After release, inspect the installed versioned cache before treating source and installed behavior as the same runtime.

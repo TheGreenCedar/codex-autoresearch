@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { STATUS_LABELS } from "../constants";
 import { asiPreview, breakdownForRun, formatDelta, formatMetricValue } from "../model";
 import type {
@@ -17,8 +17,17 @@ interface LedgerProps {
 
 export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
   const newest = useMemo(() => [...session.runs].reverse(), [session.runs]);
-  const ledgerNote = ledgerNoteFor(session.runs.length, ledgerBounds);
-  const tableLabel = tableLabelFor(session.runs.length, ledgerBounds);
+  const [visibleCount, setVisibleCount] = useState(100);
+  useEffect(() => setVisibleCount(100), [session.segment]);
+  const visibleRuns = newest.slice(0, visibleCount);
+  const locallyHidden = Math.max(0, newest.length - visibleRuns.length);
+  const ledgerNote = ledgerNoteFor(
+    visibleRuns.length,
+    locallyHidden,
+    ledgerBounds,
+    readout.invalidLedgerEntryCount,
+  );
+  const tableLabel = tableLabelFor(visibleRuns.length, locallyHidden, ledgerBounds);
   return (
     <section className="panel ledger-panel" id="ledger" aria-label="Run log" tabIndex={-1}>
       <div className="panel-head">
@@ -42,7 +51,7 @@ export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
               </tr>
             </thead>
             <tbody id="ledger-body">
-              {newest.map((run) => (
+              {visibleRuns.map((run) => (
                 <LedgerRow key={`${run.segment}-${run.run}`} run={run} readout={readout} />
               ))}
             </tbody>
@@ -53,29 +62,54 @@ export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
           No ledger yet. First safe move: capture a baseline measurement.
         </div>
       )}
+      {locallyHidden > 0 ? (
+        <div className="ledger-load-more">
+          <button
+            type="button"
+            className="tool-button subtle"
+            aria-describedby="ledger-note"
+            onClick={() => setVisibleCount((count) => count + 100)}
+          >
+            Load {Math.min(100, locallyHidden)} older
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function ledgerNoteFor(runCount: number, ledgerBounds?: LedgerBounds): string {
-  if (!runCount) return "No runs logged yet";
+function ledgerNoteFor(
+  visibleCount: number,
+  locallyHidden: number,
+  ledgerBounds?: LedgerBounds,
+  invalidCount = 0,
+): string {
+  if (!visibleCount) return invalidSuffix("No runs logged yet", invalidCount);
   const omittedEntries = omittedLedgerEntries(ledgerBounds);
+  const parts = [`${visibleCount} ${locallyHidden ? "shown" : "runs"}`, "newest first"];
+  if (locallyHidden > 0) parts.push(`${locallyHidden} older ${runLabel(locallyHidden)} available`);
   if (ledgerBounds?.truncated === true && omittedEntries > 0) {
-    return `${runCount} visible runs / newest first / ${omittedEntries} older ledger ${entryLabel(
-      omittedEntries,
-    )} omitted`;
+    parts.push(
+      `${omittedEntries} older ledger ${entryLabel(omittedEntries)} omitted from snapshot`,
+    );
   }
-  return `${runCount} runs / newest first`;
+  return invalidSuffix(parts.join(" / "), invalidCount);
 }
 
-function tableLabelFor(runCount: number, ledgerBounds?: LedgerBounds): string {
+function tableLabelFor(
+  visibleCount: number,
+  locallyHidden: number,
+  ledgerBounds?: LedgerBounds,
+): string {
   const omittedEntries = omittedLedgerEntries(ledgerBounds);
+  const parts = [`Run ledger, newest first, ${visibleCount} shown`];
+  if (locallyHidden > 0) parts.push(`${locallyHidden} older ${runLabel(locallyHidden)} available`);
   if (ledgerBounds?.truncated === true && omittedEntries > 0) {
-    return `Run ledger, newest first, ${runCount} visible runs, ${omittedEntries} older ledger ${entryLabel(
-      omittedEntries,
-    )} omitted`;
+    parts.push(
+      `${omittedEntries} older ledger ${entryLabel(omittedEntries)} omitted from snapshot`,
+    );
   }
-  return `Run ledger, newest first, ${runCount} total runs`;
+  return parts.join(", ");
 }
 
 function omittedLedgerEntries(ledgerBounds?: LedgerBounds): number {
@@ -85,6 +119,16 @@ function omittedLedgerEntries(ledgerBounds?: LedgerBounds): number {
 
 function entryLabel(count: number): string {
   return count === 1 ? "entry" : "entries";
+}
+
+function runLabel(count: number): string {
+  return count === 1 ? "run" : "runs";
+}
+
+function invalidSuffix(text: string, invalidCount: number): string {
+  return invalidCount > 0
+    ? `${text} / ${invalidCount} invalid ledger ${entryLabel(invalidCount)} ignored`
+    : text;
 }
 
 function LedgerRow({ run, readout }: { run: SessionRun; readout: DashboardReadout }) {

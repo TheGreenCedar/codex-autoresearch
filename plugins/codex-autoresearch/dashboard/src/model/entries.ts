@@ -7,34 +7,65 @@ import type {
 } from "../types";
 import { numericOrNull } from "./metrics";
 
+const RUN_STATUSES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
+
 export function normalizeEntries(entries: DashboardEntry[] | undefined): NormalizedEntries {
-  const segments: SessionSegment[] = [];
+  const segments = new Map<number, SessionSegment>();
   let segment = 0;
+  let invalidLedgerEntryCount = 0;
   let config = defaultConfig();
   const ensureSegment = (index: number): SessionSegment => {
-    while (segments.length <= index) {
-      segments.push({ segment: segments.length, config: { ...config }, runs: [] });
-    }
-    return segments[index];
+    const existing = segments.get(index);
+    if (existing) return existing;
+    const created = { segment: index, config: { ...config }, runs: [] };
+    segments.set(index, created);
+    return created;
   };
   ensureSegment(0);
   for (const entry of entries || []) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      invalidLedgerEntryCount += 1;
+      continue;
+    }
     if (entry.type === "config") {
-      if (ensureSegment(segment).runs.length) segment += 1;
+      if (ensureSegment(segment).runs.length) {
+        if (segment === Number.MAX_SAFE_INTEGER) {
+          invalidLedgerEntryCount += 1;
+          continue;
+        }
+        segment += 1;
+      }
       config = { ...defaultConfig(), ...entry } as SessionConfig;
       ensureSegment(segment).config = { ...config };
       continue;
     }
-    if (entry.type && entry.type !== "run") continue;
-    if (!("metric" in entry) && !("status" in entry)) continue;
+    if (entry.type && entry.type !== "run") {
+      continue;
+    }
+    if (!("metric" in entry) && !("status" in entry)) {
+      invalidLedgerEntryCount += 1;
+      continue;
+    }
+    if (!RUN_STATUSES.has(String(entry.status))) {
+      invalidLedgerEntryCount += 1;
+      continue;
+    }
     const runSegment = entry.segment == null ? segment : Number(entry.segment);
-    const target = ensureSegment(Number.isFinite(runSegment) ? runSegment : segment);
+    if (!Number.isSafeInteger(runSegment) || runSegment < 0) {
+      invalidLedgerEntryCount += 1;
+      continue;
+    }
+    segment = Math.max(segment, runSegment);
+    const target = ensureSegment(runSegment);
     target.runs.push(normalizeRun(entry, target));
   }
+  const normalizedSegments = [...segments.values()].sort(
+    (left, right) => left.segment - right.segment,
+  );
   return {
-    segments,
-    latestSegment: segments.length ? segments[segments.length - 1].segment : 0,
+    segments: normalizedSegments,
+    latestSegment: normalizedSegments.at(-1)?.segment ?? 0,
+    invalidLedgerEntryCount,
   };
 }
 

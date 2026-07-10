@@ -4,6 +4,7 @@ import { redactEvidenceText } from "../evidence-redaction.js";
 
 type UnlinkFn = (filePath: string) => Promise<void>;
 type CleanupWarningContext = { workDir?: string };
+export type CleanupWarning = { code: string; message: string };
 
 export function pendingReceiptCleanupWarning(
   error: unknown,
@@ -37,4 +38,27 @@ export async function clearPendingLogTransactionWithWarning(
   } catch (error) {
     return pendingReceiptCleanupWarning(error, context);
   }
+}
+
+export async function clearFilesWithWarnings(
+  filePaths: Iterable<string>,
+  unlink: UnlinkFn = fsp.unlink,
+  context: CleanupWarningContext = {},
+): Promise<CleanupWarning[]> {
+  const warnings: CleanupWarning[] = [];
+  for (const filePath of new Set(filePaths)) {
+    try {
+      await unlink(filePath);
+    } catch (error: any) {
+      if (error?.code === "ENOENT") continue;
+      warnings.push({
+        code: "last_run_cleanup_failed",
+        message: `Last-run cleanup failed: ${redactEvidenceText(
+          error instanceof Error ? error.message : String(error),
+          context,
+        )}.`,
+      });
+    }
+  }
+  return warnings;
 }

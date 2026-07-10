@@ -8,14 +8,14 @@ import {
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
-import { buildNextPacketId } from "../lib/commands/next.js";
-import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/dashboard.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
 import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/process-governor.js";
+import { actionPolicyForTool, commandActionAliases, toolMetadata } from "../lib/tool-registry.js";
 
 test("command rendering quotes hostile benchmark args for the selected shell", () => {
   const benchmark =
@@ -84,9 +84,15 @@ test("run command helper blocks packets when resource budgets are exhausted", ()
   assert.equal(buildActiveRunPacketId(2), "packet-2-active");
 });
 
-test("next command helper builds stable packet evidence ids", () => {
-  assert.equal(buildNextPacketId({ nextRun: 7 }, "abcdef1234567890"), "packet-7-abcdef123456");
-  assert.equal(buildNextPacketId({}, "1234567890abcdef"), "packet-next-1234567890ab");
+test("tool registry owns command aliases and static safety metadata", () => {
+  assert.equal(commandActionAliases.doctorExplain, "doctor");
+  assert.equal(commandActionAliases.liveDashboard, "serve dashboard");
+  assert.equal(toolMetadata("doctor_session")?.conditionallyMutating, true);
+  assert.equal(toolMetadata("doctor_session")?.openWorld, true);
+  assert.equal(
+    actionPolicyForTool("integrations", { subcommand: "sync-recipes" }),
+    "artifact_write",
+  );
 });
 
 test("dashboard command helper builds read-only continuation commands", () => {

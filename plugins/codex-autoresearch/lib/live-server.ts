@@ -124,19 +124,13 @@ export async function serveAutoresearch(args: LooseObject) {
       if (req.method === "GET" && url.pathname === "/health") {
         sendJson(res, {
           ok: true,
-          workDir,
           dashboard: {
-            cwd: workDir,
-            sessionCwd: sessionPaths.sessionCwd,
-            sessionPathIdentity: sessionPathIdentity(sessionPaths),
+            sessionIdentity: sessionPathIdentity(sessionPaths),
             liveness: "alive",
             mode: "live-server",
             pid: process.pid,
             port: serverPort || null,
-            startedAt,
-            lastReadAt: new Date().toISOString(),
             version,
-            debugLedger,
           },
         });
         return;
@@ -518,20 +512,24 @@ async function readRedactedLedgerEntries(
   context: LooseObject,
 ): Promise<LedgerReadout> {
   const boundedLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
-  const parsedEntries = boundedLines.lines.flatMap((line) => {
+  const entries: LooseObject[] = [];
+  let invalidLedgerEntryCount = 0;
+  for (const line of boundedLines.lines) {
     try {
       const entry = redactEvidenceObject(JSON.parse(line), context);
-      return isLooseObject(entry) ? [entry] : [];
+      if (isLooseObject(entry)) entries.push(entry);
+      else invalidLedgerEntryCount += 1;
     } catch {
-      return [];
+      invalidLedgerEntryCount += 1;
     }
-  });
+  }
   return {
-    entries: parsedEntries,
+    entries,
     ledgerBounds: {
       maxEntries: boundedLines.maxEntries,
       omittedEntries: boundedLines.omittedEntries,
       truncated: boundedLines.truncated,
+      ...(invalidLedgerEntryCount ? { invalidLedgerEntryCount } : {}),
     },
   };
 }

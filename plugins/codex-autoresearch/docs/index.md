@@ -1,37 +1,19 @@
-# Codex Autoresearch Docs
+# Codex Autoresearch docs
 
-The root [README.md](../../../README.md) is the front door. These pages cover setup, running sessions, trust, and wrapping up.
+If you are new to the plugin, start with [Start](start.md), then follow [From baseline to finalization preview](walkthrough.md). Together they cover the first baseline, one measured change, and the point where useful work becomes ready for review.
 
-## Getting started
+The manual command examples assume a source checkout opened at `plugins/codex-autoresearch`. Marketplace users can stay inside Codex and ask `@Codex Autoresearch` to perform the same steps.
 
-- [Start](start.md) — first five minutes, session files, benchmark contract, first packet
-- [Walkthrough](walkthrough.md) — end-to-end narrated loop with copyable commands
-- [Concepts](concepts.md) — glossary; compact-state field names live at [state-fields](concepts.md#state-fields)
+If you would rather inspect a finished session first, the [demo](../examples/index.md) has 100 packets with keeps, discards, failed checks, and a dashboard-ready ledger.
 
-## Running a session
+When a session already exists, [Operate](operate.md) explains how to resume it without trusting an old chat summary. [Trust](trust.md) covers the benchmark, Git, runtime, and command boundaries that decide whether a result is safe to keep. [Finish](finish.md) picks up once there are accepted changes worth turning into review branches. If something is broken or stale, go straight to [Troubleshooting](troubleshooting.md).
 
-- [Operate](operate.md) — resume a messy run, dashboard, packet logging, lanes, quality-gap rounds
+The remaining pages are references rather than a reading list:
 
-## Trust and safety
+- [Concepts](concepts.md) explains the terms and state fields that appear in detailed output.
+- [Recipes](recipes.md) covers the built-in benchmark shapes and external catalogs.
+- [Workflows](workflows.md) shows the main loops as diagrams.
+- [Privacy](privacy.md) and [Terms](terms.md) describe the local data and command boundary.
+- [Hooks](hooks.md) covers optional Codex reminders.
 
-- [Trust](trust.md) — metric integrity, stale packets, drift, Git safety, command gates
-- [Privacy](privacy.md) — local session files, redaction limits, deleting data
-- [Terms](terms.md) — local tooling terms, evidence limits, no warranty
-
-## Wrapping up
-
-- [Finish](finish.md) — finalization preview, review branches, merge and cleanup
-
-## Reference
-
-- [Recipes](recipes.md) — built-in benchmark shapes and external catalogs
-- [Workflows](workflows.md) — setup, packet, fanout, and finalization diagrams
-- [Architecture](architecture.md) — CLI, skill, dashboard, and state-file ownership
-- [Control plane](control-plane.md) — contracts that must agree across state, CLI, and dashboard
-- [Troubleshooting](troubleshooting.md) — symptom-to-layer diagnosis
-- [Hooks](hooks.md) — optional Codex reminders (not required for the normal loop)
-
-## Contributors
-
-- [Maintainers](maintainers.md) — repo shape, verification gates, release surfaces
-- [Style guide](STYLE.md) — voice rules for doc edits
+Contributors will also need [Architecture](architecture.md), [Control plane](control-plane.md), [Maintainers](maintainers.md), and the [documentation style guide](STYLE.md).

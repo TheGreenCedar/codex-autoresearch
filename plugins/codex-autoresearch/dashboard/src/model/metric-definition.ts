@@ -10,9 +10,12 @@ import { finiteMetric, improvementPercent, numericOrNull, round } from "./metric
 const DEFAULT_MEMORY_KEY = "memory_mb";
 const DEFAULT_WEIGHTS = Object.freeze({ time: 0.7, memory: 0.3 });
 
-export function resolveMetricDefinition(session: SessionSegment): WeightedMetricDefinition {
+export function resolveMetricDefinition(
+  session: SessionSegment,
+  summaryBaseline: number | null = null,
+): WeightedMetricDefinition {
   const requestedMode = requestedMetricMode(session.config);
-  const baselineRun = baselineCandidate(session.runs);
+  const baselineRun = baselineCandidate(session.runs, summaryBaseline);
   const normalizedWeights = normalizedWeightsFor(session.config);
   const memoryKey = memoryKeyFor(session.config);
   const baselineTime = baselineRun?.metric ?? null;
@@ -117,9 +120,13 @@ export function chartPercentValue(
   return round((Number(metricValue) / Number(definition.baselineMetric)) * 100);
 }
 
-function baselineCandidate(runs: SessionRun[]): SessionRun | null {
-  const kept = runs.find((run) => run.status === "keep" && finiteMetric(run.metric));
-  if (kept) return kept;
+function baselineCandidate(runs: SessionRun[], summaryBaseline: number | null): SessionRun | null {
+  if (finiteMetric(summaryBaseline)) {
+    const canonical = runs.find((run) => run.status !== "crash" && run.metric === summaryBaseline);
+    if (canonical) return canonical;
+  }
+  const measured = runs.find((run) => run.status === "measure" && finiteMetric(run.metric));
+  if (measured) return measured;
   return runs.find((run) => run.status !== "crash" && finiteMetric(run.metric)) || null;
 }
 

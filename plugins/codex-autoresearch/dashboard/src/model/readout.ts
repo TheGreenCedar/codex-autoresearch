@@ -12,28 +12,32 @@ import { metricValueForRun, resolveMetricDefinition } from "./metric-definition"
 export function buildReadout(
   session: SessionSegment,
   viewModel: DashboardViewModel = {},
+  invalidLedgerEntryCount = 0,
 ): DashboardReadout {
   const runs = session.runs || [];
-  const metricDefinition = resolveMetricDefinition(session);
+  const summary = viewModel.summary?.segment === session.segment ? viewModel.summary : null;
+  const summaryBaseline = finiteMetric(summary?.baseline) ? Number(summary.baseline) : null;
+  const metricDefinition = resolveMetricDefinition(session, summaryBaseline);
   const kept = runs.filter(
     (run) => isAcceptedCurrentKeep(run) && finiteMetric(metricValueForRun(run, metricDefinition)),
   );
   const evidence = runs.filter(
     (run) => run.status !== "crash" && finiteMetric(metricValueForRun(run, metricDefinition)),
   );
-  const baselineRun = kept[0] || evidence[0] || null;
-  const summary = viewModel.summary?.segment === session.segment ? viewModel.summary : null;
+  const baselineRun =
+    (summaryBaseline == null ? null : evidence.find((run) => run.metric === summaryBaseline)) ||
+    evidence.find((run) => run.status === "measure") ||
+    evidence[0] ||
+    null;
   const allowSummaryMetrics = metricDefinition.mode === "raw";
   const baseline =
-    allowSummaryMetrics && finiteMetric(summary?.baseline)
-      ? Number(summary.baseline)
+    allowSummaryMetrics && summaryBaseline != null
+      ? summaryBaseline
       : metricValueForRun(baselineRun, metricDefinition);
   const visibleBestRun = bestRunFor(kept, metricDefinition);
-  const summaryBest =
-    allowSummaryMetrics && finiteMetric(summary?.best) ? Number(summary.best) : null;
   const visibleBestValue = metricValueForRun(visibleBestRun, metricDefinition);
-  const bestRun = summaryBest != null && visibleBestValue !== summaryBest ? null : visibleBestRun;
-  const best = summaryBest ?? visibleBestValue;
+  const bestRun = visibleBestRun;
+  const best = visibleBestValue;
   const latestPlottedRun = evidence.at(-1) || null;
   const latestFailure =
     [...runs]
@@ -64,6 +68,7 @@ export function buildReadout(
     recentRuns: [...runs].reverse().slice(0, 4),
     plottedRuns: evidence,
     metricDefinition,
+    invalidLedgerEntryCount,
   };
 }
 

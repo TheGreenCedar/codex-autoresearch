@@ -1,54 +1,50 @@
 # Privacy
 
-Codex Autoresearch is a local Codex plugin workflow. It does not run a hosted service, create a project account, or add product telemetry of its own.
+Codex Autoresearch has no hosted backend, account, or product telemetry of its own. It does run inside a Codex session: the Codex service or model provider is a separate data path governed by its own settings and terms. Local state also leaves the machine when your approved commands, Git workflow, browser, package manager, or other tools send it elsewhere.
 
-## What stays local
+## Files it writes
 
-Autoresearch writes durable session state into the target working directory:
+The target project may contain:
 
-- `autoresearch.md`
-- `autoresearch.jsonl`
-- `autoresearch.config.json`
+- `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.config.json`
+- benchmark and checks wrappers
 - `autoresearch.ideas.md`
 - `autoresearch.research/<slug>/`
-- dashboard exports such as `autoresearch-dashboard.html`
+- static dashboard exports
 
-In Git repositories, active packet snapshots are Git-private files under `.git/autoresearch/`: `last-run.json`, `progress.json`, and pending log receipts such as `pending-log-*.json`. Outside Git, the same transient state falls back to worktree files: `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json`.
+In Git repositories, current packet state and interrupted-log receipts live under `.git/autoresearch/`. Outside Git, they fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree.
 
-The served dashboard is a local readout from the same state. Static exports are portable HTML snapshots. Snapshots, ledgers, pending receipts, and dashboard exports can contain command names, relative paths, metric values, benchmark output tails, ASI notes, artifact names, and summaries of what Codex tried.
+These records can include command names, relative paths, metric values, output excerpts, structured experiment notes, artifact names, and summaries of what Codex tried. A static dashboard export contains a snapshot of the same kind of information.
 
-## Command and evidence boundary
+## What may leave the machine
 
-Benchmark and checks commands are not sandboxed. They run as local shell processes with the current user's permissions, environment access, and filesystem reach from the target working directory.
+Autoresearch itself does not require a separate cloud service. Your Codex session may send prompt and repository context to its configured model provider, and the commands you approve may also:
 
-Autoresearch records bounded evidence from those commands so later sessions can resume the loop. It attempts best-effort redaction for common secrets, credentials, home paths, and env-file references, but redaction is not a confidentiality guarantee. Do not print secrets, tokens, private customer data, credentials, or sensitive local paths into benchmark output, checks output, ASI, descriptions, or artifact files.
+- call an API
+- download packages
+- start a browser
+- push to a Git remote
+- read credentials available to the process
+- upload or transform project data
 
-Use `--command-file` and `--packet-env-file` for command text and environment overrides that need reviewable local files. Prefer project-local wrappers such as `autoresearch.sh` or `autoresearch.ps1` when benchmark setup is sensitive. Outside-workdir option files are allowed for trusted local CLI use, but persisted last-run packets replace their paths with placeholders.
+Those data paths belong to Codex, the model provider, the command, or the external service, each with its own privacy policy, account terms, cost, and rate limits.
 
-## External services
+## Redaction is not a security boundary
 
-Autoresearch does not require a hosted backend. Your own benchmark, checks, package manager, Codex session, Git remote, browser, or external recipe catalog may contact third-party services. Those services are governed by their own privacy policies.
+Packet persistence applies best-effort redaction to common secrets, credentials, home paths, and option-file references. It cannot guarantee that sensitive values will never appear.
 
-If a benchmark or checks command calls an external API, uploads data, pulls dependencies, starts a browser, or reads cloud credentials, that behavior comes from the command you approved.
+Do not put secrets, tokens, credentials, private customer data, regulated data, or sensitive workstation paths into:
 
-## Package contents
+- command lines or environment files you do not control
+- benchmark and checks output
+- packet descriptions or structured experiment notes
+- task manifests and artifact files
+- dashboard exports
 
-The plugin package includes the Codex skill, docs, small launcher scripts, compiled runtime, dashboard build assets, and plugin metadata. Release artifacts exclude authored source, tests, examples not intended for packaging, and local credentials.
+Prefer project-local command files and a minimal packet environment when possible.
 
-## Your responsibilities
+## Before sharing or deleting
 
-Before running packets, logging keeps/discards, exporting dashboards, or sharing session files:
+Before sharing a ledger, branch, dashboard, or research folder, inspect it as project data.
 
-- inspect Git state and scope `commitPaths` / `revertPaths`
-- review benchmark and checks commands before execution
-- keep secrets out of command lines, output, ASI, and artifacts
-- treat dashboard exports, ledgers, last-run packets, progress snapshots, and pending transaction receipts as potentially sensitive project records
-- verify active runtime provenance when installed behavior might differ from source
-
-## Deleting local data
-
-Session data lives in local project files and, for Git repos, under `.git/autoresearch/`. Remove or archive both locations when you no longer need them. Also check whether session files, dashboard exports, pending receipts, or copied snapshots were committed, stashed, attached, or moved into review branches.
-
----
-
-Previous: [Trust](trust.md) · Next: [Terms](terms.md).
+To remove a local session, archive or delete the worktree session files and the matching `.git/autoresearch/` records. Also check commits, stashes, review branches, attachments, and copied exports; deleting the original file does not remove those copies.

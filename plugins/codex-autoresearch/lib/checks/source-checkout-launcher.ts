@@ -127,12 +127,12 @@ export async function runSourceCheckoutLauncherCheck() {
 }
 
 async function sourceRuntimeDocsProblems(): Promise<string[]> {
-  const requiredDocs: Array<[string, string[]]> = [
-    ["docs/maintainers.md", ["dist/", "bootstrap-runtime", "Installed cache drift"]],
-    ["docs/troubleshooting.md", ["Source checkout missing `dist/`", "Installed runtime drift"]],
+  const requiredDocs: Array<[string, RegExp[]]> = [
+    ["docs/maintainers.md", [/\bdist\//, /bootstrap-runtime\.mjs/]],
+    ["docs/troubleshooting.md", [/\bdist\//, /installed runtime drift/i]],
   ];
   const problems: string[] = [];
-  for (const [file, expected] of requiredDocs) {
+  for (const [file, requiredFacts] of requiredDocs) {
     let content = "";
     try {
       content = await fsp.readFile(path.join(ROOT, file), "utf8");
@@ -140,8 +140,10 @@ async function sourceRuntimeDocsProblems(): Promise<string[]> {
       problems.push(`${file} could not be read: ${String(error)}`);
       continue;
     }
-    for (const text of expected) {
-      if (!content.includes(text)) problems.push(`${file} should mention ${text}`);
+    for (const requiredFact of requiredFacts) {
+      if (!requiredFact.test(content)) {
+        problems.push(`${file} is missing operational identifier ${requiredFact.source}`);
+      }
     }
   }
   return problems;

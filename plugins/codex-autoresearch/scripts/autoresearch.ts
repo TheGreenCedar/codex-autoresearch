@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -23,16 +24,17 @@ import {
   operationProgress,
 } from "../lib/commands/dashboard.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
-import { buildNextPacketId } from "../lib/commands/next.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
-import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/commands/run.js";
 import { createDoctorCommandService } from "../lib/commands/doctor.js";
 import { createStateCommandService } from "../lib/commands/state.js";
-import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
+import {
+  clearFilesWithWarnings,
+  clearPendingLogTransactionWithWarning,
+} from "../lib/commands/log.js";
 import {
   defaultCommandShell,
   normalizeCommandShell,
@@ -97,6 +99,7 @@ import {
   isAcceptedCurrentRun,
 } from "../lib/evidence-registry.js";
 import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
+import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import {
   buildGoalContract,
@@ -124,6 +127,7 @@ import {
   resolveResearchSlugForQualityGapSync,
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
+import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/process-governor.js";
 import {
   applyResolvedRecipeDefaults,
   findRecipe,
@@ -167,6 +171,8 @@ import {
   isBaselineEligibleMetricRun,
   isMetricEligibleStatus,
   promotionGradeValue,
+  readConfig as readSessionConfig,
+  resolveWorkDir as resolveSessionWorkDir,
 } from "../lib/session-core.js";
 import {
   buildResearchIntegrity,
@@ -191,6 +197,16 @@ import {
   type SessionPaths,
 } from "../lib/session-paths.js";
 import { indexTaskArtifacts } from "../lib/task-artifact-indexer.js";
+import {
+  assertSafeDirectoryTree,
+  checkedAtomicWriteFile,
+  checkedEnsureDirectory,
+  checkedReplaceDirectory,
+} from "../lib/checked-write.js";
+import {
+  sessionMutationLockLocation,
+  withSessionMutationLock,
+} from "../lib/session-mutation-lock.js";
 
 type LooseObject = Record<string, any>;
 type WorkDirResolution = {
@@ -242,6 +258,7 @@ const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const DIRECTORY_FINGERPRINT_ENTRY_LIMIT = 500;
 const DIRECTORY_FINGERPRINT_DEPTH_LIMIT = 6;
+const FINGERPRINT_TOTAL_BYTE_LIMIT = 16 * 1024 * 1024;
 const COMMAND_EXECUTION_BOUNDARY = {
   mode: "not_sandboxed",
   note: "Benchmark and checks commands run as local shell commands with the current user's permissions.",
@@ -545,7 +562,9 @@ async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
       boolOption,
       computeConfidence,
       currentState,
-      deleteLastRunPacket,
+      deleteLastRunPacket: async (workDir: string) => {
+        await deleteLastRunPacket(workDir);
+      },
       finiteMetric,
       loopContinuation,
       readConfig,
@@ -657,6 +676,7 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
       normalized.includes("/../") ||
       normalized === ".." ||
       normalized.startsWith(":") ||
+      /[*?[\]]/.test(normalized) ||
       normalized.startsWith(".git/") ||
       normalized === ".git"
     ) {
@@ -667,6 +687,8 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
     return normalized.replace(/\/$/, "");
   });
 }
+
+const outsideWorkdirAuthorization = new AsyncLocalStorage<boolean>();
 
 function resolveOutputInside(workDir: string, output?: string) {
   const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
@@ -701,9 +723,7 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 function readConfig(sessionCwd: string): LooseObject {
-  const configPath = resolveSessionPaths({ sessionCwd, workDir: sessionCwd }).configPath;
-  if (!fs.existsSync(configPath)) return {};
-  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+  return readSessionConfig(sessionCwd);
 }
 
 function runtimeConfigPath(sessionCwd: string): string {
@@ -711,20 +731,9 @@ function runtimeConfigPath(sessionCwd: string): string {
 }
 
 function resolveWorkDir(cwdArg: unknown): WorkDirResolution {
-  const sessionCwd = path.resolve(
-    String(cwdArg || process.env.CODEX_AUTORESEARCH_WORKDIR || process.cwd()),
-  );
-  const config = readConfig(sessionCwd);
-  const workDir = config.workingDir ? path.resolve(sessionCwd, config.workingDir) : sessionCwd;
-  if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
-    throw new Error(`Working directory does not exist: ${workDir}`);
-  }
-  return {
-    sessionCwd,
-    workDir,
-    config,
-    sessionPaths: resolveSessionPaths({ sessionCwd, workDir }),
-  };
+  return resolveSessionWorkDir(String(cwdArg || "") || undefined, {
+    allowOutsideWorkdir: outsideWorkdirAuthorization.getStore() === true,
+  });
 }
 
 function assetPath(fileName: string) {
@@ -2114,7 +2123,7 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   });
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
   const lastRunLogStatus = lastRun
     ? lastRun.decision?.safeSuggestedStatus ||
       lastRun.decision?.suggestedStatus ||
@@ -2280,7 +2289,7 @@ async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
     ? await readLastRunPacket(workDir).catch((): null => null)
     : null;
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
   const lastRunLogStatus = lastRun
     ? lastRun.decision?.safeSuggestedStatus ||
       lastRun.decision?.suggestedStatus ||
@@ -3540,7 +3549,12 @@ function renderResearchFile(fileName: string, args: any, slug: string) {
 async function writeSessionFile(filePath: string, content: any, options: LooseObject = {}) {
   const exists = await pathExists(filePath);
   if (exists && !options.overwrite) return { path: filePath, action: "kept" };
-  await fsp.writeFile(filePath, content.endsWith("\n") ? content : `${content}\n`, "utf8");
+  await checkedAtomicWriteFile(
+    options.root || path.dirname(filePath),
+    filePath,
+    content.endsWith("\n") ? content : `${content}\n`,
+    { mode: options.executable ? 0o755 : 0o600 },
+  );
   if (options.executable) {
     await fsp.chmod(filePath, 0o755).catch(() => {});
   }
@@ -3655,9 +3669,9 @@ function packetEnvModeFromArgs(args: LooseObject): "inherit" | "minimal" {
     enumOption(
       args.packet_env_mode ?? args.packetEnvMode,
       new Set(["inherit", "minimal"]),
-      "inherit",
+      "minimal",
       "packetEnvMode",
-    ) || "inherit"
+    ) || "minimal"
   );
 }
 
@@ -3931,6 +3945,23 @@ async function gitPrivatePath(cwd: string, relativePath: string) {
   return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
 }
 
+async function gitPrivateRoot(cwd: string): Promise<string> {
+  const result = await git(["rev-parse", "--absolute-git-dir"], cwd);
+  if (result.code !== 0) {
+    throw new Error(`Git directory lookup failed: ${gitOutput(result, "unknown error")}`);
+  }
+  return path.resolve(result.stdout.trim());
+}
+
+async function privateStateWriteRoot(workDir: string, target: string): Promise<string> {
+  if (!(await insideGitRepo(workDir).catch(() => false))) return workDir;
+  const gitRoot = await gitPrivateRoot(workDir);
+  if (!isPathInside(gitRoot, target)) {
+    throw new Error(`Git-private state path escapes the Git directory: ${target}`);
+  }
+  return gitRoot;
+}
+
 function fallbackPendingLogTransactionPath(workDir: string) {
   return resolveSessionPaths({ workDir }).pendingLogTransactionFallbackPath;
 }
@@ -3958,8 +3989,8 @@ async function pendingLogTransactionCandidatePaths(workDir: string, inGit?: bool
 
 async function writePendingLogTransaction(workDir: string, inGit: boolean, receipt: LooseObject) {
   const receiptPath = await pendingLogTransactionPath(workDir, inGit);
-  await fsp.mkdir(path.dirname(receiptPath), { recursive: true });
-  await fsp.writeFile(
+  await checkedAtomicWriteFile(
+    inGit ? await gitPrivateRoot(workDir) : workDir,
     receiptPath,
     `${JSON.stringify(
       {
@@ -3973,7 +4004,7 @@ async function writePendingLogTransaction(workDir: string, inGit: boolean, recei
       null,
       2,
     )}\n`,
-    "utf8",
+    { mode: 0o600 },
   );
   return receiptPath;
 }
@@ -4071,6 +4102,14 @@ async function hasStagedChanges(cwd: string) {
   return result.code === 1;
 }
 
+async function hasStagedChangesInPaths(cwd: string, paths: string[]) {
+  const result = await git(
+    ["--literal-pathspecs", "diff", "--cached", "--quiet", "--", ...paths],
+    cwd,
+  );
+  return result.code === 1;
+}
+
 async function gitDirtyPathDetails(cwd: string) {
   if (!(await insideGitRepo(cwd))) return [];
   const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
@@ -4151,7 +4190,7 @@ async function assertCommitPathsExist(workDir: string, commitPaths: any[]) {
 }
 
 async function gitPathIsTracked(workDir: string, relativePath: string) {
-  const result = await git(["ls-files", "--", relativePath], workDir);
+  const result = await git(["--literal-pathspecs", "ls-files", "--", relativePath], workDir);
   return result.code === 0 && result.stdout.trim().length > 0;
 }
 
@@ -4168,10 +4207,14 @@ function hashText(value: any) {
     .digest("hex");
 }
 
-async function scopedFileFingerprints(workDir: string, paths: any[] = []) {
+async function scopedFileFingerprints(
+  workDir: string,
+  paths: any[] = [],
+  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
+) {
   const safePaths = normalizeRelativePaths(paths, "commitPaths");
   if (safePaths.length === 0) return [];
-  const result = await git(["ls-files", "--", ...safePaths], workDir);
+  const result = await git(["--literal-pathspecs", "ls-files", "--", ...safePaths], workDir);
   if (result.code !== 0) return [];
   const files = result.stdout
     .split(/\r?\n/)
@@ -4192,8 +4235,9 @@ async function scopedFileFingerprints(workDir: string, paths: any[] = []) {
     }
     const filePath = path.join(workDir, file);
     try {
-      const bytes = await fsp.readFile(filePath);
-      fingerprints.push({ path: file, hash: createHash("sha256").update(bytes).digest("hex") });
+      const fingerprint = await hashFileWithBudget(filePath, budget);
+      fingerprints.push({ path: file, ...fingerprint });
+      if (fingerprint.truncated) break;
     } catch (error) {
       fingerprints.push({
         path: file,
@@ -4223,7 +4267,11 @@ function dirtyPathsFromStatus(statusShort: string) {
     .sort((a: any, b: any) => a.localeCompare(b));
 }
 
-async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
+async function fileFingerprintsForPaths(
+  workDir: string,
+  paths: any[] = [],
+  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
+) {
   const fingerprints = [];
   const uniquePaths = [...new Set(paths)].sort((a: any, b: any) => a.localeCompare(b));
   for (const file of uniquePaths) {
@@ -4241,7 +4289,7 @@ async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
     try {
       const stats = await fsp.lstat(filePath);
       if (stats.isDirectory()) {
-        const children = await directoryFingerprints(workDir, file);
+        const children = await directoryFingerprints(workDir, file, budget);
         fingerprints.push({ path: file, directory: true, files: children });
         continue;
       }
@@ -4249,8 +4297,9 @@ async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
         fingerprints.push({ path: file, symlink: await fsp.readlink(filePath) });
         continue;
       }
-      const bytes = await fsp.readFile(filePath);
-      fingerprints.push({ path: file, hash: createHash("sha256").update(bytes).digest("hex") });
+      const fingerprint = await hashFileWithBudget(filePath, budget);
+      fingerprints.push({ path: file, ...fingerprint });
+      if (fingerprint.truncated) break;
     } catch (error) {
       fingerprints.push({
         path: file,
@@ -4262,7 +4311,11 @@ async function fileFingerprintsForPaths(workDir: string, paths: any[] = []) {
   return fingerprints;
 }
 
-async function directoryFingerprints(workDir: string, rootPath: string) {
+async function directoryFingerprints(
+  workDir: string,
+  rootPath: string,
+  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
+) {
   const root = path.resolve(workDir, rootPath);
   const base = path.resolve(workDir);
   const relativeRoot = path.relative(base, root);
@@ -4302,11 +4355,15 @@ async function directoryFingerprints(workDir: string, rootPath: string) {
       } else if (dirent.isSymbolicLink()) {
         entries.push({ path: relativePath, symlink: await fsp.readlink(absolutePath) });
       } else if (dirent.isFile()) {
-        const bytes = await fsp.readFile(absolutePath);
+        const fingerprint = await hashFileWithBudget(absolutePath, budget);
         entries.push({
           path: relativePath,
-          hash: createHash("sha256").update(bytes).digest("hex"),
+          ...fingerprint,
         });
+        if (fingerprint.truncated) {
+          truncated = true;
+          return;
+        }
       } else {
         const stats = await fsp.lstat(absolutePath);
         entries.push({ path: relativePath, type: stats.isFIFO() ? "fifo" : "other" });
@@ -4321,18 +4378,52 @@ async function lastRunGitSnapshot(workDir: string, config: LooseObject = {}) {
   if (!(await insideGitRepo(workDir).catch(() => false))) return { inside: false };
   const scopedPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
   const statusShort = await gitStatusShort(workDir);
+  const fingerprintBudget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT };
   return {
     inside: true,
     head: await shortHead(workDir),
     dirty: Boolean(statusShort),
     statusHash: hashText(statusShort),
     scopedPaths,
-    fileFingerprints: await scopedFileFingerprints(workDir, scopedPaths),
+    fileFingerprints: await scopedFileFingerprints(workDir, scopedPaths, fingerprintBudget),
     dirtyFileFingerprints: await fileFingerprintsForPaths(
       workDir,
       dirtyPathsFromStatus(statusShort),
+      fingerprintBudget,
     ),
   };
+}
+
+async function hashFileWithBudget(
+  filePath: string,
+  budget: { remaining: number },
+): Promise<LooseObject> {
+  const stats = await fsp.stat(filePath);
+  if (stats.size > budget.remaining) {
+    return {
+      truncated: true,
+      reason: "fingerprint_byte_budget",
+      maxBytes: FINGERPRINT_TOTAL_BYTE_LIMIT,
+      size: stats.size,
+    };
+  }
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of fs.createReadStream(filePath)) {
+    const length = (chunk as Buffer).byteLength;
+    if (length > budget.remaining) {
+      return {
+        truncated: true,
+        reason: "fingerprint_byte_budget",
+        maxBytes: FINGERPRINT_TOTAL_BYTE_LIMIT,
+        size: Math.max(stats.size, bytes + length),
+      };
+    }
+    budget.remaining -= length;
+    bytes += length;
+    hash.update(chunk as Buffer);
+  }
+  return { hash: hash.digest("hex"), size: bytes };
 }
 
 async function benchmarkContractSnapshot(workDir: string, context: LooseObject = {}) {
@@ -4345,14 +4436,19 @@ async function benchmarkContractSnapshot(workDir: string, context: LooseObject =
     "package.json",
     "Cargo.toml",
   ];
+  const fingerprintBudget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT };
   const fileFingerprints = [];
   for (const relative of fixedFiles) {
     const filePath = path.join(workDir, relative);
     if (!(await pathExists(filePath))) continue;
-    fileFingerprints.push(await contractFileFingerprint(workDir, filePath, relative));
+    fileFingerprints.push(
+      await contractFileFingerprint(workDir, filePath, relative, fingerprintBudget),
+    );
   }
   const command = String(context.command || "").trim();
   const checksCommand = String(context.checksCommand || "").trim();
+  const normalizedCommand = command.replace(/\s+/g, " ");
+  const normalizedChecksCommand = checksCommand.replace(/\s+/g, " ");
   const commandFile = contractPathLabel(workDir, context.commandFile);
   const envFile = contractPathLabel(workDir, context.envFile);
   const hasPacketEnvMode = Object.hasOwn(context, "packetEnvMode");
@@ -4361,11 +4457,15 @@ async function benchmarkContractSnapshot(workDir: string, context: LooseObject =
     [commandFile, context.commandFile],
     [envFile, context.envFile],
   ]) {
-    if (filePath) fileFingerprints.push(await contractFileFingerprint(workDir, filePath, label));
+    if (filePath) {
+      fileFingerprints.push(
+        await contractFileFingerprint(workDir, filePath, label, fingerprintBudget),
+      );
+    }
   }
   const contractSurface: LooseObject = {
-    command,
-    checksCommand,
+    command: normalizedCommand,
+    checksCommand: normalizedChecksCommand,
     commandFile,
     envFile,
     files: fileFingerprints,
@@ -4379,20 +4479,29 @@ async function benchmarkContractSnapshot(workDir: string, context: LooseObject =
     envFile,
     surfaceHash,
     files: fileFingerprints,
+    fingerprintByteBudgetExceeded: fingerprintsContainReason(
+      fileFingerprints,
+      "fingerprint_byte_budget",
+    ),
     capturedAt: new Date().toISOString(),
   };
   if (hasPacketEnvMode) snapshot.packetEnvMode = packetEnvMode;
   return snapshot;
 }
 
-async function contractFileFingerprint(workDir: string, filePath: string, label: any = "") {
+async function contractFileFingerprint(
+  workDir: string,
+  filePath: string,
+  label: any = "",
+  budget: { remaining: number } = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
+) {
   const resolved = resolveOptionPath(filePath, workDir);
   const display = label || contractPathLabel(workDir, resolved);
   try {
-    const bytes = await fsp.readFile(resolved);
+    const fingerprint = await hashFileWithBudget(resolved, budget);
     return {
       path: display,
-      hash: createHash("sha256").update(bytes).digest("hex"),
+      ...fingerprint,
     };
   } catch (error) {
     return {
@@ -4464,6 +4573,19 @@ async function benchmarkContractDrift(workDir: string, state: any) {
       ? { packetEnvMode: latest.benchmarkContract.packetEnvMode }
       : {}),
   });
+  if (
+    fingerprintsContainReason(latest.benchmarkContract.files, "fingerprint_byte_budget") ||
+    fingerprintsContainReason(current.files, "fingerprint_byte_budget")
+  ) {
+    return {
+      code: "benchmark_contract_fingerprint_budget_exceeded",
+      severity: "error",
+      run: latest.run ?? null,
+      message:
+        "Benchmark/check/config contract files exceed the shared fingerprint byte budget, so freshness cannot be proven.",
+      action: "Reduce or remove oversized contract files, then run next again.",
+    };
+  }
   if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
   const driftReference =
     latest.run != null
@@ -4501,15 +4623,19 @@ async function preserveSessionFiles(workDir: string) {
   const saved = new Map();
   for (const file of [...SESSION_FILES, ...AUTORESEARCH_OWNED_FILES]) {
     const filePath = path.join(workDir, file);
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    if (!fs.existsSync(filePath)) continue;
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Session artifact must not be a symlink or junction: ${filePath}`);
+    }
+    if (stat.isFile()) {
       saved.set(file, { type: "file", bytes: fs.readFileSync(filePath) });
     }
   }
   for (const dir of AUTORESEARCH_OWNED_DIRS) {
     const researchPath = path.join(workDir, dir);
-    if (!fs.existsSync(researchPath) || !fs.statSync(researchPath).isDirectory()) {
-      continue;
-    }
+    if (!fs.existsSync(researchPath)) continue;
+    await assertSafeDirectoryTree(workDir, researchPath);
     const tempPath = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-preserve-"));
     fs.cpSync(researchPath, tempPath, { recursive: true });
     saved.set(dir, { type: "dir", tempPath });
@@ -4521,13 +4647,10 @@ async function restoreSessionFiles(workDir: string, saved: any) {
   for (const [file, artifact] of saved.entries()) {
     const filePath = path.join(workDir, file);
     if (artifact.type === "dir") {
-      await fsp.rm(filePath, { recursive: true, force: true });
-      await fsp.mkdir(path.dirname(filePath), { recursive: true });
-      await fsp.cp(artifact.tempPath, filePath, { recursive: true });
+      await checkedReplaceDirectory(workDir, filePath, artifact.tempPath);
       await fsp.rm(artifact.tempPath, { recursive: true, force: true });
     } else {
-      await fsp.mkdir(path.dirname(filePath), { recursive: true });
-      await fsp.writeFile(filePath, artifact.bytes);
+      await checkedAtomicWriteFile(workDir, filePath, artifact.bytes, { mode: 0o600 });
     }
   }
 }
@@ -4554,17 +4677,22 @@ async function appendSessionRunNote(
   const existing = await fsp.readFile(filePath, "utf8");
   if (existing.includes(startMarker) && existing.includes(endMarker)) {
     const next = existing.replace(endMarker, `${line}\n${endMarker}`);
-    await fsp.writeFile(filePath, next, "utf8");
+    await checkedAtomicWriteFile(workDir, filePath, next, { mode: 0o600 });
     return;
   }
   const block = ["", "## Run Ledger", "", startMarker, `${line}`, endMarker, ""].join("\n");
-  await fsp.writeFile(filePath, `${existing.trimEnd()}\n${block}`, "utf8");
+  await checkedAtomicWriteFile(workDir, filePath, `${existing.trimEnd()}\n${block}`, {
+    mode: 0o600,
+  });
 }
 
 async function revertExceptSessionFiles(workDir: string) {
   if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
   const saved = await preserveSessionFiles(workDir);
-  const restore = await git(["restore", "--worktree", "--staged", "--", "."], workDir);
+  const restore = await git(
+    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", "."],
+    workDir,
+  );
   if (restore.code !== 0) {
     await restoreSessionFiles(workDir, saved);
     throw new Error(
@@ -4587,14 +4715,17 @@ async function revertScopedPathsExceptSessionFiles(workDir: string, paths: any[]
   const safePaths = normalizeRelativePaths(paths, "revertPaths");
   if (!safePaths.length) throw new Error("No scoped paths were provided for discard cleanup.");
   const saved = await preserveSessionFiles(workDir);
-  const restore = await git(["restore", "--worktree", "--staged", "--", ...safePaths], workDir);
+  const restore = await git(
+    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", ...safePaths],
+    workDir,
+  );
   if (restore.code !== 0) {
     await restoreSessionFiles(workDir, saved);
     throw new Error(
       `Git scoped restore failed during discard cleanup: ${gitOutput(restore, "unknown error")}`,
     );
   }
-  const clean = await git(["clean", "-fd", "--", ...safePaths], workDir);
+  const clean = await git(["--literal-pathspecs", "clean", "-fd", "--", ...safePaths], workDir);
   if (clean.code !== 0) {
     await restoreSessionFiles(workDir, saved);
     throw new Error(
@@ -4689,7 +4820,7 @@ function mergeRuntimeConfig(sessionCwd: any, updates: any) {
 async function appendRuntimeConfigFile(files: any[], sessionCwd: any, updates: any) {
   if (Object.keys(updates).length === 0) return;
   const { configPath, content } = mergeRuntimeConfig(sessionCwd, updates);
-  files.push(await writeSessionFile(configPath, content, { overwrite: true }));
+  files.push(await writeSessionFile(configPath, content, { overwrite: true, root: sessionCwd }));
 }
 
 async function appendRuntimeConfigUpdates(files: any[], sessionCwd: any, updates: LooseObject) {
@@ -4823,10 +4954,11 @@ async function ensureAutoresearchGitattributes(workDir: string) {
     return { path: filePath, action: "kept" };
   }
   const separator = current.trimEnd() ? "\n\n" : "";
-  await fsp.writeFile(
+  await checkedAtomicWriteFile(
+    workDir,
     filePath,
     `${current.trimEnd()}${separator}${AUTORESEARCH_GITATTRIBUTES_BLOCK}\n`,
-    "utf8",
+    { mode: 0o600 },
   );
   return { path: filePath, action: exists ? "updated" : "created" };
 }
@@ -4834,7 +4966,7 @@ async function ensureAutoresearchGitattributes(workDir: string) {
 async function writeRuntimeConfig(sessionCwd: any, updates: any) {
   if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
   const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
-  await fsp.writeFile(configPath, `${content}\n`, "utf8");
+  await checkedAtomicWriteFile(sessionCwd, configPath, `${content}\n`, { mode: 0o600 });
   return nextConfig;
 }
 
@@ -4992,20 +5124,21 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
     await writeSessionFile(
       path.join(workDir, "autoresearch.md"),
       `${renderSessionDocument(options.sessionDocumentArgs(context)).trimEnd()}\n\n${renderResumeBlock(workDir)}`,
-      { overwrite },
+      { overwrite, root: workDir },
     ),
   );
   files.push(
     await writeSessionFile(path.join(workDir, benchmarkFile), options.benchmarkContent(context), {
       overwrite,
       executable: shellKind === "bash",
+      root: workDir,
     }),
   );
   files.push(
     await writeSessionFile(
       path.join(workDir, "autoresearch.ideas.md"),
       options.ideasContent(context),
-      { overwrite },
+      { overwrite, root: workDir },
     ),
   );
   if (!boolOption(args.skip_gitattributes ?? args.skipGitattributes, false)) {
@@ -5021,6 +5154,7 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
       await writeSessionFile(path.join(workDir, checksFile), renderChecksScript(args, shellKind), {
         overwrite,
         executable: shellKind === "bash",
+        root: workDir,
       }),
     );
   }
@@ -5089,9 +5223,10 @@ async function setupResearchSession(args: any) {
       overwrite,
       files: setupFiles,
     }: LooseObject) => {
+      await resolveSafeResearchPath(setupWorkDir, slug);
       const researchDir = researchDirPath(setupWorkDir, slug);
-      await fsp.mkdir(path.join(researchDir, "notes"), { recursive: true });
-      await fsp.mkdir(path.join(researchDir, "deliverables"), { recursive: true });
+      await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "notes"));
+      await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "deliverables"));
       for (const fileName of [
         "brief.md",
         "plan.md",
@@ -5104,7 +5239,7 @@ async function setupResearchSession(args: any) {
           await writeSessionFile(
             path.join(researchDir, fileName),
             renderResearchFile(fileName, args, slug),
-            { overwrite },
+            { overwrite, root: setupWorkDir },
           ),
         );
       }
@@ -5504,7 +5639,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     : finalizePreview;
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const continuation = loopContinuation(workDir, state, config, "dashboard");
   const setupPlanResult = await setupPlan({ cwd: workDir, readCache }).catch((error: any) => ({
@@ -6174,7 +6309,7 @@ async function logExperiment(args: any) {
   const lastPacket = boolOption(args.from_last ?? args.fromLast, false)
     ? await readLastRunPacket(workDir)
     : null;
-  if (lastPacket) await assertFreshLastRunPacket(workDir, lastPacket);
+  if (lastPacket) await assertFreshLastRunPacket(workDir, lastPacket, config);
   const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses)
     ? lastPacket.decision.allowedStatuses
     : [];
@@ -6325,7 +6460,7 @@ async function logExperiment(args: any) {
       });
       const addResult =
         commitPaths.length > 0
-          ? await git(["add", "--", ...commitPaths], workDir)
+          ? await git(["--literal-pathspecs", "add", "--", ...commitPaths], workDir)
           : await git(["add", "-A"], workDir);
       if (addResult.code !== 0) {
         if (gitIndexLockFailure(addResult)) {
@@ -6334,9 +6469,24 @@ async function logExperiment(args: any) {
         }
         throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
       }
-      if (await hasStagedChanges(workDir)) {
+      const stagedChanges = commitPaths.length
+        ? await hasStagedChangesInPaths(workDir, commitPaths)
+        : await hasStagedChanges(workDir);
+      if (stagedChanges) {
         const commitResult = await git(
-          ["commit", "-m", description, "-m", `Result: ${JSON.stringify(resultData)}`],
+          commitPaths.length
+            ? [
+                "--literal-pathspecs",
+                "commit",
+                "--only",
+                "-m",
+                description,
+                "-m",
+                `Result: ${JSON.stringify(resultData)}`,
+                "--",
+                ...commitPaths,
+              ]
+            : ["commit", "-m", description, "-m", `Result: ${JSON.stringify(resultData)}`],
           workDir,
         );
         if (commitResult.code === 0) {
@@ -6456,7 +6606,8 @@ async function logExperiment(args: any) {
       logWarnings.push(pendingLogReceiptWarning);
     }
   }
-  if (lastPacket) await deleteLastRunPacket(workDir);
+  const lastRunCleanupWarnings = lastPacket ? await deleteLastRunPacket(workDir) : [];
+  logWarnings.push(...lastRunCleanupWarnings.map((warning) => warning.message));
 
   const stateAfter = currentState(workDir);
   const limit = iterationLimitInfo(stateAfter, config);
@@ -6482,7 +6633,8 @@ async function logExperiment(args: any) {
     revert: revertMessage,
     recovery: logWarnings.join(" "),
     warnings: logWarnings,
-    lastRunCleared: Boolean(lastPacket),
+    warningDetails: lastRunCleanupWarnings,
+    lastRunCleared: Boolean(lastPacket) && lastRunCleanupWarnings.length === 0,
     continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
 }
@@ -6541,37 +6693,26 @@ async function resolveProgressPath(workDir: string) {
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
-  await mkdirWithRetries(path.dirname(target));
-  await fsp.writeFile(
+  await checkedAtomicWriteFile(
+    await privateStateWriteRoot(workDir, target),
     target,
     `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
-    "utf8",
+    { mode: 0o600 },
   );
   return target;
 }
 
 async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
   const target = await resolveProgressPath(workDir);
-  await mkdirWithRetries(path.dirname(target));
-  await fsp.writeFile(target, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  await checkedAtomicWriteFile(
+    await privateStateWriteRoot(workDir, target),
+    target,
+    `${JSON.stringify(snapshot, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
   return target;
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function mkdirWithRetries(dir: string) {
-  let lastError: any = null;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      await fsp.mkdir(dir, { recursive: true });
-      return;
-    } catch (error: any) {
-      lastError = error;
-      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(String(error?.code || ""))) throw error;
-      await sleep(40 * (attempt + 1));
-    }
-  }
-  if (lastError) throw lastError;
 }
 
 async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
@@ -6893,8 +7034,12 @@ async function lastRunPacketFingerprint(workDir: string) {
   return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
 }
 
-async function assertFreshLastRunPacket(workDir: string, packet: any) {
-  const freshness = await lastRunPacketFreshness(workDir, packet);
+async function assertFreshLastRunPacket(
+  workDir: string,
+  packet: any,
+  config: LooseObject | null = null,
+) {
+  const freshness = await lastRunPacketFreshness(workDir, packet, config);
   if (!freshness.fresh) throw new Error(`${freshness.reason} ${lastRunRecoveryText(workDir)}`);
 }
 
@@ -6905,7 +7050,11 @@ function lastRunRecoveryText(workDir: string) {
   ].join(" ");
 }
 
-async function lastRunPacketFreshness(workDir: string, packet: any) {
+async function lastRunPacketFreshness(
+  workDir: string,
+  packet: any,
+  runtimeConfig: LooseObject | null = null,
+) {
   const expectedNextRun = Number(packet.history?.nextRun);
   const expectedSegment = Number(packet.history?.segment);
   if (!Number.isFinite(expectedNextRun)) {
@@ -6957,6 +7106,38 @@ async function lastRunPacketFreshness(workDir: string, packet: any) {
       expectedNextRun,
       actualNextRun,
       reason: `Last-run packet is stale: expected next log run #${expectedNextRun}, but current history would log #${actualNextRun}. Run next again before logging.`,
+    };
+  }
+  if (packet.history?.trustConfig && runtimeConfig) {
+    const actualTrustConfig = lastRunTrustConfigSnapshot(workDir, runtimeConfig, {
+      benchmarkContractHash: packet.history?.benchmarkContract?.surfaceHash,
+      benchmarkCommand:
+        packet.run?.command ||
+        packet.history?.benchmarkContract?.command ||
+        packet.history?.command,
+      checksCommand:
+        packet.run?.checks?.command || packet.history?.benchmarkContract?.checksCommand,
+      checksPolicy: packet.run?.checksPolicy,
+      packetEnvMode: packet.history?.packetEnvMode || packet.run?.packetEnvMode,
+    });
+    if (packet.history.trustConfig.hash !== actualTrustConfig.hash) {
+      return {
+        fresh: false,
+        expectedTrustFields: packet.history.trustConfig.fields,
+        actualTrustFields: actualTrustConfig.fields,
+        reason:
+          "Last-run packet is stale: execution, checks, scope, or recipe trust configuration changed since the packet was created. Run next again before logging.",
+      };
+    }
+  }
+  if (
+    fingerprintsContainReason(packet.history?.benchmarkContract?.files, "fingerprint_byte_budget")
+  ) {
+    return {
+      fresh: false,
+      expectedTrustFields: packet.history?.trustConfig?.fields || [],
+      reason:
+        "Last-run packet is stale: benchmark, checks, config, command, or environment files exceeded the shared fingerprint byte budget. Reduce those files, then run next again before logging.",
     };
   }
   const expectedGit = packet.history?.git;
@@ -7053,7 +7234,18 @@ function fingerprintsContainTruncation(value: unknown): boolean {
 }
 
 function gitSnapshotContainsDirtyFingerprintTruncation(git: LooseObject): boolean {
-  return fingerprintsContainTruncation(git.dirtyFileFingerprints);
+  return (
+    fingerprintsContainReason(git.fileFingerprints, "fingerprint_byte_budget") ||
+    fingerprintsContainTruncation(git.dirtyFileFingerprints)
+  );
+}
+
+function fingerprintsContainReason(value: unknown, reason: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => fingerprintsContainReason(item, reason));
+  if (!value || typeof value !== "object") return false;
+  const record = value as LooseObject;
+  if (record.truncated === true && record.reason === reason) return true;
+  return Object.values(record).some((item) => fingerprintsContainReason(item, reason));
 }
 
 function lastRunConfigSnapshot(config: LooseObject = {}) {
@@ -7065,12 +7257,60 @@ function lastRunConfigSnapshot(config: LooseObject = {}) {
   };
 }
 
+function lastRunTrustConfigSnapshot(
+  workDir: string,
+  config: LooseObject = {},
+  context: LooseObject = {},
+) {
+  const surface = {
+    benchmarkContractHash: String(context.benchmarkContractHash || ""),
+    benchmarkCommandHash: hashText(normalizedTrustCommand(context.benchmarkCommand)),
+    checksCommandHash: hashText(normalizedTrustCommand(context.checksCommand)),
+    checksPolicy: String(config.checksPolicy || context.checksPolicy || "always"),
+    protectedBenchmarkPaths: normalizeStringListForTrustHash(config.protectedBenchmarkPaths),
+    fixedControl: config.fixedControl || null,
+    secondaryMetricConstraints: normalizeStringListForTrustHash(config.secondaryMetricConstraints),
+    secondaryMetricConstraintMode: String(config.secondaryMetricConstraintMode || "advisory"),
+    packetEnvMode: String(context.packetEnvMode || "minimal"),
+    commitPaths: normalizeRelativePaths(config.commitPaths, "commitPaths").sort(),
+    workingDirectory: path.resolve(workDir),
+    recipeProvenance: config.recipeCatalogProvenance || config.recipe_catalog_provenance || null,
+  };
+  return {
+    hash: hashText(stableTrustJson(surface)),
+    fields: Object.keys(surface).sort(),
+  };
+}
+
+function normalizedTrustCommand(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeStringListForTrustHash(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : listOption(value);
+  return items
+    .map((item) => stableTrustJson(item))
+    .filter(Boolean)
+    .sort();
+}
+
+function stableTrustJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableTrustJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as LooseObject)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableTrustJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
 async function deleteLastRunPacket(workDir: string) {
   const filePath = await resolveLastRunPath(workDir);
   const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  for (const target of new Set([filePath, legacyPath])) {
-    await fsp.rm(target, { force: true }).catch(() => {});
-  }
+  return await clearFilesWithWarnings([filePath, legacyPath], undefined, { workDir });
 }
 
 async function discoverLastRunPartialResults(
@@ -7162,8 +7402,9 @@ async function ledgerDoctor(args: LooseObject): Promise<LooseObject> {
   }
 
   const backupPath = `${ledgerPath}.repair-backup-${ledgerBackupTimestamp()}`;
-  await fsp.copyFile(ledgerPath, backupPath);
-  await fsp.writeFile(ledgerPath, formatJsonl(repair.records), "utf8");
+  const originalLedger = await fsp.readFile(ledgerPath);
+  await checkedAtomicWriteFile(workDir, backupPath, originalLedger, { mode: 0o600 });
+  await checkedAtomicWriteFile(workDir, ledgerPath, formatJsonl(repair.records), { mode: 0o600 });
   const repairedLedgerHealth = analyzeLedgerHealth(repair.records);
   return {
     ok: repairedLedgerHealth.ok,
@@ -8205,7 +8446,7 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     .digest("hex");
   const artifacts = artifactList(run.artifacts, run.workDir);
   const taskArtifacts = await taskArtifactsForRun(run);
-  const packetId = buildNextPacketId(history, fingerprint);
+  const packetId = `packet-${history.nextRun || "next"}-${fingerprint.slice(0, 12)}`;
   return {
     packetId,
     cwd: redactPathDisplay(run.workDir, run.workDir),
@@ -8516,7 +8757,7 @@ async function nextExperiment(args: any) {
   }
   const stateBeforeRun = currentState(workDir);
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
   const preflightEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
       state: stateBeforeRun,
@@ -8678,11 +8919,19 @@ async function nextExperiment(args: any) {
     command: run.command,
     replayCommand: replaySafeCommand(run.command, { workDir: run.workDir }),
     replayChecksCommand: replaySafeCommand(run.checks?.command || "", { workDir: run.workDir }),
+    packetEnvMode: run.packetEnvMode || "minimal",
     workDir: run.workDir,
     currentRuns: stateBeforeLog.current.length,
     totalRuns: stateBeforeLog.results.length,
     nextRun: stateBeforeLog.results.length + 1,
     benchmarkContract: run.benchmarkContract || null,
+    trustConfig: lastRunTrustConfigSnapshot(run.workDir, config, {
+      benchmarkContractHash: run.benchmarkContract?.surfaceHash,
+      benchmarkCommand: run.command,
+      checksCommand: run.checks?.command || run.benchmarkContract?.checksCommand,
+      checksPolicy: run.checksPolicy,
+      packetEnvMode: run.packetEnvMode || "minimal",
+    }),
     git: await lastRunGitSnapshot(run.workDir, config).catch((error: any) => ({
       inside: null as boolean | null,
       error: error.message || String(error),
@@ -8879,53 +9128,89 @@ async function executeAutoresearchCli(
     );
     return;
   }
-  const handlers = createCliCommandHandlers({
-    benchmarkInspect,
-    benchmarkLint,
-    checksInspect,
-    clearSession,
-    codexGoalBrief,
-    configureSession,
-    doctorHooks,
-    doctorSession,
-    exportDashboard,
-    finalizeCurrentTree: buildFinalizeCurrentTree,
-    finalizePreview: buildFinalizePreview,
-    gapCandidates: buildGapCandidates,
-    guidedSetup,
-    initExperiment,
-    integrationsCommand: integrationsCommandLazy,
-    interactiveSetup,
-    logExperiment,
-    ledgerDoctor,
-    measureQualityGap,
-    newSegment,
-    nextExperiment,
-    onboardingPacket,
-    parseJsonOption,
-    partialResultsCommand,
-    promoteGate,
-    promptPlan,
-    publicState,
-    recommendNext,
-    sessionForensics,
-    recipeCommand,
-    researchFanout,
-    laneRunner,
-    runExperiment,
-    serveDashboard,
-    setupPlan,
-    researchStart,
-    setupResearchSession,
-    setupSession,
+  await outsideWorkdirAuthorization.run(boolOption(args.allowOutsideWorkdir, false), async () => {
+    const handlers = createCliCommandHandlers({
+      benchmarkInspect,
+      benchmarkLint,
+      checksInspect,
+      clearSession,
+      codexGoalBrief,
+      configureSession,
+      doctorHooks,
+      doctorSession,
+      exportDashboard,
+      finalizeCurrentTree: buildFinalizeCurrentTree,
+      finalizePreview: buildFinalizePreview,
+      gapCandidates: buildGapCandidates,
+      guidedSetup,
+      initExperiment,
+      integrationsCommand: integrationsCommandLazy,
+      interactiveSetup,
+      logExperiment,
+      ledgerDoctor,
+      measureQualityGap,
+      newSegment,
+      nextExperiment,
+      onboardingPacket,
+      parseJsonOption,
+      partialResultsCommand,
+      promoteGate,
+      promptPlan,
+      publicState,
+      recommendNext,
+      sessionForensics,
+      recipeCommand,
+      researchFanout,
+      laneRunner,
+      runExperiment,
+      serveDashboard,
+      setupPlan,
+      researchStart,
+      setupResearchSession,
+      setupSession,
+    });
+    const execute = async () => (await runCliCommand(command, args, handlers)) as LooseObject;
+    let outcome: LooseObject;
+    if (requiresSessionMutationLock(command, args)) {
+      const resolution = resolveWorkDir(args.workingDir || args.cwd);
+      const lock = await sessionMutationLockLocation(resolution.workDir);
+      outcome = await withSessionMutationLock(lock.root, command, execute, lock.path);
+    } else {
+      outcome = await execute();
+    }
+    if (outcome.text != null) {
+      writeStdout(outcome.text);
+      return;
+    }
+    writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
+    if (outcome.keepAlive) return await new Promise(() => {});
   });
-  const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
-  if (outcome.text != null) {
-    writeStdout(outcome.text);
-    return;
-  }
-  writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
-  if (outcome.keepAlive) return await new Promise(() => {});
+}
+
+function requiresSessionMutationLock(command: string, args: LooseObject): boolean {
+  if (boolOption(args.dryRun, false)) return false;
+  if (command === "ledger-doctor") return boolOption(args.repair, false);
+  if (command === "gap-candidates") return boolOption(args.apply, false);
+  if (command === "partial-results") return boolOption(args.record, false);
+  if (command === "session-forensics") return boolOption(args.apply, false);
+  if (command === "integrations")
+    return !["list", "status", "doctor"].includes(String(args._[1] || "list"));
+  return new Set([
+    "setup",
+    "research-setup",
+    "research-start",
+    "research-fanout",
+    "lane-runner",
+    "config",
+    "finalize-current-tree",
+    "init",
+    "run",
+    "next",
+    "log",
+    "new-segment",
+    "promote-gate",
+    "clear",
+  ]).has(command);
 }
 
 async function main() {

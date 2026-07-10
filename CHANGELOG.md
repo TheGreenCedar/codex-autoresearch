@@ -8,6 +8,23 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.6.0 - 2026-07-09
+
+### Changed
+
+- Rewrote the public README, examples, human docs, and Codex skill around the actual user journey: install, first baseline, safe packet work, recovery, and review. Removed repeated agent narration and forced pseudo-personality, separated marketplace use from source-checkout commands, and made recovery commands copyable.
+- Corrected the benchmark examples, baseline demo status, weighted demo result, failure-cleanup contract, already-committed keep route, and current-tree finalization boundary. Documentation checks now validate links, package shape, the baseline fixture, and stable operational identifiers without pinning editorial prose.
+- Packet commands now use a minimal environment by default. Inheriting the caller's full environment requires `--packet-env-mode inherit`, and a configured working directory outside `--cwd` requires `--allow-outside-workdir`.
+- `doctor` no longer refreshes a stored remote recipe catalog during ordinary checks. Use `doctor --revalidate-catalog` for an explicit public-HTTPS validation pass; internal catalogs must be local files.
+- Automatic releases accept only strictly increasing stable versions. Manual releases may publish a prerelease without moving `latest`; downgrades are rejected.
+
+### Fixed
+
+- Hardened Git scope handling, scoped commits, predictable session writes, mutation locking, packet freshness, progress redaction, fingerprint budgets, and interrupted cleanup reporting.
+- Corrected dashboard baselines, malformed-ledger handling, chart keyboard focus, modal focus restoration, large-ledger pagination, health-response privacy, and bundle budgets.
+- Runtime hydration now fails closed unless checksum, GitHub attestation, and archive-manifest checks all pass. Runtime locks recover dead owners, dashboard source changes trigger a full rebuild, temporary Git fixtures ignore global hooks, test shards retry only isolated timeouts with a 120-second default limit, and CI requires the Chrome dashboard smoke.
+- Consolidated command identity and safety metadata in the tool registry, removed misleading partial command modules, and replaced source-spelling quality checks with executable behavior coverage.
+
 ## 2.5.1 - 2026-07-07
 
 ### Changed

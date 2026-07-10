@@ -120,7 +120,6 @@ export function TrendPanel({
           point={selectedPoint}
           valueMode={valueMode}
           readout={readout}
-          restoreFocusSelector={modalOpenerSelectorRef.current}
           onClose={closePoint}
         />
       )}

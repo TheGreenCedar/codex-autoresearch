@@ -27,9 +27,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Enforce third-party action pinning
+      - name: Enforce action pinning
         run: node .github/scripts/check-workflow-policy.mjs
 
   test:
@@ -44,10 +44,10 @@ jobs:
         working-directory: plugins/codex-autoresearch
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           cache: 'npm'
@@ -58,6 +58,12 @@ jobs:
 
       - name: Run full check gate
         run: npm run check
+
+      - name: Run required Chrome dashboard smoke
+        if: runner.os == 'Linux'
+        env:
+          CODEX_AUTORESEARCH_BROWSER: /usr/bin/google-chrome
+        run: npm run test:dashboard:browser
 
       - name: Run CLI smoke test
         run: node scripts/autoresearch.mjs --help

@@ -105,26 +105,20 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
   ]);
 });
 
-test("public docs and plugin metadata keep customer-facing autoresearch wording", () => {
+test("plugin metadata keeps the public product boundary", () => {
   const repoRoot = path.resolve(pluginRoot, "..", "..");
   const readRepoFile = (relativePath: string) =>
     readFileSync(path.join(repoRoot, relativePath), "utf8");
-  const readme = readRepoFile("README.md");
-  const changelog = readRepoFile("CHANGELOG.md");
   const packageJson = JSON.parse(readRepoFile("plugins/codex-autoresearch/package.json"));
   const pluginJson = JSON.parse(
     readRepoFile("plugins/codex-autoresearch/.codex-plugin/plugin.json"),
   );
-  const currentChangelogEntry =
-    changelog.match(/## 2\.3\.5 - 2026-06-15[\s\S]*?(?=\n## 2\.3\.4 - 2026-06-15)/)?.[0] ?? "";
 
   const publicCopy = [
-    readme,
     packageJson.description,
     pluginJson.description,
     pluginJson.interface.shortDescription,
     pluginJson.interface.longDescription,
-    currentChangelogEntry,
   ].join("\n");
 
   assert.equal(
@@ -138,19 +132,7 @@ test("public docs and plugin metadata keep customer-facing autoresearch wording"
   assert.match(pluginJson.interface.longDescription, /local evidence/);
   assert.match(pluginJson.interface.longDescription, /read-only live readout/);
   assert.match(pluginJson.interface.longDescription, /after user approval/);
-  assert.match(currentChangelogEntry, /experiment outcomes|run outcomes/);
-
-  assert.doesNotMatch(publicCopy, /logs keep, discard, measure, crash, and checks_failed/i);
-  assert.doesNotMatch(publicCopy, /log decisions/i);
-  assert.doesNotMatch(publicCopy, /keep\/discard\/measure\/crash\/checks_failed/i);
-  assert.doesNotMatch(publicCopy, /\bASI\b/);
-  assert.doesNotMatch(publicCopy, /promotion labels/i);
-  assert.doesNotMatch(publicCopy, /one skill surface/i);
-  assert.doesNotMatch(publicCopy, /packet outcomes/i);
-  assert.doesNotMatch(
-    publicCopy,
-    /Run at most 5 packets|running one measured packet|fresh packet state|run one measured packet|A packet is one measured experiment cycle/i,
-  );
+  assert.doesNotMatch(publicCopy, /\bMCP\b/i);
 });
 
 test("check phase selection succeeds for clean injected source hygiene only", async () => {

@@ -209,6 +209,7 @@ const testGitConfigEntries = [
   ["commit.gpgsign", "false"],
   ["tag.gpgsign", "false"],
   ["core.autocrlf", "false"],
+  ["core.hooksPath", ""],
   ["user.email", "codex@example.invalid"],
   ["user.name", "Codex Test"],
 ];
@@ -223,7 +224,7 @@ export const runGit = async (cwd, args) => {
   return result.stdout.trim();
 };
 
-const configureTestGitRepo = async (cwd) => {
+export const configureTestGitRepo = async (cwd) => {
   for (const [key, value] of testGitConfigEntries) {
     const result = await runProcess("git", ["config", key, value], cwd);
     assert.equal(result.code, 0, `git config ${key} failed\n${result.stderr}${result.stdout}`);

@@ -19,18 +19,28 @@ export interface RunnerProgressSnapshot {
 }
 
 export function commandClassFor(command: unknown): string {
-  const parts = String(command || "")
+  const rawParts = String(command || "")
     .trim()
     .split(/\s+/)
     .filter(Boolean);
+  const firstCommand = rawParts.findIndex((part) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(part));
+  const parts = firstCommand < 0 ? [] : rawParts.slice(firstCommand);
   if (parts.length === 0) return "unknown";
   const head = parts[0].replace(/^["']|["']$/g, "");
-  const base = path.basename(head).toLowerCase();
-  if (["npm", "pnpm", "yarn", "bun"].includes(base)) return parts.slice(0, 3).join(" ");
-  if (["node", "python", "python3", "pwsh", "powershell", "bash", "sh"].includes(base)) {
-    return parts.slice(0, 2).join(" ");
+  const base = path.win32
+    .basename(path.posix.basename(head))
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd|bat)$/i, "");
+  if (["npm", "pnpm", "yarn", "bun", "git", "cargo", "dotnet"].includes(base)) {
+    const subcommand = /^[a-z][a-z0-9-]*$/i.test(parts[1] || "")
+      ? parts[1].toLowerCase()
+      : "command";
+    return `${base} ${subcommand}`;
   }
-  return parts.slice(0, 2).join(" ");
+  if (["node", "python", "python3", "pwsh", "powershell", "bash", "sh"].includes(base)) {
+    return `${base} script`;
+  }
+  return base || "unknown";
 }
 
 export function createProgressSnapshot({

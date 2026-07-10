@@ -1,50 +1,59 @@
-# Loop Operations Reference
+# Loop operations
 
-Load this when the happy path is blocked, stale, budgeted, or being resumed after compaction.
+Load this reference before a stale, blocked, budgeted, expensive, or resumed session.
 
-## Pre-first-packet checklist
+## Before another packet
 
-Before the first expensive `next`, prove the loop shape cheaply:
+Confirm that:
 
-- `recommend-next --compact --operator-checklist` names packet work as the next action.
-- The benchmark command is the real goal benchmark, not a placeholder recipe.
-- `benchmark-lint` proves the primary `METRIC` line can be parsed inside its timeout.
-- Imported `sessionDecisionCapsule` state is clear, acknowledged, or deliberately being handled.
-- The first packet is bounded by timeout, sample, task slice, or command file.
-- Unrelated dirty files are not part of keep/discard cleanup.
+- `recommend-next --compact --operator-checklist` allows packet work;
+- the benchmark is the real goal benchmark, not a placeholder;
+- `benchmark-lint` parses the configured primary metric;
+- protected paths and blocking secondary constraints are clean;
+- unrelated dirty files sit outside keep and discard scope;
+- the workload has a timeout, task slice, command file, or other hard bound; and
+- a failed packet has no useful `partial-results --cwd <project> --from-last` left to inspect.
 
-If `recommend-next` returns a `decision-capsule` action, do that action first. Hard capsules refuse generic `next`; bounded-next capsules require an explicit bounded command.
+If a decision capsule blocks work, follow its bounded next action instead of spending another packet.
+Prefer a smaller workload or task slice over increasing a timeout just to make a run finish.
 
-## Packet brake
+## Recover the failed layer
 
-Before running `next` or any heavy benchmark, answer:
+| Problem | First useful command |
+| --- | --- |
+| Timed-out packet with artifacts | `partial-results --cwd <project> --from-last` |
+| Correctness checks failed | `checks-inspect --cwd <project> --command "<checks>"` |
+| Duplicate runs, stale segments, or hand-edited ledger | `ledger-doctor --cwd <project> --json` |
+| Benchmark meaning, metric, direction, or phase changed | `new-segment --cwd <project> --dry-run` |
+| An older Codex task contains a useful bounded decision | `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run` |
 
-- What is the authoritative next action from `recommend-next --compact` or the operator checklist?
-- Is the benchmark the real goal benchmark, and did `benchmark-lint` prove the primary `METRIC` line?
-- Is this command bounded by timeout, narrowed scope, command file, query/task slice, or read-only scout lane?
-- Are protected benchmark paths and secondary metric constraints clean before treating a keep as promotable?
-- Did the last failed or timed-out packet leave partial results that should be inspected first?
-- Is the key lesson from the previous segment written into ASI, `autoresearch.ideas.md`, or a decision capsule?
+Run `ledger-doctor --repair --yes` only after reading the JSON health summary. Confirm the returned `backupPath` before continuing.
 
-If any answer is missing, do the cheap read-only action first: inspect state, run `benchmark-inspect` or `benchmark-lint`, inspect partial results, import bounded session forensics, or run `research-fanout --dry-run`.
+If `partial-results --cwd <project> --from-last` returns no usable candidate, follow its reported next action. Do not invent a metric or record a keep to clear the way.
 
-Compact-state field names: `docs/concepts.md#state-fields`.
+## Write the experiment note
 
-## Budget operations
+For shells where inline JSON is brittle, write the note to a file and pass `--asi-json-file <path>`:
 
-Setup and config can record `packetBudget`, `wallClockBudgetSeconds`, and `budgetNote`.
+```json
+{
+  "hypothesis": "What this change was expected to improve",
+  "evidence": "What the metric, checks, and diff showed",
+  "rollback_reason": "Why rejected work should stay rejected",
+  "next_action_hint": "The next useful experiment or stop condition"
+}
+```
 
-- `config --packet-budget <n>` updates the packet budget.
-- `config --wall-clock-budget-seconds <n>` resets the wall-clock window from the time of config.
-- `config --packet-budget "" --wall-clock-budget-seconds "" --budget-note ""` clears those budget fields in the CLI.
-- Packet and wall-clock budgets are not API spend tracking. Treat them as stop/rescope signals.
+Omit `rollback_reason` when there is nothing to roll back. Keep the note factual; it becomes memory for the next session.
 
-## Logging discipline
+## Keep budgets and Git scope explicit
 
-Use `log --from-last`; do not retype metrics when a packet exists. Include ASI every time: hypothesis, evidence, rollback reason for rejected paths, next action hint, and optional lane/family/risk metadata.
+- Set the packet limit with `config --packet-budget <n>`.
+- Start a new wall-clock window with `config --wall-clock-budget-seconds <n>`.
+- Treat those as experiment limits, not API-spend meters.
+- Use `commitPaths` or `--commit-paths` for kept commits.
+- When accepted work was committed outside Autoresearch, verify the hash and log the keep with `--commit <hash>`.
+- Use explicit `--revert-paths` for cleanup after `discard`, `crash`, or `checks_failed`; otherwise configured commit paths may define the cleanup scope.
+- Use `--allow-add-all` only when every dirty source file belongs to the packet.
 
-For shells where inline JSON is fragile, use `--asi-json-file` and `--metrics-file`.
-
-## Git safety
-
-Repair stale `commitPaths` before relying on keep commits. Use scoped `commitPaths` or `revertPaths` for discard/crash/checks-failed cleanup. Use `--allow-add-all` or broad dirty cleanup only when every dirty file is intentionally in scope.
+When the limit is reached, stop, rescope, start a new segment, or finalize useful work. Do not reinterpret exhaustion as success.

@@ -2,13 +2,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runShell as runBoundedShell } from "./runner.js";
-import {
-  parseQualityGapItems,
-  parseQualityGaps,
-  researchDirPath,
-  safeSlug,
-} from "./session-core.js";
+import { parseQualityGapItems, parseQualityGaps, safeSlug } from "./session-core.js";
 import { resolveSessionPaths } from "./session-paths.js";
+import { checkedAtomicWriteFile, checkedEnsureDirectory } from "./checked-write.js";
+import { resolveSafeResearchPath } from "./research-path-guard.js";
 
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
@@ -32,7 +29,7 @@ export async function gapCandidates(args: LooseObject) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
   const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
   const slug = slugResolution.slug;
-  const researchDir = researchDirPath(workDir, slug);
+  const researchDir = (await resolveSafeResearchPath(workDir, slug)).outputDir;
   const modelTimeoutSeconds = numberOption(
     args.model_timeout_seconds ?? args.modelTimeoutSeconds,
     60,
@@ -63,7 +60,7 @@ export async function gapCandidates(args: LooseObject) {
   let applied = false;
   let qualityGap = existingText ? parseQualityGaps(existingText) : { open: 0, closed: 0, total: 0 };
   if (args.apply) {
-    await appendCandidates(gapsPath, deduped);
+    await appendCandidates(workDir, gapsPath, deduped);
     applied = true;
     qualityGap = parseQualityGaps(await readIfExists(gapsPath));
   }
@@ -287,7 +284,11 @@ function printableText(value: unknown): string {
   }).join("");
 }
 
-async function appendCandidates(gapsPath: string, candidates: GapCandidate[]): Promise<void> {
+async function appendCandidates(
+  root: string,
+  gapsPath: string,
+  candidates: GapCandidate[],
+): Promise<void> {
   const existing = stripGeneratedCandidateSection(await readIfExists(gapsPath)).trimEnd();
   const lines: string[] = [];
   if (existing) lines.push(existing, "");
@@ -305,9 +306,9 @@ async function appendCandidates(gapsPath: string, candidates: GapCandidate[]): P
       "",
     );
   }
-  await fsp.mkdir(path.dirname(gapsPath), { recursive: true });
+  await checkedEnsureDirectory(root, path.dirname(gapsPath));
   const content = lines.join("\n").trimEnd();
-  await fsp.writeFile(gapsPath, content ? `${content}\n` : "", "utf8");
+  await checkedAtomicWriteFile(root, gapsPath, content ? `${content}\n` : "");
 }
 
 function stripGeneratedCandidateSection(text: string): string {

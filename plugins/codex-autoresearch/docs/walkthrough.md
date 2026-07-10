@@ -1,149 +1,72 @@
-# Walkthrough
+# From baseline to finalization preview
 
-This walkthrough shows a complete Codex Autoresearch loop. Commands are copyable; JSON and terminal output below is illustrative — trust your local `doctor`, `state`, dashboard, and finalization readouts.
+This walkthrough picks up where [Start](start.md) leaves off: the contract is understood, the source checkout is open at `plugins/codex-autoresearch`, and a test suite takes about fourteen seconds. The goal is not simply to make the number smaller; the tests still have to exercise the same behavior, and the change should stay inside the test configuration and helpers.
 
-## 1. Prompt and plan
+If you installed through Codex instead of cloning the source, ask `@Codex Autoresearch` to run these steps for you.
 
-You give Codex a broad request:
+## Set up the session
 
-```text
-/goal @Codex Autoresearch study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist.
-```
-
-Codex uses `prompt-plan` to structure the approach. Example output (abbreviated):
-
-```json
-{
-  "kind": "codex-autoresearch-prompt-plan",
-  "intent": {
-    "loopKind": "quality-gap",
-    "metric": { "name": "quality_gap", "direction": "lower" },
-    "setupDefaults": {
-      "recipe": "quality-gap",
-      "goal": "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
-    }
-  },
-  "nextStep": {
-    "stage": "configured-session",
-    "nextAction": { "toolName": "doctor", "safety": "read_or_check" }
-  }
-}
-```
-
-Codex confirms the evidence source and research slug before creating session files.
-
-## 2. Setup and doctor
-
-Codex creates the research scratchpad, configures the quality-gap session, and verifies the benchmark.
-
-Run the launcher from `plugins/codex-autoresearch`. `--cwd` points at the target repo or child package being improved. In this walkthrough the target is the package itself, so `--cwd .` is correct only because the command is already running from `plugins/codex-autoresearch`.
+From `plugins/codex-autoresearch`, create the session and configure the paths a kept result may commit:
 
 ```bash
-node scripts/autoresearch.mjs research-start --cwd . --slug dashboard-study --goal "Study the dashboard and docs, accept evidence-backed UX gaps, and close the quality_gap checklist."
+git -C <project> status --short --branch
+node scripts/autoresearch.mjs setup --cwd <project> --name "Test runtime" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand" --benchmark-prints-metric false --checks-command "npm test" --packet-budget 5 --wall-clock-budget-seconds 1800
+node scripts/autoresearch.mjs config --cwd <project> --commit-paths "vitest.config.ts,tests/helpers/"
+node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 ```
 
-Illustrative output:
+The status check keeps unrelated changes visible before setup writes session files. Doctor should confirm that Autoresearch can produce `METRIC seconds=<number>` from the timed raw command and surface any Git, runtime, or packet problem that would make the first comparison unreliable.
 
-```text
-Doctor Checks
-- Git Working Tree: clean
-- Benchmark Output: METRIC quality_gap=3
-- Primary Metric: quality_gap (lower is better)
-
-No blocking issues. The session is ready for a first baseline measurement.
-```
-
-If `benchmark-lint` passes but `doctor` reports dirty Git, runtime drift, finalization coverage issues, or stale packet blockers, repair those first. A parsed metric proves the benchmark line can be read; it does not prove the loop is finalization-ready.
-
-## 3. First packet (measure)
-
-Codex runs the first packet to measure the accepted checklist before changing the product.
+Now record the baseline:
 
 ```bash
-node scripts/autoresearch.mjs next --cwd . --compact
+node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline before test-runner changes"
+node scripts/autoresearch.mjs state --cwd <project> --report
 ```
 
-Illustrative output:
+Assume the result is `seconds=14.2`. It is logged as `measure`, not `keep`, because no change has been made.
 
-```text
-Packet Run
-Benchmark: node scripts/autoresearch.mjs quality-gap --cwd . --research-slug dashboard-study
-Benchmark output:
-  METRIC quality_gap=3
+## Try one idea
 
-Result: 3 accepted checklist gaps remain open
-```
-
-Codex logs the first baseline as `measure`, not `keep`:
+Codex finds that an unchanged helper fixture is rebuilt for every test file. It changes `tests/helpers/cache.ts`, then measures again:
 
 ```bash
 git status --short
-node scripts/autoresearch.mjs state --cwd . --compact
-node scripts/autoresearch.mjs log --cwd . --from-last --status measure --description "Baseline quality-gap measurement"
+node scripts/autoresearch.mjs next --cwd <project>
+node scripts/autoresearch.mjs state --cwd <project> --compact
 ```
 
-Illustrative output:
-
-```text
-Log entry saved.
-Status: measure
-Primary Metric: quality_gap=3
-Continuation: shouldContinue=true
-```
-
-## 4. Close credible candidates
-
-Codex previews source-backed candidates, applies the credible ones, and runs another packet.
+This time the benchmark reports `seconds=10.8` and the checks pass. Before keeping it, inspect the diff and make sure `git status` contains only the files owned by this experiment. Then log the result from the saved packet:
 
 ```bash
-node scripts/autoresearch.mjs gap-candidates --cwd . --research-slug dashboard-study
-node scripts/autoresearch.mjs next --cwd . --compact
+node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Reuse the unchanged helper fixture across test files"
 ```
 
-Illustrative output:
+Because `commitPaths` is configured, Autoresearch can commit only the permitted paths. If unrelated work has appeared in the tree, separate it before logging.
 
-```text
-Packet Run
-Benchmark output:
-  METRIC quality_gap=0
+## Decide whether to continue
 
-Result: accepted checklist closed for this round
+The log result says whether another loop action is expected. `continuation.shouldContinue` means the session is still active; `continuation.forbidFinalAnswer` means Codex must not call the goal complete yet.
+
+Before spending another packet, ask for the current recommendation:
+
+```bash
+node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
 ```
 
-Codex keeps the change only if the code/docs diff and checks support the closed checklist:
+Another run may be useful if the improvement needs a cold-process repeat or there is a different low-risk hypothesis to test. A stale packet, exhausted budget, changed benchmark, or failed check should send the session into repair instead.
+
+## Preview the review work
+
+Once the useful experiments are done, preview finalization:
 
 ```bash
 git status --short
-node scripts/autoresearch.mjs state --cwd . --compact
-node scripts/autoresearch.mjs log --cwd . --from-last --status keep --description "Closed accepted dashboard/docs quality gaps"
+node scripts/autoresearch.mjs state --cwd <project> --report
+node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-`quality_gap=0` closes the accepted checklist for this round. If the broader question is still alive, start a fresh research round. See [Concepts](concepts.md#quality-gap).
+The preview does not create or switch branches. It shows which accepted results are still current, what files they cover, and what would block branch creation.
 
-## 5. Finalization
-
-After running many packets, you want to review the kept changes.
-
-```bash
-git status --short
-node scripts/autoresearch.mjs finalize-preview --cwd .
-```
-
-Illustrative output:
-
-```text
-Finalization Preview
-Ready to create branches.
-Total kept commits: 3
-Files affected: README.md, docs/operate.md, dashboard/src/App.tsx
-Estimated overlap: safe to collapse
-
-Next step: Review finalize-preview, approve branch creation, then run the finalizer.
-Cleanup waits until the merge is verified.
-```
-
-If a dashboard is stale during review, serve a fresh dashboard rather than trusting an old `file://` export. If state reports plateau pressure, pivot to finalization, rescope, or a fresh quality-gap round instead of running another packet by habit.
-
----
-
-Previous: [Start](start.md) · Next: [Operate](operate.md) — resume, dashboard, packet logging.
+The strongest honest claim in this example may be only that the local test benchmark fell from 14.2 seconds to 10.8 while `npm test` still passed. Broader claims need broader evidence. [Finish](finish.md) explains how that evidence becomes reviewable work.

@@ -75,6 +75,10 @@ const dashboardAssets = [
   "assets/dashboard-build/dashboard-app.js",
   "assets/dashboard-build/dashboard-app.css",
 ];
+export const DASHBOARD_ASSET_BUDGETS = {
+  "assets/dashboard-build/dashboard-app.js": 650 * 1024,
+  "assets/dashboard-build/dashboard-app.css": 50 * 1024,
+} as const;
 
 type PhaseSelection =
   | { kind: "all" }
@@ -195,6 +199,12 @@ async function runDashboardBuildWithParity(): Promise<boolean> {
     console.log(indent(`Dashboard build did not create generated assets:\n${missing.join("\n")}`));
     return false;
   }
+  const budgetIssues = await dashboardAssetBudgetIssues();
+  if (budgetIssues.length) {
+    console.log("fail dashboard-asset-budget");
+    console.log(indent(budgetIssues.join("\n")));
+    return false;
+  }
   if (changed.length) {
     console.log("fail dashboard-asset-parity");
     console.log(
@@ -206,6 +216,15 @@ async function runDashboardBuildWithParity(): Promise<boolean> {
   }
   console.log("ok dashboard-asset-parity");
   return true;
+}
+
+export async function dashboardAssetBudgetIssues(): Promise<string[]> {
+  const issues: string[] = [];
+  for (const [file, maxBytes] of Object.entries(DASHBOARD_ASSET_BUDGETS)) {
+    const { size } = await fsp.stat(path.join(ROOT, file));
+    if (size > maxBytes) issues.push(`${file} is ${size} bytes; limit is ${maxBytes} bytes.`);
+  }
+  return issues;
 }
 
 async function dashboardAssetHashes(): Promise<Record<string, string | null>> {
@@ -296,7 +315,16 @@ async function runLocalDogfoodSessionCheck() {
   const result = await runCommand([
     "dogfood:self-session",
     node,
-    ["scripts/autoresearch.mjs", "doctor", "--cwd", ".", "--check-benchmark", "--explain"],
+    [
+      "scripts/autoresearch.mjs",
+      "doctor",
+      "--cwd",
+      ".",
+      "--check-benchmark",
+      "--packet-env-mode",
+      "inherit",
+      "--explain",
+    ],
   ]);
   return reportDogfoodDoctorResult("dogfood:self-session", result);
 }

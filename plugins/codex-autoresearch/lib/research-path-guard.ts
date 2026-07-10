@@ -43,8 +43,33 @@ export async function resolveSafeResearchPath(
   const safeSlug = validateResearchSlug(slug);
   const root = resolveSessionPaths({ workDir }).researchRoot;
   const outputDir = path.join(root, safeSlug);
+  await assertNoLinkedParents(workDir, outputDir);
   await assertInsideResearchRoot(root, outputDir);
   return { root, slug: safeSlug, outputDir };
+}
+
+async function assertNoLinkedParents(root: string, target: string): Promise<void> {
+  const absoluteRoot = path.resolve(root);
+  let cursor = absoluteRoot;
+  const rootStat = await fsp.lstat(absoluteRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`research root must be a real directory: ${absoluteRoot}`);
+  }
+  for (const part of path
+    .relative(absoluteRoot, path.resolve(target))
+    .split(path.sep)
+    .filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    try {
+      const stat = await fsp.lstat(cursor);
+      if (stat.isSymbolicLink() || (!stat.isDirectory() && cursor !== path.resolve(target))) {
+        throw new Error(`research parent must not be a symlink, junction, or file: ${cursor}`);
+      }
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+  }
 }
 
 export async function assertInsideResearchRoot(root: string, target: string): Promise<void> {
