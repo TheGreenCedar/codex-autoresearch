@@ -316,7 +316,7 @@ export const toolSchemas = applyToolContracts([
   {
     name: "lane_runner",
     description:
-      "Run or record one coordinated research lane with conservative isolation and a single synthesized next packet recommendation.",
+      "Run or record one coordinated research lane. Scout commands use a strict Git read-only argv allowlist; Git porcelain is best-effort post-run detection, not containment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -345,7 +345,6 @@ export const toolSchemas = applyToolContracts([
         dry_run: { type: "boolean" },
         yes: { type: "boolean" },
         ...UNSAFE_COMMAND_PROPERTY,
-        allow_non_git_command: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -728,7 +727,6 @@ export const toolSchemas = applyToolContracts([
 
 const RUNTIME_ARG_ALIASES: Record<string, string> = {
   allow_add_all: "allowAddAll",
-  allow_non_git_command: "allowNonGitCommand",
   allow_outside_workdir: "allowOutsideWorkdir",
   allow_dirty_revert: "allowDirtyRevert",
   allow_fixed_control_rerun: "allowFixedControlRerun",

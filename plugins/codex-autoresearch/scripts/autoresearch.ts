@@ -605,12 +605,9 @@ async function laneRunner(args: LooseObject): Promise<LooseObject> {
       assertWriteScopeIntegrity,
       boolOption,
       buildParallelOrchestrationContext,
-      commandLooksMutating,
       commandLooksUnsafeForWriteScope,
       currentState,
       dashboardSettings,
-      gitStatusPorcelain,
-      insideGitRepo,
       latestLaneResults,
       normalizeLaneMode,
       normalizeParallelLane,
@@ -619,6 +616,7 @@ async function laneRunner(args: LooseObject): Promise<LooseObject> {
       readJsonl,
       resolveLaneWorktree,
       resolveWorkDir,
+      runProcess: runBoundedProcess,
       runShell,
       synthesizeLaneDecision,
       tailText,
@@ -7946,9 +7944,9 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
   const readOnly =
     !/implementation|edit|candidate|worktree/i.test(String(id)) &&
     !/implementation|edit|candidate|worktree/i.test(String(label));
-  const isolation = readOnly
-    ? "read-only; do not edit files"
-    : "use a separate worktree or owned file set";
+  const executionBoundary = readOnly
+    ? "strict Git read-only argv allowlist before execution; Git porcelain is best-effort detection only"
+    : "use a separate worktree or declared write scope; no filesystem or process containment is provided";
   const nextActionHint =
     lane.nextActionHint ||
     lane.recommendation ||
@@ -7959,7 +7957,7 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
       lane.evidencePoint ||
       lane.evidence ||
       `Current ${config.metricName || "primary metric"} evidence and session memory.`,
-    boundaries: [isolation],
+    boundaries: [executionBoundary],
     pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
     expectedDecisionOutput: "one recommendation, supporting evidence, and the next measured action",
     lessonsToAvoid: [],
@@ -7970,8 +7968,8 @@ function normalizeParallelLane(lane: LooseObject, index: number, config: LooseOb
     label,
     status: lane.status || "planned",
     priority: lane.priority || (index === 0 ? "high" : "medium"),
-    mode: readOnly ? "read_only_scout" : "isolated_worktree",
-    isolation,
+    mode: readOnly ? "read_only_scout" : "implementation",
+    executionBoundary,
     evidenceStatus: lane.evidenceStatus || "provisional",
     owner: lane.owner || "subagent",
     writeScope: readOnly ? [] : listOption(config.commitPaths || config.commit_paths),
@@ -8007,53 +8005,30 @@ function normalizeLaneMode(value: unknown, fallback: string) {
 }
 
 type LaneCommandSafety = {
-  mutating: boolean;
   unsafeForWriteScope: boolean;
 };
 
-const LANE_GIT_MUTATING_SUBCOMMANDS =
-  "add|am|apply|bisect|checkout|cherry-pick|clean|commit|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|tag|worktree";
 const LANE_GIT_WRITE_SCOPE_UNSAFE =
   "am|apply|bisect|checkout|cherry-pick|clean|commit|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag|worktree";
 const LANE_PACKAGE_MANAGER_MUTATING =
   "(?:npm\\s+(?:ci|install|i|update|uninstall|remove|add)|pnpm\\s+(?:add|install|remove|update|uninstall)|yarn\\s+(?:add|install|remove|upgrade|uninstall)|bun\\s+(?:add|install|remove))";
 
 function classifyLaneCommandSafety(command: string): LaneCommandSafety {
-  const gitMutating = new RegExp(
-    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_MUTATING_SUBCOMMANDS})\\b`,
-    "i",
-  ).test(command);
   const packageMutating = new RegExp(
     `(^|[\\s;&|])${LANE_PACKAGE_MANAGER_MUTATING}(\\s|$)`,
     "i",
   ).test(command);
-  const fileMutating =
-    /(^|[\s;&|])(rm\s+|del\s+|erase\s+|remove-item|set-content|out-file|new-item|move-item|copy-item|apply_patch)(\s|$)/i.test(
-      command,
-    ) || /(^|[^<])>>?[^&]/.test(command);
-  const mutating = gitMutating || packageMutating || fileMutating;
   const gitUnsafeForWriteScope = new RegExp(
     `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_WRITE_SCOPE_UNSAFE})\\b`,
     "i",
   ).test(command);
   return {
-    mutating,
     unsafeForWriteScope: gitUnsafeForWriteScope || packageMutating,
   };
 }
 
-function commandLooksMutating(command: string) {
-  return classifyLaneCommandSafety(command).mutating;
-}
-
 function commandLooksUnsafeForWriteScope(command: string) {
   return classifyLaneCommandSafety(command).unsafeForWriteScope;
-}
-
-async function gitStatusPorcelain(cwd: string) {
-  if (!(await insideGitRepo(cwd).catch(() => false))) return null;
-  const result = await git(["status", "--porcelain"], cwd);
-  return result.code === 0 ? result.stdout : null;
 }
 
 async function gitTopLevel(cwd: string) {

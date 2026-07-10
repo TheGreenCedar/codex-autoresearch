@@ -3823,7 +3823,7 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
   });
 });
 
-test("lane-runner allows read-only lanes without worktree isolation", async () => {
+test("lane-runner records scout advice without claiming worktree containment", async () => {
   await withTempDir("lane-runner-read-only", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
@@ -3847,8 +3847,9 @@ test("lane-runner allows read-only lanes without worktree isolation", async () =
     assert.equal(payload.lane.mode, "read_only_scout");
     assert.equal(payload.result.status, "completed");
     assert.equal(payload.result.evidenceAccepted, true);
-    assert.equal(payload.result.isolation.worktree, "");
-    assert.deepEqual(payload.result.isolation.writeScope, []);
+    assert.equal(payload.result.executionBoundary.worktree, "");
+    assert.deepEqual(payload.result.executionBoundary.writeScope, []);
+    assert.equal(payload.result.executionBoundary.containment, "none");
     assert.equal(typeof payload.lane.brief.objective, "string");
 
     const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
@@ -3986,8 +3987,7 @@ test("empty lane-runner records are planned breadcrumbs, not watchdog progress",
       "--lane-id",
       "read-only-scout",
       "--command",
-      `${quoteForShell(process.execPath)} -e ""`,
-      "--allow-non-git-command",
+      "git version",
       "--yes",
     ]);
     assert.equal(commandResult.code, 0, commandResult.stderr);
@@ -4005,7 +4005,7 @@ test("empty lane-runner records are planned breadcrumbs, not watchdog progress",
   });
 });
 
-test("lane-runner blocks implementation lanes without explicit isolation", async () => {
+test("lane-runner blocks implementation lanes without a declared write boundary", async () => {
   await withTempDir("lane-runner-isolation", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
@@ -4023,7 +4023,7 @@ test("lane-runner blocks implementation lanes without explicit isolation", async
       "--yes",
     ]);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /Implementation lanes require explicit isolation/);
+    assert.match(result.stderr, /Implementation lanes require an explicit write boundary/);
   });
 });
 
@@ -5167,7 +5167,7 @@ test("fanout plans are scoped to the active segment", async () => {
   });
 });
 
-test("read-only lane-runner rejects commands outside git without explicit opt-in", async () => {
+test("read-only lane-runner refuses non-Git commands before execution", async () => {
   await withTempDir("lane-runner-non-git", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "non git lane", "--metric-name", "quality_gap"]);
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
@@ -5183,20 +5183,7 @@ test("read-only lane-runner rejects commands outside git without explicit opt-in
       "--yes",
     ]);
     assert.notEqual(blocked.code, 0);
-    assert.match(blocked.stderr, /Git worktree|porcelain verification/i);
-
-    const allowed = await runCli([
-      "lane-runner",
-      "--cwd",
-      dir,
-      "--lane-id",
-      "read-only-scout",
-      "--command",
-      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
-      "--allow-non-git-command",
-      "--yes",
-    ]);
-    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.match(blocked.stderr, /refused before execution/i);
   });
 });
 

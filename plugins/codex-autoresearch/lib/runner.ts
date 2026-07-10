@@ -22,6 +22,7 @@ export interface MetricParseResult {
 
 export interface ProcessRunOptions {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   maxOutputBytes?: number;
   timeoutSeconds?: number;
 }
@@ -340,6 +341,7 @@ export async function runProcess(
   args: string[] = [],
   {
     cwd,
+    env: extraEnv,
     timeoutSeconds = 600,
     maxOutputBytes = PROCESS_OUTPUT_CAPTURE_BYTES,
   }: ProcessRunOptions = {},
@@ -352,6 +354,7 @@ export async function runProcess(
     const child = spawn(command, argv, {
       cwd,
       detached: process.platform !== "win32",
+      env: extraEnv ? { ...process.env, ...extraEnv } : undefined,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

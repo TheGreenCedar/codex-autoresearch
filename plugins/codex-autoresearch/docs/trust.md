@@ -8,6 +8,8 @@ Setup and configuration write session files. `next` runs the benchmark and check
 
 Check `git status --short --branch` before setup, logging, failure cleanup, or finalization. Unrelated work in the same tree is not merely untidy; it can fall inside configured experiment paths and makes it harder to prove which change produced the result.
 
+`lane-runner` scout commands have a deliberately narrow boundary. Before execution, the CLI parses the command without a shell and accepts only documented Git read subcommands and options. Interpreters, shells, redirection, chaining, Git config/ref mutation, network commands, pagers, external diff/textconv, hooks, and lazy fetch are refused. Git porcelain still runs before and after the command when a worktree is available, but that is best-effort detection, not filesystem or process containment. The old `--allow-non-git-command` escape was removed; use an implementation lane with a separate worktree or declared write scope for anything outside the allowlist.
+
 ## A parsed metric is only the beginning
 
 The benchmark must print the configured primary metric:

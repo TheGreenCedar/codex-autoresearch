@@ -210,7 +210,7 @@ export interface StrategyLane {
   label?: string;
   status?: string;
   mode?: string;
-  isolation?: string;
+  executionBoundary?: string;
   evidenceStatus?: string;
   nextActionHint?: string;
   recommendation?: string;

@@ -88,13 +88,15 @@ Codex owns task-level Goal state. Autoresearch owns its benchmark contract, ledg
 flowchart TD
   Parent["Parent session"] --> Fanout["Segment-scoped fanout plan"]
   Fanout --> Scout["Read-only scouts"]
-  Fanout --> Impl["Isolated implementation lanes"]
+  Fanout --> Impl["Implementation lanes with declared write boundaries"]
   Scout --> Evidence["Evidence and recommendation"]
   Impl --> Packets["Measured packet candidates"]
   Evidence --> Parent
   Packets --> Parent
   Parent --> Decision["One benchmark and keep/discard authority"]
 ```
+
+Scout command safety is a pre-execution Git argv allowlist. Porcelain and write-scope checks are best-effort mutation detection, not filesystem or process containment; implementation lanes therefore use disposable worktrees when possible.
 
 Lanes do not get independent finalization authority. The parent session owns the benchmark, accepted evidence, and branch plan.
 
