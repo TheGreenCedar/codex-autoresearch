@@ -33,6 +33,7 @@ const ALLOWED_PACKAGED_SOURCE_SCRIPTS = new Set([
   "scripts/autoresearch.mjs",
   "scripts/bootstrap-runtime.mjs",
   "scripts/check.mjs",
+  "scripts/directory-swap.mjs",
   "scripts/finalize-autoresearch.mjs",
   "scripts/release-integrity.mjs",
 ]);
@@ -105,6 +106,7 @@ export async function runPackageArtifactCheck() {
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
       "scripts/check.mjs",
+      "scripts/directory-swap.mjs",
       "scripts/release-integrity.mjs",
       "scripts/finalize-autoresearch.mjs",
       "skills/codex-autoresearch/SKILL.md",

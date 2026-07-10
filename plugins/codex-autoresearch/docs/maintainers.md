@@ -99,7 +99,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 `npm run check` builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
-If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. There is no unverified fallback.
+If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. Hydration stages and verifies both the runtime and dashboard beside their targets, retains ownership-marked rollback directories until both installs succeed, and restores the prior pair if either install fails. There is no unverified fallback.
 
 A release tarball must:
 

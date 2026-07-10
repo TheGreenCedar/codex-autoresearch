@@ -76,7 +76,11 @@ import {
   progressSnapshotFromRun,
   staleProgressReason,
 } from "../lib/runner-progress.js";
-import { assertSafeWriteTarget, checkedAtomicWriteFile } from "../lib/checked-write.js";
+import {
+  assertSafeWriteTarget,
+  checkedAtomicWriteFile,
+  checkedReplaceDirectory,
+} from "../lib/checked-write.js";
 import {
   sessionMutationLockLocation,
   sessionRecoveryLockPath,
@@ -439,6 +443,63 @@ test("checked atomic writes remove temporary files after write failure", async (
     assert.deepEqual(
       (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
       [],
+    );
+  });
+});
+
+test("research directory replacement restores the original after a post-backup failure", async () => {
+  await withTempDir("checked-directory-rollback", async (dir) => {
+    const target = path.join(dir, "autoresearch.research");
+    const source = path.join(dir, "preserved-research");
+    await mkdir(target);
+    await mkdir(source);
+    await writeFile(path.join(target, "notes.md"), "original\n");
+    await writeFile(path.join(source, "notes.md"), "replacement\n");
+
+    await assert.rejects(
+      checkedReplaceDirectory(dir, target, source, {
+        onPhase: async (phase) => {
+          if (phase === "after-all-backups") throw new Error("injected research swap failure");
+        },
+      }),
+      /injected research swap failure/,
+    );
+    assert.equal(await readFile(path.join(target, "notes.md"), "utf8"), "original\n");
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.includes(".codex-autoresearch-")),
+      [],
+    );
+
+    await checkedReplaceDirectory(dir, target, source);
+    assert.equal(await readFile(path.join(target, "notes.md"), "utf8"), "replacement\n");
+  });
+});
+
+test("research directory replacement canonicalizes an aliased root and target together", async (t) => {
+  await withTempDir("checked-directory-aliased-root", async (dir) => {
+    const realParent = path.join(dir, "real-parent");
+    const aliasParent = path.join(dir, "alias-parent");
+    const realRoot = path.join(realParent, "session");
+    const source = path.join(dir, "preserved-research");
+    await mkdir(path.join(realRoot, "autoresearch.research"), { recursive: true });
+    await mkdir(source);
+    try {
+      await symlink(realParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory aliases are unavailable: ${String(error)}`);
+      return;
+    }
+    const aliasedRoot = path.join(aliasParent, "session");
+    const aliasedTarget = path.join(aliasedRoot, "autoresearch.research");
+    await writeFile(path.join(aliasedTarget, "notes.md"), "original\n");
+    await writeFile(path.join(source, "notes.md"), "replacement\n");
+
+    await checkedReplaceDirectory(aliasedRoot, aliasedTarget, source);
+
+    assert.equal(await readFile(path.join(aliasedTarget, "notes.md"), "utf8"), "replacement\n");
+    assert.equal(
+      await readFile(path.join(realRoot, "autoresearch.research", "notes.md"), "utf8"),
+      "replacement\n",
     );
   });
 });

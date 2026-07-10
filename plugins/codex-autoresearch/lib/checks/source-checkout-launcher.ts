@@ -5,6 +5,7 @@ import { indent, REPO_ROOT, ROOT, runCommand } from "./check-common.js";
 
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
+  "plugins/codex-autoresearch/scripts/directory-swap.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
   "plugins/codex-autoresearch/scripts/release-integrity.mjs",
 ];
