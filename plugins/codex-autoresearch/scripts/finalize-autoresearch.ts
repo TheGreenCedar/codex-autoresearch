@@ -3,10 +3,12 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
+import { parseNameStatusZ } from "../lib/git-paths.js";
 import {
   FINALIZATION_EVIDENCE_COMPONENT_KEYS,
   assertGeneratedPlanMetadata,
@@ -168,16 +170,22 @@ async function run(
     });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
     });
     child.on("error", (error: Error) =>
       resolve({ code: -1, stdout, stderr: String(error.message || error) }),
     );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      resolve({ code, stdout, stderr });
+    });
   });
   if (!allowFailure && result.code !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
@@ -197,9 +205,8 @@ function cleanLines(text: string): string[] {
 }
 
 function validateRepoRelativePath(file: unknown, cwd: string): string {
-  const normalized = String(file || "")
-    .trim()
-    .replace(/\\/g, "/");
+  const value = String(file ?? "");
+  const normalized = process.platform === "win32" ? value.replace(/\\/g, "/") : value;
   if (!normalized) throw new Error("Unsafe finalizer file path: empty path.");
   if (normalized.includes("\0"))
     throw new Error(`Unsafe finalizer file path contains NUL: ${file}`);
@@ -303,8 +310,8 @@ async function branchExists(branch: string, cwd: string): Promise<boolean> {
 }
 
 async function isDirty(cwd: string): Promise<boolean> {
-  const result = await git(["status", "--porcelain"], cwd);
-  return result.stdout.trim().length > 0;
+  const result = await git(["status", "--porcelain=v1", "-z"], cwd);
+  return result.stdout.length > 0;
 }
 
 async function restoreSourceBranch(sourceBranch: string, cwd: string): Promise<void> {
@@ -336,8 +343,12 @@ async function restoreSourceBranchIfNeeded(sourceBranch: string, cwd: string): P
 }
 
 async function changedFiles(fromRef: string, toRef: string, cwd: string): Promise<string[]> {
-  const result = await git(["diff", "--name-only", fromRef, toRef], cwd);
-  return normalizePlanFiles(cleanLines(result.stdout), cwd);
+  const result = await git(["diff", "--name-status", "-z", "-M", fromRef, toRef], cwd);
+  return normalizePlanFiles(gitChangedPaths(result.stdout), cwd);
+}
+
+function gitChangedPaths(output: string): string[] {
+  return [...new Set(parseNameStatusZ(output).flatMap((entry) => entry.paths))];
 }
 
 function planExcludesSessionArtifacts(config: FinalizePlan): boolean {
@@ -983,8 +994,8 @@ async function verifyUnion(
       }
       await git(["add", "-A"], cwd);
       await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
-      const diff = await git(["diff", "--name-only", "HEAD", config.final_tree], cwd);
-      nonSession = cleanLines(diff.stdout).filter(
+      const diff = await git(["diff", "--name-status", "-z", "-M", "HEAD", config.final_tree], cwd);
+      nonSession = gitChangedPaths(diff.stdout).filter(
         (file) => !isAutoresearchSessionArtifact(file, "finalization"),
       );
     },
@@ -1050,8 +1061,11 @@ async function verifyNoSessionArtifacts(
 ): Promise<void> {
   if (!excludeSessionArtifacts) return;
   for (const branch of reviewBranches) {
-    const result = await git(["diff-tree", "--no-commit-id", "--name-only", "-r", branch], cwd);
-    const sessionFiles = cleanLines(result.stdout).filter((file) =>
+    const result = await git(
+      ["diff-tree", "--no-commit-id", "--name-status", "-z", "-M", "-r", branch],
+      cwd,
+    );
+    const sessionFiles = gitChangedPaths(result.stdout).filter((file) =>
       isAutoresearchSessionArtifact(file, "finalization"),
     );
     if (sessionFiles.length > 0) {

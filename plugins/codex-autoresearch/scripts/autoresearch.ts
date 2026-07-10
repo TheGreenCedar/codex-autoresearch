@@ -107,6 +107,7 @@ import {
 import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
+import { displayGitPath, parseNulPathList, parsePorcelainV1Z } from "../lib/git-paths.js";
 import {
   buildGoalContract,
   buildGoalFrame,
@@ -241,7 +242,9 @@ type ProgressStageResult = {
 interface LocalProcessResult {
   code: number | null;
   stderr: string;
+  stderrTruncated?: boolean;
   stdout: string;
+  stdoutTruncated?: boolean;
 }
 
 const SESSION_FILES: readonly string[] = AUTORESEARCH_SESSION_FILES;
@@ -3948,13 +3951,20 @@ async function runProcess(
 ): Promise<LocalProcessResult> {
   const result = await runBoundedProcess(command, args, {
     cwd,
+    maxOutputBytes: options.maxOutputBytes,
     timeoutSeconds: options.timeoutMs ? Math.max(1, Number(options.timeoutMs) / 1000) : 600,
   });
-  return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+  return {
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated,
+  };
 }
 
 async function git(args: any, cwd: string): Promise<LocalProcessResult> {
-  return await runProcess("git", args, cwd);
+  return await runProcess("git", args, cwd, { maxOutputBytes: 16 * 1024 * 1024 });
 }
 
 function gitOutput(result: any, fallback: any) {
@@ -4153,36 +4163,21 @@ async function hasStagedChangesInPaths(cwd: string, paths: string[]) {
 
 async function gitDirtyPathDetails(cwd: string) {
   if (!(await insideGitRepo(cwd))) return [];
-  const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
-  if (result.code !== 0) return [];
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean)
-    .map((line) => {
-      const status = line.slice(0, 2);
-      const rawPath = line.slice(3).trim();
-      const normalizedPath = rawPath.includes(" -> ")
-        ? rawPath.split(" -> ").pop() || rawPath
-        : rawPath;
-      return {
-        status,
-        path: normalizeGitStatusPath(normalizedPath),
-        raw: line,
-      };
-    })
-    .filter((entry) => entry.path);
-}
-
-function normalizeGitStatusPath(value: string) {
-  const trimmed = String(value || "").trim();
-  const unquoted =
-    trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
-  return unquoted.replace(/\\\\/g, "/").replace(/\\/g, "/");
+  const result = await git(["status", "--porcelain=v1", "-z", "-uall"], cwd);
+  if (result.code !== 0)
+    throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
+  assertCompleteGitPathOutput(result);
+  return parsePorcelainV1Z(result.stdout).flatMap((entry) =>
+    entry.paths.map((gitPath) => ({
+      status: entry.status,
+      path: gitPath,
+      raw: `${entry.status} ${displayGitPath(gitPath)}`,
+    })),
+  );
 }
 
 function isAutoresearchOwnedDirtyPath(relativePath: string) {
-  const normalized = normalizeGitStatusPath(relativePath);
+  const normalized = relativePath;
   return (
     SESSION_FILES.includes(normalized) ||
     AUTORESEARCH_OWNED_FILES.includes(normalized) ||
@@ -4231,15 +4226,24 @@ async function assertCommitPathsExist(workDir: string, commitPaths: any[]) {
 }
 
 async function gitPathIsTracked(workDir: string, relativePath: string) {
-  const result = await git(["--literal-pathspecs", "ls-files", "--", relativePath], workDir);
-  return result.code === 0 && result.stdout.trim().length > 0;
+  const result = await git(["--literal-pathspecs", "ls-files", "-z", "--", relativePath], workDir);
+  return result.code === 0 && result.stdout.length > 0;
 }
 
 async function gitStatusShort(cwd: string) {
-  const result = await git(["status", "--porcelain=v1", "-uall"], cwd);
+  const result = await git(["status", "--porcelain=v1", "-z", "-uall"], cwd);
   if (result.code !== 0)
     throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
-  return result.stdout.trim();
+  assertCompleteGitPathOutput(result);
+  return result.stdout;
+}
+
+function assertCompleteGitPathOutput(result: LocalProcessResult) {
+  if (result.stdoutTruncated) {
+    throw new Error(
+      "Git path output exceeded the capture limit; refusing an incomplete trust check.",
+    );
+  }
 }
 
 function hashText(value: any) {
@@ -4255,13 +4259,10 @@ async function scopedFileFingerprints(
 ) {
   const safePaths = normalizeRelativePaths(paths, "commitPaths");
   if (safePaths.length === 0) return [];
-  const result = await git(["--literal-pathspecs", "ls-files", "--", ...safePaths], workDir);
+  const result = await git(["--literal-pathspecs", "ls-files", "-z", "--", ...safePaths], workDir);
   if (result.code !== 0) return [];
-  const files = result.stdout
-    .split(/\r?\n/)
-    .map((file: any) => file.trim())
-    .filter(Boolean)
-    .sort((a: any, b: any) => a.localeCompare(b));
+  assertCompleteGitPathOutput(result);
+  const files = parseNulPathList(result.stdout).sort((a, b) => a.localeCompare(b));
   const fingerprints = [];
   for (const file of files) {
     if (fingerprints.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
@@ -4291,20 +4292,8 @@ async function scopedFileFingerprints(
 }
 
 function dirtyPathsFromStatus(statusShort: string) {
-  return String(statusShort || "")
-    .split(/\r?\n/)
-    .map((line: string) => line.trimEnd())
-    .filter(Boolean)
-    .map((line: string) => {
-      const rawPath = /^.. /.test(line)
-        ? line.slice(3).trim()
-        : line.replace(/^[ MADRCU?!]{1,2}\s+/, "").trim();
-      const renamedPath = rawPath.includes(" -> ")
-        ? rawPath.split(" -> ").at(-1) || rawPath
-        : rawPath;
-      return renamedPath.replace(/^"|"$/g, "").replace(/\\"/g, '"').replace(/\\/g, "/");
-    })
-    .filter(Boolean)
+  return parsePorcelainV1Z(statusShort)
+    .flatMap((entry) => entry.paths)
     .sort((a: any, b: any) => a.localeCompare(b));
 }
 
@@ -4650,9 +4639,7 @@ async function protectedBenchmarkGuardForWorkDir(
   config: LooseObject,
   state: LooseObject,
 ) {
-  const dirtyPaths = (await gitDirtyPathDetails(workDir).catch((): LooseObject[] => [])).map(
-    (entry: LooseObject) => entry.path,
-  );
+  const dirtyPaths = (await gitDirtyPathDetails(workDir)).map((entry: LooseObject) => entry.path);
   return await buildProtectedBenchmarkGuard({ workDir, config, state, dirtyPaths });
 }
 
@@ -4807,7 +4794,7 @@ async function discardCleanupPlan(workDir: string, args: any, config: any) {
 }
 
 function pathIsCoveredByScope(filePath: string, scopePath: any) {
-  const file = slashPath(filePath);
+  const file = process.platform === "win32" ? slashPath(filePath) : filePath;
   const scope = slashPath(scopePath);
   return file === scope || file.startsWith(`${scope}/`);
 }
@@ -8088,8 +8075,7 @@ async function resolveLaneWorktree(workDir: string, worktreePath: string) {
 }
 
 function dirtyPathWithinScope(relativePath: string, writeScope: string[]) {
-  const normalized = normalizeGitStatusPath(relativePath);
-  return writeScope.some((scope) => normalized === scope || normalized.startsWith(`${scope}/`));
+  return writeScope.some((scope) => relativePath === scope || relativePath.startsWith(`${scope}/`));
 }
 
 async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: string[]) {
@@ -8102,7 +8088,10 @@ async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: str
     .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
   if (outside.length) {
     throw new Error(
-      `Implementation lane changed files outside --write-scope: ${outside.slice(0, 8).join(", ")}`,
+      `Implementation lane changed files outside --write-scope: ${outside
+        .slice(0, 8)
+        .map(displayGitPath)
+        .join(", ")}`,
     );
   }
 }
@@ -8117,7 +8106,10 @@ async function assertNoDirtyPathsOutsideWriteScope(workDir: string, writeScope: 
     .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
   if (outside.length) {
     throw new Error(
-      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside.slice(0, 8).join(", ")}`,
+      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside
+        .slice(0, 8)
+        .map(displayGitPath)
+        .join(", ")}`,
     );
   }
 }

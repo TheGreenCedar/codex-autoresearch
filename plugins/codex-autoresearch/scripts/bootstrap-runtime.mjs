@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { parseSha256Manifest } from "./release-integrity.mjs";
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -528,14 +529,18 @@ function runCapture(command, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       resolve({ code, stdout, stderr });
     });
   });
@@ -560,27 +565,28 @@ async function fileMtime(file) {
 
 async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
   if (!(targetMtime > 0)) return false;
-  const [metadata, status] = await Promise.all([
-    runCapture(
-      "git",
-      [
-        "rev-parse",
-        "--show-toplevel",
-        "--path-format=absolute",
-        "--git-path",
-        "HEAD",
-        "--git-path",
-        "index",
-      ],
-      {
-        cwd: pluginRoot,
-      },
-    ).catch(() => null),
+  let parsePorcelainV1Z;
+  try {
+    ({ parsePorcelainV1Z } = await import(
+      pathToFileURL(path.join(pluginRoot, "dist", "lib", "git-paths.mjs")).href
+    ));
+  } catch {
+    return false;
+  }
+  const [repoRootResult, headPathResult, indexPathResult, status] = await Promise.all([
+    runCapture("git", ["rev-parse", "--show-toplevel"], { cwd: pluginRoot }).catch(() => null),
+    runCapture("git", ["rev-parse", "--path-format=absolute", "--git-path", "HEAD"], {
+      cwd: pluginRoot,
+    }).catch(() => null),
+    runCapture("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], {
+      cwd: pluginRoot,
+    }).catch(() => null),
     runCapture(
       "git",
       [
         "status",
         "--porcelain=v1",
+        "-z",
         "-uall",
         "--",
         "package.json",
@@ -595,16 +601,26 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
       },
     ).catch(() => null),
   ]);
-  if (!metadata || metadata.code !== 0 || !status || status.code !== 0) return false;
+  if (
+    !repoRootResult ||
+    repoRootResult.code !== 0 ||
+    !headPathResult ||
+    headPathResult.code !== 0 ||
+    !indexPathResult ||
+    indexPathResult.code !== 0 ||
+    !status ||
+    status.code !== 0
+  )
+    return false;
 
-  const [repoRootText, headPathText, indexPathText] = metadata.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const repoRootText = gitScalar(repoRootResult.stdout);
+  const headPathText = gitScalar(headPathResult.stdout);
+  const indexPathText = gitScalar(indexPathResult.stdout);
   if (!repoRootText || !headPathText || !indexPathText) return false;
 
   const dirty = dirtyRuntimeSourcePaths({
     pluginRoot,
+    parsePorcelainV1Z,
     repoRoot: repoRootText,
     stdout: status.stdout,
   });
@@ -618,13 +634,10 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
   return Math.max(0, ...markerMtimes) < targetMtime;
 }
 
-function dirtyRuntimeSourcePaths({ pluginRoot, repoRoot, stdout }) {
+function dirtyRuntimeSourcePaths({ parsePorcelainV1Z, pluginRoot, repoRoot, stdout }) {
   const paths = [];
-  for (const rawLine of String(stdout || "").split(/\r?\n/)) {
-    if (!rawLine.trim()) continue;
-    const status = rawLine.slice(0, 2);
-    const parsed = parsePorcelainPath(rawLine.slice(3));
-    if (!parsed) continue;
+  for (const entry of parsePorcelainV1Z(stdout)) {
+    const { status } = entry;
     if (
       status.includes("D") ||
       status.includes("R") ||
@@ -633,25 +646,21 @@ function dirtyRuntimeSourcePaths({ pluginRoot, repoRoot, stdout }) {
     ) {
       return { fullScanRequired: true, paths };
     }
-    const absolutePath = path.resolve(repoRoot, parsed.replace(/\//g, path.sep));
-    const relativePath = slashPath(path.relative(pluginRoot, absolutePath));
-    if (!isRuntimeSourcePath(relativePath)) continue;
-    paths.push(absolutePath);
+    for (const gitPath of entry.paths) {
+      const absolutePath = path.resolve(repoRoot, gitPath.replace(/\//g, path.sep));
+      const relativePath = slashPath(path.relative(pluginRoot, absolutePath));
+      if (!isRuntimeSourcePath(relativePath)) continue;
+      paths.push(absolutePath);
+    }
   }
   return { fullScanRequired: false, paths };
 }
 
-function parsePorcelainPath(text) {
-  const value = String(text || "").trim();
-  if (!value) return "";
-  const renamed = value.lastIndexOf(" -> ");
-  const pathText = renamed >= 0 ? value.slice(renamed + 4) : value;
-  if (!pathText.startsWith('"')) return pathText;
-  try {
-    return JSON.parse(pathText);
-  } catch {
-    return pathText.slice(1, -1);
-  }
+function gitScalar(stdout) {
+  const text = String(stdout || "");
+  if (text.endsWith("\r\n")) return text.slice(0, -2);
+  if (text.endsWith("\n")) return text.slice(0, -1);
+  return text;
 }
 
 export function isRuntimeSourcePath(relativePath) {

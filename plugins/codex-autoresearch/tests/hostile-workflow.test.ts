@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 import { buildProtectedBenchmarkGuard } from "../lib/benchmark/contract-guards.js";
+import { parseNameStatusZ, parsePorcelainV1Z } from "../lib/git-paths.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
   createCliRunner,
   quoteForShell,
   runGit,
+  runProcess,
+  testGitArgs,
   withTempDir as withNamedTempDir,
 } from "./helpers/process.js";
 
@@ -16,6 +19,65 @@ const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch-hostile", name, fn);
+
+test("Git -z path parsers round-trip hostile names and both sides of renames", async (t) => {
+  await withTempDir("git-path-round-trip", async (dir) => {
+    await initGit(dir);
+    const portablePaths = ["literal arrow 雪.txt", " leading 雪.txt"];
+    const posixOnlyPaths = [
+      "trailing 雪.txt ",
+      "line\nbreak.txt",
+      'quote"name.txt',
+      "back\\slash.txt",
+    ];
+    if (process.platform === "win32") {
+      t.diagnostic(
+        "Literal arrow, trailing-space, newline, quote, and backslash filenames are omitted because Win32 forbids them.",
+      );
+    }
+    const hostilePaths = [
+      ...portablePaths,
+      ...(process.platform === "win32" ? [] : ["literal -> arrow 雪.txt", ...posixOnlyPaths]),
+    ];
+    for (const file of hostilePaths) await writeFile(path.join(dir, file), "before\n", "utf8");
+    const original = process.platform === "win32" ? "rename old 雪.txt" : "rename old -> 雪.txt";
+    const current = process.platform === "win32" ? "rename new 雪.txt" : "rename new -> 雪.txt";
+    await writeFile(path.join(dir, original), "rename me\n", "utf8");
+    await runGit(dir, ["add", "-A"]);
+    await runGit(dir, ["commit", "-m", "hostile paths"]);
+
+    for (const file of hostilePaths) await writeFile(path.join(dir, file), "after\n", "utf8");
+    await rename(path.join(dir, original), path.join(dir, current));
+    await runGit(dir, ["add", "-A"]);
+
+    const status = await runProcess(
+      "git",
+      testGitArgs(["status", "--porcelain=v1", "-z", "-uall"]),
+      dir,
+    );
+    assert.equal(status.code, 0, status.stderr);
+    const statusEntries = parsePorcelainV1Z(status.stdout);
+    assert.deepEqual(
+      new Set(statusEntries.flatMap((entry) => entry.paths)),
+      new Set([...hostilePaths, original, current]),
+    );
+    assert.deepEqual(statusEntries.find((entry) => entry.status.includes("R"))?.paths, [
+      original,
+      current,
+    ]);
+
+    const diff = await runProcess(
+      "git",
+      testGitArgs(["diff", "--cached", "--name-status", "-z", "-M", "HEAD"]),
+      dir,
+    );
+    assert.equal(diff.code, 0, diff.stderr);
+    assert.deepEqual(
+      parseNameStatusZ(diff.stdout).find((entry) => entry.status.startsWith("R"))?.paths,
+      [original, current],
+    );
+  });
+});
 
 test("protected benchmark edits block next and keep until a new segment", async () => {
   await withTempDir("protected-benchmark-mutation", async (dir) => {
@@ -158,6 +220,56 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
     const nextPayload = JSON.parse(next.stdout);
     assert.equal(nextPayload.ok, false);
     assert.match(JSON.stringify(nextPayload), /dirty before the first baseline/i);
+  });
+});
+
+test("renaming a protected hostile path out of scope blocks the first baseline", async () => {
+  await withTempDir("protected-benchmark-hostile-rename", async (dir) => {
+    await initGit(dir);
+    const protectedRelative = process.platform === "win32" ? "bench 雪" : "bench -> 雪";
+    const protectedDir = path.join(dir, protectedRelative);
+    const original = path.join(protectedDir, "score.mjs");
+    const current = path.join(
+      dir,
+      "src",
+      process.platform === "win32" ? "score moved 雪.mjs" : "score -> moved 雪.mjs",
+    );
+    await mkdir(protectedDir, { recursive: true });
+    await mkdir(path.dirname(current), { recursive: true });
+    await writeFile(original, "console.log('METRIC seconds=1')\n", "utf8");
+    await runGit(dir, ["add", "-A"]);
+    await runGit(dir, ["commit", "-m", "protected benchmark"]);
+
+    await assertCliOk([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "hostile protected rename",
+      "--metric-name",
+      "seconds",
+      "--benchmark-command",
+      `node ${quoteForShell(original)}`,
+      "--benchmark-prints-metric",
+      "true",
+      "--protected-benchmark-paths",
+      protectedRelative,
+    ]);
+    await rename(original, current);
+
+    const keep = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "must not bless moved benchmark",
+    ]);
+    assert.notEqual(keep.code, 0);
+    assert.match(keep.stderr, /dirty before the first baseline/i);
   });
 });
 

@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { parseNulPathList } from "../git-paths.js";
 import {
   findLooseObjectCompatibilityOffenders,
   findSourceHygieneOffenders,
@@ -55,7 +56,7 @@ export async function runSourceHygieneCheck(
   const tracked = await runCommand([
     "source-hygiene:tracked-files",
     "git",
-    ["-C", REPO_ROOT, "ls-files"],
+    ["-C", REPO_ROOT, "ls-files", "-z"],
   ]);
   if (tracked.code !== 0) {
     console.log("fail source-hygiene");
@@ -64,7 +65,7 @@ export async function runSourceHygieneCheck(
     return false;
   }
 
-  return reportSourceHygieneResult(tracked.stdout.split(/\r?\n/), {
+  return reportSourceHygieneResult(parseNulPathList(tracked.stdout), {
     sourceFiles: options.sourceFiles,
   });
 }

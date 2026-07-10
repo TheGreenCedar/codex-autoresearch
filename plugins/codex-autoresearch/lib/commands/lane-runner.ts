@@ -434,7 +434,7 @@ async function hardenedScoutStatus(
     deps,
     {
       executable: "git",
-      args: hardenedReadOnlyGitArgs("status", ["--porcelain", "--untracked-files=all"]),
+      args: hardenedReadOnlyGitArgs("status", ["--porcelain=v1", "-z", "--untracked-files=all"]),
     },
     cwd,
     timeoutSeconds,
