@@ -8,6 +8,10 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+### Fixed
+
+- Finalization now preserves pre-existing review and verification branches during rollback, deletes only branches created by the current invocation, and fails visibly when branch restoration or cleanup cannot complete.
+
 ## 2.6.0 - 2026-07-09
 
 ### Changed

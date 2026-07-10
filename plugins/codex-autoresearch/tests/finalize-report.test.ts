@@ -410,7 +410,8 @@ testWithTempRoot(
 
     const result = await run(process.execPath, [finalizer, groupsPath], repo);
     assert.match(result.stdout, /Review summary: .+autoresearch-finalize.+\.md/);
-    assert.match(result.stdout, /Created review branches:/);
+    assert.match(result.stdout, /Review branches:/);
+    assert.match(result.stdout, /autoresearch-review\/ux-test\/01-value-change \(created\)/);
     assert.match(result.stdout, /Cleanup after verified merge/);
     assert.doesNotMatch(result.stdout, /git branch -D/);
     assert.doesNotMatch(result.stdout, /Remove-Item/);
@@ -423,6 +424,8 @@ testWithTempRoot(
     const summary = await fsp.readFile(summaryPath, "utf8");
 
     assert.match(summary, /Status: verified/);
+    assert.match(summary, /\| # \| Branch \| Provenance \| Title \| Files \|/);
+    assert.match(summary, /\| 1 \| `autoresearch-review\/ux-test\/01-value-change` \| created \|/);
     assert.match(summary, /autoresearch-review\/ux-test\/01-value-change/);
     assert.match(summary, /git show --stat 'autoresearch-review\/ux-test\/01-value-change'/);
     assert.match(summary, /git diff [^\n]+ -- 'scripts\/autoresearch\.ts' 'src\/space path\.txt'/);
@@ -467,6 +470,20 @@ testWithTempRoot(
     ).stdout;
     assert.doesNotMatch(branchFiles, /autoresearch\.research/);
     assert.doesNotMatch(branchFiles, /autoresearch-dashboard\.html/);
+
+    const reusedResult = await run(process.execPath, [finalizer, groupsPath], repo);
+    assert.match(reusedResult.stdout, /autoresearch-review\/ux-test\/01-value-change \(reused\)/);
+    const reusedSummaryLine = reusedResult.stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("Review summary: "));
+    const reusedSummary = await fsp.readFile(
+      reusedSummaryLine.slice("Review summary: ".length).trim(),
+      "utf8",
+    );
+    assert.match(
+      reusedSummary,
+      /\| 1 \| `autoresearch-review\/ux-test\/01-value-change` \| reused \|/,
+    );
 
     const status = (await run("git", ["status", "--porcelain"], repo)).stdout.trim();
     assert.equal(status, "");
@@ -650,6 +667,160 @@ testWithTempRoot(
       result.stderr + result.stdout,
       /divergent|differs from the planned review content/i,
     );
+  },
+);
+
+testWithTempRoot(
+  "finalizer rollback preserves pre-existing equivalent, divergent, and verification branches",
+  "finalize-owned-branches-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await writeFile(path.join(repo, "src", "a.txt"), "base a\n");
+    await writeFile(path.join(repo, "src", "b.txt"), "base b\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await git(["switch", "-c", "codex/ownership-test"], repo);
+    await writeFile(path.join(repo, "src", "a.txt"), "planned a\n");
+    await git(["commit", "-am", "planned a"], repo);
+    const first = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeFile(path.join(repo, "src", "b.txt"), "planned b\n");
+    await git(["commit", "-am", "planned b"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const equivalent = "autoresearch-review/ownership-test/01-planned-a";
+    await git(["switch", "--detach", base], repo);
+    await git(["switch", "-c", equivalent], repo);
+    await writeFile(path.join(repo, "src", "a.txt"), "planned a\n");
+    await git(["commit", "-am", "existing equivalent review"], repo);
+    const equivalentHead = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const divergent = "autoresearch-review/ownership-test/02-planned-b";
+    await git(["switch", "--detach", base], repo);
+    await git(["switch", "-c", divergent], repo);
+    await writeFile(path.join(repo, "src", "b.txt"), "wrong b\n");
+    await git(["commit", "-am", "existing divergent review"], repo);
+    const divergentHead = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const verificationCollision = "autoresearch-review/ownership-test/verify-planned-a";
+    await git(["branch", verificationCollision, base], repo);
+    const verificationHead = (await git(["rev-parse", verificationCollision], repo)).stdout.trim();
+    await git(["switch", "codex/ownership-test"], repo);
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "ownership-test",
+          groups: [
+            {
+              title: "Planned a",
+              body: "Reuse the equivalent branch.",
+              last_commit: first,
+              slug: "planned-a",
+            },
+            {
+              title: "Planned b",
+              body: "Reject the divergent branch.",
+              last_commit: finalTree,
+              slug: "planned-b",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /divergent/i);
+    assert.equal((await git(["rev-parse", equivalent], repo)).stdout.trim(), equivalentHead);
+    assert.equal((await git(["rev-parse", divergent], repo)).stdout.trim(), divergentHead);
+    assert.equal(
+      (await git(["rev-parse", verificationCollision], repo)).stdout.trim(),
+      verificationHead,
+    );
+    const verificationBranches = (
+      await git(["branch", "--list", "autoresearch-review/ownership-test/verify-*"], repo)
+    ).stdout
+      .trim()
+      .replace(/^\*?\s*/, "");
+    assert.equal(verificationBranches, verificationCollision);
+    assert.equal(
+      (await git(["branch", "--show-current"], repo)).stdout.trim(),
+      "codex/ownership-test",
+    );
+  },
+);
+
+testWithTempRoot(
+  "finalizer makes source restoration and temporary cleanup failures blocking",
+  "finalize-restore-failure-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const sourceBranch = "codex/restore-test";
+    await git(["switch", "-c", sourceBranch], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "planned\n");
+    await git(["commit", "-am", "planned value"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const hooks = path.join(root, "hooks");
+    const postCommit = path.join(hooks, "post-commit");
+    await writeFile(
+      postCommit,
+      `#!/bin/sh\ngit branch -D ${sourceBranch} >/dev/null 2>&1 || true\n`,
+    );
+    await fsp.chmod(postCommit, 0o755);
+    await git(["config", "core.hooksPath", hooks.replace(/\\/g, "/")], repo);
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "restore-test",
+          groups: [
+            {
+              title: "Planned value",
+              body: "Force source restoration failure after branch creation.",
+              last_commit: finalTree,
+              slug: "planned-value",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
+    const output = result.stderr + result.stdout;
+    assert.notEqual(result.code, 0);
+    assert.match(output, /Source branch restoration failed|Verification state restoration failed/);
+    assert.match(output, /git switch codex\/restore-test failed/);
+    assert.match(output, /Temporary branch cleanup failed/);
   },
 );
 
@@ -1146,7 +1317,7 @@ testWithTempRoot(
     assert.deepEqual(plan.groups[0].files.sort(), ["src/guardrails.txt", "src/value.txt"]);
 
     const finalizeResult = await run(process.execPath, [finalizer, payload.planOutput], repo);
-    assert.match(finalizeResult.stdout, /Created review branches:/);
+    assert.match(finalizeResult.stdout, /Review branches:/);
   },
 );
 
@@ -1816,7 +1987,7 @@ testWithTempRoot(
     assert.equal(collapsed.groups[0].parent_commit, collapsed.base);
 
     const finalizeResult = await run(process.execPath, [finalizer, collapsedOutput], repo);
-    assert.match(finalizeResult.stdout, /Created review branches/);
+    assert.match(finalizeResult.stdout, /Review branches/);
     const summaryLine = finalizeResult.stdout
       .split(/\r?\n/)
       .find((line) => line.startsWith("Review summary: "));
