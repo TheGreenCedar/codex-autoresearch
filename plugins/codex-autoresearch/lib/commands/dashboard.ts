@@ -34,7 +34,7 @@ export interface DashboardCommandDeps {
   operationProgress: (options: LooseObject) => LooseObject;
   pluginRoot: string;
   pluginVersion: string;
-  readJsonl: (workDir: string) => LooseObject[];
+  readDashboardLedger: (workDir: string) => Promise<LooseObject>;
   resolveOutputInside: (workDir: string, output?: string) => string;
   resolveWorkDir: (value: string) => {
     workDir: string;
@@ -142,8 +142,12 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
     const startedAt = Date.now();
     const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
     emitProgress(args, "export", `reading session ledger from ${workDir}`);
-    const entries = deps.readJsonl(workDir);
-    if (entries.length === 0) throw new Error(`No autoresearch.jsonl found in ${workDir}`);
+    const ledgerFold = deps.readDashboardLedger(workDir);
+    const ledger = await ledgerFold;
+    const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
+    if (Number(ledger.summary?.totalEntries || 0) === 0) {
+      throw new Error(`No autoresearch.jsonl found in ${workDir}`);
+    }
     const output = deps.resolveOutputInside(workDir, args.output);
     const commands = deps.dashboardCommands(workDir);
     const generatedAt = new Date().toISOString();
@@ -174,7 +178,10 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       showcaseMode: showcaseExport,
       suppressEnvironmentWarnings: showcaseExport,
     };
-    const rawViewModel = await deps.dashboardViewModel(workDir, config, dashboardContext);
+    const rawViewModel = await deps.dashboardViewModel(workDir, config, {
+      ...dashboardContext,
+      ledgerFold: ledger,
+    });
     const viewModel = compactDashboardTransportViewModel(
       showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel,
     );
@@ -192,6 +199,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
       commands,
       settings: deps.dashboardSettings(config, dashboardContext),
       viewModel,
+      ledgerBounds: ledger.ledgerBounds,
       publicExport: showcaseExport,
       showcaseMode: showcaseExport,
     });
@@ -304,7 +312,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           viewModel: {},
         });
       },
-      viewModel: async () => {
+      viewModel: async (refreshContext: LooseObject = {}) => {
         const { config } = deps.resolveWorkDir(args.working_dir || args.cwd);
         return deps.dashboardViewModel(workDir, config, {
           deliveryMode: "live-server",
@@ -316,6 +324,7 @@ export function createDashboardCommands(deps: DashboardCommandDeps) {
           activeServerCount: liveDashboardServers.size,
           dashboardServerRegistry,
           readCache: liveReadCache,
+          ...refreshContext,
         });
       },
     });

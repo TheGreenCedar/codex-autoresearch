@@ -64,6 +64,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     warnings = [],
   } = normalizeDashboardContext(context);
   const current = (state.current || []) as RunLike[];
+  const ledgerSummary = (state.dashboardLedgerSummary as LooseObject) || null;
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
   const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
   const kept = acceptedCurrentRuns(current);
@@ -297,10 +298,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
       metricUnit: state.config.metricUnit,
       direction: state.config.bestDirection,
       segment: state.segment,
-      runs: current.length,
-      kept: kept.length,
-      measured: measurements.length,
-      failed: failures.length,
+      runs: ledgerSummary?.currentRunCount ?? current.length,
+      kept: ledgerSummary?.acceptedRunCount ?? kept.length,
+      measured: ledgerSummary?.measurementRunCount ?? measurements.length,
+      failed: ledgerSummary?.failedRunCount ?? failures.length,
       baseline: state.baseline,
       best: state.best,
       development: state.development || null,
@@ -310,7 +311,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
       statusCounts: Object.fromEntries(
         [...STATUS_VALUES].map((status) => [
           status,
-          current.filter((run) => run.status === status).length,
+          ledgerSummary?.statusCounts?.[status] ??
+            current.filter((run) => run.status === status).length,
         ]),
       ),
       settings,
@@ -319,9 +321,15 @@ export function buildDashboardViewModel(context: DashboardContext) {
       bestKept: bestKept ? compactRun(bestKept) : null,
       latestFailure: latestFailure ? compactRun(latestFailure) : null,
       measurementRuns: measurementReadout.runs,
-      measurementRunCount: measurements.length,
-      measurementRunsOmitted: measurementReadout.omitted,
-      measurementRunsTruncated: measurementReadout.truncated,
+      measurementRunCount: ledgerSummary?.measurementRunCount ?? measurements.length,
+      measurementRunsOmitted: Math.max(
+        0,
+        Number(ledgerSummary?.measurementRunCount ?? measurements.length) -
+          measurementReadout.runs.length,
+      ),
+      measurementRunsTruncated:
+        Number(ledgerSummary?.measurementRunCount ?? measurements.length) >
+        measurementReadout.runs.length,
       nextAction: actionRail[0]?.detail || nextAction,
       confidenceText:
         state.confidence == null

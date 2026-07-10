@@ -79,6 +79,7 @@ export interface DashboardSummary {
   best?: number;
   confidence?: number;
   runs?: number;
+  kept?: number;
   [key: string]: unknown;
 }
 
@@ -401,6 +402,14 @@ export interface LedgerBounds {
   truncated?: boolean;
   omittedEntries?: number;
   maxEntries?: number;
+  totalEntries?: number;
+  validEntries?: number;
+  retainedEntries?: number;
+  summarySource?: "full-ledger-stream";
+  retention?: "newest-rows-plus-governing-config";
+  processLifecycleProjectionIncomplete?: boolean;
+  processLifecycleTrackedIdentities?: number;
+  processLifecycleOverflowCount?: number;
   invalidLedgerEntryCount?: number;
   invalidLedgerEntries?: Array<{
     file?: string;

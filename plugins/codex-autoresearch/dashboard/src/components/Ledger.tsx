@@ -93,6 +93,9 @@ function ledgerNoteFor(
       `${omittedEntries} older ledger ${entryLabel(omittedEntries)} omitted from snapshot`,
     );
   }
+  if (ledgerBounds?.summarySource === "full-ledger-stream") {
+    parts.push("summary uses the full streamed ledger");
+  }
   return invalidSuffix(parts.join(" / "), invalidCount);
 }
 

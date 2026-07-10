@@ -18,6 +18,11 @@ import {
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardHtml, dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import {
+  DASHBOARD_LEDGER_MAX_ENTRIES,
+  foldDashboardLedger,
+  type DashboardLedgerFold,
+} from "../lib/dashboard-ledger.js";
+import {
   buildDashboardCommands,
   buildDashboardSettings as dashboardSettings,
   createDashboardCommands,
@@ -180,6 +185,7 @@ import {
   parseQualityGapItems,
   parseQualityGaps,
   readJsonl,
+  stateFromSessionRecords,
   safeSlug,
   iterationLimitInfo,
   isBaselineEligibleMetricRun,
@@ -522,7 +528,7 @@ const { exportDashboard, serveDashboard } = createDashboardCommands({
   operationProgress,
   pluginRoot: PLUGIN_ROOT,
   pluginVersion: PLUGIN_VERSION,
-  readJsonl,
+  readDashboardLedger: foldDashboardLedger,
   resolveOutputInside,
   resolveWorkDir,
   serveAutoresearch: serveAutoresearchLazy,
@@ -5644,16 +5650,124 @@ function dashboardSafeRuntimeHint(runtimeDriftSummary: LooseObject): string {
   return "Runtime drift evidence is unavailable; inspect the runtime with the CLI before acting.";
 }
 
+function dashboardLedgerFoldFromContext(value: unknown): DashboardLedgerFold | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const fold = value as DashboardLedgerFold;
+  return Array.isArray(fold.analysisRecords) && fold.summary && fold.ledgerBounds ? fold : null;
+}
+
+function dashboardSettingsContext(context: LooseObject): LooseObject {
+  const { ledgerFold: _ledgerFold, readCache: _readCache, ...settingsContext } = context;
+  return settingsContext;
+}
+
+function dashboardLedgerHealth(fold: DashboardLedgerFold): LooseObject {
+  if (!fold.ledgerBounds.truncated) return analyzeLedgerHealth(fold.analysisRecords);
+  const invalidCount = Number(fold.ledgerBounds.invalidLedgerEntryCount || 0);
+  const warnings = invalidCount
+    ? [
+        `${invalidCount} invalid ledger record${invalidCount === 1 ? "" : "s"}; run ledger-doctor --cwd <project> --json.`,
+      ]
+    : [];
+  return {
+    ok: invalidCount > 0 ? false : null,
+    totalRecords: fold.summary.validEntries,
+    parseErrorCount: invalidCount,
+    parseErrors: fold.ledgerBounds.invalidLedgerEntries || [],
+    warnings,
+    fullRunNumberHealthAvailable: false,
+    bounded: {
+      sampleLimit: DASHBOARD_LEDGER_MAX_ENTRIES,
+      truncated: true,
+    },
+  };
+}
+
+function dashboardStateFromLedgerFold(
+  workDir: string,
+  fold: DashboardLedgerFold,
+): ReturnType<typeof stateFromSessionRecords> {
+  const summary = fold.summary;
+  const current = fold.analysisRecords.filter(
+    (record) => record.run != null && Number(record.segment ?? summary.segment) === summary.segment,
+  );
+  const currentProjection = fold.analysisRecords.flatMap((record) => {
+    if (record.type === "config") return [];
+    if (record.segment != null && Number(record.segment) !== summary.segment) return [];
+    return [{ ...record, segment: 0 }];
+  });
+  const state = stateFromSessionRecords(workDir, [
+    ...(summary.activeConfigEntry ? [{ ...summary.activeConfigEntry, segment: 0 }] : []),
+    ...currentProjection,
+  ]);
+  const historicalBest = summary.historicalBestRun
+    ? {
+        run: summary.historicalBestRun.run ?? null,
+        metric: finiteMetric(summary.historicalBestRun.metric),
+        status: summary.historicalBestRun.status || "",
+        segment: summary.historicalBestRun.segment ?? null,
+        description: summary.historicalBestRun.description || "",
+        promotionGrade: promotionGradeValue(summary.historicalBestRun),
+      }
+    : null;
+  return {
+    ...state,
+    config: {
+      ...state.config,
+      name: typeof summary.config.name === "string" ? summary.config.name : null,
+      goal: String(summary.config.goal || ""),
+      metricName: String(summary.config.metricName || "metric"),
+      metricUnit: String(summary.config.metricUnit || ""),
+      bestDirection: summary.config.bestDirection === "higher" ? "higher" : "lower",
+    },
+    activeConfigEntry: summary.activeConfigEntry,
+    previousConfigEntry: summary.previousConfigEntry,
+    metricSemanticsWarning: summary.metricSemanticsWarning,
+    segment: summary.segment,
+    results: fold.analysisRecords.filter((record) => record.run != null),
+    current,
+    baseline: summary.baseline,
+    best: summary.best,
+    historicalBest,
+    confidence: summary.confidenceComplete ? state.confidence : null,
+    development: summary.development,
+    promotion: summary.promotion,
+    dashboardLedgerSummary: summary,
+    dashboardLedgerBounds: fold.ledgerBounds,
+  };
+}
+
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
   const readCache = context.readCache || createSessionReadCache();
+  const ledgerFold = dashboardLedgerFoldFromContext(context.ledgerFold);
+  const records = ledgerFold?.analysisRecords || loadSessionRecords(workDir, readCache);
+  const state = ledgerFold
+    ? dashboardStateFromLedgerFold(workDir, ledgerFold)
+    : loadSessionState(workDir, readCache);
+  if (ledgerFold) {
+    const cacheKey = path.resolve(workDir);
+    readCache.recordsByCwd.set(cacheKey, records);
+    readCache.stateByCwd.set(cacheKey, state);
+  }
   const qualityGap = await currentQualityGapSummary(workDir);
-  const state = loadSessionState(workDir, readCache);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const warnings = context.suppressEnvironmentWarnings
-    ? []
-    : await operatorWarningsForWorkDir(workDir, state);
-  const settings = dashboardSettings(config, context);
+  const warnings = [
+    ...(context.suppressEnvironmentWarnings
+      ? []
+      : await operatorWarningsForWorkDir(workDir, state)),
+    ...(ledgerFold?.ledgerBounds.truncated
+      ? [
+          {
+            code: "dashboard_ledger_retention_bounded",
+            severity: "warning",
+            message:
+              "Dashboard rows use bounded retention; counts, status totals, baseline, and best use the full streamed ledger. Confidence and detailed evidence lists use retained rows, and full run-number health requires ledger-doctor.",
+          },
+        ]
+      : []),
+  ];
+  const settings = dashboardSettings(config, dashboardSettingsContext(context));
   const drift =
     context.runtimeDrift ||
     (await buildDriftReport({
@@ -5693,8 +5807,9 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
   }));
   const dashboardSetupPlan = stripDashboardCommandGuidance(setupPlanResult);
   const dashboardGuidedSetup = stripDashboardCommandGuidance(guidedSetupResult);
-  const records = loadSessionRecords(workDir, readCache);
-  const ledgerHealth = analyzeLedgerHealth(records);
+  const ledgerHealth = ledgerFold
+    ? dashboardLedgerHealth(ledgerFold)
+    : analyzeLedgerHealth(records);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
     state,
