@@ -86,10 +86,8 @@ function markdownAnchors(content: string): Set<string> {
   for (const line of content.split(/\r?\n/)) {
     const match = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
     if (!match) continue;
-    const base = match[1]
+    const base = stripHtmlTags(match[1])
       .toLowerCase()
-      .replace(/<[^>]+>/g, "")
-      .replace(/[<>]/g, "")
       .replace(/[`*_~]/g, "")
       .replace(/[^\p{L}\p{N}\s-]/gu, "")
       .trim()
@@ -99,6 +97,21 @@ function markdownAnchors(content: string): Set<string> {
     anchors.add(duplicate === 0 ? base : `${base}-${duplicate}`);
   }
   return anchors;
+}
+
+function stripHtmlTags(value: string): string {
+  let output = "";
+  let insideTag = false;
+  for (const character of value) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      output += character;
+    }
+  }
+  return output;
 }
 
 async function markdownLinkProblems(): Promise<string[]> {

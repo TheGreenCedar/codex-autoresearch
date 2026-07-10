@@ -101,7 +101,8 @@ async function acquire(lockPath: string, root: string, record: LockRecord): Prom
     command: `${record.command}:lock-recovery`,
     token: randomUUID(),
   };
-  const claims = await acquireRecoveryAuthority(safeLockPath, root, owner, recoveryRecord);
+  const canonicalRoot = await fsp.realpath(root);
+  const claims = await acquireRecoveryAuthority(safeLockPath, canonicalRoot, owner, recoveryRecord);
   try {
     const confirmed = await readLock(safeLockPath);
     if (!confirmed || confirmed.token !== owner.token || !isDead(confirmed.pid)) {

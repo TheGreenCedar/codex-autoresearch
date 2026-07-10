@@ -204,6 +204,16 @@ test("checked writes allow canonicalized ancestors but reject linked parents ins
       await access(canonicalLock);
     });
     await assert.rejects(access(canonicalLock));
+    await writeFile(
+      canonicalLock,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale", timestamp: new Date(0).toISOString(), token: "dead" })}\n`,
+    );
+    let recoveredCanonicalLock = false;
+    await withSessionMutationLock(aliasedRoot, "recover-canonical-lock", async () => {
+      recoveredCanonicalLock = true;
+    });
+    assert.equal(recoveredCanonicalLock, true);
+    await assert.rejects(access(canonicalLock));
 
     const escaped = path.join(dir, "escaped");
     const linkedParent = path.join(aliasedRoot, "linked-parent");
