@@ -2,6 +2,8 @@ export type MetricMode = "raw" | "weighted_cost";
 export type MetricDirection = "lower" | "higher";
 export type RunStatus = "keep" | "discard" | "crash" | "checks_failed" | "measure";
 
+export const DASHBOARD_PAYLOAD_VERSION = 1;
+
 export interface MetricWeights {
   time: number;
   memory: number;
@@ -403,6 +405,7 @@ export interface LedgerBounds {
 }
 
 export interface DashboardMeta {
+  payloadVersion?: number;
   deliveryMode?: string;
   liveRefreshAvailable?: boolean;
   liveActionsAvailable?: boolean;

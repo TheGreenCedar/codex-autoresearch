@@ -10,6 +10,11 @@ import { fileURLToPath } from "node:url";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const screenshotPath = path.join(pluginRoot, "tmp", "dashboard-browser-a11y-modal.png");
+const payloadFailureScreenshotPath = path.join(
+  pluginRoot,
+  "tmp",
+  "dashboard-browser-payload-failure.png",
+);
 
 test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
   const browserExecutable = resolveBrowserExecutable();
@@ -19,7 +24,7 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
   );
 
   const fixture = await dashboardHtml();
-  const server = await serveHtml(fixture.html, fixture.livePayload);
+  const server = await serveHtml(fixture.html, fixture.failureHtml, fixture.livePayload);
   let browser;
 
   try {
@@ -134,7 +139,53 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       );
       assert.deepEqual(mobile, { noPageOverflow: true, shellFits: true });
 
+      const failurePage = await openPage(client, `${server.url}payload-missing.html`);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false },
+        failurePage.sessionId,
+      );
+      await waitForPageReady(client, failurePage.sessionId);
+      await waitForSelector(client, failurePage.sessionId, '.payload-failure-card[role="alert"]');
+      const payloadFailure = await evaluate(
+        client,
+        failurePage.sessionId,
+        `(() => ({
+          evidenceTreePresent: Boolean(document.querySelector('.runboard-shell, #trend-panel')),
+          heading: document.querySelector('#payload-failure-title')?.textContent?.trim() || '',
+          modeVisible: document.querySelector('.payload-failure-facts')?.textContent?.includes('Unknown Delivery Mode') || false,
+          provenanceVisible: document.querySelector('.payload-failure-facts')?.textContent?.includes('Dashboard payload unavailable') || false,
+          recovery: document.querySelector('#payload-failure-recovery')?.textContent?.trim() || '',
+          state: document.querySelector('#dashboard-root')?.dataset.dashboardState || ''
+        }))()`,
+      );
+      assert.deepEqual(payloadFailure, {
+        evidenceTreePresent: false,
+        heading: "Dashboard Payload Unavailable",
+        modeVisible: true,
+        provenanceVisible: true,
+        recovery:
+          "Run the Autoresearch CLI: export --cwd <project>, or serve --cwd <project>. Then reload.",
+        state: "payload-unavailable",
+      });
+      await captureScreenshot(client, failurePage.sessionId, payloadFailureScreenshotPath);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
+        failurePage.sessionId,
+      );
+      const mobileFailure = await evaluate(
+        client,
+        failurePage.sessionId,
+        `(() => ({
+          cardFits: document.querySelector('.payload-failure-card').getBoundingClientRect().right <= window.innerWidth,
+          noPageOverflow: document.documentElement.scrollWidth <= window.innerWidth
+        }))()`,
+      );
+      assert.deepEqual(mobileFailure, { cardFits: true, noPageOverflow: true });
+
       console.log(`ARTIFACT dashboard_browser_a11y_screenshot=${screenshotPath}`);
+      console.log(`ARTIFACT dashboard_payload_failure_screenshot=${payloadFailureScreenshotPath}`);
     } finally {
       await client.close();
     }
@@ -183,6 +234,7 @@ async function dashboardHtml() {
     },
   ];
   const meta = {
+    payloadVersion: 1,
     deliveryMode: "live-server",
     liveRefreshAvailable: true,
     liveActionsAvailable: false,
@@ -196,9 +248,18 @@ async function dashboardHtml() {
     .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replaceAll("<", "\\u003c"))
     .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
     .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+  const failureHtml = template
+    .replace(
+      /<script>\s*window\.__AUTORESEARCH_DATA__ = __AUTORESEARCH_DATA_PAYLOAD__;\s*window\.__AUTORESEARCH_META__ = __AUTORESEARCH_META_PAYLOAD__;\s*<\/script>/,
+      "",
+    )
+    .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
+    .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
   return {
+    failureHtml,
     html,
     livePayload: {
+      payloadVersion: 1,
       ledgerEntries: liveEntries,
       ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_001 },
       summary: { segment: 0, baseline: 5_001, best: 1, runs: 5_001 },
@@ -206,11 +267,16 @@ async function dashboardHtml() {
   };
 }
 
-async function serveHtml(html, livePayload) {
+async function serveHtml(html, failureHtml, livePayload) {
   const server = http.createServer((request, response) => {
     if (request.url === "/" || request.url === "/index.html") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(html);
+      return;
+    }
+    if (request.url === "/payload-missing.html") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(failureHtml);
       return;
     }
     if (request.url === "/view-model.json") {

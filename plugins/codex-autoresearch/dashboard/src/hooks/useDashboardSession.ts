@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { DEMO_ENTRIES, DEMO_META } from "../demoData";
 import { defaultConfig, normalizeEntries } from "../model";
 import { getUrlValue, setUrlValue } from "./useUrlState";
 import type {
@@ -12,8 +11,8 @@ import type {
 } from "../types";
 
 interface UseDashboardSessionArgs {
-  initialEntries?: DashboardEntry[];
-  initialMeta?: DashboardMeta;
+  initialEntries: DashboardEntry[];
+  initialMeta: DashboardMeta;
 }
 
 interface DashboardSessionState {
@@ -33,8 +32,8 @@ export function useDashboardSession({
   initialEntries,
   initialMeta,
 }: UseDashboardSessionArgs): DashboardSessionState {
-  const [entries, setEntries] = useState<DashboardEntry[]>(() => initialEntriesFor(initialEntries));
-  const [meta, setMeta] = useState<DashboardMeta>(() => initialMeta || DEMO_META);
+  const [entries, setEntries] = useState<DashboardEntry[]>(() => initialEntries);
+  const [meta, setMeta] = useState<DashboardMeta>(() => initialMeta);
   const [viewModel, setViewModel] = useState<DashboardViewModel>(
     () => initialMeta?.viewModel || {},
   );
@@ -79,10 +78,6 @@ function readSegmentParam(): number | null {
   if (raw == null) return null;
   const parsed = Number.parseInt(raw, 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function initialEntriesFor(initialEntries?: DashboardEntry[]) {
-  return Array.isArray(initialEntries) ? initialEntries : DEMO_ENTRIES;
 }
 
 function sessionFor(normalized: NormalizedEntries, activeSegment: number): SessionSegment {

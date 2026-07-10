@@ -79,6 +79,102 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.payload-failure {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px;
+}
+
+.payload-failure-card {
+  width: min(720px, 100%);
+  border: 1px solid var(--line);
+  border-top: 6px solid var(--coral);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.payload-failure-card h1 {
+  max-width: 18ch;
+  margin: 8px 0 12px;
+  font-size: clamp(2rem, 7vw, 3.5rem);
+  line-height: 1;
+  text-wrap: balance;
+}
+
+.payload-failure-summary {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.payload-failure-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 28px 0;
+}
+
+.payload-failure-facts div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--cream);
+  padding: 14px 16px;
+}
+
+.payload-failure-facts dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.payload-failure-facts dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 800;
+}
+
+.payload-failure-reason {
+  border-left: 4px solid var(--coral);
+  margin: 0;
+  background: rgba(216, 86, 58, 0.09);
+  padding: 14px 16px;
+  line-height: 1.55;
+}
+
+.payload-failure-recovery {
+  margin-top: 28px;
+}
+
+.payload-failure-recovery h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.payload-failure-recovery p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 560px) {
+  .payload-failure {
+    padding: 16px;
+  }
+
+  .payload-failure-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
 button,
 input,
 select,

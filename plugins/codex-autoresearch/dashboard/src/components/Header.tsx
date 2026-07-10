@@ -299,7 +299,7 @@ function segmentStatusLabel(segment: SessionSegment, normalized: NormalizedEntri
 }
 
 function statusFor(liveStatus: { title?: string; detail?: string }, mode: DashboardMode) {
-  if (mode.liveRefresh || isAttentionStatus(liveStatus.title)) {
+  if (mode.liveRefresh || mode.showcase || isAttentionStatus(liveStatus.title)) {
     return {
       title: liveStatus.title || "Dashboard notice",
       detail: liveStatus.detail || "Review the latest dashboard status.",

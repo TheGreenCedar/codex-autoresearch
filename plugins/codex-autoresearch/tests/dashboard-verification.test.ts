@@ -9,7 +9,12 @@ import { formatCompactMetricTick } from "../dashboard/src/model/formatting.js";
 import { normalizeEntries } from "../dashboard/src/model/entries.js";
 import { buildReadout } from "../dashboard/src/model/readout.js";
 import { asiText } from "../dashboard/src/model/asi.js";
-import type { SessionRun } from "../dashboard/src/types.js";
+import {
+  bootstrapDashboardPayload,
+  developmentShowcaseEnabled,
+  validateLiveDashboardPayload,
+} from "../dashboard/src/bootstrap.js";
+import { DASHBOARD_PAYLOAD_VERSION, type SessionRun } from "../dashboard/src/types.js";
 import {
   buildActionRail,
   buildDashboardViewModel,
@@ -57,6 +62,123 @@ test.after(async () => {
 
 test.afterEach(() => {
   dashboard.closeDashboardWindows();
+});
+
+test("dashboard bootstrap fails closed outside an explicit development showcase", () => {
+  const missing = bootstrapDashboardPayload(undefined, undefined);
+  assert.equal(missing.ok, false);
+  if (!missing.ok) {
+    assert.equal(missing.failure.mode, "Unknown Delivery Mode");
+    assert.match(missing.failure.reason, /data injection is missing/);
+    assert.match(missing.failure.recovery, /export --cwd <project>/);
+  }
+
+  for (const [entries, meta, reason] of [
+    [{}, {}, /not an array/],
+    [[], [], /metadata injection/],
+    [[], "invalid", /metadata injection/],
+    [[], { viewModel: [] }, /view model is not an object/],
+    [[], { deliveryMode: [] }, /delivery mode is not a string/],
+    [[], { showcaseMode: "yes" }, /showcaseMode flag is not a boolean/],
+    [[{ type: "config", name: 42 }], {}, /malformed config entry/],
+    [[{ type: "event", message: "unknown" }], {}, /invalid auxiliary ledger entry/],
+    [
+      [dashboardConfigEntry({ name: "invalid payload", metricName: "seconds" }), null],
+      {},
+      /invalid ledger entry/,
+    ],
+    [
+      [
+        dashboardConfigEntry({ name: "invalid payload", metricName: "seconds" }),
+        { type: "run", metric: 1, status: "not-a-status" },
+      ],
+      {},
+      /invalid status/,
+    ],
+    [[], { payloadVersion: DASHBOARD_PAYLOAD_VERSION + 1 }, /incompatible/],
+  ] as const) {
+    const result = bootstrapDashboardPayload(entries, meta);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.failure.reason, reason);
+  }
+
+  assert.equal(developmentShowcaseEnabled(false, "?showcase=1"), false);
+  assert.equal(developmentShowcaseEnabled(true, ""), false);
+  assert.equal(developmentShowcaseEnabled(true, "?showcase=1"), true);
+  const showcase = bootstrapDashboardPayload(undefined, undefined, { developmentShowcase: true });
+  assert.equal(showcase.ok, true);
+  if (showcase.ok) {
+    assert.equal(showcase.meta.deliveryMode, "showcase");
+    assert.equal(showcase.meta.showcaseMode, true);
+    assert.ok(showcase.entries.length > 1);
+  }
+
+  const auxiliary = bootstrapDashboardPayload(
+    [
+      { type: "research_fanout", fanoutPlan: { status: "planned" } },
+      { type: "lane_result", lane: { id: "scout" }, result: { status: "complete" } },
+      { type: "approval", gate: "big_idea_architecture", scope: "scout" },
+    ],
+    {},
+  );
+  assert.equal(auxiliary.ok, true);
+});
+
+test("dashboard live payload validation rejects missing, malformed, and incompatible evidence", () => {
+  for (const [payload, reason] of [
+    [null, /not an object/],
+    [[], /not an object/],
+    [{}, /does not contain a ledger entry array/],
+    [{ ledgerEntries: {} }, /does not contain a ledger entry array/],
+    [{ ledgerEntries: [null] }, /invalid ledger entry/],
+    [{ payloadVersion: DASHBOARD_PAYLOAD_VERSION + 1, ledgerEntries: [] }, /incompatible/],
+  ] as const) {
+    const result = validateLiveDashboardPayload(payload);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.reason, reason);
+  }
+
+  const valid = validateLiveDashboardPayload({
+    payloadVersion: DASHBOARD_PAYLOAD_VERSION,
+    ledgerEntries: [dashboardConfigEntry({ name: "live", metricName: "seconds" })],
+  });
+  assert.equal(valid.ok, true);
+});
+
+test("production dashboard renders a payload-unavailable state instead of demo evidence", async () => {
+  const { dom, getById, queryById } = await runDashboard([], {}, { omitPayloadGlobals: true });
+  const alert = dom.window.document.querySelector('[role="alert"]');
+
+  assert.equal(getById("dashboard-root").dataset.dashboardState, "payload-unavailable");
+  assert.equal(alert?.getAttribute("aria-live"), "assertive");
+  assert.equal(getById("payload-failure-title").textContent, "Dashboard Payload Unavailable");
+  assert.match(getById("payload-failure-reason").textContent || "", /data injection is missing/);
+  assert.match(getById("payload-failure-recovery").textContent || "", /export --cwd <project>/);
+  assert.equal(queryById("trend-panel"), null);
+  assert.doesNotMatch(getById("dashboard-root").textContent || "", /Indexing Pipeline Speed/);
+});
+
+test("static and served bootstrap failures show mode-specific recovery", async () => {
+  for (const { entries, meta, mode, recovery } of [
+    {
+      entries: [],
+      meta: { deliveryMode: "static-export", payloadVersion: DASHBOARD_PAYLOAD_VERSION + 1 },
+      mode: "Static Snapshot",
+      recovery: /export --cwd <project>/,
+    },
+    {
+      entries: {},
+      meta: { deliveryMode: "live-server" },
+      mode: "Live Readout",
+      recovery: /serve --cwd <project>/,
+    },
+  ]) {
+    const { dom, getById, queryById } = await runDashboard(entries, meta);
+    assert.match(getById("dashboard-root").textContent || "", new RegExp(mode));
+    assert.match(getById("payload-failure-recovery").textContent || "", recovery);
+    assert.equal(queryById("trend-panel"), null);
+    dom.window.close();
+  }
 });
 
 test("dashboard chart downsamples long histories while preserving anchor points", () => {
@@ -679,6 +801,7 @@ test("static dashboard export strips setup and recipe command fields", () => {
   assert.ok(metaMatch);
   const data = JSON.parse(dataMatch[1]);
   const meta = JSON.parse(metaMatch[1]);
+  assert.equal(meta.payloadVersion, DASHBOARD_PAYLOAD_VERSION);
   const serialized = JSON.stringify({ data, meta });
 
   assert.doesNotMatch(serialized, /benchmarkCommand|checksCommand|commandAuthority/);
@@ -1584,8 +1707,8 @@ test("dashboard renders the newest 100 of 5,000 rows and loads older rows in bat
   assert.match(getById("ledger-note").textContent || "", /4800 older runs available/);
 });
 
-test("dashboard reports malformed ledger entries that were ignored", async () => {
-  const { getById } = await runDashboard(
+test("dashboard rejects malformed injected ledger entries", async () => {
+  const { getById, queryById } = await runDashboard(
     [
       dashboardConfigEntry({ name: "malformed ledger", metricName: "seconds", metricUnit: "s" }),
       { type: "run", run: 1, metric: 5, status: "keep", description: "Valid" },
@@ -1594,8 +1717,21 @@ test("dashboard reports malformed ledger entries that were ignored", async () =>
     emptyCommandMeta({ ledgerBounds: { invalidLedgerEntryCount: 2 } }),
   );
 
-  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 1);
-  assert.match(getById("ledger-note").textContent || "", /3 invalid ledger entries ignored/);
+  assert.match(getById("payload-failure-reason").textContent || "", /invalid status/);
+  assert.equal(queryById("ledger-body"), null);
+});
+
+test("dashboard rejects unknown explicit ledger entry types before rendering evidence", async () => {
+  const { getById, queryById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "unknown ledger type", metricName: "seconds" }),
+      { type: "event", message: "Not a supported Autoresearch ledger record" },
+    ],
+    emptyCommandMeta(),
+  );
+
+  assert.match(getById("payload-failure-reason").textContent || "", /invalid auxiliary/);
+  assert.equal(queryById("ledger-body"), null);
 });
 
 test("dashboard labels bounded static export ledgers as partial", async () => {
@@ -3423,7 +3559,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   dom.window.close();
 });
 
-test("showcase dashboard presents the demo as live while keeping diagnostics in the model", async () => {
+test("showcase dashboard labels explicit demo provenance while keeping diagnostics in the model", async () => {
   const entries = [
     {
       type: "config",
@@ -3451,7 +3587,7 @@ test("showcase dashboard presents the demo as live while keeping diagnostics in 
   ];
 
   const { getById, queryById } = await runDashboard(entries, {
-    deliveryMode: "static-export",
+    deliveryMode: "showcase",
     liveActionsAvailable: false,
     showcaseMode: true,
     modeGuidance: {
@@ -3471,10 +3607,12 @@ test("showcase dashboard presents the demo as live while keeping diagnostics in 
   });
 
   assert.ok(getById("dashboard-toolbar"));
-  assert.equal(queryById("live-region"), null);
+  assert.ok(getById("live-region"));
+  assert.match(getById("live-detail").textContent || "", /Showcase provenance: explicit demo data/);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
   assert.equal(queryById("trust-strip"), null);
+  assert.equal(getById("side-mode-detail").textContent, "Showcase Data");
   assert.equal(
     getById("next-action-detail").textContent,
     "Check memory footprint before keeping the path.",
@@ -4421,6 +4559,7 @@ test("live dashboard view model reports ledger bounds when entries are capped", 
 
     const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
 
+    assert.equal(snapshot.payloadVersion, DASHBOARD_PAYLOAD_VERSION);
     assert.equal(snapshot.ledgerEntries.length, LIVE_LEDGER_MAX_ENTRIES);
     assert.deepEqual(snapshot.ledgerBounds, {
       maxEntries: LIVE_LEDGER_MAX_ENTRIES,
@@ -5105,6 +5244,61 @@ test("served dashboard live refresh reports endpoint failures without success", 
   );
   assert.match(getById("live-detail").textContent || "", /view-model\.json returned HTTP 500/);
   assert.doesNotMatch(getById("live-title").textContent || "", /refreshed/i);
+  dom.window.close();
+});
+
+test("served dashboard rejects malformed refresh payloads and labels retained evidence", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "validated live snapshot", metricName: "seconds" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Validated baseline" },
+  ];
+  const { getById, dom } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      refreshMs: 60_000,
+      viewModel: {},
+    },
+    {
+      beforeParse(window) {
+        window.fetch = async () => ({
+          ok: true,
+          json: async () => ({
+            payloadVersion: DASHBOARD_PAYLOAD_VERSION,
+            ledgerEntries: {},
+          }),
+        });
+        window.setInterval = () => 1;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => /failed/i.test(getById("live-title").textContent || ""),
+    "Malformed live payload was not rejected.",
+  );
+  assert.match(getById("live-detail").textContent || "", /last known valid readout/);
+  assert.match(getById("live-detail").textContent || "", /does not contain a ledger entry array/);
+  assert.equal(getById("runs-value").textContent, "1 (1 kept)");
+  assert.match(
+    dom.window.document.querySelector(".toolbar-session strong")?.textContent || "",
+    /validated live snapshot/,
+  );
+
+  dom.window.fetch = async () => ({
+    ok: true,
+    json: async () => {
+      throw new Error("C:\\private\\payload.json could not be parsed");
+    },
+  });
+  getById("refresh-now").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(
+    () => /not valid JSON/i.test(getById("live-detail").textContent || ""),
+    "Malformed live JSON did not produce a safe diagnostic.",
+  );
+  assert.doesNotMatch(getById("live-detail").textContent || "", /private|payload\.json/i);
   dom.window.close();
 });
 
