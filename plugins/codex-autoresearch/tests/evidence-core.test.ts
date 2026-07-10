@@ -202,6 +202,49 @@ test("runner proves a stubborn child and grandchild are gone before timeout reso
   });
 });
 
+test(
+  "runner proves concurrent stubborn Windows process trees are gone after their roots exit",
+  { skip: process.platform !== "win32" },
+  async () => {
+    await withTempDir("concurrent-stubborn-process-trees", async (dir) => {
+      const fixture = path.join(process.cwd(), "tests", "fixtures", "stubborn-process-tree.mjs");
+      let results: Awaited<ReturnType<typeof runShell>>[] = [];
+      try {
+        results = await Promise.all(
+          Array.from({ length: 8 }, (_, index) => {
+            const marker = path.join(dir, `heartbeat-${index}.txt`);
+            const command = `${quoteForShell(process.execPath)} ${quoteForShell(fixture)} root ${quoteForShell(marker)}`;
+            return runShell(command, dir, 1);
+          }),
+        );
+
+        for (const result of results) {
+          const fixturePids = processTreeFixturePids(result.fullOutput);
+          assert.equal(result.timedOut, true);
+          assert.equal(result.terminationFailed, false, JSON.stringify(result.termination));
+          assert.equal(result.termination?.proven, true);
+          assert.equal(fixturePids.length, 3, result.fullOutput);
+          for (const pid of fixturePids) assert.equal(processIsAlive(pid), false, `PID ${pid}`);
+        }
+      } finally {
+        await Promise.all(
+          results.map((result) =>
+            forceCleanupPids(
+              result.termination?.pid ?? null,
+              [
+                ...processTreeFixturePids(result.fullOutput),
+                ...(result.termination?.trackedPids || []),
+                ...(result.termination?.remainingPids || []),
+              ],
+              true,
+            ),
+          ),
+        );
+      }
+    });
+  },
+);
+
 test("a non-resolving terminator is bounded and remains an explicit loop-contract blocker", async () => {
   let result: Awaited<ReturnType<typeof runProcess>> | null = null;
   try {

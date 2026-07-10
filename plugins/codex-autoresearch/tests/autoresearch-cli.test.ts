@@ -1212,7 +1212,7 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const progress = payload.packetEvidence.progressSnapshot;
-    assert.equal(progress.exitState, "timed_out");
+    assert.equal(progress.exitState, "timed_out", JSON.stringify(progress.termination));
     assert.equal(progress.timeoutPhase, "checks");
     assert.equal(progress.terminationFailed, false);
     assert.equal(payload.run.checks.termination.proven, true);
@@ -1341,11 +1341,14 @@ test("benchmark inspection holds the session lock through process execution", as
   await withTempDir("inspect-session-lock", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "inspect lock", "--metric-name", "seconds"]);
     const ready = path.join(dir, "inspect-ready.txt");
+    const release = path.join(dir, "inspect-release.txt");
     const sideEffect = path.join(dir, "overlap.txt");
     const inspectScript = [
-      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, 'ready')`,
-      "setTimeout(() => console.log('METRIC seconds=1'), 2000)",
+      "const fs = require('node:fs')",
+      `fs.writeFileSync(${JSON.stringify(ready)}, 'ready')`,
+      `const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('METRIC seconds=1'); } }, 25)`,
     ].join(";");
+    let inspected: Awaited<ReturnType<typeof runSpawnedCli>>;
     const inspect = runSpawnedCli([
       "benchmark-inspect",
       "--cwd",
@@ -1353,27 +1356,30 @@ test("benchmark inspection holds the session lock through process execution", as
       "--command",
       `${quoteForShell(process.execPath)} -e ${quoteForShell(inspectScript)}`,
       "--timeout-seconds",
-      "5",
+      "30",
     ]);
-    for (let attempt = 0; attempt < 50 && !(await pathExists(ready)); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      for (let attempt = 0; attempt < 100 && !(await pathExists(ready)); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.equal(await pathExists(ready), true, "inspect command did not start");
+
+      const overlap = await runSpawnedCli([
+        "next",
+        "--cwd",
+        dir,
+        "--command",
+        `${quoteForShell(process.execPath)} -e ${quoteForShell(
+          `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran'); console.log('METRIC seconds=1')`,
+        )}`,
+      ]);
+      assert.notEqual(overlap.code, 0);
+      assert.match(overlap.stderr, /mutation is already running/i);
+      assert.equal(await pathExists(sideEffect), false);
+    } finally {
+      await writeFile(release, "release", "utf8");
+      inspected = await inspect;
     }
-    assert.equal(await pathExists(ready), true, "inspect command did not start");
-
-    const overlap = await runSpawnedCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell(
-        `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran'); console.log('METRIC seconds=1')`,
-      )}`,
-    ]);
-    assert.notEqual(overlap.code, 0);
-    assert.match(overlap.stderr, /mutation is already running/i);
-    assert.equal(await pathExists(sideEffect), false);
-
-    const inspected = await inspect;
     assert.equal(inspected.code, 0, inspected.stderr);
   });
 });

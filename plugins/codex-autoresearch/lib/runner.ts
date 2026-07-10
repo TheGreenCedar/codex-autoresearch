@@ -736,17 +736,24 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
       [],
     );
   }
-  const refreshed = pidState(pid) === "gone" ? snapshot : await windowsProcessTreeSnapshot(pid);
+  const refreshed = await windowsProcessTreeSnapshot(pid, snapshot.entries, false);
   const originalRoot = snapshot.entries.find((entry) => entry.pid === pid);
   const refreshedRoot = refreshed.entries.find((entry) => entry.pid === pid);
-  const sameRoot =
-    !refreshedRoot || !originalRoot || refreshedRoot.started === originalRoot.started;
-  const second = sameRoot
+  const rootIdentityChanged = Boolean(
+    refreshedRoot && originalRoot && refreshedRoot.started !== originalRoot.started,
+  );
+  const second = !rootIdentityChanged
     ? refreshed
-    : { ...refreshed, proven: false, reason: "windows_root_process_identity_changed" };
+    : {
+        ...refreshed,
+        entries: [],
+        proven: false,
+        reason: "windows_root_process_identity_changed",
+        trackedPids: [],
+      };
   const entries = mergeProcessEntries(snapshot.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
-  const forcedCode = sameRoot ? await taskkill(pid, true) : null;
+  const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true);
   let forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
   if (forcedRemaining.length > 0) {
     const identities = await windowsProcessIdentities(forcedRemaining);
@@ -865,25 +872,52 @@ function signalTrackedPosix(entries: ProcessIdentity[], signal: NodeJS.Signals):
   }
 }
 
-async function windowsProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnapshot> {
+async function windowsProcessTreeSnapshot(
+  pid: number,
+  seeds: ProcessIdentity[] = [],
+  requireRoot = true,
+): Promise<ProcessTreeSnapshot> {
+  const fallbackPids = [...new Set([pid, ...seeds.map((entry) => entry.pid)])].slice(
+    0,
+    PROCESS_TREE_PID_LIMIT,
+  );
   const script = [
     "& {",
-    "param([int]$RootProcessId)",
+    "param([int]$RootProcessId, [string]$SeedsBase64, [int]$RequireRoot)",
     "$all = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)",
-    "if (-not ($all | Where-Object { [int]$_.ProcessId -eq $RootProcessId })) { throw 'root_missing' }",
+    "$rootPresent = @($all | Where-Object { [int]$_.ProcessId -eq $RootProcessId }).Count -gt 0",
+    "if ($RequireRoot -eq 1 -and -not $rootPresent) { throw 'root_missing' }",
+    "$seeds = @((ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($SeedsBase64)))))",
     "$ids = @($RootProcessId)",
+    "foreach ($seed in $seeds) {",
+    "  $seedProcess = $all | Where-Object { [int]$_.ProcessId -eq [int]$seed.pid } | Select-Object -First 1",
+    "  if ($null -ne $seedProcess -and $seedProcess.CreationDate.ToUniversalTime().ToString('o') -eq [string]$seed.started -and $ids -notcontains [int]$seed.pid) { $ids += [int]$seed.pid }",
+    "}",
     "do {",
     "  $children = @($all | Where-Object { $ids -contains [int]$_.ParentProcessId -and $ids -notcontains [int]$_.ProcessId } | ForEach-Object { [int]$_.ProcessId })",
     "  if ($children.Count -eq 0) { break }",
     "  $ids += $children",
     `  if ($ids.Count -gt ${PROCESS_TREE_PID_LIMIT}) { throw 'tree_too_large' }`,
     "} while ($true)",
-    "@($all | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress",
+    "$rows = @($all | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } })",
+    "if ($rows.Count -eq 0) { '[]' } else { $rows | ConvertTo-Json -Compress }",
     "}",
   ].join("\n");
   const result = await execFileResult(
     "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, String(pid)],
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      script,
+      String(pid),
+      Buffer.from(
+        JSON.stringify(seeds.map(({ pid: seedPid, started }) => ({ pid: seedPid, started }))),
+        "utf8",
+      ).toString("base64"),
+      requireRoot ? "1" : "0",
+    ],
     PROCESS_TREE_VERIFY_MS,
   );
   if (result.code !== 0) {
@@ -891,11 +925,11 @@ async function windowsProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnaps
       entries: [],
       proven: false,
       reason: "windows_process_tree_enumeration_failed",
-      trackedPids: [pid],
+      trackedPids: fallbackPids,
     };
   }
   try {
-    const parsed = JSON.parse(result.stdout.trim());
+    const parsed = JSON.parse(result.stdout.trim() || "[]");
     const values = Array.isArray(parsed) ? parsed : [parsed];
     const entries = values.map((value) => ({
       pid: Number(value?.pid),
@@ -904,8 +938,7 @@ async function windowsProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnaps
     }));
     const trackedPids = [...new Set(entries.map((entry) => entry.pid))];
     const valid =
-      trackedPids.includes(pid) &&
-      trackedPids.length > 0 &&
+      (!requireRoot || trackedPids.includes(pid)) &&
       trackedPids.length <= PROCESS_TREE_PID_LIMIT &&
       entries.every(
         (entry) =>
@@ -921,14 +954,14 @@ async function windowsProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnaps
           entries: [],
           proven: false,
           reason: "windows_process_tree_enumeration_invalid",
-          trackedPids: [pid],
+          trackedPids: fallbackPids,
         };
   } catch {
     return {
       entries: [],
       proven: false,
       reason: "windows_process_tree_enumeration_invalid",
-      trackedPids: [pid],
+      trackedPids: fallbackPids,
     };
   }
 }
