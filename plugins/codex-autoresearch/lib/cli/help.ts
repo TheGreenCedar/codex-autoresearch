@@ -56,7 +56,7 @@ const FULL_USAGE_LINES = [
   "  node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
   "  node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--dry-run] [--skip-init] [--no-baseline-log]",
   "  node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]",
-  "  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation|big_idea] [--command <cmd>] [--worktree <path>|--write-scope <paths>] [--allow-non-git-command] [--summary <text>] [--recommendation <text>] [--evidence <items>] [--risks <items>] [--human-approval] [--time-budget-seconds <n>] [--dry-run|--yes]",
+  "  node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation|big_idea] [--command <allowlisted-git-read>] [--worktree <path>|--write-scope <paths>] [--summary <text>] [--recommendation <text>] [--evidence <items>] [--risks <items>] [--human-approval] [--time-budget-seconds <n>] [--dry-run|--yes]",
   "  node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]",
   "  node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]",
   "  node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]",

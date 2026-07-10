@@ -318,7 +318,8 @@ const CONTRACTS = {
     purpose: "Run or record one planned lane and synthesize a single coordinator next action.",
     whenToUse: "Use after research_fanout when a lane needs bounded execution or a handoff.",
     contrast: "Use research_fanout to create lanes; use next_experiment for the measured packet.",
-    safety: "Read-only scout by default; implementation requires --worktree or --write-scope.",
+    safety:
+      "Scout commands are refused before execution unless they match the strict Git read-only argv allowlist. Git porcelain is best-effort detection, not filesystem/process containment. Implementation requires --worktree or --write-scope.",
     outputSchema: basicOutputSchema([
       "ok",
       "workDir",

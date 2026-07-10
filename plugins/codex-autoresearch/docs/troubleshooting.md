@@ -55,7 +55,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | An older Codex task contains a bounded decision | Session evidence has not been imported | Run `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run`. |
 | Loop keeps running without learning | Repeated idea family or stale phase | Stop packets; inspect the saved experiment notes, run `research-fanout --dry-run`, rescope, or start a new segment. |
 | Watchdog fires | No meaningful progress in the quiet window | Inspect active work, finalize useful keeps, or rescope. |
-| `lane-runner` rejects a non-Git command | Lane isolation | Use a worktree, keep the lane read-only, or deliberately pass `--allow-non-git-command`. |
+| `lane-runner` rejects a scout command | Pre-execution command policy | Scout commands must match the strict Git read-only argv allowlist. There is no non-Git override; use an implementation lane with a separate worktree or declared write scope, and remember that neither provides process/filesystem containment. |
 | Primary metric must change | Session semantics changed | Use `new-segment`; do not edit the ledger by hand. |
 
 ## Repair a ledger

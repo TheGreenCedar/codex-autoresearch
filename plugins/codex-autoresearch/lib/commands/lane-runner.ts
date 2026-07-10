@@ -1,4 +1,4 @@
-import type { ShellRunResult } from "../runner.js";
+import type { ProcessRunOptions, ProcessRunResult, ShellRunResult } from "../runner.js";
 import { normalizeBoundedLaneRecommendation } from "../lane-briefs.js";
 import {
   approvalRecordsFromLedger,
@@ -23,12 +23,10 @@ export interface LaneRunnerCommandDeps {
     config: LooseObject;
     settings?: LooseObject;
   }) => LooseObject;
-  commandLooksMutating: (command: string) => boolean;
   commandLooksUnsafeForWriteScope: (command: string) => boolean;
   currentState: (workDir: string) => LooseObject;
   dashboardSettings: (config: LooseObject) => LooseObject;
   gitStatusPorcelain: (cwd: string) => Promise<string | null>;
-  insideGitRepo: (cwd: string) => Promise<boolean>;
   latestLaneResults: (workDir: string, segment?: number | null) => LooseObject[];
   normalizeLaneMode: (value: unknown, fallback: string) => string;
   normalizeParallelLane: (lane: LooseObject, index: number, config: LooseObject) => LooseObject;
@@ -41,6 +39,11 @@ export interface LaneRunnerCommandDeps {
   readJsonl: (workDir: string) => LooseObject[];
   resolveLaneWorktree: (workDir: string, worktreePath: string) => Promise<string>;
   resolveWorkDir: (value: string) => { workDir: string; config: LooseObject };
+  runProcess: (
+    command: string,
+    args: string[],
+    options: ProcessRunOptions,
+  ) => Promise<ProcessRunResult>;
   runShell: (
     command: string,
     cwd: string,
@@ -123,23 +126,11 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     }
     if (mode === "implementation" && !worktreePath && writeScope.length === 0) {
       throw new Error(
-        "Implementation lanes require explicit isolation: pass --worktree <path> or --write-scope <paths> before running.",
+        "Implementation lanes require an explicit write boundary: pass --worktree <path> or --write-scope <paths> before running.",
       );
     }
-    if (mode === "read_only_scout" && command && deps.commandLooksMutating(command)) {
-      throw new Error("Read-only scout lanes cannot run commands that look mutating.");
-    }
-    const allowNonGitReadOnlyCommand = deps.boolOption(
-      args.allow_non_git_command ?? args.allowNonGitCommand,
-      false,
-    );
-    if (mode === "read_only_scout" && command && !dryRun && !(await deps.insideGitRepo(workDir))) {
-      if (!allowNonGitReadOnlyCommand) {
-        throw new Error(
-          "Read-only scout lanes cannot run commands outside a Git worktree without porcelain verification. Use --worktree or implementation mode with --write-scope for isolated edits, or pass --allow-non-git-command only when the command is provably read-only.",
-        );
-      }
-    }
+    const scoutCommand =
+      mode === "read_only_scout" && command ? strictReadOnlyScoutCommand(command) : null;
     if (
       mode === "implementation" &&
       !worktreePath &&
@@ -167,20 +158,30 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     }
     let commandResult: LooseObject | null = null;
     if (command && !dryRun) {
-      const result = await deps.runShell(command, runCwd, timeBudgetSeconds, {
-        retainMetricNames: [state.config.metricName || config.metricName || ""],
-      });
+      const result = scoutCommand
+        ? await deps.runProcess(scoutCommand.executable, scoutCommand.args, {
+            cwd: runCwd,
+            env: READ_ONLY_GIT_ENV,
+            timeoutSeconds: timeBudgetSeconds,
+          })
+        : await deps.runShell(command, runCwd, timeBudgetSeconds, {
+            retainMetricNames: [state.config.metricName || config.metricName || ""],
+          });
       commandResult = {
         code: result.exitCode,
         timedOut: result.timedOut,
         durationSeconds: result.durationSeconds,
-        output: deps.tailText(result.output || "", 20, 4000),
+        output: deps.tailText(
+          ("combinedOutput" in result ? result.combinedOutput : result.output) || "",
+          20,
+          4000,
+        ),
       };
       if (beforeStatus != null) {
         const afterStatus = await deps.gitStatusPorcelain(workDir);
         if (afterStatus !== beforeStatus) {
           throw new Error(
-            "Read-only scout lane changed the git working tree; discard or isolate the change before continuing.",
+            "Git porcelain detected a worktree change after the allowlisted scout command. Detection is best-effort, not containment; inspect and restore the repository before continuing.",
           );
         }
       }
@@ -254,10 +255,18 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
           : null,
       command: command || "",
       timeBudgetSeconds,
-      isolation: {
+      executionBoundary: {
         mode,
         worktree: worktreePath,
         writeScope,
+        containment: "none",
+        commandPolicy:
+          mode === "read_only_scout"
+            ? "strict_git_read_only_argv_allowlist"
+            : mode === "big_idea"
+              ? "no_command_execution"
+              : "implementation_command_with_declared_write_boundary",
+        postRunDetection: beforeStatus == null ? "not_available" : "git_porcelain_best_effort",
       },
       commandResult,
     };
@@ -313,4 +322,176 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       coordinatorRecommendation,
     };
   };
+}
+
+type ReadOnlyGitPolicy = {
+  exact?: readonly string[];
+  patterns?: readonly RegExp[];
+  prefixes?: readonly string[];
+};
+
+const options = (value: string): string[] => value.split(/\s+/);
+
+const READ_ONLY_GIT_POLICIES: Record<string, ReadOnlyGitPolicy> = {
+  version: { exact: ["--build-options"] },
+  status: {
+    exact: options(
+      "--short -s --branch -b --show-stash --porcelain --long --ignored --untracked-files -u --no-renames --ahead-behind --no-ahead-behind -z",
+    ),
+    prefixes: ["--porcelain=", "--ignored=", "--untracked-files="],
+  },
+  diff: {
+    exact: options(
+      "--cached --staged --stat --numstat --shortstat --summary --patch -p -u --raw --name-only --name-status --check --quiet --exit-code --no-renames --minimal --patience --histogram --no-ext-diff --no-textconv",
+    ),
+    patterns: [/^-U\d+$/],
+    prefixes: ["--unified=", "--diff-filter=", "--find-renames=", "--relative="],
+  },
+  log: {
+    exact: options(
+      "--oneline --graph --decorate --no-decorate --stat --name-only --name-status --all --branches --tags --remotes --first-parent --merges --no-merges --reverse --topo-order --date-order --follow --no-patch -s --patch -p --boundary --left-right --cherry-pick --no-ext-diff --no-textconv",
+    ),
+    patterns: [/^-\d+$/],
+    prefixes: [
+      "--format=",
+      "--pretty=",
+      "--max-count=",
+      "--skip=",
+      "--since=",
+      "--until=",
+      "--author=",
+      "--committer=",
+      "--grep=",
+      "--date=",
+      "--decorate=",
+    ],
+  },
+  show: {
+    exact: options(
+      "--oneline --stat --name-only --name-status --no-patch -s --patch -p --raw --no-ext-diff --no-textconv",
+    ),
+    prefixes: ["--format=", "--pretty=", "--date="],
+  },
+  grep: {
+    exact: options(
+      "-n --line-number -H --with-filename -h --no-filename -l --files-with-matches -L --files-without-match -i --ignore-case -w --word-regexp -v --invert-match -E --extended-regexp -G --basic-regexp -F --fixed-strings -P --perl-regexp --cached --break --heading --full-name",
+    ),
+    patterns: [/^-[ABC]\d+$/],
+    prefixes: ["--max-depth=", "--threads="],
+  },
+  "ls-files": {
+    exact: options(
+      "--cached -c --deleted -d --modified -m --others -o --ignored -i --stage -s --unmerged -u --killed -k --directory --no-empty-directory --error-unmatch --full-name --exclude-standard",
+    ),
+    prefixes: ["--format=", "--abbrev=", "--exclude="],
+  },
+  "rev-parse": {
+    exact: options(
+      "--verify --quiet -q --short --abbrev-ref --symbolic --symbolic-full-name --revs-only --no-revs --flags --no-flags --show-toplevel --show-prefix --show-cdup --git-dir --absolute-git-dir --git-common-dir --is-inside-git-dir --is-inside-work-tree --is-bare-repository --is-shallow-repository --end-of-options",
+    ),
+    prefixes: ["--short=", "--abbrev-ref="],
+  },
+  "merge-base": { exact: ["--all", "-a", "--octopus", "--independent", "--is-ancestor"] },
+};
+
+const READ_ONLY_GIT_ENV: NodeJS.ProcessEnv = {
+  GIT_NO_LAZY_FETCH: "1",
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_TERMINAL_PROMPT: "0",
+};
+
+function strictReadOnlyScoutCommand(command: string): {
+  args: string[];
+  executable: "git";
+} {
+  const argv = parseStrictArgv(command);
+  if (argv[0]?.toLowerCase() !== "git") {
+    return refuseScoutCommand("only the Git read-only allowlist is executable");
+  }
+  const subcommand = String(argv[1] || "").toLowerCase();
+  const policy = READ_ONLY_GIT_POLICIES[subcommand];
+  if (!policy) {
+    return refuseScoutCommand(
+      `git ${subcommand || "<missing>"} is not an allowlisted read-only subcommand`,
+    );
+  }
+  let afterDoubleDash = false;
+  for (const arg of argv.slice(2)) {
+    if (afterDoubleDash) continue;
+    if (arg === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (!arg.startsWith("-")) continue;
+    const allowed =
+      policy.exact?.includes(arg) ||
+      policy.prefixes?.some((prefix) => arg.startsWith(prefix)) ||
+      policy.patterns?.some((pattern) => pattern.test(arg));
+    if (!allowed) return refuseScoutCommand(`git ${subcommand} option ${arg} is not allowlisted`);
+    if (["log", "show"].includes(subcommand) && /^(?:--format|--pretty)=.*%G/.test(arg)) {
+      return refuseScoutCommand("Git signature formats may start external verification processes");
+    }
+  }
+  const hardened = [
+    "--no-pager",
+    "--no-optional-locks",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=",
+    "-c",
+    "diff.ignoreSubmodules=all",
+    "-c",
+    "status.submoduleSummary=false",
+    subcommand,
+  ];
+  if (["diff", "log", "show"].includes(subcommand)) {
+    hardened.push("--no-ext-diff", "--no-textconv");
+  }
+  return { executable: "git", args: [...hardened, ...argv.slice(2)] };
+}
+
+function parseStrictArgv(command: string): string[] {
+  const argv: string[] = [];
+  let token = "";
+  let tokenStarted = false;
+  let quote = "";
+  for (const character of command.trim()) {
+    if (quote) {
+      if (character === quote) quote = "";
+      else if (character === "\n" || character === "\r" || character === "\0") {
+        return refuseScoutCommand("command arguments cannot contain control characters");
+      } else if (/[;&|<>`$^]/.test(character)) {
+        return refuseScoutCommand(`shell syntax ${character} is not accepted`);
+      } else token += character;
+      tokenStarted = true;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      tokenStarted = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (tokenStarted) argv.push(token);
+      token = "";
+      tokenStarted = false;
+      continue;
+    }
+    if (/[;&|<>`$()^]/.test(character)) {
+      return refuseScoutCommand(`shell syntax ${character} is not accepted`);
+    }
+    token += character;
+    tokenStarted = true;
+  }
+  if (quote) return refuseScoutCommand("command contains an unterminated quote");
+  if (tokenStarted) argv.push(token);
+  if (!argv.length) return refuseScoutCommand("command argv is empty");
+  return argv;
+}
+
+function refuseScoutCommand(reason: string): never {
+  throw new Error(
+    `Read-only scout command refused before execution: ${reason}. Use an allowlisted Git read command or an implementation lane with a declared worktree/write boundary.`,
+  );
 }

@@ -252,7 +252,6 @@ export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, C
         timeoutSeconds: args.timeoutSeconds,
         dryRun: args.dryRun,
         yes: args.yes,
-        allowNonGitCommand: args.allowNonGitCommand,
         approved: args.approved,
         evidence: args.evidence,
         humanApproval: args.humanApproval,

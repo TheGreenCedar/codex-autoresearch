@@ -123,7 +123,7 @@ node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <sl
 
 Closing the checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
 
-When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Start with read-only work. An implementation lane needs a worktree or an explicit write scope, and a large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
+When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Scout commands run only when their parsed argv matches the strict Git read-only allowlist; Git porcelain is post-run detection, not containment. An implementation lane needs a separate worktree or an explicit write scope, neither of which contains arbitrary process or outside-root effects. A large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
 
 ## Use the dashboard when it helps
 

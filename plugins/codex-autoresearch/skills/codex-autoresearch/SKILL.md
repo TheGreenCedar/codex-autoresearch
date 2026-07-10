@@ -136,7 +136,7 @@ Report the real runway: preview, approved, branches created, locally verified, p
 
 Run `codex-goal-brief` and inspect its `completionAudit` field before the parent calls `update_goal(status="complete")`. Keep Goal state in Codex; use Autoresearch only for the evidence.
 
-When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
+When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Scout commands must match `lane-runner`'s strict Git read-only argv allowlist; do not use shell or interpreter escapes. Treat Git porcelain and write-scope checks as best-effort detection, not process/filesystem containment, and use disposable worktrees for implementation lanes. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
 
 ## Load only the documentation you need
 
