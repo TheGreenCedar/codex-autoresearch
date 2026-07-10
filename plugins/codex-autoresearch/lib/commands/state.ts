@@ -237,6 +237,15 @@ function copyIfProvided<T extends object>(target: T, key: string, value: unknown
   if (value !== undefined) (target as JsonObject)[key] = value;
 }
 
+function decisionSetupState(state: CommandRecord): CommandRecord | null {
+  if (state.current?.length > 0 || String(state.config?.name || "").trim()) return null;
+  return {
+    stage: "needs-setup",
+    blockers: [],
+    nextAction: "Create or complete the session setup before running a baseline.",
+  };
+}
+
 type CommandRecord = UnknownRecord & Record<string, any>;
 
 export type StateCommandServiceDeps = Record<string, any>;
@@ -443,17 +452,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
         lastRun?.packetEvidence?.progressSnapshot ||
         null,
     });
-    const portfolioRecommendation = recommendPortfolioDirection({
-      runtimeDrift: guidance.runtimeDriftSummary,
-      gateQuality: guidance.gateQuality,
-      preflight: publicPreflight,
-      laneLifecycle,
-      laneResults: laneLifecycle.latestResults,
-      packetDiagnostics,
-      experimentMemory: memory,
-      best: state.best,
-      current: state.current,
-    });
     const readModel = buildSessionReadModel({
       workDir,
       config,
@@ -481,27 +479,48 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       ...continuation.commands,
       ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
     };
+    const decisionInput = {
+      state: {
+        ...stateWithQualityGap,
+        ...controlPlane,
+        limit: iterationLimitInfo(state, config),
+      },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction,
+      experimentMemory: memory,
+      setupState: decisionSetupState(state),
+      watchdog: watchdogSummary,
+    };
+    const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
+    const portfolioRecommendation =
+      preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
+        ? null
+        : recommendPortfolioDirection({
+            runtimeDrift: guidance.runtimeDriftSummary,
+            gateQuality: guidance.gateQuality,
+            preflight: publicPreflight,
+            laneLifecycle,
+            laneResults: laneLifecycle.latestResults,
+            packetDiagnostics,
+            experimentMemory: memory,
+            best: state.best,
+            current: state.current,
+          });
     const decisionEnvelope = withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state: {
-          ...stateWithQualityGap,
-          portfolioRecommendation,
-          ...controlPlane,
-          limit: iterationLimitInfo(state, config),
-        },
-        nextAction: continuation.nextAction,
-        lastRunFreshness,
-        warningDetails,
-        scaffoldHealth,
-        researchIntegrity,
-        qualityGap,
-        finalization,
-        experimentEconomics,
-        salvageCandidates: partialResults.candidates,
-        workflowFriction,
-        experimentMemory: memory,
-        watchdog: watchdogSummary,
-      }),
+      portfolioRecommendation
+        ? buildDecisionEnvelope({
+            ...decisionInput,
+            state: { ...decisionInput.state, portfolioRecommendation },
+          })
+        : preliminaryDecisionEnvelope,
       stateCommands,
     );
     const fullState = {
@@ -746,17 +765,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       lastRun,
       progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
     });
-    const portfolioRecommendation = recommendPortfolioDirection({
-      runtimeDrift: guidance.runtimeDriftSummary,
-      gateQuality: guidance.gateQuality,
-      preflight: publicPreflight,
-      laneLifecycle,
-      laneResults: laneLifecycle.latestResults,
-      packetDiagnostics,
-      experimentMemory: memory,
-      best: state.best,
-      current: state.current,
-    });
     const statusCounts = statusCountsFromState(state);
     const continuation = loopContinuation(workDir, state, config, "state");
     const compactCommands = {
@@ -790,27 +798,48 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       preflight: publicPreflight,
     });
     const controlPlane = readModel.controlPlane;
+    const decisionInput = {
+      state: {
+        ...stateWithQualityGap,
+        ...controlPlane,
+        limit: iterationLimitInfo(state, config),
+      },
+      nextAction: continuation.nextAction,
+      lastRunFreshness,
+      warningDetails,
+      scaffoldHealth,
+      researchIntegrity,
+      qualityGap,
+      finalization,
+      experimentEconomics,
+      salvageCandidates: partialResults.candidates,
+      workflowFriction,
+      experimentMemory: memory,
+      setupState: decisionSetupState(state),
+      watchdog: watchdogSummary,
+    };
+    const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
+    const portfolioRecommendation =
+      preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
+        ? null
+        : recommendPortfolioDirection({
+            runtimeDrift: guidance.runtimeDriftSummary,
+            gateQuality: guidance.gateQuality,
+            preflight: publicPreflight,
+            laneLifecycle,
+            laneResults: laneLifecycle.latestResults,
+            packetDiagnostics,
+            experimentMemory: memory,
+            best: state.best,
+            current: state.current,
+          });
     const decisionEnvelope = withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state: {
-          ...stateWithQualityGap,
-          portfolioRecommendation,
-          ...controlPlane,
-          limit: iterationLimitInfo(state, config),
-        },
-        nextAction: continuation.nextAction,
-        lastRunFreshness,
-        warningDetails,
-        scaffoldHealth,
-        researchIntegrity,
-        qualityGap,
-        finalization,
-        experimentEconomics,
-        salvageCandidates: partialResults.candidates,
-        workflowFriction,
-        experimentMemory: memory,
-        watchdog: watchdogSummary,
-      }),
+      portfolioRecommendation
+        ? buildDecisionEnvelope({
+            ...decisionInput,
+            state: { ...decisionInput.state, portfolioRecommendation },
+          })
+        : preliminaryDecisionEnvelope,
       compactCommands,
     );
     return compactPublicState({

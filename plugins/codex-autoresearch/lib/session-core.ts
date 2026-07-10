@@ -696,6 +696,7 @@ const SUPPLEMENTAL_NEXT_ACTION_RULES: SupplementalActionRule[] = [
   timeoutMismatchAction,
   workflowBlockerAction,
   metricSaturationAction,
+  activeProgressAction,
   stalePacketAction,
   setupAction,
   benchmarkCommandAction,
@@ -888,23 +889,24 @@ function stalePacketAction(envelope: LooseObject): LooseObject | null {
       triggeredBy: ["latestPacketFreshness"],
     };
   }
-  if (
-    envelope.experimentEconomics?.warnings?.some(
-      (warning: any) => warning.code === "stale_progress",
-    )
-  ) {
-    return {
-      kind: "stale-packet",
-      priority: SUPPLEMENTAL_ACTION_PRIORITY.setupOrFreshness,
-      reason:
-        envelope.experimentEconomics.warnings.find(
-          (warning: any) => warning.code === "stale_progress",
-        )?.recommendation || "Inspect stale packet progress before continuing.",
-      command: "",
-      triggeredBy: ["experimentEconomics", "progress"],
-    };
-  }
   return null;
+}
+
+function activeProgressAction(envelope: LooseObject): LooseObject | null {
+  const warning = envelope.experimentEconomics?.warnings?.find(
+    (item: any) => item?.code === "stale_progress",
+  );
+  if (!warning) return null;
+  return {
+    kind: "active-progress",
+    priority: SUPPLEMENTAL_ACTION_PRIORITY.pendingPacketDecision,
+    reason:
+      warning.recommendation ||
+      warning.message ||
+      "Inspect active packet progress before restarting the packet.",
+    command: warning.command || "",
+    triggeredBy: ["experimentEconomics", "progress"],
+  };
 }
 
 function setupAction(envelope: LooseObject): LooseObject | null {

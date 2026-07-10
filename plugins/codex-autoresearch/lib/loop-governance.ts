@@ -25,6 +25,7 @@ const LOOP_PRIORITY = {
   approvalGate: 1.5,
   laneOrchestration: 1.75,
   laneCleanup: 2,
+  earlyWorkflowBlocker: 2.25,
   pendingPacket: 2.5,
   validationGate: 3,
   setupOrDecision: 4,
@@ -265,6 +266,39 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
         )} before rerunning an expensive packet.`,
         salvageCandidate.command,
         ["partialResults"],
+      ),
+    );
+  }
+
+  const economicsWarnings = arrayValue(objectValue(envelope.experimentEconomics)?.warnings).map(
+    objectValue,
+  );
+  const timeoutMismatch = economicsWarnings.find(
+    (warning) => warning?.code === "outer_timeout_shorter_than_inner",
+  );
+  if (timeoutMismatch) {
+    blockers.push(
+      loopAction(
+        "benchmark-mismatch",
+        LOOP_PRIORITY.earlyWorkflowBlocker,
+        timeoutMismatch.recommendation || timeoutMismatch.message,
+        timeoutMismatch.command,
+        ["experimentEconomics", "outer_timeout_shorter_than_inner"],
+      ),
+    );
+  }
+
+  const staleProgress = economicsWarnings.find((warning) => warning?.code === "stale_progress");
+  if (staleProgress) {
+    blockers.push(
+      loopAction(
+        "active-progress",
+        LOOP_PRIORITY.pendingPacket,
+        staleProgress.recommendation ||
+          staleProgress.message ||
+          "Inspect active packet progress before restarting the packet.",
+        staleProgress.command,
+        ["experimentEconomics", "progress"],
       ),
     );
   }

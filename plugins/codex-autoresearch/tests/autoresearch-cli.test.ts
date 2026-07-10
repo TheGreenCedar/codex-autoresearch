@@ -6471,6 +6471,226 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
   });
 });
 
+test("canonical next action stays consistent across state, report, recommend-next, and dashboard", async () => {
+  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+  const passingChecks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+  const failingChecks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+  const fixtures = [
+    {
+      name: "active-artifact",
+      expectedKind: "partial-salvage",
+      commandPattern: /partial-results/,
+      blocked: true,
+      absentBest: true,
+      prepare: async (dir) => {
+        await runCli([
+          "init",
+          "--cwd",
+          dir,
+          "--name",
+          "active artifact",
+          "--metric-name",
+          "seconds",
+        ]);
+        const script = path.join(dir, "partial-packet.mjs");
+        await writeFile(
+          script,
+          [
+            "import { mkdirSync, writeFileSync } from 'node:fs';",
+            "mkdirSync('out', { recursive: true });",
+            "writeFileSync('out/rows.json', JSON.stringify({ schemaVersion: 1, metricName: 'seconds', formulaVersion: 'v1', rows: [{ seconds: 4.2 }] }));",
+            "console.log('ARTIFACT rows=out/rows.json');",
+            "process.exit(1);",
+          ].join("\n"),
+        );
+        const packet = await runCli([
+          "next",
+          "--cwd",
+          dir,
+          "--command",
+          `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+        ]);
+        assert.equal(packet.code, 0, packet.stderr);
+      },
+    },
+    {
+      name: "stale-packet",
+      expectedKind: "stale-packet",
+      commandPattern: /\bnext\b/,
+      blocked: true,
+      absentBest: false,
+      prepare: async (dir) => {
+        await runCli(["init", "--cwd", dir, "--name", "stale packet", "--metric-name", "seconds"]);
+        const packet = await runCli([
+          "next",
+          "--cwd",
+          dir,
+          "--command",
+          benchmarkCommand,
+          "--checks-command",
+          passingChecks,
+        ]);
+        assert.equal(packet.code, 0, packet.stderr);
+        const laterRun = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--metric",
+          "2",
+          "--status",
+          "keep",
+          "--description",
+          "Later direct run",
+        ]);
+        assert.equal(laterRun.code, 0, laterRun.stderr);
+      },
+    },
+    {
+      name: "missing-setup",
+      expectedKind: "setup",
+      commandPattern: /setup-plan/,
+      blocked: true,
+      absentBest: true,
+      prepare: async (dir) => {
+        await writeFile(
+          path.join(dir, "autoresearch.jsonl"),
+          `${JSON.stringify({ type: "config", metricName: "seconds" })}\n`,
+          "utf8",
+        );
+      },
+    },
+    {
+      name: "failed-checks",
+      expectedKind: "log-decision",
+      commandPattern: /\blog\b/,
+      blocked: true,
+      absentBest: true,
+      prepare: async (dir) => {
+        await runCli(["init", "--cwd", dir, "--name", "failed checks", "--metric-name", "seconds"]);
+        const packet = await runCli([
+          "next",
+          "--cwd",
+          dir,
+          "--command",
+          benchmarkCommand,
+          "--checks-command",
+          failingChecks,
+        ]);
+        assert.equal(packet.code, 0, packet.stderr);
+      },
+    },
+    {
+      name: "ready",
+      expectedKind: "next-packet",
+      commandPattern: /\bnext\b/,
+      blocked: false,
+      absentBest: true,
+      prepare: async (dir) => {
+        const setup = await runCli([
+          "setup",
+          "--cwd",
+          dir,
+          "--name",
+          "ready session",
+          "--metric-name",
+          "seconds",
+          "--benchmark-command",
+          benchmarkCommand,
+          "--checks-command",
+          passingChecks,
+        ]);
+        assert.equal(setup.code, 0, setup.stderr);
+      },
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    await withTempDir(`canonical-${fixture.name}`, async (dir) => {
+      await fixture.prepare(dir);
+      const [fullResult, compactResult, reportResult, recommendResult, dashboardResult] =
+        await Promise.all([
+          runCli(["state", "--cwd", dir]),
+          runCli(["state", "--cwd", dir, "--compact"]),
+          runCli(["state", "--cwd", dir, "--report"]),
+          runCli(["recommend-next", "--cwd", dir, "--compact"]),
+          runCli(["export", "--cwd", dir, "--json-full"]),
+        ]);
+      for (const result of [
+        fullResult,
+        compactResult,
+        reportResult,
+        recommendResult,
+        dashboardResult,
+      ]) {
+        assert.equal(result.code, 0, `${fixture.name}: ${result.stderr}`);
+      }
+
+      const full = JSON.parse(fullResult.stdout);
+      const compact = JSON.parse(compactResult.stdout);
+      const report = JSON.parse(reportResult.stdout);
+      const recommend = JSON.parse(recommendResult.stdout);
+      const dashboard = JSON.parse(dashboardResult.stdout);
+      const actions = [
+        full.decisionEnvelope.canonicalNextAction,
+        compact.decisionEnvelope.canonicalNextAction,
+        recommend.decisionEnvelope.canonicalNextAction,
+        dashboard.viewModel.decisionEnvelope.canonicalNextAction,
+      ];
+
+      assert.deepEqual(
+        actions.map((action) => action.kind),
+        Array(actions.length).fill(fixture.expectedKind),
+        fixture.name,
+      );
+      assert.deepEqual(
+        actions.map((action) => action.reason),
+        Array(actions.length).fill(actions[0].reason),
+        fixture.name,
+      );
+      assert.equal(report.report.json.nextAction, actions[0].reason, fixture.name);
+      assert.equal(dashboard.viewModel.nextBestAction.kind, fixture.expectedKind, fixture.name);
+
+      const commands = [
+        actions[0].command,
+        actions[1].command,
+        recommend.commands.primary,
+        report.report.json.nextCommand,
+      ];
+      assert.deepEqual(commands, Array(commands.length).fill(commands[0]), fixture.name);
+      assert.match(commands[0], fixture.commandPattern, fixture.name);
+
+      const loopContracts = [
+        full.decisionEnvelope.loopContract,
+        compact.decisionEnvelope.loopContract,
+        recommend.decisionEnvelope.loopContract,
+        dashboard.viewModel.decisionEnvelope.loopContract,
+      ];
+      assert.deepEqual(
+        loopContracts.map((contract) => contract.canRunNextPacket),
+        Array(loopContracts.length).fill(!fixture.blocked),
+        fixture.name,
+      );
+      assert.equal(report.report.json.status === "blocked", fixture.blocked, fixture.name);
+
+      const portfolioKinds = [
+        full.portfolioRecommendation?.kind,
+        compact.portfolioRecommendation?.kind,
+        recommend.portfolioRecommendation?.kind,
+        dashboard.viewModel.portfolioRecommendation?.kind,
+        report.report.json.portfolio.kind,
+      ];
+      assert.equal(portfolioKinds.includes("exploit-best"), false, fixture.name);
+      if (fixture.blocked) {
+        assert.deepEqual(portfolioKinds.slice(0, 4), [undefined, undefined, undefined, undefined]);
+      }
+      if (fixture.absentBest) {
+        assert.equal(full.best, null, fixture.name);
+        assert.equal(compact.best, null, fixture.name);
+      }
+    });
+  }
+});
+
 test("recommend-next compact returns state-first handoff with shared finalization authority", async () => {
   await withTempDir("recommend-next-compact-state-first", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "compact recommend", "--metric-name", "seconds"]);

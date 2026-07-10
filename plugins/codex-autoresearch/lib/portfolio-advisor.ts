@@ -1,3 +1,5 @@
+import { finiteMetric } from "./session-core.js";
+
 export type PortfolioRecommendationKind =
   | "trust-blocker"
   | "exploit-best"
@@ -90,7 +92,7 @@ export function recommendPortfolioDirection(input: PortfolioAdvisorInput): Portf
   }
 
   const keptRuns = arrayValue(memory?.kept);
-  const hasBest = Number.isFinite(Number(input.best));
+  const hasBest = finiteMetric(input.best) != null;
   if (
     /incumbent|exploit|confirm/i.test(stringValue(diversityGuidance?.id)) ||
     keptRuns.length > 0 ||

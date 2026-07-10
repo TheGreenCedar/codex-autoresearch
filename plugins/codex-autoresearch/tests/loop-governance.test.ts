@@ -604,6 +604,36 @@ test("last-run freshness does not suppress independent gate or preflight blocker
   assert.equal(status.strongestAction?.kind, "preflight");
 });
 
+test("active progress stays distinct from stale packets, recovery, and setup", () => {
+  const status = buildLoopContractStatus({
+    experimentEconomics: {
+      warnings: [
+        {
+          code: "stale_progress",
+          recommendation: "Inspect the active artifact before restarting.",
+        },
+      ],
+    },
+    latestPacketFreshness: {
+      fresh: false,
+      reason: "Last-run packet is stale.",
+    },
+    salvageCandidates: [{ id: "artifact-1", status: "diagnostic" }],
+    setupState: {
+      stage: "needs-setup",
+      blockers: ["Session setup is missing."],
+    },
+  });
+
+  assert.equal(status.canRunNextPacket, false);
+  assert.deepEqual(
+    status.blockers.map((item) => item.kind),
+    ["partial-salvage", "active-progress", "stale-packet", "setup"],
+  );
+  assert.equal(status.strongestAction?.kind, "partial-salvage");
+  assert.match(status.blockers[1].reason, /active artifact/i);
+});
+
 test("packet-brake blocker actions get non-next fallback commands", () => {
   const commands = {
     doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
@@ -774,7 +804,8 @@ test("current-tree finalization acceptance requires only one issue and a finaliz
       canRunNextPacket: false,
       strongestAction: {
         kind: "current-tree-finalization",
-        command: "node scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+        command:
+          "node C:/worktrees/ar-v27-next-action/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
       },
       blockers: [{ kind: "current-tree-finalization" }],
     },
