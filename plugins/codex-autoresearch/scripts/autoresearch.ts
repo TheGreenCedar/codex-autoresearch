@@ -3946,11 +3946,12 @@ async function gitPrivatePath(cwd: string, relativePath: string) {
 }
 
 async function gitPrivateRoot(cwd: string): Promise<string> {
-  const result = await git(["rev-parse", "--absolute-git-dir"], cwd);
+  const result = await git(["rev-parse", "--git-dir"], cwd);
   if (result.code !== 0) {
     throw new Error(`Git directory lookup failed: ${gitOutput(result, "unknown error")}`);
   }
-  return path.resolve(result.stdout.trim());
+  const gitDir = result.stdout.trim();
+  return path.isAbsolute(gitDir) ? path.resolve(gitDir) : path.resolve(cwd, gitDir);
 }
 
 async function privateStateWriteRoot(workDir: string, target: string): Promise<string> {

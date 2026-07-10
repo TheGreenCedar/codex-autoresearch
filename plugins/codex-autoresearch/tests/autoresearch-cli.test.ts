@@ -7825,6 +7825,60 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
   });
 });
 
+test("Git-private state accepts a repository reached through a canonicalized ancestor", async (t) => {
+  await withTempDir("git-private-aliased-root", async (dir) => {
+    const realParent = path.join(dir, "real");
+    const realRepo = path.join(realParent, "repo");
+    const aliasParent = path.join(dir, "alias");
+    await mkdir(realRepo, { recursive: true });
+    try {
+      await symlink(realParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory links are unavailable: ${String(error)}`);
+      return;
+    }
+    const aliasedRepo = path.join(aliasParent, "repo");
+    await git(aliasedRepo, ["init"]);
+    await writeFile(path.join(aliasedRepo, "tracked.txt"), "base\n", "utf8");
+    await git(aliasedRepo, ["add", "tracked.txt"]);
+    await git(aliasedRepo, ["commit", "-m", "initial"]);
+
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      aliasedRepo,
+      "--name",
+      "aliased Git-private state",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 0, initialized.stderr);
+    await writeFile(
+      path.join(aliasedRepo, "packet.command"),
+      "node -e \"console.log('METRIC seconds=1')\"\n",
+      "utf8",
+    );
+    const packet = await runCli(["next", "--cwd", aliasedRepo, "--command-file", "packet.command"]);
+    assert.equal(packet.code, 0, packet.stderr);
+    await access(path.join(realRepo, ".git", "autoresearch", "last-run.json"));
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      aliasedRepo,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Record packet through aliased repository path",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.match(
+      await readFile(path.join(realRepo, "autoresearch.jsonl"), "utf8"),
+      /Record packet through aliased repository path/,
+    );
+  });
+});
+
 test("keep logs can record an existing commit without staging dirty work", async () => {
   await withTempDir("keep-existing-commit", async (dir) => {
     await git(dir, ["init"]);

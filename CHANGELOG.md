@@ -20,7 +20,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Fixed
 
-- Hardened Git scope handling, scoped commits, predictable session writes, mutation locking, cross-platform packet freshness, progress redaction, fingerprint budgets, and interrupted cleanup reporting.
+- Hardened Git scope handling, scoped commits, predictable session writes, Git-private path aliases, mutation locking, cross-platform packet freshness, progress redaction, fingerprint budgets, and interrupted cleanup reporting.
 - Corrected dashboard baselines, malformed-ledger handling, chart keyboard focus, modal focus restoration, large-ledger pagination, health-response privacy, and bundle budgets.
 - Runtime hydration now fails closed unless checksum, GitHub attestation, and archive-manifest checks all pass. Runtime locks recover dead owners, dashboard source changes trigger a full rebuild, temporary Git fixtures ignore global hooks, test shards retry only isolated timeouts with a 120-second default limit, and CI requires the Chrome dashboard smoke.
 - Consolidated command identity and safety metadata in the tool registry, removed misleading partial command modules, and replaced source-spelling quality checks with executable behavior coverage.
