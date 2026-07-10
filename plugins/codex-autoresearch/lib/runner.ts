@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -9,6 +9,32 @@ const FULL_OUTPUT_CAPTURE_BYTES = 1024 * 1024;
 const METRIC_OUTPUT_CAPTURE_BYTES = 64 * 1024;
 const PROCESS_OUTPUT_CAPTURE_BYTES = 32768;
 const METRIC_LINE_MAX_CHARS = 4096;
+const PROCESS_TREE_GRACE_MS = 500;
+const PROCESS_TREE_VERIFY_MS = 3000;
+const PROCESS_TREE_PID_LIMIT = 256;
+const PROCESS_TREE_HANDLER_TIMEOUT_MS = 20_000;
+
+type ProcessIdentity = { pid: number; ppid: number; pgid?: number; started: string };
+type ProcessTreeSnapshot = {
+  entries: ProcessIdentity[];
+  proven: boolean;
+  reason: string;
+  trackedPids: number[];
+};
+
+export interface ProcessTreeTermination {
+  attempted: boolean;
+  escalated: boolean;
+  method: "none" | "posix-process-group" | "windows-taskkill-tree";
+  pid: number | null;
+  platform: NodeJS.Platform;
+  proven: boolean;
+  reason: string;
+  remainingPids: number[];
+  trackedPids: number[];
+}
+
+export type ProcessTreeTerminator = (pid?: number) => Promise<ProcessTreeTermination>;
 
 export interface MetricParseOptions {
   maxMetrics?: number;
@@ -25,6 +51,8 @@ export interface ProcessRunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   maxOutputBytes?: number;
+  terminateProcessTree?: ProcessTreeTerminator;
+  terminationTimeoutMs?: number;
   timeoutSeconds?: number;
 }
 
@@ -36,6 +64,8 @@ export interface ShellRunOptions {
   maxOutputBytes?: number;
   onProgress?: (event: { observedAt: string; output: string }) => void;
   retainMetricNames?: string[];
+  terminateProcessTree?: ProcessTreeTerminator;
+  terminationTimeoutMs?: number;
 }
 
 export interface ShellRunResult {
@@ -53,6 +83,8 @@ export interface ShellRunResult {
   parsedMetrics: Record<string, number>;
   retainedMetricOutput: string;
   startedAt: string;
+  termination: ProcessTreeTermination | null;
+  terminationFailed: boolean;
   timedOut: boolean;
 }
 
@@ -73,6 +105,8 @@ export interface ProcessRunResult {
   stderrTruncated: boolean;
   stdout: string;
   stdoutTruncated: boolean;
+  termination: ProcessTreeTermination | null;
+  terminationFailed: boolean;
   timedOut: boolean;
 }
 
@@ -211,9 +245,9 @@ export async function runShell(
     let metricOutputTruncated = false;
     let lastOutputAt: string | null = null;
     let timedOut = false;
+    let termination: ProcessTreeTermination | null = null;
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
-    let timeoutFallback: ReturnType<typeof setTimeout> | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
     const maxOutputBytes = positiveByteLimit(options.maxOutputBytes, OUTPUT_CAPTURE_BYTES);
     const maxFullOutputBytes = positiveByteLimit(
@@ -250,6 +284,7 @@ export async function runShell(
       }
     };
     const appendOutput = (text: string) => {
+      if (settled) return;
       lastOutputAt = new Date().toISOString();
       options.onProgress?.({ observedAt: lastOutputAt, output: text });
       metricCollector.append(text);
@@ -272,8 +307,7 @@ export async function runShell(
     }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
-      if (timeoutFallback) clearTimeout(timeoutFallback);
+      if (timeout) clearTimeout(timeout);
       if (/^METRIC\s+/i.test(pendingMetricText.trim())) appendMetricLine(pendingMetricText);
       const retainedMetricOutput = retainedMetricText(retainedMetricLines);
       resolve(
@@ -292,14 +326,21 @@ export async function runShell(
           outputTruncated,
           fullOutputTruncated,
           parsedMetrics: metricCollector.finish(),
+          termination,
         }),
       );
     };
     timeout = setTimeout(
       () => {
         timedOut = true;
-        killProcess(child.pid);
-        timeoutFallback = setTimeout(() => finish({ exitCode: null, output, fullOutput }), 5000);
+        void terminateAfterTimeout(
+          child.pid,
+          options.terminateProcessTree,
+          options.terminationTimeoutMs,
+        ).then((result) => {
+          termination = result;
+          finish({ exitCode: null, output, fullOutput });
+        });
       },
       Math.max(1, timeoutSeconds) * 1000,
     );
@@ -311,6 +352,10 @@ export async function runShell(
     });
     child.on("error", (error) => {
       const errorText = String(error.stack || error.message || error);
+      if (timedOut) {
+        appendOutput(errorText);
+        return;
+      }
       finish({
         exitCode: null,
         output: errorText,
@@ -318,6 +363,7 @@ export async function runShell(
       });
     });
     child.on("close", (code) => {
+      if (timedOut) return;
       finish({ exitCode: code, output, fullOutput });
     });
   });
@@ -345,6 +391,8 @@ export async function runProcess(
     env: extraEnv,
     timeoutSeconds = 600,
     maxOutputBytes = PROCESS_OUTPUT_CAPTURE_BYTES,
+    terminateProcessTree: terminate = terminateProcessTree,
+    terminationTimeoutMs,
   }: ProcessRunOptions = {},
 ): Promise<ProcessRunResult> {
   const startedAt = Date.now();
@@ -367,11 +415,12 @@ export async function runProcess(
     let stderrTruncated = false;
     let lastOutputAt: string | null = null;
     let timedOut = false;
+    let termination: ProcessTreeTermination | null = null;
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
-    let timeoutFallback: ReturnType<typeof setTimeout> | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
     const appendOutput = (target: "stdout" | "stderr", text: string) => {
+      if (settled) return;
       lastOutputAt = new Date().toISOString();
       metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
@@ -398,8 +447,7 @@ export async function runProcess(
     }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
-      if (timeoutFallback) clearTimeout(timeoutFallback);
+      if (timeout) clearTimeout(timeout);
       resolve(
         processResult({
           commandDisplay,
@@ -413,14 +461,17 @@ export async function runProcess(
           startedAtIso,
           lastOutputAt,
           parsedMetrics: metricCollector.finish(),
+          termination,
         }),
       );
     };
     timeout = setTimeout(
       () => {
         timedOut = true;
-        killProcess(child.pid);
-        timeoutFallback = setTimeout(() => finish({ exitCode: null, stdout, stderr }), 5000);
+        void terminateAfterTimeout(child.pid, terminate, terminationTimeoutMs).then((result) => {
+          termination = result;
+          finish({ exitCode: null, stdout, stderr });
+        });
       },
       Math.max(1, Number(timeoutSeconds) || 1) * 1000,
     );
@@ -431,6 +482,10 @@ export async function runProcess(
       appendOutput("stderr", stderrDecoder.write(chunk));
     });
     child.on("error", (error) => {
+      if (timedOut) {
+        appendOutput("stderr", error.message || String(error));
+        return;
+      }
       finish({
         exitCode: null,
         stdout,
@@ -440,6 +495,7 @@ export async function runProcess(
     child.on("close", (code) => {
       appendOutput("stdout", stdoutDecoder.end());
       appendOutput("stderr", stderrDecoder.end());
+      if (timedOut) return;
       finish({ exitCode: code, stdout, stderr });
     });
   });
@@ -472,6 +528,7 @@ function shellRunResult({
   outputTruncated,
   fullOutputTruncated,
   parsedMetrics,
+  termination,
 }: {
   command: string;
   exitCode: number | null;
@@ -486,6 +543,7 @@ function shellRunResult({
   retainedMetricOutput: string;
   startedAt: number;
   startedAtIso?: string;
+  termination: ProcessTreeTermination | null;
   timedOut: boolean;
 }): ShellRunResult {
   return {
@@ -504,6 +562,8 @@ function shellRunResult({
     outputTruncated,
     fullOutputTruncated,
     parsedMetrics,
+    termination,
+    terminationFailed: Boolean(timedOut && !termination?.proven),
   };
 }
 
@@ -519,6 +579,7 @@ function processResult({
   startedAtIso,
   lastOutputAt,
   parsedMetrics = Object.create(null),
+  termination,
 }: {
   commandDisplay: string;
   exitCode: number | null;
@@ -530,6 +591,7 @@ function processResult({
   stderrTruncated: boolean;
   stdout: string;
   stdoutTruncated: boolean;
+  termination: ProcessTreeTermination | null;
   timedOut: boolean;
 }): ProcessRunResult {
   const durationSeconds = (Date.now() - startedAt) / 1000;
@@ -551,6 +613,8 @@ function processResult({
     stdoutTruncated,
     stderrTruncated,
     parsedMetrics,
+    termination,
+    terminationFailed: Boolean(timedOut && !termination?.proven),
   };
 }
 
@@ -575,19 +639,440 @@ function retainedMetricText(lines: Map<string, string>): string {
   return [...lines.values()].map((line) => `${line}\n`).join("");
 }
 
-export function killProcess(pid?: number): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
-    return;
+export async function terminateProcessTree(pid?: number): Promise<ProcessTreeTermination> {
+  if (!Number.isSafeInteger(pid) || Number(pid) <= 0) {
+    return terminationResult(pid, false, false, "none", "missing_root_pid");
   }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Already gone.
+  return process.platform === "win32"
+    ? await terminateWindowsTree(Number(pid))
+    : await terminatePosixProcessGroup(Number(pid));
+}
+
+export async function terminateAfterTimeout(
+  pid: number | undefined,
+  terminate: ProcessTreeTerminator = terminateProcessTree,
+  timeoutMs = PROCESS_TREE_HANDLER_TIMEOUT_MS,
+): Promise<ProcessTreeTermination> {
+  const boundedMs = Math.max(1, Number(timeoutMs) || PROCESS_TREE_HANDLER_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const handled = Promise.resolve()
+    .then(() => terminate(pid))
+    .then((result) =>
+      validTerminationResult(result)
+        ? result
+        : terminationResult(pid, true, false, "none", "termination_handler_invalid"),
+    )
+    .catch(() => terminationResult(pid, true, false, "none", "termination_handler_failed"));
+  const timedOut = new Promise<ProcessTreeTermination>((resolve) => {
+    timer = setTimeout(
+      () => resolve(terminationResult(pid, true, false, "none", "termination_handler_timeout")),
+      boundedMs,
+    );
+  });
+  const result = await Promise.race([handled, timedOut]);
+  if (timer) clearTimeout(timer);
+  return result;
+}
+
+async function terminatePosixProcessGroup(pid: number): Promise<ProcessTreeTermination> {
+  const initial = await posixProcessTreeSnapshot(pid);
+  const graceful = signalProcessGroup(pid, "SIGTERM");
+  signalTrackedPosix(initial.entries, "SIGTERM");
+  const gracefulRemaining = await waitForPidsGone(initial.trackedPids, PROCESS_TREE_GRACE_MS);
+  if (
+    initial.proven &&
+    graceful !== "failed" &&
+    gracefulRemaining.length === 0 &&
+    processGroupState(pid) === "gone"
+  ) {
+    return terminationResult(
+      pid,
+      true,
+      true,
+      "posix-process-group",
+      "process_group_exited_after_sigterm",
+      false,
+      initial.trackedPids,
+      [],
+    );
+  }
+  const second = await posixProcessTreeSnapshot(pid);
+  const entries = mergeProcessEntries(initial.entries, second.entries);
+  const trackedPids = entries.map((entry) => entry.pid);
+  const forced = signalProcessGroup(pid, "SIGKILL");
+  signalTrackedPosix(entries, "SIGKILL");
+  const remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
+  const proven =
+    initial.proven &&
+    second.proven &&
+    forced !== "failed" &&
+    processGroupState(pid) === "gone" &&
+    remainingPids.length === 0;
+  return terminationResult(
+    pid,
+    true,
+    proven,
+    "posix-process-group",
+    proven ? "process_group_absent_after_sigkill" : "process_group_termination_unproven",
+    true,
+    trackedPids,
+    remainingPids,
+  );
+}
+
+async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination> {
+  const snapshot = await windowsProcessTreeSnapshot(pid);
+  const gracefulCode = await taskkill(pid, false);
+  let remainingPids = await waitForPidsGone(snapshot.trackedPids, PROCESS_TREE_GRACE_MS);
+  if (snapshot.proven && remainingPids.length === 0) {
+    return terminationResult(
+      pid,
+      true,
+      true,
+      "windows-taskkill-tree",
+      gracefulCode === 0 ? "taskkill_tree_exited_gracefully" : "process_tree_absent_after_grace",
+      false,
+      snapshot.trackedPids,
+      [],
+    );
+  }
+  const refreshed = pidState(pid) === "gone" ? snapshot : await windowsProcessTreeSnapshot(pid);
+  const originalRoot = snapshot.entries.find((entry) => entry.pid === pid);
+  const refreshedRoot = refreshed.entries.find((entry) => entry.pid === pid);
+  const sameRoot =
+    !refreshedRoot || !originalRoot || refreshedRoot.started === originalRoot.started;
+  const second = sameRoot
+    ? refreshed
+    : { ...refreshed, proven: false, reason: "windows_root_process_identity_changed" };
+  const entries = mergeProcessEntries(snapshot.entries, second.entries);
+  const trackedPids = entries.map((entry) => entry.pid);
+  const forcedCode = sameRoot ? await taskkill(pid, true) : null;
+  let forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
+  if (forcedRemaining.length > 0) {
+    const identities = await windowsProcessIdentities(forcedRemaining);
+    const safePids = entries
+      .filter((entry) => identities.get(entry.pid) === entry.started)
+      .map((entry) => entry.pid);
+    if (safePids.length > 0) await taskkillPids(safePids, true);
+  }
+  remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
+  if (remainingPids.length > 0) {
+    const identities = await windowsProcessIdentities(remainingPids);
+    remainingPids = entries
+      .filter((entry) => remainingPids.includes(entry.pid))
+      .filter((entry) => identities.get(entry.pid) === entry.started)
+      .map((entry) => entry.pid);
+  }
+  const proven = snapshot.proven && second.proven && remainingPids.length === 0;
+  return terminationResult(
+    pid,
+    true,
+    proven,
+    "windows-taskkill-tree",
+    proven
+      ? "taskkill_tree_absent_after_force"
+      : snapshot.proven && second.proven
+        ? `taskkill_tree_termination_unproven_${gracefulCode ?? "unknown"}_${forcedCode ?? "unknown"}`
+        : !snapshot.proven
+          ? snapshot.reason
+          : second.reason,
+    true,
+    trackedPids,
+    remainingPids,
+  );
+}
+
+async function posixProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnapshot> {
+  const result = await execFileResult(
+    "ps",
+    ["-axo", "pid=,ppid=,pgid=,lstart="],
+    PROCESS_TREE_VERIFY_MS,
+  );
+  if (result.code !== 0) {
+    return {
+      entries: [],
+      proven: false,
+      reason: "posix_process_tree_enumeration_failed",
+      trackedPids: [pid],
+    };
+  }
+  const table = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/))
+    .filter((match): match is RegExpMatchArray => Boolean(match))
+    .map((match) => ({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      pgid: Number(match[3]),
+      started: match[4],
+    }));
+  if (table.length === 0) {
+    return {
+      entries: [],
+      proven: false,
+      reason: "posix_process_tree_enumeration_invalid",
+      trackedPids: [pid],
+    };
+  }
+  return recursiveProcessTreeSnapshot(pid, table, "posix_process_tree_enumerated");
+}
+
+function recursiveProcessTreeSnapshot(
+  pid: number,
+  table: ProcessIdentity[],
+  successReason: string,
+): ProcessTreeSnapshot {
+  const ids = new Set<number>([
+    pid,
+    ...table.filter((entry) => entry.pgid === pid).map((entry) => entry.pid),
+  ]);
+  for (;;) {
+    const children = table.filter((entry) => ids.has(entry.ppid) && !ids.has(entry.pid));
+    if (children.length === 0) break;
+    for (const child of children) ids.add(child.pid);
+    if (ids.size > PROCESS_TREE_PID_LIMIT) {
+      return {
+        entries: table.filter((entry) => ids.has(entry.pid)).slice(0, PROCESS_TREE_PID_LIMIT),
+        proven: false,
+        reason: "process_tree_too_large",
+        trackedPids: [...ids].slice(0, PROCESS_TREE_PID_LIMIT),
+      };
     }
   }
+  const entries = table.filter((entry) => ids.has(entry.pid));
+  const absent = entries.length === 0 && processGroupState(pid) === "gone";
+  return {
+    entries,
+    proven: entries.length > 0 || absent,
+    reason: entries.length > 0 || absent ? successReason : "process_tree_enumeration_invalid",
+    trackedPids: entries.length > 0 ? entries.map((entry) => entry.pid) : [pid],
+  };
+}
+
+function mergeProcessEntries(...groups: ProcessIdentity[][]): ProcessIdentity[] {
+  const merged = new Map<string, ProcessIdentity>();
+  for (const entry of groups.flat()) merged.set(`${entry.pid}:${entry.started}`, entry);
+  return [...merged.values()].slice(0, PROCESS_TREE_PID_LIMIT);
+}
+
+function signalTrackedPosix(entries: ProcessIdentity[], signal: NodeJS.Signals): void {
+  for (const entry of entries) {
+    try {
+      process.kill(entry.pid, signal);
+    } catch {
+      // Already gone or not signalable; verification below fails closed.
+    }
+  }
+}
+
+async function windowsProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnapshot> {
+  const script = [
+    "& {",
+    "param([int]$RootProcessId)",
+    "$all = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)",
+    "if (-not ($all | Where-Object { [int]$_.ProcessId -eq $RootProcessId })) { throw 'root_missing' }",
+    "$ids = @($RootProcessId)",
+    "do {",
+    "  $children = @($all | Where-Object { $ids -contains [int]$_.ParentProcessId -and $ids -notcontains [int]$_.ProcessId } | ForEach-Object { [int]$_.ProcessId })",
+    "  if ($children.Count -eq 0) { break }",
+    "  $ids += $children",
+    `  if ($ids.Count -gt ${PROCESS_TREE_PID_LIMIT}) { throw 'tree_too_large' }`,
+    "} while ($true)",
+    "@($all | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress",
+    "}",
+  ].join("\n");
+  const result = await execFileResult(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, String(pid)],
+    PROCESS_TREE_VERIFY_MS,
+  );
+  if (result.code !== 0) {
+    return {
+      entries: [],
+      proven: false,
+      reason: "windows_process_tree_enumeration_failed",
+      trackedPids: [pid],
+    };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout.trim());
+    const values = Array.isArray(parsed) ? parsed : [parsed];
+    const entries = values.map((value) => ({
+      pid: Number(value?.pid),
+      ppid: Number(value?.ppid),
+      started: String(value?.started || ""),
+    }));
+    const trackedPids = [...new Set(entries.map((entry) => entry.pid))];
+    const valid =
+      trackedPids.includes(pid) &&
+      trackedPids.length > 0 &&
+      trackedPids.length <= PROCESS_TREE_PID_LIMIT &&
+      entries.every(
+        (entry) =>
+          Number.isSafeInteger(entry.pid) &&
+          entry.pid > 0 &&
+          Number.isSafeInteger(entry.ppid) &&
+          entry.ppid >= 0 &&
+          entry.started.length > 0,
+      );
+    return valid
+      ? { entries, proven: true, reason: "windows_process_tree_enumerated", trackedPids }
+      : {
+          entries: [],
+          proven: false,
+          reason: "windows_process_tree_enumeration_invalid",
+          trackedPids: [pid],
+        };
+  } catch {
+    return {
+      entries: [],
+      proven: false,
+      reason: "windows_process_tree_enumeration_invalid",
+      trackedPids: [pid],
+    };
+  }
+}
+
+async function windowsProcessIdentities(pids: number[]): Promise<Map<number, string>> {
+  if (pids.length === 0) return new Map();
+  const script = [
+    "& {",
+    "param([string]$IdsJson)",
+    "$ids = @((ConvertFrom-Json $IdsJson) | ForEach-Object { [int]$_ })",
+    "@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress",
+    "}",
+  ].join("\n");
+  const result = await execFileResult(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, JSON.stringify(pids)],
+    PROCESS_TREE_VERIFY_MS,
+  );
+  if (result.code !== 0) return new Map();
+  try {
+    const parsed = JSON.parse(result.stdout.trim() || "[]");
+    const values = Array.isArray(parsed) ? parsed : [parsed];
+    return new Map(values.map((value) => [Number(value.pid), String(value.started || "")]));
+  } catch {
+    return new Map();
+  }
+}
+
+function taskkill(pid: number, force: boolean): Promise<number | null> {
+  return taskkillPids([pid], force);
+}
+
+function taskkillPids(pids: number[], force: boolean): Promise<number | null> {
+  return execFileResult(
+    "taskkill",
+    [...pids.flatMap((pid) => ["/pid", String(pid)]), "/t", ...(force ? ["/f"] : [])],
+    force ? PROCESS_TREE_VERIFY_MS : PROCESS_TREE_GRACE_MS,
+  ).then((result) => result.code);
+}
+
+function execFileResult(
+  command: string,
+  args: string[],
+  timeout: number,
+): Promise<{ code: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      args,
+      { maxBuffer: 64 * 1024, timeout, windowsHide: true },
+      (error, stdout) => {
+        resolve({
+          code: error ? (typeof error.code === "number" ? error.code : null) : 0,
+          stdout: String(stdout || ""),
+        });
+      },
+    );
+  });
+}
+
+function signalProcessGroup(pid: number, signal: NodeJS.Signals): "sent" | "gone" | "failed" {
+  try {
+    process.kill(-pid, signal);
+    return "sent";
+  } catch (error) {
+    return errorCode(error) === "ESRCH" ? "gone" : "failed";
+  }
+}
+
+async function waitForPidsGone(pids: number[], timeoutMs: number): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  let remaining = pids.filter((pid) => pidState(pid) !== "gone");
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    remaining = remaining.filter((pid) => pidState(pid) !== "gone");
+  }
+  return remaining;
+}
+
+function processGroupState(pid: number): "alive" | "gone" | "unknown" {
+  try {
+    process.kill(-pid, 0);
+    return "alive";
+  } catch (error) {
+    return errorCode(error) === "ESRCH" ? "gone" : "unknown";
+  }
+}
+
+function pidState(pid: number): "alive" | "gone" | "unknown" {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    return errorCode(error) === "ESRCH" ? "gone" : "unknown";
+  }
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : "";
+}
+
+function terminationResult(
+  pid: number | undefined,
+  attempted: boolean,
+  proven: boolean,
+  method: ProcessTreeTermination["method"],
+  reason: string,
+  escalated = false,
+  trackedPids = Number.isSafeInteger(pid) && Number(pid) > 0 ? [Number(pid)] : [],
+  remainingPids = proven ? [] : trackedPids,
+): ProcessTreeTermination {
+  return {
+    attempted,
+    escalated,
+    method,
+    pid: Number.isSafeInteger(pid) && Number(pid) > 0 ? Number(pid) : null,
+    platform: process.platform,
+    proven,
+    reason,
+    remainingPids: remainingPids.slice(0, PROCESS_TREE_PID_LIMIT),
+    trackedPids: trackedPids.slice(0, PROCESS_TREE_PID_LIMIT),
+  };
+}
+
+function validTerminationResult(value: unknown): value is ProcessTreeTermination {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Partial<ProcessTreeTermination>;
+  const validPids = (pids: unknown[]) =>
+    pids.length <= PROCESS_TREE_PID_LIMIT &&
+    pids.every((pid) => Number.isSafeInteger(pid) && Number(pid) > 0);
+  return (
+    typeof result.attempted === "boolean" &&
+    typeof result.escalated === "boolean" &&
+    typeof result.proven === "boolean" &&
+    typeof result.reason === "string" &&
+    /^[a-z0-9_]+$/.test(result.reason) &&
+    result.reason.length <= 160 &&
+    ["none", "posix-process-group", "windows-taskkill-tree"].includes(String(result.method)) &&
+    result.platform === process.platform &&
+    (result.pid === null || (Number.isSafeInteger(result.pid) && Number(result.pid) > 0)) &&
+    Array.isArray(result.remainingPids) &&
+    Array.isArray(result.trackedPids) &&
+    validPids(result.remainingPids) &&
+    validPids(result.trackedPids) &&
+    (!result.proven || result.remainingPids.length === 0)
+  );
 }

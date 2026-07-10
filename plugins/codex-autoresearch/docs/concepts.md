@@ -52,10 +52,12 @@ Outside Git, the three transient records fall back to `autoresearch.last-run.jso
 
 | Term | What it tells you |
 | --- | --- |
-| **Trust blocker** | A condition that makes another packet or final claim unsafe: stale packet, dirty Git scope, benchmark drift, corrupt ledger, or runtime mismatch. |
+| **Trust blocker** | A condition that makes another packet or final claim unsafe: stale packet, unproven process-tree termination, dirty Git scope, benchmark drift, corrupt ledger, or runtime mismatch. |
 | **Protected benchmark path** | A benchmark or fixture path that must not change silently while results are compared. |
 | **Runtime provenance** | Whether the command ran from the source checkout or an installed plugin, and whether those builds match. |
 | **Packet diagnostics** | Evidence loss such as missing citations, failed synthesis, or a benchmark failure hidden behind an optimistic summary. |
+
+Timeout proof uses native containment available without a runtime dependency: POSIX commands start in a detached process group and merge bounded recursive `ps` snapshots before graceful and forced signals; Windows merges bounded CIM descendant snapshots around `taskkill /T`. Every tracked PID must disappear before cleanup is reported as proven. Enumeration failure, an oversized tree, changed process identity, or a surviving tracked PID fails closed as `termination_failed`; deliberately reparented descendants that escape before either native snapshot remain an operating-system boundary and must not be treated as safely stopped without separate verification.
 | **Claim coverage** | The checks and measurements required to support the exact claim you want to make. |
 | **Promotion evidence** | Repeat, holdout, breadth, or explicit gate evidence that supports more than a local exploratory result. |
 

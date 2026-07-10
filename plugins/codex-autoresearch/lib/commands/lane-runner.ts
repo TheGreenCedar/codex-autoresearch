@@ -165,6 +165,8 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
       commandResult = {
         code: result.exitCode,
         timedOut: result.timedOut,
+        termination: result.termination,
+        terminationFailed: result.terminationFailed,
         durationSeconds: result.durationSeconds,
         output: deps.tailText(
           ("combinedOutput" in result ? result.combinedOutput : result.output) || "",
@@ -172,6 +174,31 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
           4000,
         ),
       };
+      if (commandResult.terminationFailed) {
+        const pid = commandResult.termination?.pid;
+        const recovery = `Verify PID ${pid || "unknown"} and its descendants are absent, then remove only the retained progress marker before running another command.`;
+        return {
+          ok: false,
+          code: "termination_failed",
+          workDir,
+          dryRun,
+          lane: { id: lane.id, title: lane.title || lane.label, mode },
+          result: {
+            status: "termination_failed",
+            summary: "Lane process-tree termination could not be proven.",
+            recommendation: recovery,
+            evidenceAccepted: false,
+            command: command || "",
+            commandResult,
+          },
+          coordinatorRecommendation: {
+            status: "blocked",
+            nextAction: recovery,
+            measuredPacket: "Blocked while the prior lane process tree may still be alive.",
+            commandHint: "",
+          },
+        };
+      }
       if (beforeStatus != null) {
         const afterStatus = await hardenedScoutStatus(deps, workDir, timeBudgetSeconds);
         if (afterStatus !== beforeStatus) {

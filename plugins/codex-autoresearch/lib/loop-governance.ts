@@ -60,6 +60,22 @@ function loopAction(
 export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContractStatus {
   const blockers: LoopAction[] = [];
   const warnings: LoopAction[] = [];
+  const progress = objectValue(objectValue(envelope.experimentEconomics)?.progress);
+  if (progress?.terminationFailed === true || progress?.exitState === "termination_failed") {
+    const termination = objectValue(progress.termination);
+    const pid = Number.isSafeInteger(Number(termination?.pid))
+      ? ` PID ${Number(termination?.pid)}`
+      : "";
+    blockers.push(
+      loopAction(
+        "termination-failed",
+        LOOP_PRIORITY.essentialSafety,
+        `Process-tree termination${pid} could not be proven. Verify the process and descendants are absent before clearing retained progress.`,
+        "",
+        ["experimentEconomics", "progress", "terminationFailed"],
+      ),
+    );
+  }
   const goalContract = objectValue(envelope.goalContract);
   if (goalContract?.blocksPacket === true || goalContract?.blocksFinalization === true) {
     const goalBlockers = stringList(goalContract.blockers, []);

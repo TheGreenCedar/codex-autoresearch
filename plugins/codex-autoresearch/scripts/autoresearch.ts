@@ -152,6 +152,7 @@ import {
 } from "../lib/runner.js";
 import {
   createProgressSnapshot,
+  finishProgressSnapshot,
   progressSnapshotFromRun,
   staleProgressReason,
   type RunnerProgressSnapshot,
@@ -227,6 +228,7 @@ type ProcessRunResult = LooseObject & {
   durationSeconds?: number;
   exitCode?: number | null;
   output?: string;
+  terminationFailed?: boolean;
   timedOut?: boolean;
 };
 type ProgressStageResult = {
@@ -236,6 +238,8 @@ type ProgressStageResult = {
   outputTail: string;
   stage: string;
   status: string;
+  termination?: LooseObject | null;
+  terminationFailed?: boolean;
   timedOut: boolean;
 };
 
@@ -6179,6 +6183,8 @@ async function runExperimentWithProgressWriter(
     );
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
+  const terminationFailed = Boolean(benchmark.terminationFailed || checks?.terminationFailed);
+  const termination = checks?.termination ?? benchmark.termination;
   const metricError =
     benchmarkPassed && !primaryPresent
       ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
@@ -6208,6 +6214,19 @@ async function runExperimentWithProgressWriter(
         : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
+  if (terminationFailed) {
+    progressSnapshot = finishProgressSnapshot(progressSnapshot, {
+      exitCode: null,
+      timedOut: true,
+      terminationFailed: true,
+      termination,
+      timeoutPhase: benchmark.terminationFailed ? "benchmark" : "checks",
+      completedAt: checks?.finishedAt || benchmark.finishedAt,
+      artifacts,
+    });
+    progressSnapshot = progressWriter.queue(progressSnapshot);
+    await progressWriter.flush();
+  }
   return {
     ok: passed,
     workDir,
@@ -6233,6 +6252,8 @@ async function runExperimentWithProgressWriter(
     progressSnapshot,
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
+    termination,
+    terminationFailed,
     timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
@@ -6261,6 +6282,8 @@ async function runExperimentWithProgressWriter(
           command: checksCommand,
           exitCode: checks.exitCode,
           timedOut: checks.timedOut,
+          termination: checks.termination,
+          terminationFailed: checks.terminationFailed,
           durationSeconds: checks.durationSeconds,
           passed: checksPassed,
           tailOutput: tailText(checks.output, 80, 16000),
@@ -6322,11 +6345,22 @@ function buildRunProgress({
     );
   }
   const timedOut = stages.some((stage) => stage.timedOut);
+  const terminationFailed = stages.some((stage) => stage.terminationFailed);
   return {
     mode: "synchronous",
-    status: timedOut ? "timed_out" : passed ? "completed" : "failed",
+    status: terminationFailed
+      ? "termination_failed"
+      : timedOut
+        ? "timed_out"
+        : passed
+          ? "completed"
+          : "failed",
     cancellable: false,
-    cancelStatus: timedOut ? "timeout-killed" : "not_requested",
+    cancelStatus: terminationFailed
+      ? "termination-failed"
+      : timedOut
+        ? "timeout-terminated"
+        : "not_requested",
     elapsedSeconds: Number(
       stages.reduce((total, stage) => total + Number(stage.durationSeconds || 0), 0).toFixed(3),
     ),
@@ -6343,10 +6377,18 @@ function progressStage(
   return {
     stage,
     label,
-    status: result.timedOut ? "timed_out" : result.exitCode === 0 ? "completed" : "failed",
+    status: result.terminationFailed
+      ? "termination_failed"
+      : result.timedOut
+        ? "timed_out"
+        : result.exitCode === 0
+          ? "completed"
+          : "failed",
     durationSeconds: Number(result.durationSeconds || 0),
     exitCode: result.exitCode ?? null,
     timedOut: Boolean(result.timedOut),
+    termination: result.termination || null,
+    terminationFailed: Boolean(result.terminationFailed),
     outputTail: tailText(result.output || ""),
   };
 }
@@ -6814,6 +6856,59 @@ async function deleteActiveProgressSnapshot(workDir: string) {
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
+}
+
+async function deleteActiveProgressSnapshotIfSafe(workDir: string) {
+  const snapshot = await readActiveProgressSnapshot(workDir);
+  if (snapshot?.exitState === "termination_failed") return;
+  await deleteActiveProgressSnapshot(workDir);
+}
+
+function terminationFailureEvidence(value: LooseObject | null | undefined): LooseObject | null {
+  const candidates = [
+    value,
+    value?.run,
+    value?.checks,
+    value?.benchmark,
+    value?.commandResult,
+    value?.result,
+    value?.result?.commandResult,
+  ];
+  return (
+    candidates.find(
+      (candidate) => candidate?.terminationFailed === true && candidate?.termination,
+    ) || null
+  );
+}
+
+export async function persistTerminationFailure(
+  workDir: string,
+  command: string,
+  evidence: LooseObject | null,
+) {
+  if (!evidence?.terminationFailed || !evidence.termination) return;
+  const current = await readActiveProgressSnapshot(workDir);
+  if (current?.exitState === "termination_failed") return;
+  const writer = await createActiveProgressWriter(workDir);
+  const snapshot = finishProgressSnapshot(
+    createProgressSnapshot({
+      packetId: `termination-${command}-${Date.now()}`,
+      command: `autoresearch ${command}`,
+      startedAt: evidence.startedAt || new Date().toISOString(),
+      timeoutSeconds: evidence.timeoutSeconds ?? null,
+      artifactRoot: ".",
+    }),
+    {
+      exitCode: null,
+      timedOut: true,
+      terminationFailed: true,
+      termination: evidence.termination,
+      timeoutPhase: "unknown",
+      completedAt: evidence.finishedAt || new Date().toISOString(),
+    },
+  );
+  writer.queue(snapshot);
+  await writer.close();
 }
 
 function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
@@ -8525,6 +8620,8 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timeoutSeconds: run.timeoutSeconds ?? null,
     exitStatus: run.exitCode ?? null,
     timedOut: Boolean(run.timedOut),
+    termination: run.termination || null,
+    terminationFailed: Boolean(run.terminationFailed),
     stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
       workDir: run.workDir,
     }),
@@ -8541,6 +8638,8 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
           command: redactCommandDisplay(run.checks.command || "", { workDir: run.workDir }),
           exitStatus: run.checks.exitCode ?? null,
           timedOut: Boolean(run.checks.timedOut),
+          termination: run.checks.termination || null,
+          terminationFailed: Boolean(run.checks.terminationFailed),
           passed: run.checks.passed ?? null,
         }
       : null,
@@ -8740,13 +8839,46 @@ async function nextExperiment(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   return await runWithRequiredCleanup(
     () => nextExperimentWithActiveProgress(args),
-    () => deleteActiveProgressSnapshot(workDir),
+    () => deleteActiveProgressSnapshotIfSafe(workDir),
     "Failed to remove active progress snapshot",
   );
 }
 
 async function nextExperimentWithActiveProgress(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
+  const retainedProgress = await readActiveProgressSnapshot(workDir, config);
+  if (retainedProgress?.exitState === "termination_failed") {
+    const state = currentState(workDir);
+    const decisionEnvelope = withCanonicalActionCommand(
+      buildDecisionEnvelope({
+        state,
+        nextAction: "Prove the prior process tree is gone before another packet.",
+        experimentEconomics: { progress: retainedProgress },
+      }),
+      continuationCommands(workDir),
+    );
+    const loopContract = decisionEnvelope.loopContract || {};
+    const blockingAction = blockingLoopAction(loopContract, decisionEnvelope.canonicalNextAction);
+    return {
+      ok: false,
+      workDir,
+      refused: true,
+      code: "termination_failed",
+      run: null,
+      decision: null,
+      blockingAction,
+      loopContract,
+      decisionEnvelope,
+      progress: retainedProgress,
+      nextAction: blockingAction?.reason || "Prove the prior process tree is gone.",
+      clearingCondition:
+        "Verify the reported PID and descendants are absent, then clear the retained progress marker before retrying next.",
+      commandHint: continuationCommands(workDir).state,
+      continuation: loopContinuation(workDir, state, config, "blocked", {
+        stopReason: blockingAction?.reason || "Prior process-tree termination is unproven.",
+      }),
+    };
+  }
   await writeNextPreflightProgressSnapshot(workDir, args, config);
   const doctor = await doctorSession({
     ...args,
@@ -9011,9 +9143,11 @@ async function nextExperimentWithActiveProgress(args: any) {
     doctor,
     run,
     decision,
-    nextAction: run.ok
-      ? `Log this run as ${decision.safeSuggestedStatus || "keep/discard"} unless review evidence says otherwise, include ASI, then continue with the next ${memory.diversityGuidance?.label || "diversity"} lane.`
-      : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
+    nextAction: run.terminationFailed
+      ? "Process-tree termination could not be proven. Preserve this evidence, verify the reported PID and descendants are absent, then clear the retained progress marker."
+      : run.ok
+        ? `Log this run as ${decision.safeSuggestedStatus || "keep/discard"} unless review evidence says otherwise, include ASI, then continue with the next ${memory.diversityGuidance?.label || "diversity"} lane.`
+        : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
     continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", {
       requiredStatus: run.logHint.status,
     }),
@@ -9025,8 +9159,18 @@ async function nextExperimentWithActiveProgress(args: any) {
 async function runStandaloneExperiment(args: LooseObject) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   return await runWithRequiredCleanup(
-    () => runExperiment(args),
-    () => deleteActiveProgressSnapshot(workDir),
+    async () => {
+      const retainedProgress = await readActiveProgressSnapshot(workDir);
+      if (retainedProgress?.exitState === "termination_failed") {
+        const error = new Error(
+          "Prior process-tree termination is unproven. Verify the reported PID and descendants are absent, then clear retained progress before another run.",
+        ) as Error & { code: string };
+        error.code = "termination_failed";
+        throw error;
+      }
+      return await runExperiment(args);
+    },
+    () => deleteActiveProgressSnapshotIfSafe(workDir),
     "Failed to remove active progress snapshot",
   );
 }
@@ -9128,6 +9272,8 @@ function compactNextExperimentPacket(packet: LooseObject) {
             policy: run.checks.policy,
             exitCode: run.checks.exitCode,
             timedOut: run.checks.timedOut,
+            termination: run.checks.termination || null,
+            terminationFailed: run.checks.terminationFailed === true,
           }
         : null,
       progress: run.progress
@@ -9139,6 +9285,8 @@ function compactNextExperimentPacket(packet: LooseObject) {
         : null,
       outputTruncated: run.outputTruncated === true,
       metricsTruncated: run.metricsTruncated === true,
+      termination: run.termination || null,
+      terminationFailed: run.terminationFailed === true,
     },
     decision: {
       metric: decision.metric,
@@ -9258,7 +9406,26 @@ async function executeAutoresearchCli(
       setupResearchSession,
       setupSession,
     });
-    const execute = async () => (await runCliCommand(command, args, handlers)) as LooseObject;
+    const execute = async () => {
+      try {
+        const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
+        if (command !== "next" && command !== "run") {
+          const evidence = terminationFailureEvidence(outcome.result);
+          if (evidence) {
+            const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
+            await persistTerminationFailure(resolution.workDir, command, evidence);
+          }
+        }
+        return outcome;
+      } catch (error: any) {
+        const evidence = terminationFailureEvidence(error);
+        if (evidence) {
+          const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
+          await persistTerminationFailure(resolution.workDir, command, evidence);
+        }
+        throw error;
+      }
+    };
     let outcome: LooseObject;
     if (requiresSessionMutationLock(command, args)) {
       const resolution = resolveWorkDir(args.workingDir || args.cwd);
@@ -9279,7 +9446,10 @@ async function executeAutoresearchCli(
 function requiresSessionMutationLock(command: string, args: LooseObject): boolean {
   if (boolOption(args.dryRun, false)) return false;
   if (command === "ledger-doctor") return boolOption(args.repair, false);
-  if (command === "gap-candidates") return boolOption(args.apply, false);
+  if (command === "doctor") return boolOption(args.checkBenchmark || args.check_benchmark, false);
+  if (command === "gap-candidates") {
+    return boolOption(args.apply, false) || Boolean(args.modelCommand || args.model_command);
+  }
   if (command === "partial-results") return boolOption(args.record, false);
   if (command === "session-forensics") return boolOption(args.apply, false);
   if (command === "integrations")
@@ -9290,6 +9460,9 @@ function requiresSessionMutationLock(command: string, args: LooseObject): boolea
     "research-start",
     "research-fanout",
     "lane-runner",
+    "benchmark-lint",
+    "benchmark-inspect",
+    "checks-inspect",
     "config",
     "finalize-current-tree",
     "init",

@@ -98,6 +98,11 @@ export function createInspectCommands(deps: InspectCommandDeps) {
           "Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.",
         );
       }
+      if (commandResult.terminationFailed) {
+        warnings.push(
+          "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+        );
+      }
     }
     if (parsedMetricCount > 20) {
       warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
@@ -133,13 +138,17 @@ export function createInspectCommands(deps: InspectCommandDeps) {
       issues,
       warnings: [...warnings, ...researchIntegrity.warnings],
       timeoutSeconds: commandResult ? timeoutSeconds : null,
+      termination: commandResult?.termination || null,
+      terminationFailed: commandResult?.terminationFailed === true,
       contractCheckHint:
         "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
       example: `METRIC ${metricName}=1.23`,
       nextAction: issues.length
-        ? commandResult?.timedOut
-          ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.`
-          : `Update the benchmark so it prints METRIC ${metricName}=<number>.`
+        ? commandResult?.terminationFailed
+          ? "Verify the reported PID and descendants are absent before another benchmark command."
+          : commandResult?.timedOut
+            ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.`
+            : `Update the benchmark so it prints METRIC ${metricName}=<number>.`
         : "Benchmark output satisfies the metric contract.",
     };
   }
@@ -232,6 +241,11 @@ export function createInspectCommands(deps: InspectCommandDeps) {
         `The inspect command exited ${result.exitCode}; verify the command is a bounded probe.`,
       );
     }
+    if (result.terminationFailed) {
+      warnings.push(
+        "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+      );
+    }
     return {
       ...inspectionBase({
         ok: !result.timedOut && result.exitCode === 0,
@@ -241,14 +255,17 @@ export function createInspectCommands(deps: InspectCommandDeps) {
         timeoutSeconds,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
+        termination: result.termination,
+        terminationFailed: result.terminationFailed,
         warnings,
         hints: benchmarkInspectHints(state.config.metricName || ""),
         outputPreview: deps.headText(output || result.fullOutput || result.output || "", 30, 12000),
         outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
       }),
       parsedMetrics,
-      nextAction:
-        result.timedOut || result.exitCode !== 0
+      nextAction: result.terminationFailed
+        ? "Verify the reported PID and descendants are absent before another inspect command."
+        : result.timedOut || result.exitCode !== 0
           ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract."
           : "If this is bounded and representative, run benchmark-lint or the first compact next packet.",
     };
@@ -294,14 +311,17 @@ export function createInspectCommands(deps: InspectCommandDeps) {
         timeoutSeconds,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
+        termination: result.termination,
+        terminationFailed: result.terminationFailed,
         warnings,
         hints: checksInspectHints(),
         outputPreview: deps.headText(output, 50, 16000),
         outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
       }),
       failedTests,
-      nextAction:
-        result.timedOut || result.exitCode !== 0
+      nextAction: result.terminationFailed
+        ? "Verify the reported PID and descendants are absent before another checks command."
+        : result.timedOut || result.exitCode !== 0
           ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed."
           : "Checks command completed cleanly; include it as verification evidence before logging or finalizing.",
     };
@@ -367,6 +387,8 @@ function inspectionBase({
   timeoutSeconds,
   exitCode,
   timedOut,
+  termination = null,
+  terminationFailed = false,
   warnings,
   hints,
   outputPreview,
@@ -380,6 +402,8 @@ function inspectionBase({
     timeoutSeconds,
     exitCode,
     timedOut,
+    termination,
+    terminationFailed,
     warnings,
     hints,
     outputPreview,
@@ -425,6 +449,11 @@ function checksInspectWarnings(
     warnings,
     result.timedOut,
     "The checks command timed out. Narrow it to touched paths or increase the timeout before using it as decision evidence.",
+  );
+  pushWarning(
+    warnings,
+    result.terminationFailed,
+    "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
   );
   pushWarning(
     warnings,

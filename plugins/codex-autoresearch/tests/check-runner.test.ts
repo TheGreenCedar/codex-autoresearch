@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { resolveSpawnCommand } from "../scripts/check-runner.js";
+import { resolveSpawnCommand, runCommand } from "../scripts/check-runner.js";
+import { terminateProcessTree } from "../lib/runner.js";
 import { PRODUCT_PHASE_TIMEOUT_SECONDS } from "../lib/checks/product-phase.js";
 import {
   dashboardExportAssetIssues,
@@ -46,6 +48,71 @@ test("check runner leaves native commands unchanged", () => {
     command: "node",
     args: ["--version"],
   });
+});
+
+test("check runner awaits proof that a timed-out process tree is gone", async () => {
+  await withTempDir("check-runner-process-tree-", async (dir) => {
+    const marker = path.join(dir, "heartbeat.txt");
+    const fixture = path.join(process.cwd(), "tests", "fixtures", "stubborn-process-tree.mjs");
+    let result: Awaited<ReturnType<typeof runCommand>> | null = null;
+    let fixturePids: number[] = [];
+    try {
+      result = await runCommand(["stubborn-tree", process.execPath, [fixture, "root", marker]], {
+        cwd: dir,
+        timeoutSeconds: 1,
+      });
+      fixturePids = processTreeFixturePids(result.stdout);
+
+      assert.equal(result.timedOut, true);
+      assert.equal(result.terminationFailed, false, JSON.stringify(result.termination));
+      assert.equal(result.termination?.proven, true);
+      assert.match(result.stdout, /partial-output-before-timeout/);
+      assert.equal(fixturePids.length, 3, result.stdout);
+      for (const pid of fixturePids) assert.equal(processIsAlive(pid), false, `PID ${pid}`);
+      for (const pid of fixturePids) {
+        assert.equal(result.termination?.trackedPids.includes(pid), true, `untracked PID ${pid}`);
+      }
+      const before = await readFile(marker, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(await readFile(marker, "utf8"), before);
+    } finally {
+      if (result?.termination?.pid) {
+        await terminateProcessTree(result.termination.pid).catch(() => null);
+      }
+      const cleanupPids = [
+        ...fixturePids,
+        ...(result?.termination?.trackedPids || []),
+        ...(result?.termination?.remainingPids || []),
+      ];
+      for (const pid of [...new Set(cleanupPids)].reverse()) forceKillPid(pid);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      for (const pid of new Set(cleanupPids)) {
+        assert.equal(isStubbornFixtureProcess(pid), false, `fixture PID ${pid} survived cleanup`);
+      }
+    }
+  });
+});
+
+test("check runner bounds a non-resolving termination hook", async () => {
+  let result: Awaited<ReturnType<typeof runCommand>> | null = null;
+  try {
+    result = await runCommand(
+      ["hung-terminator", process.execPath, ["-e", "setInterval(() => {}, 1000)"]],
+      {
+        cwd: process.cwd(),
+        timeoutSeconds: 1,
+        terminationTimeoutMs: 50,
+        terminateProcessTree: async () => await new Promise(() => {}),
+      },
+    );
+    assert.equal(result.timedOut, true);
+    assert.equal(result.terminationFailed, true);
+    assert.equal(result.termination?.reason, "termination_handler_timeout");
+  } finally {
+    if (result?.termination?.pid) {
+      await terminateProcessTree(result.termination.pid).catch(() => null);
+    }
+  }
 });
 
 const normalizeExecutablePath = (value: string) => {
@@ -393,6 +460,63 @@ async function withTempDir(prefix: string, fn: (dir: string) => Promise<void>): 
     await fn(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function processTreeFixturePids(output: string): number[] {
+  return ["ROOT_PID", "SPAWNED_CHILD_PID", "CHILD_PID", "SPAWNED_GRANDCHILD_PID", "GRANDCHILD_PID"]
+    .map((name) => Number(output.match(new RegExp(`(?:^|\\n)${name}=(\\d+)`))?.[1]))
+    .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+    .filter((pid, index, values) => values.indexOf(pid) === index);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      String(error.code) === "ESRCH"
+    );
+  }
+}
+
+function forceKillPid(pid: number): void {
+  if (!processIsAlive(pid)) return;
+  if (!isStubbornFixtureProcess(pid)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Already gone.
+  }
+}
+
+function isStubbornFixtureProcess(pid: number): boolean {
+  if (!processIsAlive(pid)) return false;
+  try {
+    const command =
+      process.platform === "win32"
+        ? execFileSync(
+            "powershell.exe",
+            [
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`,
+            ],
+            { encoding: "utf8", timeout: 2000, windowsHide: true },
+          )
+        : execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+            encoding: "utf8",
+            timeout: 2000,
+          });
+    return command.includes("stubborn-process-tree.mjs");
+  } catch {
+    return false;
   }
 }
 
