@@ -79,6 +79,8 @@ For docs-only work, read the rendered Markdown and check the command text, then 
 
 ## Dashboard review
 
+`npm run test:dashboard` includes a 100,000-record streaming-ledger gate. Its intentionally broad CI ceilings are 96 MiB sampled peak heap delta, 15 seconds wall time, 2.5 MB serialized response, and exactly 5,000 retained rows; the test prints the measured values for review.
+
 Tests do not prove that the dashboard is understandable. Serve or export the demo and inspect it after dashboard source, view-model, copy, or asset changes:
 
 ```bash

@@ -1,22 +1,24 @@
 import http from "node:http";
 import type { ServerResponse } from "node:http";
 import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
-import { createReadStream } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";
+import {
+  DASHBOARD_LEDGER_MAX_ENTRIES,
+  foldDashboardLedgerFile,
+  type DashboardLedgerFold,
+  type DashboardLedgerLine,
+} from "./dashboard-ledger.js";
 import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
 import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
-import { ledgerRecordIssue, parseJsonlRecord } from "./session-records.js";
 
 type LooseObject = Record<string, unknown>;
 
-export const LIVE_LEDGER_MAX_ENTRIES = 5000;
+export const LIVE_LEDGER_MAX_ENTRIES = DASHBOARD_LEDGER_MAX_ENTRIES;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_ENTRIES = 200;
 export const LIVE_RESEARCH_FINGERPRINT_MAX_DEPTH = 2;
-const LIVE_LEDGER_INVALID_SAMPLE_LIMIT = 20;
 const LIVE_VIEW_MODEL_REFRESH_RETRY_LIMIT = 1;
 
 interface LiveViewModelCache {
@@ -57,15 +59,7 @@ interface LiveSessionContext {
 interface LedgerReadout {
   entries: LooseObject[];
   ledgerBounds: DashboardLedgerBounds;
-}
-
-interface BoundedLedgerLines extends DashboardLedgerBounds {
-  lines: BoundedLedgerLine[];
-}
-
-interface BoundedLedgerLine {
-  line: number;
-  text: string;
+  ledgerFold: DashboardLedgerFold;
 }
 
 export async function serveAutoresearch(args: LooseObject) {
@@ -73,7 +67,7 @@ export async function serveAutoresearch(args: LooseObject) {
   const { workDir, sessionPaths } = sessionContext;
   const port = Number(args.port || 0);
   const dashboardHtml = args.dashboardHtml as (context?: LooseObject) => Promise<string>;
-  const viewModel = args.viewModel as () => Promise<LooseObject>;
+  const viewModel = args.viewModel as (context?: LooseObject) => Promise<LooseObject>;
   const startedAt = String(args.startedAt || new Date().toISOString());
   const version = String(args.pluginVersion || args.version || "");
   const debugLedger = args.debugLedger === true;
@@ -108,12 +102,15 @@ export async function serveAutoresearch(args: LooseObject) {
           );
           return;
         }
-        const ledgerLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
+        const ledger = await foldDashboardLedgerFile(
+          sessionPaths.ledgerPath,
+          LIVE_LEDGER_MAX_ENTRIES,
+        );
         send(
           res,
           200,
           "application/jsonl; charset=utf-8",
-          redactLedgerLines(ledgerLines.lines, sessionPaths.ledgerPath, { workDir }),
+          redactLedgerLines(ledger.lines, { workDir }),
         );
         return;
       }
@@ -216,20 +213,11 @@ function isAllowedHostHeader(host: string | string[] | undefined, activePort: nu
   );
 }
 
-function redactLedgerLines(
-  lines: BoundedLedgerLine[],
-  ledgerPath: string,
-  context: LooseObject,
-): string {
+function redactLedgerLines(lines: DashboardLedgerLine[], context: LooseObject): string {
   return lines
-    .map(({ line, text }) => {
-      try {
-        return JSON.stringify(
-          redactEvidenceObject(parseJsonlRecord(text, ledgerPath, line), context),
-        );
-      } catch {
-        return redactEvidenceText(text, context);
-      }
+    .map(({ text, record }) => {
+      if (record) return JSON.stringify(redactEvidenceObject(record, context));
+      return redactEvidenceText(text, context);
     })
     .join("\n");
 }
@@ -244,7 +232,7 @@ async function readCachedLiveViewModel({
 }: {
   workDir: string;
   sessionPaths: SessionPaths;
-  viewModel: () => Promise<LooseObject>;
+  viewModel: (context?: LooseObject) => Promise<LooseObject>;
   nowMs: number;
   ttlMs: number;
   cache: LiveViewModelCacheState;
@@ -289,7 +277,7 @@ async function buildLiveViewModelRefresh({
   fingerprint,
 }: {
   sessionContext: LiveSessionContext;
-  viewModel: () => Promise<LooseObject>;
+  viewModel: (context?: LooseObject) => Promise<LooseObject>;
   ttlMs: number;
   fingerprint: string;
 }): Promise<LiveViewModelResult> {
@@ -322,7 +310,7 @@ async function buildLiveViewModelBody({
   viewModel,
 }: {
   sessionContext: LiveSessionContext;
-  viewModel: () => Promise<LooseObject>;
+  viewModel: (context?: LooseObject) => Promise<LooseObject>;
 }): Promise<{
   body: LooseObject;
   completedAt: number;
@@ -332,7 +320,9 @@ async function buildLiveViewModelBody({
   const ledgerReadout = await readRedactedLedgerEntries(sessionPaths, { workDir });
   const body = redactEvidenceObject(
     {
-      ...compactDashboardTransportViewModel(await viewModel()),
+      ...compactDashboardTransportViewModel(
+        await viewModel({ ledgerFold: ledgerReadout.ledgerFold }),
+      ),
       payloadVersion: DASHBOARD_PAYLOAD_VERSION,
       ledgerEntries: ledgerReadout.entries,
       ledgerBounds: ledgerReadout.ledgerBounds,
@@ -525,136 +515,15 @@ async function readRedactedLedgerEntries(
   sessionPaths: SessionPaths,
   context: LooseObject,
 ): Promise<LedgerReadout> {
-  const boundedLines = await readBoundedLedgerLines(sessionPaths.ledgerPath);
-  const entries: LooseObject[] = [];
-  const invalidLedgerEntries: NonNullable<DashboardLedgerBounds["invalidLedgerEntries"]> = [];
-  let invalidLedgerEntryCount = 0;
-  for (const { line, text } of boundedLines.lines) {
-    try {
-      entries.push(
-        redactEvidenceObject(parseJsonlRecord(text, sessionPaths.ledgerPath, line), context),
-      );
-    } catch (error) {
-      const issue = ledgerRecordIssue(error);
-      if (issue) {
-        invalidLedgerEntryCount += 1;
-        if (invalidLedgerEntries.length < LIVE_LEDGER_INVALID_SAMPLE_LIMIT) {
-          invalidLedgerEntries.push(issue);
-        }
-      } else throw error;
-    }
-  }
+  const ledgerFold = await foldDashboardLedgerFile(
+    sessionPaths.ledgerPath,
+    LIVE_LEDGER_MAX_ENTRIES,
+  );
   return {
-    entries,
-    ledgerBounds: {
-      maxEntries: boundedLines.maxEntries,
-      omittedEntries: boundedLines.omittedEntries,
-      truncated: boundedLines.truncated,
-      ...(invalidLedgerEntryCount ? { invalidLedgerEntryCount, invalidLedgerEntries } : {}),
-    },
+    entries: ledgerFold.entries.map((entry) => redactEvidenceObject(entry, context)),
+    ledgerBounds: ledgerFold.ledgerBounds,
+    ledgerFold,
   };
-}
-
-async function readBoundedLedgerLines(filePath: string): Promise<BoundedLedgerLines> {
-  const maxEntries = LIVE_LEDGER_MAX_ENTRIES;
-  const empty = { lines: [], maxEntries, omittedEntries: 0, truncated: false };
-  const stats = await fsp
-    .stat(filePath)
-    .catch((error: unknown) => (isFileNotFound(error) ? null : Promise.reject(error)));
-  if (!stats) return empty;
-
-  const lines: BoundedLedgerLine[] = [];
-  let totalLines = 0;
-  let sourceLine = 0;
-  let latestConfigBeforeTail: BoundedLedgerLine | null = null;
-
-  if (maxEntries <= 0) {
-    return { ...empty, truncated: stats.size > 0 };
-  }
-
-  const stream = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const rawLine of reader) {
-      sourceLine += 1;
-      const text = String(rawLine).trim();
-      if (!text) continue;
-      totalLines += 1;
-      lines.push({ line: sourceLine, text });
-      if (lines.length > maxEntries) {
-        const removed = lines.shift();
-        if (isConfigLedgerLine(removed)) latestConfigBeforeTail = removed || null;
-      }
-    }
-  } catch (error) {
-    if (isFileNotFound(error)) return empty;
-    throw error;
-  } finally {
-    reader.close();
-    stream.destroy();
-  }
-
-  const bounded =
-    maxEntries > 1 && latestConfigBeforeTail && tailNeedsGoverningConfig(lines)
-      ? trimBoundLedgerLines([latestConfigBeforeTail, ...lines], maxEntries)
-      : lines;
-  return {
-    lines: bounded,
-    maxEntries,
-    omittedEntries: Math.max(0, totalLines - bounded.length),
-    truncated: totalLines > bounded.length,
-  };
-}
-
-function tailNeedsGoverningConfig(lines: BoundedLedgerLine[]): boolean {
-  const firstRunOffset = lines.findIndex(isRunLedgerLine);
-  if (firstRunOffset < 0) return false;
-  for (let index = firstRunOffset; index >= 0; index -= 1) {
-    if (isConfigLedgerLine(lines[index])) return false;
-  }
-  return true;
-}
-
-function trimBoundLedgerLines(lines: BoundedLedgerLine[], maxEntries: number): BoundedLedgerLine[] {
-  const bounded = [...lines];
-  while (bounded.length > maxEntries) {
-    const removable = bounded.findIndex((line, index) => index > 0 && !isConfigLedgerLine(line));
-    bounded.splice(removable >= 0 ? removable : bounded.length - 1, 1);
-  }
-  return bounded;
-}
-
-function isConfigLedgerLine(line: BoundedLedgerLine | undefined): boolean {
-  return ledgerLineType(line) === "config";
-}
-
-function isRunLedgerLine(line: BoundedLedgerLine | undefined): boolean {
-  return ledgerLineType(line) === "run";
-}
-
-function ledgerLineType(line: BoundedLedgerLine | undefined): "config" | "run" | "other" {
-  if (!line) return "other";
-  if (
-    !line.text.includes('"type"') &&
-    !line.text.includes('"run"') &&
-    !line.text.includes('"metric"') &&
-    !line.text.includes('"status"')
-  ) {
-    return "other";
-  }
-  try {
-    const entry = parseJsonlRecord(line.text, "autoresearch.jsonl", line.line);
-    if (entry.type === "config") return "config";
-    if (
-      entry.type === "run" ||
-      (!entry.type && ("run" in entry || "metric" in entry || "status" in entry))
-    ) {
-      return "run";
-    }
-  } catch {
-    return "other";
-  }
-  return "other";
 }
 
 function isFileNotFound(error: unknown): boolean {

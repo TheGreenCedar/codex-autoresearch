@@ -122,10 +122,24 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
               <SignalStrip view={view} viewModel={viewModel} />
             </div>
           </div>
-          {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
+          {auditView ? (
+            <ScoreStrip
+              session={session}
+              readout={readout}
+              summary={viewModel.summary}
+              layout="stack"
+            />
+          ) : null}
         </section>
 
-        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
+        {!auditView ? (
+          <ScoreStrip
+            session={session}
+            readout={readout}
+            summary={viewModel.summary}
+            layout="compact"
+          />
+        ) : null}
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />

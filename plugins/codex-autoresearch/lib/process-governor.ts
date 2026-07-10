@@ -67,6 +67,98 @@ const PROCESS_LIFECYCLE_EVENTS = new Set<ProcessLifecycleEvent>([
   "terminated",
   "termination-failed",
 ]);
+export const PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT = 256;
+const PROCESS_LIFECYCLE_PROJECTION_INVALID_LIMIT = 5;
+
+export interface ProcessLifecycleProjection {
+  records: UnknownRecord[];
+  trackedIdentityCount: number;
+  invalidRecordCount: number;
+  overflowCount: number;
+  incomplete: boolean;
+  maxTrackedIdentities: number;
+}
+
+export interface ProcessLifecycleAccumulator {
+  add(entry: unknown): void;
+  snapshot(): ProcessLifecycleProjection;
+}
+
+export function createProcessLifecycleAccumulator({
+  maxTrackedIdentities = PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+}: {
+  maxTrackedIdentities?: number;
+} = {}): ProcessLifecycleAccumulator {
+  const requestedLimit = Math.floor(Number(maxTrackedIdentities) || 0);
+  const limit = Math.max(
+    1,
+    Math.min(
+      PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+      requestedLimit || PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+    ),
+  );
+  const blockingByIdentity = new Map<string, ParsedProcessLifecycleRecord>();
+  const invalidRecords: UnknownRecord[] = [];
+  let invalidRecordCount = 0;
+  let overflowCount = 0;
+  let overflowAt = "";
+
+  const accept = (lifecycle: ParsedProcessLifecycleRecord) => {
+    if (lifecycle.event === "terminated") {
+      blockingByIdentity.delete(lifecycle.identityKey);
+      return;
+    }
+    if (blockingByIdentity.has(lifecycle.identityKey)) {
+      blockingByIdentity.set(lifecycle.identityKey, lifecycle);
+      return;
+    }
+    if (blockingByIdentity.size >= limit) {
+      overflowCount += 1;
+      overflowAt ||= lifecycle.timestamp;
+      return;
+    }
+    blockingByIdentity.set(lifecycle.identityKey, lifecycle);
+  };
+
+  return {
+    add(entry: unknown) {
+      if (isUnknownRecord(entry) && entry.type === "process_lifecycle") {
+        const parsed = parseProcessLifecycleRecord(entry);
+        if (parsed) accept(parsed);
+        else {
+          invalidRecordCount += 1;
+          if (invalidRecords.length < PROCESS_LIFECYCLE_PROJECTION_INVALID_LIMIT) {
+            invalidRecords.push(
+              processLifecycleProjectionInvalidRecord(
+                safeLedgerTimestamp(entry.at),
+                invalidRecordCount,
+              ),
+            );
+          }
+        }
+        return;
+      }
+      for (const lifecycle of processLifecycleRecordsFromEntry(entry)) accept(lifecycle);
+    },
+    snapshot() {
+      const incomplete = overflowCount > 0;
+      return {
+        records: [
+          ...invalidRecords,
+          ...(incomplete
+            ? [processLifecycleProjectionIncompleteRecord(overflowCount, overflowAt)]
+            : []),
+          ...[...blockingByIdentity.values()].map((record) => record.projectionRecord),
+        ],
+        trackedIdentityCount: blockingByIdentity.size,
+        invalidRecordCount,
+        overflowCount,
+        incomplete,
+        maxTrackedIdentities: limit,
+      };
+    },
+  };
+}
 
 export function buildResourcePreflight({
   activeProcesses = 0,
@@ -154,6 +246,27 @@ export function classifyProcessResidue(entries: unknown[]): ResourceResidueFact[
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (isUnknownRecord(entry) && entry.type === "process_lifecycle") {
+      if (entry.projectionInvalid === true) {
+        invalid.push({
+          type: "process_lifecycle",
+          identity: publicProcessIdentity(`invalid-bounded-process-lifecycle-${index}`),
+          status: "invalid-lifecycle",
+          timestamp: safeLedgerTimestamp(entry.at),
+          reason: "typed process lifecycle entry is malformed or contradicts termination proof",
+        });
+        continue;
+      }
+      if (entry.projectionIncomplete === true) {
+        invalid.push({
+          type: "process_lifecycle",
+          identity: publicProcessIdentity("bounded-process-lifecycle-projection"),
+          status: "invalid-lifecycle",
+          timestamp: safeLedgerTimestamp(entry.at),
+          reason:
+            "bounded process lifecycle projection is incomplete; inspect full state or ledger-doctor before trusting process clearance",
+        });
+        continue;
+      }
       const parsed = parseProcessLifecycleRecord(entry);
       if (!parsed) {
         invalid.push({
@@ -249,6 +362,7 @@ export function buildProcessLifecycleRecord({
 interface ParsedProcessLifecycleRecord {
   event: ProcessLifecycleEvent;
   identityKey: string;
+  projectionRecord: ProcessLifecycleRecord;
   timestamp: string;
 }
 
@@ -264,11 +378,18 @@ function processLifecycleRecordsFromEntry(entry: unknown): ParsedProcessLifecycl
   const identityKey = processIdentity(packetId, processId);
   const event = progressLifecycleEvent(progressSnapshot);
   if (!identityKey || !event) return [];
+  const timestamp = safeLedgerTimestamp(entry.timestamp || progressSnapshot.startedAt);
   return [
     {
       identityKey,
       event,
-      timestamp: safeLedgerTimestamp(entry.timestamp || progressSnapshot.startedAt),
+      projectionRecord: {
+        type: "process_lifecycle",
+        identity: { packetId, processId },
+        event,
+        at: timestamp || "1970-01-01T00:00:00.000Z",
+      },
+      timestamp,
     },
   ];
 }
@@ -302,7 +423,47 @@ function parseProcessLifecycleRecord(entry: unknown): ParsedProcessLifecycleReco
   ) {
     return null;
   }
-  return { identityKey, event, timestamp };
+  return {
+    identityKey,
+    event,
+    projectionRecord: {
+      type: "process_lifecycle",
+      identity: {
+        packetId: stringValue(identity.packetId),
+        processId: stringValue(identity.processId),
+      },
+      event,
+      at: timestamp,
+      ...(terminationPresent && isUnknownRecord(termination)
+        ? { termination: redactedTerminationSummary(termination) || undefined }
+        : {}),
+    },
+    timestamp,
+  };
+}
+
+function processLifecycleProjectionInvalidRecord(
+  at: string,
+  invalidOrdinal: number,
+): UnknownRecord {
+  return {
+    type: "process_lifecycle",
+    projectionInvalid: true,
+    invalidOrdinal,
+    at,
+  };
+}
+
+function processLifecycleProjectionIncompleteRecord(
+  overflowCount: number,
+  at: string,
+): UnknownRecord {
+  return {
+    type: "process_lifecycle",
+    projectionIncomplete: true,
+    overflowCount,
+    at: at || "1970-01-01T00:00:00.000Z",
+  };
 }
 
 function progressLifecycleEvent(progress: UnknownRecord): ProcessLifecycleEvent | null {

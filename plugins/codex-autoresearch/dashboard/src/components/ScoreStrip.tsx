@@ -1,15 +1,19 @@
-import type { DashboardReadout, SessionSegment } from "../types";
+import type { DashboardReadout, DashboardSummary, SessionSegment } from "../types";
 import { formatConfidence, formatImprovement, formatMetricValue, statusCounts } from "../model";
 
 interface ScoreStripProps {
   session: SessionSegment;
   readout: DashboardReadout;
+  summary?: DashboardSummary;
   layout?: "stack" | "compact";
 }
 
-export function ScoreStrip({ session, readout, layout = "stack" }: ScoreStripProps) {
+export function ScoreStrip({ session, readout, summary, layout = "stack" }: ScoreStripProps) {
   const counts = statusCounts(session.runs);
   const latest = readout.recentRuns[0] || null;
+  const canonicalSummary = summary?.segment === session.segment ? summary : null;
+  const runCount = finiteCount(canonicalSummary?.runs, session.runs.length);
+  const keptCount = finiteCount(canonicalSummary?.kept, counts.keep);
   return (
     <section className={`score-strip score-strip--${layout}`} aria-label="What changed">
       <ScoreCell
@@ -23,7 +27,7 @@ export function ScoreStrip({ session, readout, layout = "stack" }: ScoreStripPro
         value={
           latest
             ? `#${latest.run} ${latest.status || "logged"}`
-            : `${session.runs.length} run${session.runs.length === 1 ? "" : "s"}`
+            : `${runCount} run${runCount === 1 ? "" : "s"}`
         }
       />
       <ScoreCell
@@ -41,13 +45,14 @@ export function ScoreStrip({ session, readout, layout = "stack" }: ScoreStripPro
         id="improvement-value"
         value={formatImprovement(readout.improvement)}
       />
-      <ScoreCell
-        label="Runs"
-        id="runs-value"
-        value={`${session.runs.length} (${counts.keep} kept)`}
-      />
+      <ScoreCell label="Runs" id="runs-value" value={`${runCount} (${keptCount} kept)`} />
     </section>
   );
+}
+
+function finiteCount(value: unknown, fallback: number): number {
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : fallback;
 }
 
 interface ScoreCellProps {

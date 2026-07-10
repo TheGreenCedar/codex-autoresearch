@@ -32,6 +32,7 @@ import {
 import { commandForDecisionCapsule } from "../lib/commands/session-forensics.js";
 import { analyzeLedgerHealth, repairLedgerRecords } from "../lib/ledger-health.js";
 import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
+import { DASHBOARD_LEDGER_MAX_ENTRIES } from "../lib/dashboard-ledger-bounds.js";
 import { renderExportedDashboard } from "./helpers/dashboard-export.js";
 import {
   prepareCurrentTreeFinalizationBlocker,
@@ -2792,6 +2793,15 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
       event: "started",
       at: "2026-07-10T12:00:00.000Z",
     });
+    for (let index = 0; index < DASHBOARD_LEDGER_MAX_ENTRIES + 7; index += 1) {
+      records.push({
+        type: "run",
+        run: 10_000 + index,
+        metric: index + 2,
+        status: "measure",
+        description: `tail run ${index + 1}`,
+      });
+    }
     await writeLedger(dir, records);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
@@ -2803,8 +2813,8 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
 
     const statePreflight = JSON.parse(state.stdout).resourcePreflight;
     const doctorPreflight = JSON.parse(doctor.stdout).state.resourcePreflight;
-    const dashboardPreflight = JSON.parse(dashboard.stdout).viewModel.decisionEnvelope
-      .resourcePreflight;
+    const dashboardPayload = JSON.parse(dashboard.stdout);
+    const dashboardPreflight = dashboardPayload.viewModel.decisionEnvelope.resourcePreflight;
     for (const preflight of [statePreflight, doctorPreflight, dashboardPreflight]) {
       assert.equal(preflight.status, "blocked");
       assert.equal(preflight.canStart, false);
@@ -2813,6 +2823,9 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
     }
     assert.equal(statePreflight.nextAction, doctorPreflight.nextAction);
     assert.equal(statePreflight.nextAction, dashboardPreflight.nextAction);
+    assert.equal(dashboardPayload.viewModel.summary.runs, DASHBOARD_LEDGER_MAX_ENTRIES + 8);
+    const dashboardHtml = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
+    assert.doesNotMatch(dashboardHtml, /packet-unclosed/);
   });
 });
 

@@ -1865,14 +1865,21 @@ test("dashboard labels bounded static export ledgers as partial", async () => {
     entries,
     emptyCommandMeta({
       deliveryMode: "static-export",
-      ledgerBounds: { truncated: true, omittedEntries: 101, maxEntries: 5000 },
+      ledgerBounds: {
+        truncated: true,
+        omittedEntries: 101,
+        maxEntries: 5000,
+        summarySource: "full-ledger-stream",
+      },
+      viewModel: { summary: { segment: 0, runs: 113, kept: 110 } },
     }),
   );
 
   assert.match(
     getById("ledger-note").textContent,
-    /12 runs \/ newest first \/ 101 older ledger entries omitted from snapshot/,
+    /12 runs \/ newest first \/ 101 older ledger entries omitted from snapshot \/ summary uses the full streamed ledger/,
   );
+  assert.equal(getById("runs-value").textContent, "113 (110 kept)");
   assert.match(
     getById("ledger-scroll").querySelector("table")?.getAttribute("aria-label") || "",
     /12 shown, 101 older ledger entries omitted from snapshot/,
@@ -4679,6 +4686,11 @@ test("live dashboard view model reports ledger bounds when entries are capped", 
       maxEntries: LIVE_LEDGER_MAX_ENTRIES,
       omittedEntries: 4,
       truncated: true,
+      totalEntries: LIVE_LEDGER_MAX_ENTRIES + 4,
+      validEntries: LIVE_LEDGER_MAX_ENTRIES + 4,
+      retainedEntries: LIVE_LEDGER_MAX_ENTRIES,
+      summarySource: "full-ledger-stream",
+      retention: "newest-rows-plus-governing-config",
     });
     assert.equal(snapshot.ledgerEntries[0].type, "config");
     assert.equal(snapshot.ledgerEntries[1].run, 5);
@@ -4715,11 +4727,16 @@ test("live dashboard ledger bounds count omitted raw ledger history before parsi
     const snapshot = await fetch(`${server.url}view-model.json`).then((res) => res.json());
 
     assert.equal(snapshot.ledgerEntries.length, LIVE_LEDGER_MAX_ENTRIES);
-    assert.deepEqual(snapshot.ledgerBounds, {
-      maxEntries: LIVE_LEDGER_MAX_ENTRIES,
-      omittedEntries: malformedLineCount + 4,
-      truncated: true,
-    });
+    assert.equal(snapshot.ledgerBounds.maxEntries, LIVE_LEDGER_MAX_ENTRIES);
+    assert.equal(snapshot.ledgerBounds.omittedEntries, malformedLineCount + 4);
+    assert.equal(snapshot.ledgerBounds.truncated, true);
+    assert.equal(snapshot.ledgerBounds.totalEntries, malformedLineCount + runCount + 1);
+    assert.equal(snapshot.ledgerBounds.validEntries, runCount + 1);
+    assert.equal(snapshot.ledgerBounds.retainedEntries, LIVE_LEDGER_MAX_ENTRIES);
+    assert.equal(snapshot.ledgerBounds.summarySource, "full-ledger-stream");
+    assert.equal(snapshot.ledgerBounds.retention, "newest-rows-plus-governing-config");
+    assert.equal(snapshot.ledgerBounds.invalidLedgerEntryCount, malformedLineCount);
+    assert.equal(snapshot.ledgerBounds.invalidLedgerEntries.length, 20);
     assert.equal(snapshot.ledgerEntries[0].type, "config");
     assert.equal(snapshot.ledgerEntries[1].run, 5);
   } finally {
@@ -4797,6 +4814,11 @@ test("live dashboard ledger bounds preserve governing config by position", async
       maxEntries: LIVE_LEDGER_MAX_ENTRIES,
       omittedEntries: 5,
       truncated: true,
+      totalEntries: LIVE_LEDGER_MAX_ENTRIES + 5,
+      validEntries: LIVE_LEDGER_MAX_ENTRIES + 5,
+      retainedEntries: LIVE_LEDGER_MAX_ENTRIES,
+      summarySource: "full-ledger-stream",
+      retention: "newest-rows-plus-governing-config",
     });
     assert.equal(snapshot.ledgerEntries[0].type, "config");
     assert.equal(snapshot.ledgerEntries[1].run, 6);
