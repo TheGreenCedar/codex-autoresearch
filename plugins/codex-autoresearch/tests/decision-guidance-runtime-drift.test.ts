@@ -1,15 +1,195 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
+  inspectRuntimeDrift,
   inspectRuntimeDriftFromFacts,
   summarizeRuntimeAuthority,
 } from "../lib/runtime-drift-doctor.js";
+import { withAutoresearchTempDir, writeRuntimePackage } from "./helpers/cli-session.js";
 
 const DOCTOR_COMMAND = /node .*scripts[\\/]autoresearch\.mjs doctor .*--explain/;
 const ABSOLUTE_DOCTOR_COMMAND =
   /node ".*codex autoresearch.*scripts[\\/]autoresearch\.mjs" doctor --cwd ".*codex autoresearch" --explain/;
 const SOURCE_FINGERPRINT = "a".repeat(64);
+
+const FIXTURE_VERSION = "2.6.0";
+const RUNTIME_CONTENT = "export const runtimeFixture = true;\n";
+const runtimePath = (cacheRoot: string, version: string) =>
+  path.join(cacheRoot, "TheGreenCedar", "codex-autoresearch", version);
+
+async function writeSource(root: string, packageArtifact = false) {
+  await writeRuntimePackage(root, FIXTURE_VERSION, {
+    sourceShaped: !packageArtifact,
+    runtimeContent: RUNTIME_CONTENT,
+  });
+}
+
+test("canonical metadata finds the current cache and reports runtime surfaces", async () => {
+  await withAutoresearchTempDir("runtime-canonical", async (dir) => {
+    const sourceRoot = path.join(dir, "source");
+    const cacheRoot = path.join(dir, "cache");
+    const installedRoot = runtimePath(cacheRoot, FIXTURE_VERSION);
+    await writeSource(sourceRoot);
+    await writeRuntimePackage(installedRoot, FIXTURE_VERSION, {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+
+    const summary = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: cacheRoot,
+    });
+
+    assert.equal(summary.installedRuntime, "fresh");
+    assert.equal(summary.packageSurface, "source-checkout");
+    assert.equal(summary.installedRuntimeShape, "hydrated-runtime");
+    assert.equal(summary.installedRuntimePath, installedRoot);
+    assert.equal(summary.installedRuntimeVersion, FIXTURE_VERSION);
+    assert.equal(summary.installedRuntimeProvenance.source, "canonical-cache-layout");
+    assert.equal(summary.installedRuntimeProvenance.status, "selected");
+    assert.deepEqual(summary.installedRuntimeProvenance.candidates, [installedRoot]);
+  });
+});
+
+test("multiple versions prefer the source version and fail closed when it is absent", async () => {
+  await withAutoresearchTempDir("runtime-ambiguous", async (dir) => {
+    const sourceRoot = path.join(dir, "source");
+    const cacheRoot = path.join(dir, "cache");
+    const activeRoot = runtimePath(cacheRoot, FIXTURE_VERSION);
+    await writeSource(sourceRoot);
+    await writeRuntimePackage(runtimePath(cacheRoot, "2.5.0"), "2.5.0", {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+    await writeRuntimePackage(activeRoot, FIXTURE_VERSION, {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+
+    const preferred = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: cacheRoot,
+    });
+    assert.equal(preferred.installedRuntime, "fresh");
+    assert.equal(preferred.installedRuntimePath, activeRoot);
+    assert.equal(preferred.installedRuntimeProvenance.source, "canonical-cache-layout");
+
+    const ambiguousCache = path.join(dir, "ambiguous-cache");
+    for (const version of ["2.4.0", "2.5.0"]) {
+      await writeRuntimePackage(runtimePath(ambiguousCache, version), version, {
+        runtimeContent: RUNTIME_CONTENT,
+      });
+    }
+    const ambiguous = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: ambiguousCache,
+    });
+    assert.equal(ambiguous.installedRuntime, "unavailable");
+    assert.equal(ambiguous.installedRuntimeProvenance.status, "ambiguous");
+    assert.equal(ambiguous.installedRuntimeProvenance.candidates.length, 2);
+    assert.match(ambiguous.nextActionHint, /ambiguous/i);
+
+    const selected = await inspectRuntimeDrift({
+      packageRoot: activeRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: cacheRoot,
+    });
+    assert.equal(selected.installedRuntime, "fresh");
+    assert.equal(selected.packageSurface, "active-installed-cache");
+    assert.equal(selected.installedRuntimeProvenance.source, "launcher-package-root");
+  });
+});
+
+test("source-shaped, package, missing, and stale surfaces stay distinct", async () => {
+  await withAutoresearchTempDir("runtime-shapes", async (dir) => {
+    const sourceRoot = path.join(dir, "source");
+    await writeSource(sourceRoot);
+
+    const sourceCache = path.join(dir, "source-cache");
+    await writeRuntimePackage(runtimePath(sourceCache, FIXTURE_VERSION), FIXTURE_VERSION, {
+      sourceShaped: true,
+    });
+    const sourceShaped = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: sourceCache,
+    });
+    assert.equal(sourceShaped.installedRuntime, "unavailable");
+    assert.equal(sourceShaped.installedRuntimeShape, "source-shaped-package");
+
+    const missing = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: path.join(dir, "missing-cache"),
+    });
+    assert.equal(missing.installedRuntime, "missing");
+
+    const staleCache = path.join(dir, "stale-cache");
+    await writeRuntimePackage(runtimePath(staleCache, "2.5.0"), "2.5.0", {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+    const stale = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: staleCache,
+    });
+    assert.equal(stale.installedRuntime, "stale");
+    assert.equal(stale.installedRuntimeVersion, "2.5.0");
+
+    const packageRoot = path.join(dir, "package");
+    await writeSource(packageRoot, true);
+    const artifact = await inspectRuntimeDrift({
+      packageRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: path.join(dir, "artifact-cache"),
+    });
+    assert.equal(artifact.packageSurface, "package-artifact");
+  });
+});
+
+test("legacy discovery is labelled and wrong canonical casing is rejected", async () => {
+  await withAutoresearchTempDir("runtime-legacy-casing", async (dir) => {
+    const sourceRoot = path.join(dir, "source");
+    await writeSource(sourceRoot);
+
+    const legacyCache = path.join(dir, "legacy-cache");
+    const legacyRoot = path.join(
+      legacyCache,
+      "thegreencedar-autoresearch",
+      "plugin-install-fixture",
+      "codex-autoresearch",
+      FIXTURE_VERSION,
+    );
+    await writeRuntimePackage(legacyRoot, FIXTURE_VERSION, {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+    const legacy = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: legacyCache,
+    });
+    assert.equal(legacy.installedRuntime, "fresh");
+    assert.equal(legacy.installedRuntimePath, legacyRoot);
+    assert.equal(legacy.installedRuntimeProvenance.source, "legacy-cache-fallback");
+
+    const wrongCaseCache = path.join(dir, "wrong-case-cache");
+    await writeRuntimePackage(
+      path.join(wrongCaseCache, "thegreencedar", "codex-autoresearch", FIXTURE_VERSION),
+      FIXTURE_VERSION,
+      { runtimeContent: RUNTIME_CONTENT },
+    );
+    const wrongCase = await inspectRuntimeDrift({
+      packageRoot: sourceRoot,
+      sourceVersion: FIXTURE_VERSION,
+      pluginCacheRoot: wrongCaseCache,
+    });
+    assert.equal(wrongCase.installedRuntime, "unavailable");
+    assert.equal(wrongCase.installedRuntimeProvenance.source, "canonical-cache-layout");
+    assert.match(wrongCase.installedRuntimeProvenance.detail, /TheGreenCedar/);
+  });
+});
 
 test("unavailable installed runtime asks the operator to inspect the runtime", () => {
   const summary = inspectRuntimeDriftFromFacts({
