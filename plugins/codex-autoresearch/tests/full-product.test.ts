@@ -671,6 +671,7 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
     "scripts/autoresearch.mjs",
     "scripts/bootstrap-runtime.mjs",
     "scripts/check.mjs",
+    "scripts/directory-swap.mjs",
     "scripts/finalize-autoresearch.mjs",
     "scripts/release-integrity.mjs",
   ]) {

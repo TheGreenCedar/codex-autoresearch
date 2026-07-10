@@ -7,7 +7,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
+import {
+  hasDirectorySwapArtifacts,
+  recoverDirectorySwapArtifacts,
+  replaceDirectoriesRollbackSafe,
+} from "./directory-swap.mjs";
 import { parseSha256Manifest } from "./release-integrity.mjs";
+
+export { hasDirectorySwapArtifacts, replaceDirectoriesRollbackSafe };
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_TIMEOUT_MS = 120_000;
@@ -26,12 +33,19 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
   await rebuildStaleSourceRuntime(pluginRoot, target);
-  if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) {
-    return pathToFileURL(target).href;
+  const replacementTargets = runtimeReplacementTargets(pluginRoot);
+  const ready = (await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot));
+  const recoveryPending = await hasDirectorySwapArtifacts(replacementTargets);
+  if (ready && !recoveryPending) return pathToFileURL(target).href;
+  if (!install) {
+    if (!ready) throw missingRuntimeError(pluginRoot, target);
+    throw new Error(
+      "Codex Autoresearch runtime has unfinished replacement artifacts. Run the launcher once with hydration enabled to recover or inspect them safely.",
+    );
   }
-  if (!install) throw missingRuntimeError(pluginRoot, target);
 
   await withRuntimeInstallLock(pluginRoot, async () => {
+    await recoverDirectorySwapArtifacts(pluginRoot, replacementTargets);
     if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) return;
     await installRuntimeFromRelease(pluginRoot, options);
     if (!(await fileExists(target))) {
@@ -43,6 +57,10 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   });
 
   return pathToFileURL(target).href;
+}
+
+function runtimeReplacementTargets(pluginRoot) {
+  return [path.join(pluginRoot, "dist"), path.join(pluginRoot, "assets", "dashboard-build")];
 }
 
 async function dashboardRuntimeReady(pluginRoot) {
@@ -145,18 +163,51 @@ async function installRuntimeFromRelease(pluginRoot, options = {}) {
     }
     await verifyReleasePackageManifest(extractedPackage, version);
 
-    await fs.rm(path.join(pluginRoot, "dist"), { recursive: true, force: true });
-    await fs.cp(extractedDist, path.join(pluginRoot, "dist"), { recursive: true });
-    await fs.rm(path.join(pluginRoot, "assets", "dashboard-build"), {
-      recursive: true,
-      force: true,
-    });
     await fs.mkdir(path.join(pluginRoot, "assets"), { recursive: true });
-    await fs.cp(extractedDashboardBuild, path.join(pluginRoot, "assets", "dashboard-build"), {
-      recursive: true,
-    });
+    await replaceDirectoriesRollbackSafe(
+      pluginRoot,
+      [
+        {
+          target: path.join(pluginRoot, "dist"),
+          source: extractedDist,
+          verify: verifyHydratedDist,
+        },
+        {
+          target: path.join(pluginRoot, "assets", "dashboard-build"),
+          source: extractedDashboardBuild,
+          verify: verifyHydratedDashboardBuild,
+        },
+      ],
+      options.directorySwap,
+    );
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function verifyHydratedDist(distDir) {
+  const required = [
+    "lib/runtime-paths.mjs",
+    "scripts/autoresearch.mjs",
+    "scripts/check.mjs",
+    "scripts/finalize-autoresearch.mjs",
+  ];
+  const missing = [];
+  for (const relative of required) {
+    if (!(await fileExists(path.join(distDir, relative)))) missing.push(relative);
+  }
+  if (missing.length) {
+    throw new Error(`Release runtime is missing required built files: ${missing.join(", ")}.`);
+  }
+}
+
+async function verifyHydratedDashboardBuild(buildDir) {
+  const missing = [];
+  for (const asset of DASHBOARD_BUILD_ASSETS) {
+    if (!(await fileExists(path.join(buildDir, asset)))) missing.push(asset);
+  }
+  if (missing.length) {
+    throw new Error(`Release dashboard build is missing required assets: ${missing.join(", ")}.`);
   }
 }
 
@@ -307,7 +358,7 @@ function isExpectedRuntimeArchiveFile(name) {
   }
   if (/^docs\/.+\.md$/.test(name)) return true;
   if (
-    /^scripts\/(?:autoresearch|bootstrap-runtime|check|finalize-autoresearch|release-integrity)\.mjs$/.test(
+    /^scripts\/(?:autoresearch|bootstrap-runtime|check|directory-swap|finalize-autoresearch|release-integrity)\.mjs$/.test(
       name,
     )
   ) {

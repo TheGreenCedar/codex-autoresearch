@@ -432,7 +432,7 @@ const checks = [
   },
   {
     id: "release-tarball-runtime",
-    file: ".gitignore, package.json, scripts/autoresearch.mjs, scripts/bootstrap-runtime.mjs, scripts/release-integrity.mjs, .github/workflows/release.yml",
+    file: ".gitignore, package.json, scripts/autoresearch.mjs, scripts/bootstrap-runtime.mjs, scripts/directory-swap.mjs, scripts/release-integrity.mjs, .github/workflows/release.yml",
     description:
       "Source checkouts keep generated dist out of Git while release tarballs include the built runtime used by public launchers.",
     run: async () => {
@@ -461,6 +461,7 @@ const checks = [
           "scripts/autoresearch.mjs",
           "scripts/bootstrap-runtime.mjs",
           "scripts/check.mjs",
+          "scripts/directory-swap.mjs",
           "scripts/finalize-autoresearch.mjs",
           "scripts/release-integrity.mjs",
           ".codex-plugin/",
