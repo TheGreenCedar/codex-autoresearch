@@ -2650,6 +2650,7 @@ function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
   const minimalEnvelope = envelope
     ? {
         activeSegment: envelope.activeSegment || null,
+        nextAction: envelope.nextAction || compact.nextAction || "",
         canonicalNextAction: canonicalNextAction || envelope.canonicalNextAction || null,
         finalizationReadiness: envelope.finalizationReadiness || null,
         latestPacketFreshness: envelope.latestPacketFreshness || null,

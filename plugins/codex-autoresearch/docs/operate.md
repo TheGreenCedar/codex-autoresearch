@@ -63,7 +63,7 @@ Use `--from-last` rather than copying a metric out of the terminal. If inline JS
 
 Detailed output stores that structured experiment note in the `asi` field. It should say what Codex expected, what the evidence showed, why a rejected path should stay rejected, and what experiment would be sensible next. A useful note prevents the next session from rediscovering the same dead end.
 
-Every log returns a continuation. If `continuation.shouldContinue` is true, another loop action is expected. If `continuation.forbidFinalAnswer` is true, Codex should not report the goal as finished. A repair, budget stop, segment change, or finalization action takes priority over another experiment.
+Every log returns a continuation. If `continuation.shouldContinue` is true, the session is still active and another loop action is expected; it does not authorize another packet. Read `loopContract.canRunNextPacket` (also exposed as `canRunNextPacket` in compact state) before running one. If `continuation.forbidFinalAnswer` is true, Codex should not report the goal as finished. A repair, budget stop, segment change, or finalization action takes priority over another experiment.
 
 ## Repair the layer that failed
 

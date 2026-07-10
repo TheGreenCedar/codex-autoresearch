@@ -88,7 +88,7 @@ Obey these brakes:
 - Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
 - Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
 - Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.
-- Continue when `continuation.shouldContinue=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
+- Continue the active session when `continuation.shouldContinue=true`, but run a packet only when `loopContract.canRunNextPacket=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
 - Let blockers, budget stops, segment changes, and finalization outrank another packet.
 - Treat `benchmark-lint` as a parser check, not proof that the benchmark represents the product.
 - Require the checks implied by the claim: accuracy, behavior, accessibility, safety, data integrity, or performance.

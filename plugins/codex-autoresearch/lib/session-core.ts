@@ -656,6 +656,7 @@ export function buildDecisionEnvelope({
   });
   return {
     ...envelope,
+    nextAction: canonicalNextAction.reason || envelope.nextAction,
     loopContract,
     canonicalNextAction,
     operatorReadout,

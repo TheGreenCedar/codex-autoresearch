@@ -33,6 +33,7 @@ export interface CompactStateBuilderInput {
   remainingIterations?: unknown;
   nextAction?: string;
   shouldContinue?: boolean;
+  canRunNextPacket?: boolean;
   forbidFinalAnswer?: boolean;
   activeBudget?: boolean;
   requiresLogDecision?: boolean;
@@ -130,6 +131,7 @@ export interface CompactStateResponse {
   remainingIterations: unknown;
   nextAction: string;
   shouldContinue: boolean;
+  canRunNextPacket: boolean;
   forbidFinalAnswer: boolean;
   activeBudget: boolean;
   requiresLogDecision: boolean;
@@ -204,6 +206,7 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
     remainingIterations: input.remainingIterations ?? null,
     nextAction: input.nextAction || "Run doctor, then next.",
     shouldContinue: input.shouldContinue === true,
+    canRunNextPacket: input.canRunNextPacket === true,
     forbidFinalAnswer: input.forbidFinalAnswer === true,
     activeBudget: input.activeBudget === true,
     requiresLogDecision: input.requiresLogDecision === true,
@@ -971,6 +974,11 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       state.decisionEnvelope?.canonicalNextAction ||
       state.resumeAudit?.canonicalNextAction ||
       null;
+    const canonicalReason =
+      canonicalNextAction?.reason ||
+      compactDecisionEnvelope?.nextAction ||
+      continuation.nextAction ||
+      "Run doctor, then next.";
     const loopBlockers = Array.isArray(compactDecisionEnvelope?.loopContract?.blockers)
       ? compactDecisionEnvelope.loopContract.blockers.map(actionMessage).filter(Boolean)
       : [];
@@ -1005,7 +1013,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       });
     const operatorHandoff = {
       goal: goalFrame.operatorLine,
-      next: canonicalNextAction?.reason || continuation.nextAction || "Run doctor, then next.",
+      next: canonicalReason,
       blocker: blockers[0] || "",
       command: canonicalNextAction?.command || continuation.commands?.next || "",
     };
@@ -1063,9 +1071,9 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
         : null,
       limitReached: Boolean(limit.limitReached),
       remainingIterations: limit.remainingIterations ?? null,
-      nextAction:
-        canonicalNextAction?.reason || continuation.nextAction || "Run doctor, then next.",
+      nextAction: canonicalReason,
       shouldContinue: continuation.shouldContinue === true,
+      canRunNextPacket: compactDecisionEnvelope?.loopContract?.canRunNextPacket === true,
       forbidFinalAnswer: continuation.forbidFinalAnswer === true,
       activeBudget: continuation.activeBudget === true,
       requiresLogDecision: continuation.requiresLogDecision === true,
@@ -1109,7 +1117,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
             : state.best == null
               ? "No best metric yet."
               : `Best ${state.config?.metricName || "metric"} is ${state.best}.`,
-        next: continuation.nextAction || "Run doctor, then next.",
+        next: canonicalReason,
       },
       memory: {
         plateau: state.memory?.plateau?.detected === true,

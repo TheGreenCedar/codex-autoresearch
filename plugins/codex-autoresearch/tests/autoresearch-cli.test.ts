@@ -1232,7 +1232,7 @@ test("research-start dry-run prints the full qualitative loop start plan", async
     assert.match(payload.commands.setup, /\bresearch-setup\b/);
     assert.match(payload.commands.benchmarkLint, /\bbenchmark-lint\b/);
     assert.match(payload.commands.doctor, /\bdoctor\b.*--check-benchmark/);
-    assert.match(payload.commands.baseline, /\bnext\b.*--compact/);
+    assert.match(payload.commands.baseline, /(?:^|\s)next(?:\s|$).*--compact/);
     assert.match(payload.commands.logBaseline, /\blog\b.*--status measure/);
     assert.match(payload.commands.resume, /\brecommend-next\b.*--compact/);
     assert.equal(await pathExists(path.join(dir, "autoresearch.config.json")), false);
@@ -6203,9 +6203,13 @@ test("guarded sessions with active budgets keep continuation non-final", async (
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.activeBudget, true);
+    assert.equal(statePayload.shouldContinue, true);
+    assert.equal(statePayload.canRunNextPacket, false);
     assert.equal(statePayload.forbidFinalAnswer, true);
     assert.match(statePayload.commands.next, /--compact/);
-    assert.match(statePayload.report.next, /Keep going/);
+    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
+    assert.match(statePayload.report.next, /benchmark command/i);
+    assert.equal(statePayload.report.next, statePayload.canonicalNextAction.reason);
   });
 });
 
@@ -6516,7 +6520,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
     {
       name: "stale-packet",
       expectedKind: "stale-packet",
-      commandPattern: /\bnext\b/,
+      commandPattern: /(?:^|\s)next(?:\s|$)/,
       blocked: true,
       absentBest: false,
       prepare: async (dir) => {
@@ -6582,7 +6586,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
     {
       name: "ready",
       expectedKind: "next-packet",
-      commandPattern: /\bnext\b/,
+      commandPattern: /(?:^|\s)next(?:\s|$)/,
       blocked: false,
       absentBest: true,
       prepare: async (dir) => {
@@ -6647,6 +6651,20 @@ test("canonical next action stays consistent across state, report, recommend-nex
         Array(actions.length).fill(actions[0].reason),
         fixture.name,
       );
+      assert.deepEqual(
+        [
+          full.decisionEnvelope.nextAction,
+          compact.decisionEnvelope.nextAction,
+          compact.nextAction,
+          compact.report.next,
+          recommend.decisionEnvelope.nextAction,
+          recommend.nextAction,
+          dashboard.viewModel.decisionEnvelope.nextAction,
+          report.report.json.nextAction,
+        ],
+        Array(8).fill(actions[0].reason),
+        fixture.name,
+      );
       assert.equal(report.report.json.nextAction, actions[0].reason, fixture.name);
       assert.equal(dashboard.viewModel.nextBestAction.kind, fixture.expectedKind, fixture.name);
 
@@ -6668,6 +6686,13 @@ test("canonical next action stays consistent across state, report, recommend-nex
       assert.deepEqual(
         loopContracts.map((contract) => contract.canRunNextPacket),
         Array(loopContracts.length).fill(!fixture.blocked),
+        fixture.name,
+      );
+      assert.equal(compact.canRunNextPacket, !fixture.blocked, fixture.name);
+      assert.equal(compact.shouldContinue, true, fixture.name);
+      assert.equal(
+        compact.canRunNextPacket,
+        compact.decisionEnvelope.loopContract.canRunNextPacket,
         fixture.name,
       );
       assert.equal(report.report.json.status === "blocked", fixture.blocked, fixture.name);
@@ -6727,18 +6752,21 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
     );
     assert.equal(recommendPayload.decisionEnvelope.finalizationReadiness.available, true);
     assert.equal(statePayload.canonicalNextAction.kind, "log-decision");
-    assert.doesNotMatch(statePayload.operatorHandoff.command, /\bnext\b.*--compact/);
+    assert.doesNotMatch(statePayload.operatorHandoff.command, /(?:^|\s)next(?:\s|$).*--compact/);
     assert.equal(
       recommendPayload.commands.primary,
       statePayload.canonicalNextAction.command || statePayload.commands.state,
     );
-    assert.doesNotMatch(recommendPayload.commands.primary, /\bnext\b.*--compact/);
+    assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
     assert.equal(
       recommendPayload.decisionEnvelope.canonicalNextAction.kind,
       statePayload.canonicalNextAction.kind,
     );
     assert.equal(recommendPayload.operatorChecklist.source, "latestPacketFreshness");
-    assert.doesNotMatch(recommendPayload.operatorChecklist.command, /\bnext\b.*--compact/);
+    assert.doesNotMatch(
+      recommendPayload.operatorChecklist.command,
+      /(?:^|\s)next(?:\s|$).*--compact/,
+    );
     assert.match(recommendPayload.whySafe, /compact state/);
     assert.match(recommendPayload.whySafe, /shared decision envelope/);
   });
@@ -6814,8 +6842,9 @@ test("recommend-next compact refuses stale next command for plateau pivot", asyn
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.action?.kind, "plateau-pivot");
-    assert.doesNotMatch(payload.commands.primary, /\bnext\b/);
-    assert.match(payload.commands.primary, /lane-runner|new-segment/);
+    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "plateau-pivot");
+    assert.doesNotMatch(payload.commands.primary, /(?:^|\s)next(?:\s|$)/);
+    assert.match(payload.commands.primary, /(?:^|\s)(?:lane-runner|new-segment)(?:\s|$)/);
   });
 });
 
@@ -6904,7 +6933,7 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
     assert.equal(payload.decisionEnvelope.finalizationReadiness.available, true);
     assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "current-tree-finalization");
     assert.match(payload.nextAction, /finalize-current-tree|Final tree coverage/i);
-    assert.doesNotMatch(payload.canonicalNextAction.command, /\bnext\b/);
+    assert.doesNotMatch(payload.canonicalNextAction.command, /(?:^|\s)next(?:\s|$)/);
   });
 });
 
@@ -6939,7 +6968,7 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
       true,
     );
     assert.match(recommendPayload.operatorChecklist.source, /currentTree/);
-    assert.doesNotMatch(recommendPayload.commands.primary, /\bnext\b.*--compact/);
+    assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
 
     const doctor = await runCli([
       "doctor",
@@ -7058,7 +7087,10 @@ test("stale packet compact state recommends replacement next command", async () 
     const fullStatePayload = JSON.parse(fullState.stdout);
 
     assert.equal(fullStatePayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
-    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /\bnext\b/);
+    assert.match(
+      fullStatePayload.decisionEnvelope.canonicalNextAction.command,
+      /(?:^|\s)next(?:\s|$)/,
+    );
     assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--command/);
     assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--checks-command/);
 
@@ -7067,7 +7099,7 @@ test("stale packet compact state recommends replacement next command", async () 
     const statePayload = JSON.parse(state.stdout);
 
     assert.equal(statePayload.canonicalNextAction.kind, "stale-packet");
-    assert.match(statePayload.commands.replaceLast, /\bnext\b/);
+    assert.match(statePayload.commands.replaceLast, /(?:^|\s)next(?:\s|$)/);
     assert.match(statePayload.commands.replaceLast, /--command/);
     assert.match(statePayload.commands.replaceLast, /--checks-command/);
     assert.equal(statePayload.canonicalNextAction.command, statePayload.commands.replaceLast);
@@ -7082,7 +7114,7 @@ test("stale packet compact state recommends replacement next command", async () 
 
     assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
     assert.equal(recommendPayload.commands.primary, statePayload.commands.replaceLast);
-    assert.match(recommendPayload.commands.primary, /\bnext\b/);
+    assert.match(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$)/);
 
     const replacement = await runCli([
       "next",
@@ -10394,7 +10426,10 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
     assert.equal(payload.viewModel.lastRun.freshness.fresh, false);
     assert.equal(payload.viewModel.nextBestAction.kind, "stale-packet");
     assert.equal(payload.viewModel.guidedSetup.commands, undefined);
-    assert.doesNotMatch(String(payload.viewModel.nextBestAction.command || ""), /\bnext\b/);
+    assert.doesNotMatch(
+      String(payload.viewModel.nextBestAction.command || ""),
+      /(?:^|\s)next(?:\s|$)/,
+    );
     assert.equal(payload.viewModel.missionControl.logDecision.commandsByStatus, undefined);
     assert.equal(payload.viewModel.missionControl.logDecision.liveAction, undefined);
     assert.match(payload.viewModel.nextBestAction.detail, /Last-run packet is stale/);
@@ -10514,7 +10549,11 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
         assert.equal(payload.canonicalNextAction.toolName, "doctor", status);
         assert.match(payload.canonicalNextAction.command || "", /\bdoctor\b/, status);
         assert.match(payload.canonicalNextAction.command || "", /--explain\b/, status);
-        assert.doesNotMatch(payload.canonicalNextAction.command || "", /\bnext\b/, status);
+        assert.doesNotMatch(
+          payload.canonicalNextAction.command || "",
+          /(?:^|\s)next(?:\s|$)/,
+          status,
+        );
         assert.match(
           payload.issues.join("\n"),
           new RegExp(`${status} installed plugin runtime`, "i"),
@@ -10670,9 +10709,12 @@ test("recommend-next compact operator checklist uses bounded recovery for empty 
     const payload = JSON.parse(recommend.stdout);
     const command = payload.operatorChecklist.command || "";
 
-    assert.equal(payload.action.kind, "preflight");
-    assert.match(payload.nextAction, /benchmark command/i);
-    assert.match(payload.operatorChecklist.blocker, /benchmark command/i);
+    assert.equal(payload.action.kind, "setup");
+    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "setup");
+    assert.equal(payload.loopContract.blockers[0].kind, "setup");
+    assert.equal(payload.loopContract.canRunNextPacket, false);
+    assert.match(payload.nextAction, /setup/i);
+    assert.match(payload.operatorChecklist.blocker, /setup/i);
     assert.match(command, /autoresearch\.mjs\b.*\b(setup-plan|state)\b/);
     assert.match(command, /--cwd\b/);
     assert.doesNotMatch(command, /\bdoctor\b.*--explain\b/);
@@ -10680,24 +10722,24 @@ test("recommend-next compact operator checklist uses bounded recovery for empty 
   });
 });
 
-test("state and recommend-next expose advisory portfolio guidance", async () => {
+test("state and recommend-next suppress portfolio guidance while benchmark setup is blocked", async () => {
   await withTempDir("portfolio-guidance", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "portfolio", "--metric-name", "seconds"]);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.portfolioRecommendation.kind, "trust-blocker");
-    assert.equal(typeof statePayload.portfolioRecommendation.nextActionHint, "string");
+    assert.equal(statePayload.portfolioRecommendation, null);
+    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
+    assert.equal(statePayload.decisionEnvelope.loopContract.blockers[0].kind, "preflight");
+    assert.equal(statePayload.canRunNextPacket, false);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.portfolioRecommendation.kind, "trust-blocker");
-    assert.deepEqual(
-      recommendPayload.portfolioRecommendation,
-      statePayload.portfolioRecommendation,
-    );
+    assert.equal(recommendPayload.portfolioRecommendation, null);
+    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
+    assert.equal(recommendPayload.loopContract.blockers[0].kind, "preflight");
   });
 });
 

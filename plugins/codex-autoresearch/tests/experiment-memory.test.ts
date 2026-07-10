@@ -102,6 +102,21 @@ test("portfolio advisor never treats absent metrics as an incumbent", () => {
     assert.equal(recommendation.kind, "insufficient-evidence", String(best));
     assert.doesNotMatch(recommendation.evidence.join("\n"), /best metric/i, String(best));
   }
+
+  const metriclessKeep = recommendPortfolioDirection({
+    runtimeDrift: { installedRuntime: "fresh" },
+    gateQuality: { posture: "correctness" },
+    preflight: { status: "ready" },
+    laneLifecycle: { plannedLanes: [] },
+    experimentMemory: {
+      kept: [{ status: "keep", metric: null }],
+      diversityGuidance: { id: "incumbent-confirmation" },
+    },
+    best: null,
+    current: [],
+  });
+  assert.equal(metriclessKeep.kind, "insufficient-evidence");
+  assert.equal(metriclessKeep.evidence.includes("1 current kept run"), false);
 });
 
 test("experiment memory groups repeated setting families and detects plateau risk", () => {

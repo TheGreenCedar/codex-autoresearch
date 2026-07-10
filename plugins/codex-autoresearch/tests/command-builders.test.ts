@@ -475,8 +475,10 @@ test("compact state response preserves stable compact fields and optional loop f
     discarded: 1,
     measured: 1,
     nextAction: "Clean up stale lanes.",
+    shouldContinue: true,
+    canRunNextPacket: false,
     runtimeProvenance: { status: "fresh" },
-    loopContract: { mayRunPacket: false },
+    loopContract: { canRunNextPacket: false },
     laneLifecycle: { staleLanes: ["scout"] },
     packetDiagnostics: { unresolved: true },
     watchdogSummary: { stale: true },
@@ -486,8 +488,10 @@ test("compact state response preserves stable compact fields and optional loop f
   assert.equal(response.runs, 3);
   assert.equal(response.kept, 1);
   assert.equal(response.nextAction, "Clean up stale lanes.");
+  assert.equal(response.shouldContinue, true);
+  assert.equal(response.canRunNextPacket, false);
   assert.deepEqual(response.runtimeProvenance, { status: "fresh" });
-  assert.deepEqual(response.loopContract, { mayRunPacket: false });
+  assert.deepEqual(response.loopContract, { canRunNextPacket: false });
   assert.deepEqual(response.laneLifecycle, { staleLanes: ["scout"] });
   assert.deepEqual(response.packetDiagnostics, { unresolved: true });
   assert.deepEqual(response.watchdogSummary, { stale: true });
