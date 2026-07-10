@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { validateLiveDashboardPayload } from "../bootstrap";
 import { formatDisplayTime } from "../model";
 import type { DashboardEntry, DashboardMeta, DashboardMode, DashboardViewModel } from "../types";
 
@@ -161,12 +162,18 @@ async function fetchLiveDashboardSnapshot(
       throw failure;
     }
 
-    const payload = (await viewModelResponse.json()) as DashboardViewModel;
-    const embeddedEntries = entriesFromViewModel(payload);
+    let rawPayload: unknown;
+    try {
+      rawPayload = await viewModelResponse.json();
+    } catch {
+      throw new Error("Live readout payload is not valid JSON.");
+    }
+    const payload = validateLiveDashboardPayload(rawPayload);
+    if (!payload.ok) throw new Error(payload.reason);
     return {
-      entries: embeddedEntries ?? [],
+      entries: payload.entries,
       generatedAt: new Date().toISOString(),
-      viewModel: payload || {},
+      viewModel: payload.viewModel,
     };
   }
 
@@ -175,21 +182,6 @@ async function fetchLiveDashboardSnapshot(
 
 function noStoreRequest(signal: AbortSignal | null): RequestInit {
   return signal ? { cache: "no-store", signal } : { cache: "no-store" };
-}
-
-function entriesFromViewModel(
-  payload: DashboardViewModel | null | undefined,
-): DashboardEntry[] | null {
-  if (!payload) return null;
-  for (const key of ["ledgerEntries", "entries", "dashboardEntries"]) {
-    const value = payload[key];
-    if (Array.isArray(value)) return value.filter(isDashboardEntry);
-  }
-  return null;
-}
-
-function isDashboardEntry(value: unknown): value is DashboardEntry {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveStatus {
@@ -202,14 +194,14 @@ function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveSta
 function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
   return {
     title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
-    detail: message,
+    detail: `Showing the last known valid readout. ${message} Restart the Autoresearch CLI: serve --cwd <project>. Then reload.`,
   };
 }
 
 function refreshUnavailableStatus(): LiveStatus {
   return {
     title: "Snapshot refresh unavailable",
-    detail: "This browser context does not expose fetch.",
+    detail: "Showing the last known valid readout. This browser context does not expose fetch.",
   };
 }
 

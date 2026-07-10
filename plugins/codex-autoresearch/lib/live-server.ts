@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { ServerResponse } from "node:http";
+import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
 import { createReadStream } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -143,7 +144,7 @@ export async function serveAutoresearch(args: LooseObject) {
           ok: false,
           error:
             error instanceof Error
-              ? error.message
+              ? redactEvidenceText(error.message, { workDir })
               : "Autoresearch dashboard server failed unexpectedly.",
         },
         500,
@@ -320,6 +321,7 @@ async function buildLiveViewModelBody({
   const body = redactEvidenceObject(
     {
       ...compactDashboardTransportViewModel(await viewModel()),
+      payloadVersion: DASHBOARD_PAYLOAD_VERSION,
       ledgerEntries: ledgerReadout.entries,
       ledgerBounds: ledgerReadout.ledgerBounds,
     },

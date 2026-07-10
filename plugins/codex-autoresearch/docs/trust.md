@@ -80,4 +80,6 @@ Keep secrets out of commands, output, descriptions, experiment notes, and artifa
 
 The live dashboard serves current local state over loopback. An export is a portable snapshot. Neither should be treated as fresh evidence after the underlying session has changed.
 
+If dashboard data or metadata injection is missing, malformed, or declares an incompatible payload version, the readout shows a payload-unavailable screen instead of session evidence. Regenerate the static export or restart `serve` using the recovery command on that screen. Demo data appears only in an explicit `--showcase` export or the development server with `?showcase=1`, and the dashboard labels that provenance. A rejected live refresh leaves the last validated readout visible with a failure label; it never replaces that evidence with demo data.
+
 The ledger is append-only. If it is corrupt, report the file and line and use `ledger-doctor`; do not continue from a silently truncated history.

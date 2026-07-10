@@ -26,8 +26,8 @@ import {
 import { Ledger } from "./components/Ledger";
 
 interface DashboardProps {
-  initialEntries?: DashboardEntry[];
-  initialMeta?: DashboardMeta;
+  initialEntries: DashboardEntry[];
+  initialMeta: DashboardMeta;
 }
 
 export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {

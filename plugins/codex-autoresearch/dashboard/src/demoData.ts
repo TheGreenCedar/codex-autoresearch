@@ -21,7 +21,7 @@ export const DEMO_ENTRIES: DashboardEntry[] = [
 ];
 
 export const DEMO_META: DashboardMeta = {
-  deliveryMode: "live-server",
+  deliveryMode: "showcase",
   liveRefreshAvailable: false,
   liveActionsAvailable: false,
   showcaseMode: true,

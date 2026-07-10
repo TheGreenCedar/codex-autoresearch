@@ -6,6 +6,7 @@ import { boundDashboardLedgerEntries } from "./dashboard-ledger-bounds.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "./runtime-paths.js";
 import { type UnknownRecord, unknownRecordOrNull } from "./types/json.js";
+import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
 
 type LooseObject = UnknownRecord;
 
@@ -76,6 +77,7 @@ export function dashboardHtml(entries: LooseObject[], meta: LooseObject = {}) {
   const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
   const metaForClient = stripDashboardCommandFields({
     ...meta,
+    payloadVersion: DASHBOARD_PAYLOAD_VERSION,
     ledgerBounds: offlineExport
       ? {
           truncated: boundedEntries.truncated,

@@ -11,7 +11,7 @@ export function dashboardMode(meta: DashboardMeta = {}): DashboardMode {
       liveActions: false,
       showcase: true,
       title: "Demo Snapshot",
-      detail: guidance.detail || "100 embedded packets.",
+      detail: `Showcase provenance: explicit demo data. ${guidance.detail || "100 embedded packets."}`,
       refreshDone: "Demo snapshot refreshed",
       actionNote: "Demo shows the served readout; actions stay in CLI.",
     };
