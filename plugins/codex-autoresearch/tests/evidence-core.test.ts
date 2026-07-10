@@ -36,6 +36,7 @@ import {
   runShell,
   terminateAfterTimeout,
   terminateProcessTree,
+  verifyWindowsProcessIdentities,
 } from "../lib/runner.js";
 import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { isPublicCatalogAddress } from "../lib/recipes.js";
@@ -276,6 +277,30 @@ test("termination wrapper rejects an invalid hook result", async () => {
   assert.equal(result.proven, false);
   assert.equal(result.reason, "termination_handler_invalid");
   assert.deepEqual(result.remainingPids, [4242]);
+});
+
+test("Windows identity-query failure keeps every candidate PID unproven", async () => {
+  const requested: number[][] = [];
+  const result = await verifyWindowsProcessIdentities(
+    [
+      { pid: 41, started: "first" },
+      { pid: 42, started: "second" },
+    ],
+    [41, 42],
+    async (pids) => {
+      requested.push(pids);
+      return {
+        identities: new Map(),
+        proven: false,
+        reason: "windows_process_identity_enumeration_failed",
+      };
+    },
+  );
+
+  assert.deepEqual(requested, [[41, 42]]);
+  assert.equal(result.proven, false);
+  assert.equal(result.reason, "windows_process_identity_enumeration_failed");
+  assert.deepEqual(result.pids, [41, 42]);
 });
 
 test("remote catalog address validation accepts only globally routable IPs", () => {

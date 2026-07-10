@@ -21,6 +21,12 @@ type ProcessTreeSnapshot = {
   reason: string;
   trackedPids: number[];
 };
+type WindowsProcessIdentitySnapshot = {
+  identities: Map<number, string>;
+  proven: boolean;
+  reason: string;
+};
+type WindowsProcessIdentityQuery = (pids: number[]) => Promise<WindowsProcessIdentitySnapshot>;
 
 export interface ProcessTreeTermination {
   attempted: boolean;
@@ -754,23 +760,31 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
   const entries = mergeProcessEntries(snapshot.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
   const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true);
+  let identityFailureReason = "";
+  const identityFailurePids = new Set<number>();
   let forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
   if (forcedRemaining.length > 0) {
-    const identities = await windowsProcessIdentities(forcedRemaining);
-    const safePids = entries
-      .filter((entry) => identities.get(entry.pid) === entry.started)
-      .map((entry) => entry.pid);
-    if (safePids.length > 0) await taskkillPids(safePids, true);
+    const verification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
+    if (!verification.proven) {
+      identityFailureReason = verification.reason;
+      for (const remainingPid of verification.pids) identityFailurePids.add(remainingPid);
+    } else if (verification.pids.length > 0) {
+      await taskkillPids(verification.pids, true);
+    }
   }
   remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
   if (remainingPids.length > 0) {
-    const identities = await windowsProcessIdentities(remainingPids);
-    remainingPids = entries
-      .filter((entry) => remainingPids.includes(entry.pid))
-      .filter((entry) => identities.get(entry.pid) === entry.started)
-      .map((entry) => entry.pid);
+    const verification = await verifyWindowsProcessIdentities(entries, remainingPids);
+    if (!verification.proven) {
+      identityFailureReason ||= verification.reason;
+      for (const remainingPid of verification.pids) identityFailurePids.add(remainingPid);
+    } else {
+      remainingPids = verification.pids;
+    }
   }
-  const proven = snapshot.proven && second.proven && remainingPids.length === 0;
+  remainingPids = [...new Set([...remainingPids, ...identityFailurePids])];
+  const proven =
+    snapshot.proven && second.proven && !identityFailureReason && remainingPids.length === 0;
   return terminationResult(
     pid,
     true,
@@ -778,11 +792,12 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
     "windows-taskkill-tree",
     proven
       ? "taskkill_tree_absent_after_force"
-      : snapshot.proven && second.proven
-        ? `taskkill_tree_termination_unproven_${gracefulCode ?? "unknown"}_${forcedCode ?? "unknown"}`
-        : !snapshot.proven
-          ? snapshot.reason
-          : second.reason,
+      : identityFailureReason ||
+          (snapshot.proven && second.proven
+            ? `taskkill_tree_termination_unproven_${gracefulCode ?? "unknown"}_${forcedCode ?? "unknown"}`
+            : !snapshot.proven
+              ? snapshot.reason
+              : second.reason),
     true,
     trackedPids,
     remainingPids,
@@ -966,8 +981,14 @@ async function windowsProcessTreeSnapshot(
   }
 }
 
-async function windowsProcessIdentities(pids: number[]): Promise<Map<number, string>> {
-  if (pids.length === 0) return new Map();
+async function windowsProcessIdentities(pids: number[]): Promise<WindowsProcessIdentitySnapshot> {
+  if (pids.length === 0) {
+    return {
+      identities: new Map(),
+      proven: true,
+      reason: "windows_process_identities_enumerated",
+    };
+  }
   const script = [
     "& {",
     "param([string]$IdsJson)",
@@ -980,14 +1001,68 @@ async function windowsProcessIdentities(pids: number[]): Promise<Map<number, str
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, JSON.stringify(pids)],
     PROCESS_TREE_VERIFY_MS,
   );
-  if (result.code !== 0) return new Map();
+  if (result.code !== 0) {
+    return {
+      identities: new Map(),
+      proven: false,
+      reason: "windows_process_identity_enumeration_failed",
+    };
+  }
   try {
     const parsed = JSON.parse(result.stdout.trim() || "[]");
     const values = Array.isArray(parsed) ? parsed : [parsed];
-    return new Map(values.map((value) => [Number(value.pid), String(value.started || "")]));
+    const entries = values.map((value) => [
+      Number(value?.pid),
+      String(value?.started || ""),
+    ]) as Array<[number, string]>;
+    const valid =
+      entries.length <= pids.length &&
+      entries.every(
+        ([entryPid, started]) =>
+          Number.isSafeInteger(entryPid) &&
+          entryPid > 0 &&
+          pids.includes(entryPid) &&
+          started.length > 0,
+      ) &&
+      new Set(entries.map(([entryPid]) => entryPid)).size === entries.length;
+    return valid
+      ? {
+          identities: new Map(entries),
+          proven: true,
+          reason: "windows_process_identities_enumerated",
+        }
+      : {
+          identities: new Map(),
+          proven: false,
+          reason: "windows_process_identity_enumeration_invalid",
+        };
   } catch {
-    return new Map();
+    return {
+      identities: new Map(),
+      proven: false,
+      reason: "windows_process_identity_enumeration_invalid",
+    };
   }
+}
+
+export async function verifyWindowsProcessIdentities(
+  entries: Array<Pick<ProcessIdentity, "pid" | "started">>,
+  pids: number[],
+  query: WindowsProcessIdentityQuery = windowsProcessIdentities,
+): Promise<{ pids: number[]; proven: boolean; reason: string }> {
+  const candidates = [...new Set(pids)];
+  const snapshot = await query(candidates);
+  if (!snapshot.proven) {
+    return { pids: candidates, proven: false, reason: snapshot.reason };
+  }
+  const identitiesByPid = new Map(entries.map((entry) => [entry.pid, entry.started]));
+  return {
+    pids: candidates.filter(
+      (candidate) => snapshot.identities.get(candidate) === identitiesByPid.get(candidate),
+    ),
+    proven: true,
+    reason: snapshot.reason,
+  };
 }
 
 function taskkill(pid: number, force: boolean): Promise<number | null> {
