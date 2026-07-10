@@ -184,7 +184,9 @@ export async function inspectRuntimeDrift(input: {
   const installedRuntime = await inspectInstalledRuntime({
     packageRoot,
     sourceVersion: input.sourceVersion,
-    pluginCacheRoot: input.pluginCacheRoot || path.join(os.homedir(), ".codex", "plugins", "cache"),
+    pluginCacheRoot:
+      input.pluginCacheRoot ||
+      path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "plugins", "cache"),
   });
 
   return inspectRuntimeDriftFromFacts({
@@ -356,20 +358,12 @@ async function inspectInstalledRuntime(input: {
         canonical.paths.map((runtimePath) => runtimeCandidate(runtimePath, identity)),
       )
     ).filter((candidate): candidate is RuntimeCandidate => candidate !== null);
-    const matching = candidates.filter((candidate) => candidate.version === identity.version);
-    if (matching.length === 1) {
-      return selectedInspection(
-        matching[0],
-        "canonical-cache-layout",
-        "Selected the canonical cache version declared by the source plugin manifest.",
-      );
-    }
     if (candidates.length > 1) {
       return emptyInspection(
         "",
         "canonical-cache-layout",
         "ambiguous",
-        "Multiple canonical versions are metadata-valid and none matches the source plugin manifest.",
+        "Multiple canonical versions are metadata-valid and no launcher selected one.",
         candidates.map((candidate) => candidate.path),
       );
     }

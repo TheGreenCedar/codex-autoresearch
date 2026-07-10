@@ -17,6 +17,7 @@ export const pathExists = async (target: string) => {
 export function isolatedRuntimeEnv(homeDir: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    CODEX_HOME: path.join(homeDir, ".codex"),
     HOME: homeDir,
     USERPROFILE: homeDir,
   };

@@ -53,7 +53,35 @@ test("canonical metadata finds the current cache and reports runtime surfaces", 
   });
 });
 
-test("multiple versions prefer the source version and fail closed when it is absent", async () => {
+test("production discovery honors CODEX_HOME without leaking environment state", async () => {
+  await withAutoresearchTempDir("runtime-codex-home", async (dir) => {
+    const sourceRoot = path.join(dir, "source");
+    const codexHome = path.join(dir, "custom-codex-home");
+    const installedRoot = runtimePath(path.join(codexHome, "plugins", "cache"), FIXTURE_VERSION);
+    await writeSource(sourceRoot);
+    await writeRuntimePackage(installedRoot, FIXTURE_VERSION, {
+      runtimeContent: RUNTIME_CONTENT,
+    });
+
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = codexHome;
+      const summary = await inspectRuntimeDrift({
+        packageRoot: sourceRoot,
+        sourceVersion: FIXTURE_VERSION,
+      });
+      assert.equal(summary.installedRuntime, "fresh");
+      assert.equal(summary.installedRuntimePath, installedRoot);
+      assert.equal(summary.installedRuntimeProvenance.source, "canonical-cache-layout");
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+    assert.equal(process.env.CODEX_HOME, originalCodexHome);
+  });
+});
+
+test("multiple versions fail closed unless the running launcher selects one", async () => {
   await withAutoresearchTempDir("runtime-ambiguous", async (dir) => {
     const sourceRoot = path.join(dir, "source");
     const cacheRoot = path.join(dir, "cache");
@@ -66,25 +94,10 @@ test("multiple versions prefer the source version and fail closed when it is abs
       runtimeContent: RUNTIME_CONTENT,
     });
 
-    const preferred = await inspectRuntimeDrift({
-      packageRoot: sourceRoot,
-      sourceVersion: FIXTURE_VERSION,
-      pluginCacheRoot: cacheRoot,
-    });
-    assert.equal(preferred.installedRuntime, "fresh");
-    assert.equal(preferred.installedRuntimePath, activeRoot);
-    assert.equal(preferred.installedRuntimeProvenance.source, "canonical-cache-layout");
-
-    const ambiguousCache = path.join(dir, "ambiguous-cache");
-    for (const version of ["2.4.0", "2.5.0"]) {
-      await writeRuntimePackage(runtimePath(ambiguousCache, version), version, {
-        runtimeContent: RUNTIME_CONTENT,
-      });
-    }
     const ambiguous = await inspectRuntimeDrift({
       packageRoot: sourceRoot,
       sourceVersion: FIXTURE_VERSION,
-      pluginCacheRoot: ambiguousCache,
+      pluginCacheRoot: cacheRoot,
     });
     assert.equal(ambiguous.installedRuntime, "unavailable");
     assert.equal(ambiguous.installedRuntimeProvenance.status, "ambiguous");
