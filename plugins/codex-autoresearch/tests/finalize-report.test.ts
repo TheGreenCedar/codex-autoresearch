@@ -410,7 +410,8 @@ testWithTempRoot(
 
     const result = await run(process.execPath, [finalizer, groupsPath], repo);
     assert.match(result.stdout, /Review summary: .+autoresearch-finalize.+\.md/);
-    assert.match(result.stdout, /Created review branches:/);
+    assert.match(result.stdout, /Review branches:/);
+    assert.match(result.stdout, /autoresearch-review\/ux-test\/01-value-change \(created\)/);
     assert.match(result.stdout, /Cleanup after verified merge/);
     assert.doesNotMatch(result.stdout, /git branch -D/);
     assert.doesNotMatch(result.stdout, /Remove-Item/);
@@ -423,6 +424,8 @@ testWithTempRoot(
     const summary = await fsp.readFile(summaryPath, "utf8");
 
     assert.match(summary, /Status: verified/);
+    assert.match(summary, /\| # \| Branch \| Provenance \| Title \| Files \|/);
+    assert.match(summary, /\| 1 \| `autoresearch-review\/ux-test\/01-value-change` \| created \|/);
     assert.match(summary, /autoresearch-review\/ux-test\/01-value-change/);
     assert.match(summary, /git show --stat 'autoresearch-review\/ux-test\/01-value-change'/);
     assert.match(summary, /git diff [^\n]+ -- 'scripts\/autoresearch\.ts' 'src\/space path\.txt'/);
@@ -467,6 +470,20 @@ testWithTempRoot(
     ).stdout;
     assert.doesNotMatch(branchFiles, /autoresearch\.research/);
     assert.doesNotMatch(branchFiles, /autoresearch-dashboard\.html/);
+
+    const reusedResult = await run(process.execPath, [finalizer, groupsPath], repo);
+    assert.match(reusedResult.stdout, /autoresearch-review\/ux-test\/01-value-change \(reused\)/);
+    const reusedSummaryLine = reusedResult.stdout
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("Review summary: "));
+    const reusedSummary = await fsp.readFile(
+      reusedSummaryLine.slice("Review summary: ".length).trim(),
+      "utf8",
+    );
+    assert.match(
+      reusedSummary,
+      /\| 1 \| `autoresearch-review\/ux-test\/01-value-change` \| reused \|/,
+    );
 
     const status = (await run("git", ["status", "--porcelain"], repo)).stdout.trim();
     assert.equal(status, "");
@@ -1300,7 +1317,7 @@ testWithTempRoot(
     assert.deepEqual(plan.groups[0].files.sort(), ["src/guardrails.txt", "src/value.txt"]);
 
     const finalizeResult = await run(process.execPath, [finalizer, payload.planOutput], repo);
-    assert.match(finalizeResult.stdout, /Created review branches:/);
+    assert.match(finalizeResult.stdout, /Review branches:/);
   },
 );
 
@@ -1970,7 +1987,7 @@ testWithTempRoot(
     assert.equal(collapsed.groups[0].parent_commit, collapsed.base);
 
     const finalizeResult = await run(process.execPath, [finalizer, collapsedOutput], repo);
-    assert.match(finalizeResult.stdout, /Created review branches/);
+    assert.match(finalizeResult.stdout, /Review branches/);
     const summaryLine = finalizeResult.stdout
       .split(/\r?\n/)
       .find((line) => line.startsWith("Review summary: "));

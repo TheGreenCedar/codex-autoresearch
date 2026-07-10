@@ -622,9 +622,15 @@ function renderReviewSummaryHeader({
     "",
     "## Review Branches",
     "",
-    "| # | Branch | Title | Files |",
-    "|---:|---|---|---|",
+    "| # | Branch | Provenance | Title | Files |",
+    "|---:|---|---|---|---|",
   ];
+}
+
+function branchProvenance(result?: BranchResult): string {
+  if (!result || (result.skipped && !result.createdThisRun)) return "not created";
+  if (result.skipped) return "created then removed";
+  return result.createdThisRun ? "created" : "reused";
 }
 
 function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): string[] {
@@ -635,7 +641,7 @@ function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): st
     const branch = result?.branch || "(not created)";
     const suffix = result?.skipped ? " (skipped empty)" : "";
     lines.push(
-      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${markdownEscape(group.title || "")} | ${markdownEscape(group.files.join(", ") || "(none)")} |`,
+      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${branchProvenance(result)} | ${markdownEscape(group.title || "")} | ${markdownEscape(group.files.join(", ") || "(none)")} |`,
     );
   }
   return lines;
@@ -769,10 +775,10 @@ function renderRunwayTextForConfig(
         ]),
     "",
     `Final file set: ${[...fileSet].sort().join(", ") || "(none)"}`,
-    `Review branches created: ${
+    `Review branches: ${
       results
         .filter((result) => result && !result.skipped)
-        .map((result) => result.branch)
+        .map((result) => `${result.branch} (${branchProvenance(result)})`)
         .join(", ") || "(none)"
     }`,
   ];
@@ -1362,8 +1368,10 @@ async function main() {
   }
 
   console.log("");
-  console.log("Created review branches:");
-  for (const branch of reviewBranches) console.log(`  ${branch}`);
+  console.log("Review branches:");
+  for (const result of results.filter((result) => !result.skipped)) {
+    console.log(`  ${result.branch} (${branchProvenance(result)})`);
+  }
   console.log("");
   if (productGradeFinalizationIssue(config.product_claim_coverage)) {
     console.log("Experimental review branch only: product-grade proof is missing.");
