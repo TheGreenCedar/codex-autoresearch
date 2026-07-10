@@ -4,6 +4,7 @@ import path from "node:path";
 type LooseObject = Record<string, any>;
 
 export interface RunnerProgressSnapshot {
+  generation: number;
   packetId: string;
   commandClass: string;
   startedAt: string;
@@ -52,6 +53,7 @@ export function createProgressSnapshot({
   artifactRoot = "",
 }: LooseObject = {}): RunnerProgressSnapshot {
   return {
+    generation: 0,
     packetId: packetId || progressId(command, startedAt),
     commandClass: commandClass || commandClassFor(command),
     startedAt: isoTime(startedAt),

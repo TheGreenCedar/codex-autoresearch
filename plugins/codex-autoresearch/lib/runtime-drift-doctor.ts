@@ -292,7 +292,7 @@ function buildNextActionHint({
   }
   if (installedRuntime === "unavailable") {
     if (installedRuntimeShape === "source-shaped-package") {
-      return `The installed cache at ${installedRuntimePath} is source-shaped and not hydrated. Run its launcher once, then rerun: ${inspectionCommand}`;
+      return `The installed runtime cache at ${installedRuntimePath} is source-shaped and not hydrated. Run its launcher once, then rerun: ${inspectionCommand}`;
     }
     return `Installed runtime fingerprint evidence is unavailable. Inspect the runtime with: ${inspectionCommand}`;
   }

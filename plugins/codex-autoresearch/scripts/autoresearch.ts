@@ -63,6 +63,7 @@ import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js"
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
+import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 import {
@@ -147,6 +148,7 @@ import {
   createProgressSnapshot,
   progressSnapshotFromRun,
   staleProgressReason,
+  type RunnerProgressSnapshot,
   updateProgressSnapshot,
 } from "../lib/runner-progress.js";
 import {
@@ -703,6 +705,40 @@ function resolveOutputInside(workDir: string, output?: string) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function runWithRequiredCleanup<T>(
+  action: () => Promise<T>,
+  cleanup: () => Promise<void>,
+  cleanupLabel: string,
+): Promise<T> {
+  let value!: T;
+  let actionFailed = false;
+  let primaryError: unknown;
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+  try {
+    value = await action();
+  } catch (error) {
+    actionFailed = true;
+    primaryError = error;
+  } finally {
+    try {
+      await cleanup();
+    } catch (error) {
+      cleanupFailed = true;
+      cleanupError = error;
+    }
+  }
+  if (cleanupFailed) {
+    if (!actionFailed) throw cleanupError;
+    throw new AggregateError(
+      [primaryError, cleanupError],
+      `${errorMessage(primaryError)}\n${cleanupLabel}: ${errorMessage(cleanupError)}`,
+    );
+  }
+  if (actionFailed) throw primaryError;
+  return value;
 }
 
 function errorCodeOrMessage(error: unknown): string {
@@ -6023,6 +6059,19 @@ async function initExperiment(args: LooseObject) {
 }
 
 async function runExperiment(args: LooseObject) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const progressWriter = await createActiveProgressWriter(workDir);
+  return await runWithRequiredCleanup(
+    () => runExperimentWithProgressWriter(args, progressWriter),
+    () => progressWriter.close(),
+    "Failed to close active progress writer",
+  );
+}
+
+async function runExperimentWithProgressWriter(
+  args: LooseObject,
+  progressWriter: Awaited<ReturnType<typeof createActiveProgressWriter>>,
+) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const limit = iterationLimitInfo(state, config);
@@ -6056,7 +6105,8 @@ async function runExperiment(args: LooseObject) {
     timeoutSeconds,
     artifactRoot: ".",
   });
-  await writeActiveProgressSnapshot(workDir, progressSnapshot);
+  progressSnapshot = progressWriter.queue(progressSnapshot);
+  await progressWriter.flush();
   const updateProgress = ({ observedAt, output }: { observedAt: string; output: string }) => {
     progressSnapshot = updateProgressSnapshot(progressSnapshot, { output, observedAt });
     progressSnapshot = {
@@ -6069,7 +6119,7 @@ async function runExperiment(args: LooseObject) {
         ),
       }),
     };
-    void writeActiveProgressSnapshot(workDir, progressSnapshot).catch(() => {});
+    progressSnapshot = progressWriter.queue(progressSnapshot);
   };
   const benchmark = await runShell(command, workDir, timeoutSeconds, {
     env: commandInput.env,
@@ -6178,8 +6228,8 @@ async function runExperiment(args: LooseObject) {
       result: benchmark,
     }),
     startedAt: benchmark.startedAt,
-    finishedAt: benchmark.finishedAt,
-    lastOutputAt: benchmark.lastOutputAt,
+    finishedAt: checks?.finishedAt || benchmark.finishedAt,
+    lastOutputAt: checks?.lastOutputAt || benchmark.lastOutputAt,
     progressSnapshot,
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
@@ -6705,6 +6755,8 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
 
 async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
   const target = await resolveProgressPath(workDir);
+  const generation = activeProgressGeneration(snapshot);
+  if (generation <= activeProgressGeneration(readProgressSnapshot(target))) return target;
   await checkedAtomicWriteFile(
     await privateStateWriteRoot(workDir, target),
     target,
@@ -6718,28 +6770,50 @@ async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObjec
 
 async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
   const target = await resolveProgressPath(workDir);
+  const snapshot = readProgressSnapshot(target);
+  if (!snapshot || snapshot.exitState !== "running") return snapshot;
+  return {
+    ...snapshot,
+    staleProgressReason: staleProgressReason(snapshot as RunnerProgressSnapshot, {
+      staleAfterSeconds: numberOption(
+        config.staleProgressSeconds ?? config.progressStaleSeconds,
+        300,
+      ),
+    }),
+  };
+}
+
+async function createActiveProgressWriter(workDir: string) {
+  const current = await readActiveProgressSnapshot(workDir);
+  return createCoalescingProgressWriter<RunnerProgressSnapshot>({
+    initialGeneration: activeProgressGeneration(current),
+    write: async (snapshot) => {
+      await writeActiveProgressSnapshot(workDir, snapshot);
+    },
+  });
+}
+
+function readProgressSnapshot(target: string): LooseObject | null {
   if (!fs.existsSync(target)) return null;
   try {
     const snapshot = JSON.parse(fs.readFileSync(target, "utf8"));
-    if (!snapshot || typeof snapshot !== "object" || snapshot.exitState !== "running") {
-      return snapshot || null;
-    }
-    return {
-      ...snapshot,
-      staleProgressReason: staleProgressReason(snapshot, {
-        staleAfterSeconds: numberOption(
-          config.staleProgressSeconds ?? config.progressStaleSeconds,
-          300,
-        ),
-      }),
-    };
+    return snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : null;
   } catch {
     return null;
   }
 }
 
+function activeProgressGeneration(snapshot: LooseObject | null): number {
+  const generation = Number(snapshot?.generation);
+  return Number.isSafeInteger(generation) && generation >= 0 ? generation : 0;
+}
+
 async function deleteActiveProgressSnapshot(workDir: string) {
-  await fsp.rm(await resolveProgressPath(workDir), { force: true }).catch(() => {});
+  try {
+    await fsp.rm(await resolveProgressPath(workDir));
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
 }
 
 function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
@@ -8681,8 +8755,17 @@ function promotionStateForLoggedDecision({
 }
 
 async function nextExperiment(args: any) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  return await runWithRequiredCleanup(
+    () => nextExperimentWithActiveProgress(args),
+    () => deleteActiveProgressSnapshot(workDir),
+    "Failed to remove active progress snapshot",
+  );
+}
+
+async function nextExperimentWithActiveProgress(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  await writeNextPreflightProgressSnapshot(workDir, args, config).catch(() => {});
+  await writeNextPreflightProgressSnapshot(workDir, args, config);
   const doctor = await doctorSession({
     ...args,
     check_benchmark: false,
@@ -8701,7 +8784,6 @@ async function nextExperiment(args: any) {
     ) {
       const state = currentState(doctor.workDir);
       const capsule = state.sessionDecisionCapsule || null;
-      await deleteActiveProgressSnapshot(workDir).catch(() => {});
       return {
         ok: false,
         workDir: doctor.workDir,
@@ -8737,7 +8819,6 @@ async function nextExperiment(args: any) {
         }),
       };
     }
-    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     return {
       ok: false,
       workDir: doctor.workDir,
@@ -8783,7 +8864,6 @@ async function nextExperiment(args: any) {
     !boundedNextAllowed &&
     !stalePacketReplacementAllowed
   ) {
-    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     return {
       ok: false,
       workDir,
@@ -8826,7 +8906,6 @@ async function nextExperiment(args: any) {
     args,
   );
   if (fixedControlBlock) {
-    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     const nextAction =
       fixedControlBlock.message ||
       "A fixed control artifact is active; reuse it instead of rerunning the control command.";
@@ -8853,7 +8932,6 @@ async function nextExperiment(args: any) {
     error: error.message || String(error),
   }));
   if (gitSnapshotContainsDirtyFingerprintTruncation(preRunGit)) {
-    await deleteActiveProgressSnapshot(workDir).catch(() => {});
     const nextAction =
       "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.";
     return {
@@ -8959,8 +9037,16 @@ async function nextExperiment(args: any) {
     }),
   };
   await writeLastRunPacket(run.workDir, packet, lastRunFile);
-  await deleteActiveProgressSnapshot(run.workDir);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+
+async function runStandaloneExperiment(args: LooseObject) {
+  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  return await runWithRequiredCleanup(
+    () => runExperiment(args),
+    () => deleteActiveProgressSnapshot(workDir),
+    "Failed to remove active progress snapshot",
+  );
 }
 
 async function writeNextPreflightProgressSnapshot(
@@ -8978,16 +9064,22 @@ async function writeNextPreflightProgressSnapshot(
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
-  await writeActiveProgressSnapshot(
-    workDir,
-    createProgressSnapshot({
-      packetId: `packet-${state.results.length + 1}-active`,
-      command: commandSource?.command || "autoresearch next preflight",
-      commandClass: "autoresearch preflight",
-      startedAt: new Date().toISOString(),
-      timeoutSeconds,
-      artifactRoot: ".",
-    }),
+  const progressWriter = await createActiveProgressWriter(workDir);
+  await runWithRequiredCleanup(
+    async () => {
+      progressWriter.queue(
+        createProgressSnapshot({
+          packetId: `packet-${state.results.length + 1}-active`,
+          command: commandSource?.command || "autoresearch next preflight",
+          commandClass: "autoresearch preflight",
+          startedAt: new Date().toISOString(),
+          timeoutSeconds,
+          artifactRoot: ".",
+        }),
+      );
+    },
+    () => progressWriter.close(),
+    "Failed to close active progress writer",
   );
 }
 
@@ -9166,7 +9258,7 @@ async function executeAutoresearchCli(
       recipeCommand,
       researchFanout,
       laneRunner,
-      runExperiment,
+      runExperiment: runStandaloneExperiment,
       serveDashboard,
       setupPlan,
       researchStart,
