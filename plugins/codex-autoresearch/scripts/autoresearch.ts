@@ -608,7 +608,6 @@ async function laneRunner(args: LooseObject): Promise<LooseObject> {
       commandLooksUnsafeForWriteScope,
       currentState,
       dashboardSettings,
-      gitStatusPorcelain,
       latestLaneResults,
       normalizeLaneMode,
       normalizeParallelLane,
@@ -8030,12 +8029,6 @@ function classifyLaneCommandSafety(command: string): LaneCommandSafety {
 
 function commandLooksUnsafeForWriteScope(command: string) {
   return classifyLaneCommandSafety(command).unsafeForWriteScope;
-}
-
-async function gitStatusPorcelain(cwd: string) {
-  if (!(await insideGitRepo(cwd).catch(() => false))) return null;
-  const result = await git(["status", "--porcelain"], cwd);
-  return result.code === 0 ? result.stdout : null;
 }
 
 async function gitTopLevel(cwd: string) {

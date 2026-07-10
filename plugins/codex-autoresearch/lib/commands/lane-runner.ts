@@ -26,7 +26,6 @@ export interface LaneRunnerCommandDeps {
   commandLooksUnsafeForWriteScope: (command: string) => boolean;
   currentState: (workDir: string) => LooseObject;
   dashboardSettings: (config: LooseObject) => LooseObject;
-  gitStatusPorcelain: (cwd: string) => Promise<string | null>;
   latestLaneResults: (workDir: string, segment?: number | null) => LooseObject[];
   normalizeLaneMode: (value: unknown, fallback: string) => string;
   normalizeParallelLane: (lane: LooseObject, index: number, config: LooseObject) => LooseObject;
@@ -149,7 +148,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
         : workDir;
     const beforeStatus =
       mode === "read_only_scout" && command && !dryRun
-        ? await deps.gitStatusPorcelain(workDir)
+        ? await hardenedScoutStatus(deps, workDir, timeBudgetSeconds)
         : null;
     let writeScopeBefore: LooseObject | null = null;
     if (mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun) {
@@ -159,11 +158,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
     let commandResult: LooseObject | null = null;
     if (command && !dryRun) {
       const result = scoutCommand
-        ? await deps.runProcess(scoutCommand.executable, scoutCommand.args, {
-            cwd: runCwd,
-            env: READ_ONLY_GIT_ENV,
-            timeoutSeconds: timeBudgetSeconds,
-          })
+        ? await runHardenedScoutGit(deps, scoutCommand, runCwd, timeBudgetSeconds)
         : await deps.runShell(command, runCwd, timeBudgetSeconds, {
             retainMetricNames: [state.config.metricName || config.metricName || ""],
           });
@@ -178,7 +173,7 @@ export function createLaneRunnerCommand(deps: LaneRunnerCommandDeps) {
         ),
       };
       if (beforeStatus != null) {
-        const afterStatus = await deps.gitStatusPorcelain(workDir);
+        const afterStatus = await hardenedScoutStatus(deps, workDir, timeBudgetSeconds);
         if (afterStatus !== beforeStatus) {
           throw new Error(
             "Git porcelain detected a worktree change after the allowlisted scout command. Detection is best-effort, not containment; inspect and restore the repository before continuing.",
@@ -400,6 +395,53 @@ const READ_ONLY_GIT_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: "0",
 };
 
+const hardenedReadOnlyGitArgs = (subcommand: string, args: string[] = []): string[] => [
+  "--no-pager",
+  "--no-optional-locks",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=",
+  "-c",
+  "diff.ignoreSubmodules=all",
+  "-c",
+  "status.submoduleSummary=false",
+  "-c",
+  "submodule.recurse=false",
+  subcommand,
+  ...args,
+];
+
+async function runHardenedScoutGit(
+  deps: Pick<LaneRunnerCommandDeps, "runProcess">,
+  command: { args: string[]; executable: "git" },
+  cwd: string,
+  timeoutSeconds: number,
+): Promise<ProcessRunResult> {
+  return await deps.runProcess(command.executable, command.args, {
+    cwd,
+    env: READ_ONLY_GIT_ENV,
+    timeoutSeconds,
+  });
+}
+
+async function hardenedScoutStatus(
+  deps: Pick<LaneRunnerCommandDeps, "runProcess">,
+  cwd: string,
+  timeoutSeconds: number,
+): Promise<string | null> {
+  const result = await runHardenedScoutGit(
+    deps,
+    {
+      executable: "git",
+      args: hardenedReadOnlyGitArgs("status", ["--porcelain", "--untracked-files=all"]),
+    },
+    cwd,
+    timeoutSeconds,
+  );
+  return result.exitCode === 0 ? result.stdout : null;
+}
+
 function strictReadOnlyScoutCommand(command: string): {
   args: string[];
   executable: "git";
@@ -432,19 +474,7 @@ function strictReadOnlyScoutCommand(command: string): {
       return refuseScoutCommand("Git signature formats may start external verification processes");
     }
   }
-  const hardened = [
-    "--no-pager",
-    "--no-optional-locks",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.hooksPath=",
-    "-c",
-    "diff.ignoreSubmodules=all",
-    "-c",
-    "status.submoduleSummary=false",
-    subcommand,
-  ];
+  const hardened = hardenedReadOnlyGitArgs(subcommand);
   if (["diff", "log", "show"].includes(subcommand)) {
     hardened.push("--no-ext-diff", "--no-textconv");
   }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -278,5 +278,99 @@ test("lane-runner refuses non-allowlisted scout side effects before execution", 
     assert.equal(payload.result.executionBoundary.postRunDetection, "git_porcelain_best_effort");
     assert.equal(payload.result.executionBoundary.containment, "none");
     await assert.rejects(access(externalDiffMarker));
+  });
+});
+
+test("lane-runner hardens scout porcelain probes against configured fsmonitor hooks", async () => {
+  await withTempDir("autoresearch", "lane-runner-scout-fsmonitor", async (dir) => {
+    await runGit(dir, ["init"]);
+    await writeFile(path.join(dir, ".gitignore"), "ignored-fsmonitor.txt\n");
+    await writeFile(path.join(dir, "README.md"), "tracked\n");
+    await runGit(dir, ["add", ".gitignore", "README.md"]);
+    await runGit(dir, ["commit", "-m", "base"]);
+    const init = await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "hardened scout porcelain",
+      "--metric-name",
+      "quality_gap",
+    ]);
+    assert.equal(init.code, 0, init.stderr);
+
+    const ignoredMarker = path.join(dir, "ignored-fsmonitor.txt");
+    const outsideMarker = path.join(
+      path.dirname(dir),
+      `${path.basename(dir)}-fsmonitor-outside.txt`,
+    );
+    const fsmonitorHook = path.join(dir, ".git", "hostile-fsmonitor");
+    await writeFile(
+      fsmonitorHook,
+      [
+        "#!/usr/bin/env node",
+        'const { writeFileSync } = require("node:fs");',
+        `writeFileSync(${JSON.stringify(ignoredMarker)}, "invoked");`,
+        `writeFileSync(${JSON.stringify(outsideMarker)}, "invoked");`,
+      ].join("\n"),
+    );
+    await chmod(fsmonitorHook, 0o755);
+
+    const hardenedStatusArgs = [
+      "--no-pager",
+      "--no-optional-locks",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.hooksPath=",
+      "-c",
+      "diff.ignoreSubmodules=all",
+      "-c",
+      "status.submoduleSummary=false",
+      "-c",
+      "submodule.recurse=false",
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+    ];
+    const hardenedEnv = {
+      ...process.env,
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    const before = await runProcess("git", hardenedStatusArgs, { cwd: dir, env: hardenedEnv });
+    assert.equal(before.code, 0, before.stderr);
+
+    try {
+      await runGit(dir, ["config", "core.fsmonitor", fsmonitorHook.replaceAll("\\", "/")]);
+      const positiveControl = await runProcess("git", ["status", "--porcelain"], dir);
+      assert.equal(positiveControl.code, 0, positiveControl.stderr);
+      assert.equal(await readFile(ignoredMarker, "utf8"), "invoked");
+      assert.equal(await readFile(outsideMarker, "utf8"), "invoked");
+      await rm(ignoredMarker, { force: true });
+      await rm(outsideMarker, { force: true });
+
+      const allowed = await runCli([
+        "lane-runner",
+        "--cwd",
+        dir,
+        "--mode",
+        "read_only_scout",
+        "--command",
+        "git status --short",
+        "--yes",
+      ]);
+      assert.equal(allowed.code, 0, allowed.stderr);
+
+      const after = await runProcess("git", hardenedStatusArgs, { cwd: dir, env: hardenedEnv });
+      assert.equal(after.code, 0, after.stderr);
+      assert.equal(after.stdout, before.stdout);
+      await assert.rejects(access(ignoredMarker));
+      await assert.rejects(access(outsideMarker));
+    } finally {
+      await rm(ignoredMarker, { force: true });
+      await rm(outsideMarker, { force: true });
+    }
   });
 });
