@@ -7,7 +7,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Symptom | Failing layer | What to do |
 | --- | --- | --- |
 | Source checkout missing `dist/` | Source launcher hydration | Install `gh`, confirm GitHub network access, then run `node scripts/autoresearch.mjs --help` from the plugin directory. Hydration stops if checksum, release attestation, or archive validation fails. |
-| Source behavior differs from Codex | Installed runtime drift | Inspect or refresh the active plugin cache before changing source again. |
+| Source behavior differs from Codex | Installed runtime drift | Run `doctor --check-installed --explain`. Read `installedRuntimePath`, `installedRuntimeShape`, and `installedRuntimeProvenance`; hydrate a source-shaped package, refresh a stale cache, or remove ambiguity between multiple canonical versions before changing source again. |
 | Setup wrapper calls itself | Scaffold health | Replace the recursive wrapper or rerun setup with the real `--benchmark-command`. |
 
 ## Benchmark and checks

@@ -6,6 +6,29 @@ import path from "node:path";
 export type RuntimeAvailability = "fresh" | "stale" | "missing" | "unavailable";
 export type BuiltRuntimeStatus = "available" | "missing" | "unavailable";
 export type RuntimeTrustScope = "source-checkout" | "installed-plugin";
+export type RuntimePackageSurface =
+  | "source-checkout"
+  | "package-artifact"
+  | "active-installed-cache"
+  | "unavailable";
+export type InstalledRuntimeShape =
+  | "hydrated-runtime"
+  | "source-shaped-package"
+  | "package-artifact"
+  | "missing"
+  | "unavailable";
+
+export interface InstalledRuntimeProvenance {
+  source:
+    | "launcher-package-root"
+    | "canonical-cache-layout"
+    | "legacy-cache-fallback"
+    | "plugin-manifest";
+  status: "selected" | "ambiguous" | "missing" | "unavailable";
+  path: string;
+  candidates: string[];
+  detail: string;
+}
 
 export interface RuntimeStatus {
   status: string;
@@ -20,6 +43,9 @@ export interface RuntimeDriftFacts {
   installedRuntimePath: string;
   sourceRuntimeFingerprint?: string | null;
   installedRuntimeFingerprint?: string | null;
+  packageSurface?: RuntimePackageSurface;
+  installedRuntimeShape?: InstalledRuntimeShape;
+  installedRuntimeProvenance?: InstalledRuntimeProvenance;
 }
 
 export interface RuntimeDriftSummary {
@@ -30,6 +56,11 @@ export interface RuntimeDriftSummary {
   runtimeFingerprint: "matched" | "mismatched" | "unavailable";
   smokeCheck: string;
   nextActionHint: string;
+  packageSurface: RuntimePackageSurface;
+  installedRuntimePath: string;
+  installedRuntimeVersion: string | null;
+  installedRuntimeShape: InstalledRuntimeShape;
+  installedRuntimeProvenance: InstalledRuntimeProvenance;
 }
 
 export function summarizeRuntimeAuthority(input: {
@@ -105,6 +136,13 @@ export function inspectRuntimeDriftFromFacts(facts: RuntimeDriftFacts): RuntimeD
   const builtRuntime = classifyBuiltRuntime(facts.builtRuntimeExists);
   const smokeCheck = buildSmokeCheck(packageRoot, builtRuntime);
   const inspectionCommand = buildInspectionCommand(packageRoot);
+  const installedRuntimeProvenance = facts.installedRuntimeProvenance || {
+    source: "plugin-manifest",
+    status: "unavailable",
+    path: facts.installedRuntimePath,
+    candidates: [],
+    detail: "Installed runtime provenance was not inspected.",
+  };
 
   return {
     sourceVersion,
@@ -113,6 +151,11 @@ export function inspectRuntimeDriftFromFacts(facts: RuntimeDriftFacts): RuntimeD
     builtRuntime,
     runtimeFingerprint,
     smokeCheck,
+    packageSurface: facts.packageSurface || "unavailable",
+    installedRuntimePath: facts.installedRuntimePath,
+    installedRuntimeVersion: facts.installedRuntimeVersion,
+    installedRuntimeShape: facts.installedRuntimeShape || "unavailable",
+    installedRuntimeProvenance,
     nextActionHint: buildNextActionHint({
       sourceVersion,
       installedRuntime,
@@ -120,6 +163,8 @@ export function inspectRuntimeDriftFromFacts(facts: RuntimeDriftFacts): RuntimeD
       builtRuntime,
       runtimeFingerprint,
       installedRuntimePath: facts.installedRuntimePath,
+      installedRuntimeShape: facts.installedRuntimeShape || "unavailable",
+      installedRuntimeProvenance,
       inspectionCommand,
       smokeCheck,
     }),
@@ -129,13 +174,20 @@ export function inspectRuntimeDriftFromFacts(facts: RuntimeDriftFacts): RuntimeD
 export async function inspectRuntimeDrift(input: {
   packageRoot: string;
   sourceVersion: string;
+  pluginCacheRoot?: string;
 }): Promise<RuntimeDriftSummary> {
   const packageRoot = path.resolve(input.packageRoot);
   const builtRuntimePath = path.join(packageRoot, "dist", "scripts", "autoresearch.mjs");
   const builtRuntimeExists = await fileExists(builtRuntimePath);
   const sourceRuntimeFingerprint =
     builtRuntimeExists === true ? await fileFingerprint(builtRuntimePath) : null;
-  const installedRuntime = await inspectInstalledRuntime(input.sourceVersion);
+  const installedRuntime = await inspectInstalledRuntime({
+    packageRoot,
+    sourceVersion: input.sourceVersion,
+    pluginCacheRoot:
+      input.pluginCacheRoot ||
+      path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "plugins", "cache"),
+  });
 
   return inspectRuntimeDriftFromFacts({
     sourceVersion: input.sourceVersion,
@@ -145,6 +197,9 @@ export async function inspectRuntimeDrift(input: {
     installedRuntimePath: installedRuntime.path,
     sourceRuntimeFingerprint,
     installedRuntimeFingerprint: installedRuntime.fingerprint,
+    packageSurface: await packageSurface(packageRoot, installedRuntime),
+    installedRuntimeShape: installedRuntime.shape,
+    installedRuntimeProvenance: installedRuntime.provenance,
   });
 }
 
@@ -199,6 +254,8 @@ function buildNextActionHint({
   builtRuntime,
   runtimeFingerprint,
   installedRuntimePath,
+  installedRuntimeShape,
+  installedRuntimeProvenance,
   inspectionCommand,
   smokeCheck,
 }: {
@@ -208,9 +265,16 @@ function buildNextActionHint({
   builtRuntime: BuiltRuntimeStatus;
   runtimeFingerprint: "matched" | "mismatched" | "unavailable";
   installedRuntimePath: string;
+  installedRuntimeShape: InstalledRuntimeShape;
+  installedRuntimeProvenance: InstalledRuntimeProvenance;
   inspectionCommand: string;
   smokeCheck: string;
 }): string {
+  if (installedRuntimeProvenance.status === "ambiguous") {
+    return `Installed runtime discovery is ambiguous across ${installedRuntimeProvenance.candidates.join(
+      ", ",
+    )}. Remove or disambiguate stale cache entries, then rerun: ${inspectionCommand}`;
+  }
   if (builtRuntime === "missing") {
     return `Build the local runtime with npm run build:node, then inspect installed runtime drift with: ${inspectionCommand}`;
   }
@@ -227,58 +291,341 @@ function buildNextActionHint({
     return `Installed runtime is missing at ${installedRuntimePath}. Inspect or refresh the runtime with: ${inspectionCommand}`;
   }
   if (installedRuntime === "unavailable") {
+    if (installedRuntimeShape === "source-shaped-package") {
+      return `The installed cache at ${installedRuntimePath} is source-shaped and not hydrated. Run its launcher once, then rerun: ${inspectionCommand}`;
+    }
     return `Installed runtime fingerprint evidence is unavailable. Inspect the runtime with: ${inspectionCommand}`;
   }
   return `Runtime surfaces look fresh; smoke check with: ${smokeCheck}`;
 }
 
-async function inspectInstalledRuntime(sourceVersion: string): Promise<{
+type PluginIdentity = { publisher: string; plugin: string; version: string };
+type RuntimeCandidate = {
+  path: string;
+  version: string;
+  fingerprint: string | null;
+  shape: InstalledRuntimeShape;
+};
+type InstalledRuntimeInspection = {
   path: string;
   version: string | null;
   fingerprint: string | null;
-}> {
-  const cacheRoot = path.join(
-    os.homedir(),
-    ".codex",
-    "plugins",
-    "cache",
-    "thegreencedar-autoresearch",
-    "codex-autoresearch",
-  );
+  shape: InstalledRuntimeShape;
+  provenance: InstalledRuntimeProvenance;
+};
 
-  let entries: string[];
-  try {
-    entries = (await fsp.readdir(cacheRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch (error) {
-    return isMissingPathError(error)
-      ? { path: cacheRoot, version: null, fingerprint: null }
-      : { path: "", version: null, fingerprint: null };
+const LEGACY_CACHE_NAMESPACE = "thegreencedar-autoresearch";
+
+async function inspectInstalledRuntime(input: {
+  packageRoot: string;
+  sourceVersion: string;
+  pluginCacheRoot: string;
+}): Promise<InstalledRuntimeInspection> {
+  const identity = await pluginIdentity(input.packageRoot, input.sourceVersion);
+  if (!identity) {
+    return emptyInspection("", "plugin-manifest", "unavailable", "Plugin identity is unavailable.");
   }
 
-  if (entries.length === 0) return { path: cacheRoot, version: null, fingerprint: null };
+  const launcherRelative = path.relative(input.pluginCacheRoot, input.packageRoot).split(path.sep);
+  if (
+    launcherRelative.length === 3 &&
+    launcherRelative[0] === identity.publisher &&
+    launcherRelative[1] === identity.plugin &&
+    launcherRelative[2] === identity.version
+  ) {
+    const launcher = await runtimeCandidate(input.packageRoot, identity);
+    return launcher
+      ? selectedInspection(
+          launcher,
+          "launcher-package-root",
+          "Selected the cache package that owns the running launcher.",
+        )
+      : emptyInspection(
+          "",
+          "launcher-package-root",
+          "unavailable",
+          "The running launcher does not match its package metadata.",
+        );
+  }
 
-  const preferred = entries.includes(sourceVersion)
-    ? sourceVersion
-    : sortVersionCandidates(entries)[0];
-  const installedRuntimePath = path.join(cacheRoot, preferred);
-  const installedVersion = await readPackageVersion(installedRuntimePath);
-  const fingerprint = await fileFingerprint(
-    path.join(installedRuntimePath, "dist", "scripts", "autoresearch.mjs"),
+  const canonical = await canonicalVersionPaths(input.pluginCacheRoot, identity);
+  if (canonical.status === "unavailable") {
+    return emptyInspection("", "canonical-cache-layout", "unavailable", canonical.detail);
+  }
+  if (canonical.status === "found") {
+    const candidates = (
+      await Promise.all(
+        canonical.paths.map((runtimePath) => runtimeCandidate(runtimePath, identity)),
+      )
+    ).filter((candidate): candidate is RuntimeCandidate => candidate !== null);
+    if (candidates.length > 1) {
+      return emptyInspection(
+        "",
+        "canonical-cache-layout",
+        "ambiguous",
+        "Multiple canonical versions are metadata-valid and no launcher selected one.",
+        candidates.map((candidate) => candidate.path),
+      );
+    }
+    if (candidates.length === 1) {
+      return selectedInspection(
+        candidates[0],
+        "canonical-cache-layout",
+        "Selected the only metadata-valid canonical cache version.",
+      );
+    }
+    if (canonical.paths.length > 0) {
+      return emptyInspection(
+        "",
+        "canonical-cache-layout",
+        "unavailable",
+        "Canonical version directories do not match package metadata.",
+        canonical.paths,
+      );
+    }
+  }
+
+  const legacyCandidates = await legacyRuntimeCandidates(input.pluginCacheRoot, identity);
+  if (legacyCandidates === null) {
+    return emptyInspection(
+      "",
+      "legacy-cache-fallback",
+      "unavailable",
+      "The legacy cache fallback could not be read.",
+    );
+  }
+  if (legacyCandidates.length > 1) {
+    return emptyInspection(
+      "",
+      "legacy-cache-fallback",
+      "ambiguous",
+      "Multiple legacy cache versions are metadata-valid.",
+      legacyCandidates.map((candidate) => candidate.path),
+    );
+  }
+  if (legacyCandidates.length === 1) {
+    return selectedInspection(
+      legacyCandidates[0],
+      "legacy-cache-fallback",
+      "Canonical discovery found no install; selected the only legacy cache version.",
+    );
+  }
+  return emptyInspection(
+    canonical.root,
+    "canonical-cache-layout",
+    "missing",
+    "No canonical install was found; the labelled legacy fallback was also empty.",
   );
-  return { path: installedRuntimePath, version: installedVersion, fingerprint };
 }
 
-async function readPackageVersion(installedRuntimePath: string): Promise<string | null> {
+async function runtimeCandidate(
+  runtimePath: string,
+  expected: PluginIdentity,
+): Promise<RuntimeCandidate | null> {
+  const version = path.basename(runtimePath);
+  const [identity, packageJson] = await Promise.all([
+    pluginIdentity(runtimePath, version),
+    readJson(path.join(runtimePath, "package.json")),
+  ]);
+  if (
+    !identity ||
+    identity.publisher !== expected.publisher ||
+    identity.plugin !== expected.plugin ||
+    packageJson?.name !== expected.plugin ||
+    packageJson?.version !== version
+  ) {
+    return null;
+  }
+
+  const fingerprint = await fileFingerprint(
+    path.join(runtimePath, "dist", "scripts", "autoresearch.mjs"),
+  );
+  const shape = fingerprint
+    ? "hydrated-runtime"
+    : (await fileExists(path.join(runtimePath, "scripts", "autoresearch.ts"))) === true
+      ? "source-shaped-package"
+      : (await fileExists(path.join(runtimePath, "scripts", "autoresearch.mjs"))) === true
+        ? "package-artifact"
+        : "unavailable";
+  return { path: runtimePath, version, fingerprint, shape };
+}
+
+async function pluginIdentity(
+  packageRoot: string,
+  expectedVersion: string,
+): Promise<PluginIdentity | null> {
+  const manifest = await readJson(path.join(packageRoot, ".codex-plugin", "plugin.json"));
+  if (
+    typeof manifest?.name !== "string" ||
+    manifest.version !== expectedVersion ||
+    typeof manifest.repository !== "string"
+  ) {
+    return null;
+  }
   try {
-    const parsed = JSON.parse(
-      await fsp.readFile(path.join(installedRuntimePath, "package.json"), "utf8"),
-    );
-    return typeof parsed.version === "string" && parsed.version.trim() ? parsed.version : null;
+    const repository = new URL(manifest.repository);
+    const [publisher, plugin] = repository.pathname.split("/").filter(Boolean);
+    if (
+      repository.hostname.toLowerCase() !== "github.com" ||
+      !publisher ||
+      plugin?.replace(/\.git$/i, "").toLowerCase() !== manifest.name.toLowerCase()
+    ) {
+      return null;
+    }
+    return { publisher, plugin: manifest.name, version: expectedVersion };
   } catch {
     return null;
   }
+}
+
+async function legacyRuntimeCandidates(
+  pluginCacheRoot: string,
+  identity: PluginIdentity,
+): Promise<RuntimeCandidate[] | null> {
+  const legacyRoot = path.join(pluginCacheRoot, LEGACY_CACHE_NAMESPACE);
+  const topLevel = await childDirectories(legacyRoot, true);
+  if (topLevel === null) return null;
+
+  const pluginRoots = [
+    path.join(legacyRoot, identity.plugin),
+    ...topLevel
+      .filter((entry) => path.basename(entry).startsWith("plugin-install-"))
+      .map((entry) => path.join(entry, identity.plugin)),
+  ];
+  const versionRoots = (
+    await Promise.all(pluginRoots.map((root) => childDirectories(root, true)))
+  ).flatMap((entries) => entries || []);
+  return (
+    await Promise.all(versionRoots.map((runtimePath) => runtimeCandidate(runtimePath, identity)))
+  ).filter((candidate): candidate is RuntimeCandidate => candidate !== null);
+}
+
+function selectedInspection(
+  candidate: RuntimeCandidate,
+  source: InstalledRuntimeProvenance["source"],
+  detail: string,
+): InstalledRuntimeInspection {
+  return {
+    ...candidate,
+    provenance: {
+      source,
+      status: "selected",
+      path: candidate.path,
+      candidates: [candidate.path],
+      detail,
+    },
+  };
+}
+
+function emptyInspection(
+  pathValue: string,
+  source: InstalledRuntimeProvenance["source"],
+  status: InstalledRuntimeProvenance["status"],
+  detail: string,
+  candidates: string[] = [],
+): InstalledRuntimeInspection {
+  return {
+    path: pathValue,
+    version: null,
+    fingerprint: null,
+    shape: status === "missing" ? "missing" : "unavailable",
+    provenance: { source, status, path: pathValue, candidates: [...candidates].sort(), detail },
+  };
+}
+
+async function canonicalVersionPaths(
+  pluginCacheRoot: string,
+  identity: PluginIdentity,
+): Promise<{
+  status: "found" | "missing" | "unavailable";
+  root: string;
+  paths: string[];
+  detail: string;
+}> {
+  const root = path.join(pluginCacheRoot, identity.publisher, identity.plugin);
+  try {
+    const publishers = await fsp.readdir(pluginCacheRoot, { withFileTypes: true });
+    const publisher = publishers.find(
+      (entry) => entry.isDirectory() && entry.name === identity.publisher,
+    );
+    if (!publisher) {
+      const wrongCase = publishers.some(
+        (entry) =>
+          entry.isDirectory() && entry.name.toLowerCase() === identity.publisher.toLowerCase(),
+      );
+      return {
+        status: wrongCase ? "unavailable" : "missing",
+        root,
+        paths: [],
+        detail: wrongCase ? `Publisher cache casing must be ${identity.publisher}.` : "",
+      };
+    }
+
+    const publisherRoot = path.join(pluginCacheRoot, publisher.name);
+    const plugins = await fsp.readdir(publisherRoot, { withFileTypes: true });
+    const plugin = plugins.find((entry) => entry.isDirectory() && entry.name === identity.plugin);
+    if (!plugin) {
+      const wrongCase = plugins.some(
+        (entry) =>
+          entry.isDirectory() && entry.name.toLowerCase() === identity.plugin.toLowerCase(),
+      );
+      return {
+        status: wrongCase ? "unavailable" : "missing",
+        root,
+        paths: [],
+        detail: wrongCase ? `Plugin cache casing must be ${identity.plugin}.` : "",
+      };
+    }
+    const paths = await childDirectories(root);
+    return paths === null
+      ? { status: "unavailable", root, paths: [], detail: "Version directories are unreadable." }
+      : { status: "found", root, paths, detail: "" };
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { status: "missing", root, paths: [], detail: "" }
+      : { status: "unavailable", root, paths: [], detail: String(error) };
+  }
+}
+
+async function childDirectories(parent: string, missingIsEmpty = false): Promise<string[] | null> {
+  try {
+    return (await fsp.readdir(parent, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(parent, entry.name));
+  } catch (error) {
+    return missingIsEmpty && isMissingPathError(error) ? [] : null;
+  }
+}
+
+async function readJson(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed: unknown = JSON.parse(await fsp.readFile(filePath, "utf8"));
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function packageSurface(
+  packageRoot: string,
+  installed: InstalledRuntimeInspection,
+): Promise<RuntimePackageSurface> {
+  if (installed.path && samePath(packageRoot, installed.path)) return "active-installed-cache";
+  if ((await fileExists(path.join(packageRoot, "scripts", "autoresearch.ts"))) === true) {
+    return "source-checkout";
+  }
+  if ((await fileExists(path.join(packageRoot, "scripts", "autoresearch.mjs"))) === true) {
+    return "package-artifact";
+  }
+  return "unavailable";
+}
+
+function samePath(left: string, right: string): boolean {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 async function fileExists(filePath: string): Promise<boolean | null> {
@@ -313,12 +660,6 @@ function classifyRuntimeFingerprint({
   const installed = installedRuntimeFingerprint?.trim();
   if (!source || !installed) return "unavailable";
   return source === installed ? "matched" : "mismatched";
-}
-
-function sortVersionCandidates(versions: string[]): string[] {
-  return [...versions].sort((left, right) =>
-    right.localeCompare(left, undefined, { numeric: true }),
-  );
 }
 
 function quoteCommandArg(value: string): string {

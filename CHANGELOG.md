@@ -10,6 +10,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ### Fixed
 
+- Installed-runtime checks now honor `CODEX_HOME`, resolve the canonical `publisher/plugin/version` cache from plugin metadata, report the selected path and provenance, distinguish source-shaped packages from hydrated runtimes, and fail closed when multiple cache versions lack active-launcher proof. The obsolete combined marketplace namespace remains a labelled fallback only.
 - Finalization now preserves pre-existing review and verification branches during rollback, deletes only branches created by the current invocation, and fails visibly when branch restoration or cleanup cannot complete.
 
 ## 2.6.0 - 2026-07-09
