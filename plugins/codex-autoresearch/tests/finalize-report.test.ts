@@ -1306,6 +1306,7 @@ testWithTempRoot(
     const plan = JSON.parse(await fsp.readFile(payload.planOutput, "utf8"));
     assert.equal(plan.mode, "current-final-tree");
     assert.ok(plan.plan_fingerprint);
+    assert.ok(plan.accepted_evidence_fingerprint?.fingerprint);
     assert.equal(plan.current_tree_coverage.exclude_session_artifacts, true);
     assert.equal(plan.current_tree_coverage.review_unit, "current_tree");
     assert.deepEqual(plan.current_tree_coverage.excluded_session_artifacts.sort(), [
@@ -1888,6 +1889,157 @@ testWithTempRoot(
     );
   },
 );
+
+testWithTempRoot(
+  "finalizer rejects plans after hostile accepted-current evidence changes",
+  "autoresearch-finalize-stale-evidence-",
+  async (root) => {
+    const variants = [
+      {
+        name: "rejected",
+        entry: (commit) => ({
+          run: 2,
+          status: "keep",
+          evidenceStatus: "rejected",
+          commit,
+          description: "Rejected after review",
+        }),
+      },
+      {
+        name: "superseded",
+        entry: (commit) => ({
+          run: 2,
+          status: "keep",
+          evidenceStatus: "superseded",
+          commit,
+          description: "Superseded by later evidence",
+        }),
+      },
+      {
+        name: "invalidated",
+        entry: (commit) => ({
+          run: 2,
+          status: "discard",
+          commit,
+          description: "Invalidated after evaluator contamination",
+          asi: { rollback_reason: "Evaluator contamination invalidated the keep." },
+        }),
+      },
+      {
+        name: "reverted",
+        entry: (commit) => ({
+          run: 2,
+          status: "discard",
+          commit,
+          description: "Reverted after verification",
+          asi: { rollback_reason: "Reverted the accepted change." },
+        }),
+      },
+    ];
+
+    for (const variant of variants) {
+      const { commit, output, repo } = await createEvidencePlanFixture(root, variant.name);
+      const plannedHead = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+      await fsp.appendFile(
+        path.join(repo, "autoresearch.jsonl"),
+        `${JSON.stringify(variant.entry(commit))}\n`,
+        "utf8",
+      );
+
+      const result = await run(process.execPath, [finalizer, output], repo, true);
+      assert.notEqual(result.code, 0, variant.name);
+      assert.match(result.stderr, /accepted-current evidence changed/i, variant.name);
+      assert.match(result.stderr, /accepted commit membership/i, variant.name);
+      assert.match(result.stderr, /evidence status/i, variant.name);
+      assert.match(result.stderr, /Regenerate the finalizer plan/i, variant.name);
+      assert.equal((await git(["rev-parse", "HEAD"], repo)).stdout.trim(), plannedHead);
+      assert.equal(
+        (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim(),
+        "",
+        variant.name,
+      );
+    }
+  },
+);
+
+testWithTempRoot(
+  "finalizer fingerprints accepted ordering and product-claim inputs but ignores audit-only rows",
+  "autoresearch-finalize-evidence-fingerprint-",
+  async (root) => {
+    const stale = await createEvidencePlanFixture(root, "claim-inputs");
+    await fsp.appendFile(
+      path.join(stale.repo, "autoresearch.jsonl"),
+      `${JSON.stringify({
+        run: 2,
+        status: "keep",
+        evidenceStatus: "accepted",
+        commit: stale.commit,
+        metric: 0.9,
+        description: "Accepted with revised claim evidence",
+        evidence: "correctness checks passed",
+      })}\n`,
+      "utf8",
+    );
+    const staleResult = await run(process.execPath, [finalizer, stale.output], stale.repo, true);
+    assert.notEqual(staleResult.code, 0);
+    assert.match(staleResult.stderr, /accepted ledger ordering/i);
+    assert.match(staleResult.stderr, /product-claim coverage inputs/i);
+
+    const audit = await createEvidencePlanFixture(root, "audit-only");
+    await fsp.appendFile(
+      path.join(audit.repo, "autoresearch.jsonl"),
+      [
+        JSON.stringify({ type: "diagnostic", note: "Audit context only" }),
+        JSON.stringify({ run: 99, status: "measure", metric: 1, description: "Audit probe" }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const auditResult = await run(process.execPath, [finalizer, audit.output], audit.repo);
+    assert.match(auditResult.stdout, /Review branches:/);
+  },
+);
+
+async function createEvidencePlanFixture(root, name) {
+  const repo = path.join(root, name);
+  await fsp.mkdir(repo, { recursive: true });
+  await git(["init", "-b", "main"], repo);
+  await git(["config", "user.email", "codex@example.invalid"], repo);
+  await git(["config", "user.name", "Codex Test"], repo);
+  await writeFile(path.join(repo, ".gitignore"), "autoresearch.jsonl\n");
+  await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+  await git(["add", "-A"], repo);
+  await git(["commit", "-m", "base"], repo);
+  await git(["switch", "-c", `codex/${name}`], repo);
+  await writeFile(path.join(repo, "src", "value.txt"), "accepted\n");
+  await git(["add", "src/value.txt"], repo);
+  await git(["commit", "-m", "accepted change"], repo);
+  const commit = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+  await writeFile(
+    path.join(repo, "autoresearch.jsonl"),
+    [
+      JSON.stringify({
+        type: "config",
+        goal: "Deliver a shippable correctness improvement.",
+      }),
+      JSON.stringify({
+        run: 1,
+        status: "keep",
+        evidenceStatus: "accepted",
+        metric: 1,
+        commit,
+        description: "Accepted change",
+        evidence: "correctness checks passed",
+      }),
+      "",
+    ].join("\n"),
+  );
+  const output = path.join(root, `${name}.groups.json`);
+  await run(process.execPath, [finalizer, "plan", "--output", output, "--goal", name], repo);
+  const plan = JSON.parse(await fsp.readFile(output, "utf8"));
+  assert.ok(plan.accepted_evidence_fingerprint?.fingerprint);
+  return { commit, output, repo };
+}
 
 testWithTempRoot(
   "finalizer plan recommends collapsing overlap and can collapse on request",

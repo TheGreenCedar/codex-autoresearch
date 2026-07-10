@@ -8,9 +8,13 @@ import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
 import {
+  FINALIZATION_EVIDENCE_COMPONENT_KEYS,
   assertGeneratedPlanMetadata,
+  buildFinalizationEvidenceState,
   finalizationPlanFingerprint,
+  normalizeFinalizationEvidenceFingerprint,
   readAutoresearchLedger,
+  type FinalizationEvidenceFingerprint,
 } from "../lib/finalization-plan.js";
 import { buildFinalizationProductClaimCoverageFromLedger } from "../lib/product-claim-coverage.js";
 import {
@@ -67,6 +71,7 @@ type ExcludedCommit = {
   subject?: string;
 };
 type FinalizePlan = LooseObject & {
+  accepted_evidence_fingerprint?: FinalizationEvidenceFingerprint;
   base: string;
   excluded_commits?: ExcludedCommit[];
   final_tree: string;
@@ -1060,8 +1065,12 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
-  const keptRuns = entries.filter(isAcceptedCurrentRun);
-  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(entries);
+  const evidenceState = buildFinalizationEvidenceState(
+    history.map((item) => item.hash),
+    entries,
+  );
+  const keptRuns = evidenceState.acceptedRuns;
+  const productClaimCoverage = evidenceState.productClaimCoverage;
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
@@ -1102,6 +1111,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
     excluded_commits: excludedCommits,
     excluded_commit_count: excludedCommits.length,
     overlap_files: overlapAnalysis.files,
+    accepted_evidence_fingerprint: evidenceState.fingerprint,
     overlap_count: overlapAnalysis.files.length,
     collapse_overlap_recommended: overlapAnalysis.files.length > 0,
     warnings: buildPlanWarnings({ excludedCommits, overlapAnalysis }),
@@ -1273,6 +1283,14 @@ async function main() {
     },
   );
 
+  await withPhase(
+    "evidence revalidation",
+    "Regenerate the finalizer plan from the current accepted evidence, then retry.",
+    async () => {
+      await assertPlanAcceptedEvidenceCurrent(config, cwd);
+    },
+  );
+
   const createdBranches: string[] = [];
   const reviewBranches: string[] = [];
   const results: BranchResult[] = [];
@@ -1395,10 +1413,38 @@ function planFingerprint(plan: FinalizePlan): string {
   return finalizationPlanFingerprint(plan);
 }
 
+async function assertPlanAcceptedEvidenceCurrent(config: FinalizePlan, cwd: string): Promise<void> {
+  if (!config.accepted_evidence_fingerprint) return;
+  const planned = normalizeFinalizationEvidenceFingerprint(config.accepted_evidence_fingerprint);
+  const history = await commitHistory(config.base, cwd);
+  const entries = await readAutoresearchJsonl(cwd);
+  const current = buildFinalizationEvidenceState(
+    history.map((item) => item.hash),
+    entries,
+  ).fingerprint;
+  if (planned.fingerprint === current.fingerprint && planned.schema_version === 1) return;
+  const labels: Record<string, string> = {
+    accepted_commit_membership: "accepted commit membership",
+    excluded_commit_statuses: "excluded commit status",
+    evidence_statuses: "evidence status",
+    accepted_ledger_order: "accepted ledger ordering",
+    product_claim_coverage_inputs: "product-claim coverage inputs",
+  };
+  const changed = FINALIZATION_EVIDENCE_COMPONENT_KEYS.filter(
+    (key) => planned.components[key] !== current.components[key],
+  ).map((key) => labels[key]);
+  if (planned.schema_version !== 1) changed.unshift("fingerprint schema");
+  if (!changed.length) changed.push("canonical evidence fingerprint");
+  throw new Error(
+    `Stale finalization plan: accepted-current evidence changed in ${changed.join(", ")}. No review branches were created. Regenerate the finalizer plan from the current ledger and retry.`,
+  );
+}
+
 async function hydratePlanProductClaimCoverage(
   config: FinalizePlan,
   cwd: string,
 ): Promise<FinalizePlan> {
+  if (config.accepted_evidence_fingerprint && config.product_claim_coverage) return config;
   const entries = await readAutoresearchJsonl(cwd);
   const derived = buildFinalizationProductClaimCoverageFromLedger(entries);
   const productGradeIssue = productGradeFinalizationIssue(derived);
