@@ -134,7 +134,12 @@ import {
   resolveResearchSlugForQualityGapSync,
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
-import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/process-governor.js";
+import {
+  assertRunResourcePreflight,
+  buildActiveRunPacketId,
+  buildProcessLifecycleRecord,
+  type ProcessLifecycleEvent,
+} from "../lib/process-governor.js";
 import {
   applyResolvedRecipeDefaults,
   findRecipe,
@@ -5775,6 +5780,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     workflowFriction,
     finalization: effectiveFinalizePreview,
     commands: continuationCommands(workDir),
+    processProgress: activeProgress,
     qualityGap,
     laneLifecycle,
     packetDiagnostics,
@@ -6097,13 +6103,20 @@ async function runExperimentWithProgressWriter(
     args.timeout_seconds ?? args.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const retainedProcessProgress = await readActiveProgressSnapshot(workDir, config);
   const resourcePreflight = assertRunResourcePreflight({
     command,
     config,
-    entries: readJsonl(workDir),
+    entries: [
+      ...readJsonl(workDir),
+      ...(retainedProcessProgress
+        ? [{ packetEvidence: { progressSnapshot: retainedProcessProgress } }]
+        : []),
+    ],
   });
+  const packetId = buildActiveRunPacketId(state.results.length + 1);
   let progressSnapshot = createProgressSnapshot({
-    packetId: buildActiveRunPacketId(state.results.length + 1),
+    packetId,
     command,
     startedAt: new Date().toISOString(),
     timeoutSeconds,
@@ -6125,12 +6138,49 @@ async function runExperimentWithProgressWriter(
     };
     progressSnapshot = progressWriter.queue(progressSnapshot);
   };
-  const benchmark = await runShell(command, workDir, timeoutSeconds, {
-    env: commandInput.env,
-    envMode: commandInput.packetEnvMode,
-    onProgress: updateProgress,
-    retainMetricNames: [state.config.metricName],
-  });
+  const runPacketStage = async (
+    stageCommand: string,
+    stageTimeoutSeconds: number,
+    options: Parameters<typeof runShell>[3],
+    timeoutPhase: "benchmark" | "checks",
+  ) => {
+    try {
+      return await runShell(stageCommand, workDir, stageTimeoutSeconds, options);
+    } catch (error) {
+      progressSnapshot = finishProgressSnapshot(progressSnapshot, {
+        exitCode: null,
+        timedOut: true,
+        terminationFailed: true,
+        termination: {
+          attempted: false,
+          escalated: false,
+          method: "none",
+          pid: null,
+          platform: process.platform,
+          proven: false,
+          reason: "runner_rejected_before_outcome",
+          remainingPids: [],
+          trackedPids: [],
+        },
+        timeoutPhase,
+        completedAt: new Date().toISOString(),
+      });
+      progressSnapshot = progressWriter.queue(progressSnapshot);
+      await progressWriter.flush();
+      throw error;
+    }
+  };
+  const benchmark = await runPacketStage(
+    command,
+    timeoutSeconds,
+    {
+      env: commandInput.env,
+      envMode: commandInput.packetEnvMode,
+      onProgress: updateProgress,
+      retainMetricNames: [state.config.metricName],
+    },
+    "benchmark",
+  );
   const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
   const parseSource = metricParseSource(benchmark);
   const parsedMetricResult = parseMetricLines(parseSource, {
@@ -6168,9 +6218,8 @@ async function runExperimentWithProgressWriter(
       explicitChecksCommand,
     })
   ) {
-    checks = await runShell(
+    checks = await runPacketStage(
       checksCommand,
-      workDir,
       numberOption(
         args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
         DEFAULT_CHECKS_TIMEOUT_SECONDS,
@@ -6180,6 +6229,7 @@ async function runExperimentWithProgressWriter(
         envMode: commandInput.packetEnvMode,
         onProgress: updateProgress,
       },
+      "checks",
     );
   }
   const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
@@ -6226,6 +6276,17 @@ async function runExperimentWithProgressWriter(
     });
     progressSnapshot = progressWriter.queue(progressSnapshot);
     await progressWriter.flush();
+  } else {
+    progressSnapshot = finishProgressSnapshot(progressSnapshot, {
+      exitCode: checks?.exitCode ?? benchmark.exitCode,
+      timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
+      termination,
+      timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
+      completedAt: checks?.finishedAt || benchmark.finishedAt,
+      artifacts,
+    });
+    progressSnapshot = progressWriter.queue(progressSnapshot);
+    await progressWriter.flush();
   }
   return {
     ok: passed,
@@ -6249,6 +6310,7 @@ async function runExperimentWithProgressWriter(
     startedAt: benchmark.startedAt,
     finishedAt: checks?.finishedAt || benchmark.finishedAt,
     lastOutputAt: checks?.lastOutputAt || benchmark.lastOutputAt,
+    processLifecycle: processLifecycleRecordsForRun(packetId, benchmark, checks),
     progressSnapshot,
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
@@ -6313,6 +6375,52 @@ async function runExperimentWithProgressWriter(
       packetEnvMode: commandInput.packetEnvMode,
     }),
   };
+}
+
+function processLifecycleRecordsForRun(
+  packetId: string,
+  benchmark: ProcessRunResult,
+  checks: ProcessRunResult | null,
+) {
+  return [
+    ...processLifecycleRecordsForStage(packetId, "benchmark", benchmark),
+    ...(checks ? processLifecycleRecordsForStage(packetId, "checks", checks) : []),
+  ];
+}
+
+function processLifecycleRecordsForStage(
+  packetId: string,
+  processId: string,
+  result: ProcessRunResult,
+) {
+  const records = [
+    buildProcessLifecycleRecord({
+      packetId,
+      processId,
+      event: "started",
+      at: String(result.startedAt),
+    }),
+  ];
+  if (result.lastOutputAt) {
+    records.push(
+      buildProcessLifecycleRecord({
+        packetId,
+        processId,
+        event: "observed-live",
+        at: String(result.lastOutputAt),
+      }),
+    );
+  }
+  records.push(
+    buildProcessLifecycleRecord({
+      packetId,
+      processId,
+      event: result.terminationFailed ? "termination-failed" : "terminated",
+      at: String(result.finishedAt),
+      ...(result.termination ? { termination: result.termination } : {}),
+    }),
+  );
+  return records;
 }
 
 function buildRunProgress({
@@ -6403,6 +6511,19 @@ async function logExperiment(args: any) {
     ? await readLastRunPacket(workDir)
     : null;
   if (lastPacket) await assertFreshLastRunPacket(workDir, lastPacket, config);
+  const packetProcessLifecycle = processLifecycleRecordsFromPacket(lastPacket);
+  const hasUnprovenTermination = packetProcessLifecycle.some(
+    (record) => record.event === "termination-failed",
+  );
+  if (hasUnprovenTermination) {
+    const retainedProgress = await readActiveProgressSnapshot(workDir);
+    if (retainedProgress?.exitState === "termination_failed") {
+      throw new Error(
+        "Cannot log a packet while process-tree termination remains unproven. Verify the reported PID and descendants, then clear retained progress first.",
+      );
+    }
+    packetProcessLifecycle.push(...terminalReconciliationRecords(packetProcessLifecycle));
+  }
   const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses)
     ? lastPacket.decision.allowedStatuses
     : [];
@@ -6687,6 +6808,7 @@ async function logExperiment(args: any) {
     [...currentRuns, experiment],
     stateBefore.config.bestDirection,
   );
+  for (const lifecycle of packetProcessLifecycle) appendJsonl(workDir, lifecycle);
   appendJsonl(workDir, experiment);
   if (pendingLogReceiptPath) {
     const cleanupWarning = await clearPendingLogTransactionWithWarning(
@@ -6861,6 +6983,13 @@ async function deleteActiveProgressSnapshot(workDir: string) {
 async function deleteActiveProgressSnapshotIfSafe(workDir: string) {
   const snapshot = await readActiveProgressSnapshot(workDir);
   if (snapshot?.exitState === "termination_failed") return;
+  if (
+    snapshot?.exitState === "running" &&
+    typeof snapshot.startedAt === "string" &&
+    typeof snapshot.commandClass === "string"
+  ) {
+    return;
+  }
   await deleteActiveProgressSnapshot(workDir);
 }
 
@@ -8622,6 +8751,7 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timedOut: Boolean(run.timedOut),
     termination: run.termination || null,
     terminationFailed: Boolean(run.terminationFailed),
+    processLifecycle: rekeyProcessLifecycleRecords(run.processLifecycle, packetId),
     stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
       workDir: run.workDir,
     }),
@@ -8645,6 +8775,50 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
       : null,
     freshnessFingerprint: fingerprint,
   };
+}
+
+function processLifecycleRecordsFromPacket(packet: LooseObject | null): LooseObject[] {
+  return rekeyProcessLifecycleRecords(
+    packet?.packetEvidence?.processLifecycle,
+    String(packet?.packetEvidence?.packetId || ""),
+  );
+}
+
+function rekeyProcessLifecycleRecords(value: unknown, packetId: string): LooseObject[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+    const identity =
+      record.identity && typeof record.identity === "object" && !Array.isArray(record.identity)
+        ? record.identity
+        : {};
+    return buildProcessLifecycleRecord({
+      packetId,
+      processId: String(identity.processId || ""),
+      event: String(record.event || "") as ProcessLifecycleEvent,
+      at: String(record.at || ""),
+      ...(record.termination ? { termination: record.termination } : {}),
+    });
+  });
+}
+
+function terminalReconciliationRecords(records: LooseObject[]): LooseObject[] {
+  const latest = new Map<string, LooseObject>();
+  for (const record of records) {
+    const packetId = String(record.identity?.packetId || "");
+    const processId = String(record.identity?.processId || "");
+    latest.set(`${packetId}\0${processId}`, record);
+  }
+  return [...latest.values()]
+    .filter((record) => record.event === "termination-failed")
+    .map((record) =>
+      buildProcessLifecycleRecord({
+        packetId: String(record.identity.packetId),
+        processId: String(record.identity.processId),
+        event: "terminated",
+        termination: { proven: true, reason: "operator_verified_absent" },
+      }),
+    );
 }
 
 async function taskArtifactsForRun(run: LooseObject) {

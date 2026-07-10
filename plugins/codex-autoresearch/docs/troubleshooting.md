@@ -23,6 +23,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | `benchmark-lint` times out | Broken or too-large benchmark probe | Repair the wrapper, warm the cache, or use a bounded task slice. This is benchmark repair, not product progress. |
 | Packet timed out after writing artifacts | Partial results exist | Run `partial-results --cwd <project> --from-last` before rerunning; recorded rows remain diagnostic `measure` evidence. |
 | State reports `termination_failed` | Process-tree cleanup could not be proven | Treat the reported PID as possibly alive. Verify that PID and its descendants are absent before removing only `.git/autoresearch/progress.json` (Git) or `autoresearch.progress.json` (non-Git); do not start another packet first. |
+| State reports an invalid or active process lifecycle | Typed lifecycle ledger state is malformed or has no later terminal row | Preserve the ledger. Repair the malformed `process_lifecycle` row or append a valid `terminated` row for the same packet/process identity only after verifying the process is absent. Historical descriptive prose needs no repair. |
 | Checks failed | Correctness boundary | Run `checks-inspect --cwd <project> --command "<checks>"`, then fix or reject the packet. Logging `checks_failed` may clean configured or explicit experiment paths. |
 
 ## Git and logging

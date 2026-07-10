@@ -138,6 +138,13 @@ test("dashboard bootstrap fails closed outside an explicit development showcase"
       { type: "research_fanout", fanoutPlan: { status: "planned" } },
       { type: "lane_result", lane: { id: "scout" }, result: { status: "complete" } },
       { type: "approval", gate: "big_idea_architecture", scope: "scout" },
+      {
+        type: "process_lifecycle",
+        identity: { packetId: "packet-1", processId: "benchmark" },
+        event: "terminated",
+        at: "2026-07-10T12:00:00.000Z",
+        termination: { proven: true, reason: "terminated" },
+      },
     ],
     {},
   );
@@ -199,9 +206,57 @@ test("dashboard live payload validation rejects missing, malformed, and incompat
 
   const valid = validateLiveDashboardPayload({
     payloadVersion: DASHBOARD_PAYLOAD_VERSION,
-    ledgerEntries: [dashboardConfigEntry({ name: "live", metricName: "seconds" })],
+    ledgerEntries: [
+      dashboardConfigEntry({ name: "live", metricName: "seconds" }),
+      {
+        type: "process_lifecycle",
+        identity: { packetId: "packet-live", processId: "checks" },
+        event: "termination-failed",
+        at: "2026-07-10T12:00:00.000Z",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      },
+    ],
   });
   assert.equal(valid.ok, true);
+
+  for (const malformed of [
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-1", processId: "benchmark" },
+      event: "terminated",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: false, reason: "remaining_processes_alive" },
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-1" },
+      event: "started",
+      at: "not-a-time",
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-1", processId: "benchmark" },
+      event: "started",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: false, reason: "remaining_processes_alive" },
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-1", processId: "benchmark" },
+      event: "termination-failed",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: true, reason: "terminated" },
+    },
+  ]) {
+    assert.equal(bootstrapDashboardPayload([malformed], {}).ok, false);
+    assert.equal(
+      validateLiveDashboardPayload({
+        payloadVersion: DASHBOARD_PAYLOAD_VERSION,
+        ledgerEntries: [malformed],
+      }).ok,
+      false,
+    );
+  }
 });
 
 test("production dashboard renders a payload-unavailable state instead of demo evidence", async () => {

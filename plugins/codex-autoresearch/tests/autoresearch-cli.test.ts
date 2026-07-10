@@ -2750,6 +2750,133 @@ test("run returns explicit keep/discard decision options instead of a fake statu
   });
 });
 
+test("packet lifecycle records keep state doctor and dashboard process trust aligned", async () => {
+  await withTempDir("typed-process-lifecycle", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "process lifecycle", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    assert.equal(next.code, 0, next.stderr);
+    const packetLifecycle = JSON.parse(next.stdout).packetEvidence.processLifecycle;
+    assert.deepEqual(
+      packetLifecycle.map((record: any) => record.event),
+      ["started", "observed-live", "terminated"],
+    );
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Record completed packet lifecycle",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const records = parseLedger(await readFile(ledgerPath, "utf8"));
+    const loggedLifecycle = records.filter((record) => record.type === "process_lifecycle");
+    assert.deepEqual(
+      loggedLifecycle.map((record) => record.event),
+      ["started", "observed-live", "terminated"],
+    );
+    assert.deepEqual(
+      loggedLifecycle.map((record: any) => record.identity.processId),
+      ["benchmark", "benchmark", "benchmark"],
+    );
+    assert.doesNotMatch(JSON.stringify(loggedLifecycle), /console\.log|METRIC|seconds=1/);
+
+    records.push({
+      type: "process_lifecycle",
+      identity: { packetId: "packet-unclosed", processId: "benchmark" },
+      event: "started",
+      at: "2026-07-10T12:00:00.000Z",
+    });
+    await writeLedger(dir, records);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json"]);
+    const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.equal(dashboard.code, 0, dashboard.stderr);
+
+    const statePreflight = JSON.parse(state.stdout).resourcePreflight;
+    const doctorPreflight = JSON.parse(doctor.stdout).state.resourcePreflight;
+    const dashboardPreflight = JSON.parse(dashboard.stdout).viewModel.decisionEnvelope
+      .resourcePreflight;
+    for (const preflight of [statePreflight, doctorPreflight, dashboardPreflight]) {
+      assert.equal(preflight.status, "blocked");
+      assert.equal(preflight.canStart, false);
+      assert.equal(preflight.residue.length, 1);
+      assert.equal(preflight.residue[0].status, "process-active");
+    }
+    assert.equal(statePreflight.nextAction, doctorPreflight.nextAction);
+    assert.equal(statePreflight.nextAction, dashboardPreflight.nextAction);
+  });
+});
+
+test("unknown packet runner rejection retains a termination-failed brake", async () => {
+  await withTempDir("runner-rejection-process-brake", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "runner rejection", "--metric-name", "seconds"]);
+    await writeFile(path.join(dir, "hostile.command"), "node\0unexpected", "utf8");
+
+    const run = await runCli(["run", "--cwd", dir, "--command-file", "hostile.command"]);
+    assert.notEqual(run.code, 0);
+    const progress = JSON.parse(
+      await readFile(path.join(dir, "autoresearch.progress.json"), "utf8"),
+    );
+    assert.equal(progress.exitState, "termination_failed");
+    assert.equal(progress.termination.proven, false);
+    assert.equal(progress.termination.reason, "runner_rejected_before_outcome");
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const payload = JSON.parse(state.stdout);
+    assert.equal(payload.resourcePreflight.canStart, false);
+    assert.equal(payload.resourcePreflight.residue[0].status, "termination-failed");
+    assert.equal(payload.loopContract.canRunNextPacket, false);
+  });
+});
+
+test("a valid unclosed running process snapshot blocks and remains durable", async () => {
+  await withTempDir("unclosed-running-process", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "unclosed process", "--metric-name", "seconds"]);
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    await writeFile(
+      progressPath,
+      JSON.stringify({
+        generation: 3,
+        packetId: "packet-unclosed",
+        commandClass: "node script",
+        startedAt: "2026-07-10T12:00:00.000Z",
+        lastOutputAt: "2026-07-10T12:00:01.000Z",
+        timeoutSeconds: 60,
+        timeoutPhase: "none",
+        exitState: "running",
+        artifactRoot: ".",
+        latestArtifactRow: "",
+        elapsedSeconds: 1,
+        staleProgressReason: "",
+        finalArtifactSummary: "",
+        termination: null,
+        terminationFailed: false,
+      }),
+      "utf8",
+    );
+    const sideEffect = path.join(dir, "must-not-run.txt");
+    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+      `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran')`,
+    )}`;
+
+    const run = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.notEqual(run.code, 0);
+    assert.match(run.stderr, /Typed process lifecycle state reports an active/);
+    assert.equal(await pathExists(progressPath), true);
+    assert.equal(await pathExists(sideEffect), false);
+  });
+});
+
 test("state and dashboard math keep zero-valued metrics visible", async () => {
   await withTempDir("zero-metric", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "zero metric", "--metric-name", "failures"]);

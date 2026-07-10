@@ -87,6 +87,7 @@ Obey these brakes:
 
 - Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
 - Treat `termination_failed` as a hard stop. Preserve partial packet evidence, verify the reported PID and descendants are absent, then remove only the retained progress marker before another `run` or `next`.
+- Treat typed `process_lifecycle` blockers as process truth: verify absence before recording a later terminal row. Never infer active residue from historical prose, and never repair a malformed lifecycle row by weakening validation.
 - Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
 - Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.
 - Continue the active session when `continuation.shouldContinue=true`, but run a packet only when `loopContract.canRunNextPacket=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
