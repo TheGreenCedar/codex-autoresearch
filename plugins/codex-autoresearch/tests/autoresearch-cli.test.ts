@@ -460,6 +460,67 @@ test("spawned CLI contract covers source launcher startup and env workdir resolu
   });
 });
 
+test("spawned CLI returns scoped help and human-safe usage errors", async () => {
+  const rootHelp = await runSpawnedCli(["-h"]);
+  assert.equal(rootHelp.code, 0, rootHelp.stderr);
+  assert.match(rootHelp.stdout, /Happy path:/);
+
+  const commandHelp = await runSpawnedCli(["state", "--help"]);
+  assert.equal(commandHelp.code, 0, commandHelp.stderr);
+  assert.match(commandHelp.stdout, /Command: state/);
+  assert.match(commandHelp.stdout, /autoresearch\.mjs state --cwd <project>/);
+  assert.doesNotMatch(commandHelp.stdout, /autoresearch\.mjs setup --cwd/);
+
+  const prefixedHelp = await runSpawnedCli(["--debug", "--all", "help", "state"]);
+  assert.equal(prefixedHelp.code, 0, prefixedHelp.stderr);
+  assert.match(prefixedHelp.stdout, /Command: state/);
+
+  for (const args of [
+    ["state", "--metric-name", "latency"],
+    ["state", "--compact=perhaps"],
+    ["state", "--debug", "nonsense"],
+  ]) {
+    const result = await runSpawnedCli(args);
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /Command: state/);
+    assert.match(result.stderr, /Usage:/);
+    assert.doesNotMatch(result.stderr, /\n\s+at\s/);
+    assert.doesNotMatch(result.stderr, new RegExp(escapeRegExp(pluginRoot), "i"));
+  }
+
+  const invalidDebug = await runSpawnedCli(["--debug=perhaps"]);
+  assert.equal(invalidDebug.code, 1, invalidDebug.stderr);
+  assert.match(invalidDebug.stderr, /debug expects a boolean value/i);
+  assert.doesNotMatch(invalidDebug.stderr, /\n\s+at\s/);
+
+  for (const value of [
+    path.join(pluginRoot, "private-project"),
+    "secret-token-shaped-value",
+    "line-one\nline-two\u001b[31m",
+  ]) {
+    const invalidBoolean = await runSpawnedCli(["state", `--compact=${value}`]);
+    assert.equal(invalidBoolean.code, 1, invalidBoolean.stderr);
+    assert.match(invalidBoolean.stderr, /compact expects a boolean value/i);
+    assert.equal(invalidBoolean.stderr.includes(value), false);
+    assert.equal(invalidBoolean.stderr.includes("\u001b"), false);
+    assert.doesNotMatch(invalidBoolean.stderr, /\n\s+at\s/);
+  }
+
+  const debug = await runSpawnedCli(["state", "--metric-name", "latency", "--debug"]);
+  assert.equal(debug.code, 1, debug.stderr);
+  assert.match(debug.stderr, /\n\s+at\s/);
+
+  const debugThenMalformed = await runSpawnedCli([
+    "state",
+    "--metric-name",
+    "latency",
+    "--debug=true",
+    "--debug=perhaps",
+  ]);
+  assert.equal(debugThenMalformed.code, 1, debugThenMalformed.stderr);
+  assert.match(debugThenMalformed.stderr, /\n\s+at\s/);
+});
+
 test("compact state exposes authoritative goal frame and operator handoff", async () => {
   await withTempDir("compact-goal-frame", async (dir) => {
     await runCli([
@@ -9234,7 +9295,7 @@ test("config updates and clears guardrails and budgets", async () => {
 
     const missingPacketBudget = await runCli(["config", "--cwd", dir, "--packet-budget"]);
     assert.notEqual(missingPacketBudget.code, 0);
-    assert.match(missingPacketBudget.stderr, /Expected a number, got true/);
+    assert.match(missingPacketBudget.stderr, /packet-budget.*argument missing/i);
 
     const missingWallClockBudget = await runCli([
       "config",
@@ -9243,7 +9304,7 @@ test("config updates and clears guardrails and budgets", async () => {
       "--wall-clock-budget-seconds",
     ]);
     assert.notEqual(missingWallClockBudget.code, 0);
-    assert.match(missingWallClockBudget.stderr, /Expected a number, got true/);
+    assert.match(missingWallClockBudget.stderr, /wall-clock-budget-seconds.*argument missing/i);
 
     const cleared = await runCli([
       "config",

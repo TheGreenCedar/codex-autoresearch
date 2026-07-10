@@ -52,6 +52,84 @@ function testWithTempRoot(name, prefix, body) {
   });
 }
 
+test("finalizer CLI validates aliases, booleans, unknown options, and debug stacks", async () => {
+  const help = await run(process.execPath, [finalizer, "-h"], pluginRoot, true);
+  assert.equal(help.code, 0, help.stderr);
+  assert.match(help.stdout, /Finalize an autoresearch branch/);
+
+  const aliases = await run(
+    process.execPath,
+    [finalizer, "plan", "--workingDir=repo path", "--collapseOverlap=false", "--help"],
+    pluginRoot,
+    true,
+  );
+  assert.equal(aliases.code, 0, aliases.stderr);
+
+  for (const args of [
+    ["--help", "plan"],
+    ["--debug", "plan", "--help"],
+  ]) {
+    const leading = await run(process.execPath, [finalizer, ...args], pluginRoot, true);
+    assert.equal(leading.code, 0, leading.stderr);
+    assert.match(leading.stdout, /Finalize an autoresearch branch/);
+  }
+
+  for (const args of [
+    ["plan", "--bogus"],
+    ["plan", "--collapse-overlap=perhaps"],
+    ["plan", "--collapse-overlap", "perhaps"],
+    ["--collapse-overlap", "perhaps", "plan"],
+  ]) {
+    const result = await run(process.execPath, [finalizer, ...args], pluginRoot, true);
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /Usage:/);
+    assert.doesNotMatch(result.stderr, /\n\s+at\s/);
+    assert.doesNotMatch(
+      result.stderr,
+      new RegExp(pluginRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+    );
+  }
+
+  const debug = await run(
+    process.execPath,
+    [finalizer, "plan", "--bogus", "--debug"],
+    pluginRoot,
+    true,
+  );
+  assert.equal(debug.code, 1, debug.stderr);
+  assert.match(debug.stderr, /\n\s+at\s/);
+
+  const leadingDebug = await run(
+    process.execPath,
+    [finalizer, "--debug", "missing.groups.json"],
+    pluginRoot,
+    true,
+  );
+  assert.equal(leadingDebug.code, 1, leadingDebug.stderr);
+  assert.match(leadingDebug.stderr, /\n\s+at\s/);
+
+  for (const option of ["cwd", "output", "goal", "trunk"]) {
+    const missingValue = await run(
+      process.execPath,
+      [finalizer, `--${option}`, "--debug", "plan"],
+      pluginRoot,
+      true,
+    );
+    assert.equal(missingValue.code, 1, missingValue.stderr);
+    assert.match(missingValue.stderr, new RegExp(`${option}.*argument missing`, "i"));
+    assert.match(missingValue.stderr, /\n\s+at\s/);
+  }
+
+  const debugThenMalformed = await run(
+    process.execPath,
+    [finalizer, "plan", "--bogus", "--debug=true", "--debug=perhaps"],
+    pluginRoot,
+    true,
+  );
+  assert.equal(debugThenMalformed.code, 1, debugThenMalformed.stderr);
+  assert.match(debugThenMalformed.stderr, /\n\s+at\s/);
+});
+
 test("session artifact modes preserve finalization, dirty tree, and source checkout policy", () => {
   const cases: Array<[string, boolean, boolean, boolean]> = [
     ["autoresearch.jsonl", true, true, true],

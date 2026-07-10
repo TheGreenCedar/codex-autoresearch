@@ -1,12 +1,13 @@
 export interface HelpOptions {
   all?: boolean;
+  command?: string | null;
 }
 
 const HAPPY_PATH = "setup -> doctor -> next -> log -> state -> finalize-preview";
 
 const DEFAULT_USAGE_LINES = [
   "  Read-only planning:",
-  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--name <name>] [--metric-name <name>] [--direction lower|higher] [--benchmark-command <cmd>]",
+  "  node scripts/autoresearch.mjs setup-plan --cwd <project> [--name <name>] [--metric-name <name>] [--direction lower|higher] [--benchmark-command <cmd>] [--shell bash|powershell]",
   "  node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>",
   "  Writes session files:",
   "  node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
@@ -27,6 +28,7 @@ const SETUP_GUIDANCE_FLAGS = [
   "[--direction lower|higher]",
   "[--benchmark-command <cmd>]",
   "[--checks-command <cmd>]",
+  "[--shell bash|powershell]",
   "[--commit-paths <paths>]",
   "[--protected-benchmark-paths <paths>]",
   "[--secondary-metric-constraints <rules>]",
@@ -89,7 +91,8 @@ const FULL_GUIDANCE_LINES = [
   "  After reviewing the plan, run the finalizer with that plan file.",
 ];
 
-export function renderCliHelp({ all = false }: HelpOptions = {}): string {
+export function renderCliHelp({ all = false, command = null }: HelpOptions = {}): string {
+  if (command) return renderCommandHelp(command);
   const usageLines = all ? FULL_USAGE_LINES : DEFAULT_USAGE_LINES;
   const sections = [
     "Codex Autoresearch",
@@ -104,6 +107,37 @@ export function renderCliHelp({ all = false }: HelpOptions = {}): string {
   } else {
     sections.push(...FULL_GUIDANCE_LINES);
   }
+  sections.push(
+    "",
+    "Global options:",
+    "  -h, --help  Show root or command help.",
+    "  --debug     Include a stack trace when a command fails.",
+  );
   sections.push("", "Benchmark output format:", "  METRIC name=value", "  ARTIFACT name=path", "");
   return sections.join("\n");
+}
+
+function renderCommandHelp(command: string): string {
+  const commandPattern = new RegExp(
+    `node scripts/autoresearch\\.mjs ${escapeRegExp(command)}(?:\\s|$)`,
+  );
+  const usageLines = FULL_USAGE_LINES.filter((line) => commandPattern.test(line));
+  const sections = [
+    "Codex Autoresearch",
+    "",
+    `Command: ${command}`,
+    "",
+    "Usage:",
+    ...(usageLines.length ? usageLines : [`  node scripts/autoresearch.mjs ${command}`]),
+    "",
+    "Options:",
+    "  -h, --help  Show this help.",
+    "  --debug     Include a stack trace when the command fails.",
+    "",
+  ];
+  return sections.join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

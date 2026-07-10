@@ -50,11 +50,16 @@ import {
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
 import {
+  CliUsageError,
+  cliDebugRequested,
+  isKnownCliCommand,
+  parseAutoresearchCliArgs,
+} from "../lib/cli/options.js";
+import {
   boolOption,
   enumOption,
   nonNegativeIntegerOption,
   numberOption,
-  parseCliArgs,
   parseJsonFileOption,
   parseJsonOption,
   positiveIntegerOption,
@@ -626,7 +631,7 @@ async function laneRunner(args: LooseObject): Promise<LooseObject> {
   return await laneRunnerHandler(args);
 }
 
-function usage(options: { all?: boolean } = {}) {
+function usage(options: { all?: boolean; command?: string | null } = {}) {
   return renderCliHelp(options);
 }
 
@@ -9179,14 +9184,20 @@ export async function runAutoresearchCli(
 ): Promise<number> {
   const writeStdout = io.stdout || console.log;
   const writeStderr = io.stderr || console.error;
+  let debug = false;
   try {
+    debug = cliDebugRequested(argv);
     await executeAutoresearchCli(argv, writeStdout);
     return 0;
   } catch (error: any) {
-    if (error?.code) {
-      writeStderr(`${error.code}: ${error.message || String(error)}`);
+    const message = error?.code
+      ? `${error.code}: ${error.message || String(error)}`
+      : error?.message || String(error);
+    const detail = debug && error?.stack ? error.stack : message;
+    if (error instanceof CliUsageError) {
+      writeStderr(`${detail}\n\n${usage({ command: error.command })}`);
     } else {
-      writeStderr(error.stack || error.message || String(error));
+      writeStderr(detail);
     }
     return 1;
   }
@@ -9196,11 +9207,16 @@ async function executeAutoresearchCli(
   argv: string[],
   writeStdout: (text: string) => void,
 ): Promise<void> {
-  const args = parseCliArgs(argv);
+  const args = parseAutoresearchCliArgs(argv);
   const command = args._[0];
   if (!command || args.help || command === "help") {
+    const helpCommand = command === "help" ? args._[1] || null : command || null;
+    if (helpCommand && !isKnownCliCommand(helpCommand)) {
+      throw new CliUsageError(`Unknown command: ${helpCommand}`);
+    }
     writeStdout(
       usage({
+        command: helpCommand,
         all:
           boolOption(args.all, false) ||
           command === "finalize-current-tree" ||
