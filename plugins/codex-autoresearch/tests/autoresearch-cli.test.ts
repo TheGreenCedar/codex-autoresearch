@@ -5895,7 +5895,10 @@ test("packet command tampering is stale in dashboard and next preflight", async 
       "manual",
     ]);
     assert.equal(replacement.code, 0, replacement.stderr);
-    assert.equal(JSON.parse(replacement.stdout).run.command, command);
+    assert.equal(
+      JSON.parse(replacement.stdout).run.command,
+      redactCommandDisplay(command, { workDir: dir }),
+    );
   });
 });
 
