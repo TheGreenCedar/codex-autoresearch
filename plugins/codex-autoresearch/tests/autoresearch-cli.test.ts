@@ -1194,7 +1194,7 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
       checks,
       [
         "for (let index = 0; index < 200; index += 1) process.stdout.write(`check-${index}\\n`);",
-        "setTimeout(() => {}, 5000);",
+        "setTimeout(() => {}, 30000);",
       ].join("\n"),
     );
 

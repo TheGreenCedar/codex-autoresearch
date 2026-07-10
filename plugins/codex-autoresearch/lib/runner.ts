@@ -732,7 +732,10 @@ async function terminatePosixProcessGroup(pid: number): Promise<ProcessTreeTermi
 }
 
 async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination> {
-  const snapshot = await windowsProcessTreeSnapshot(pid);
+  let snapshot = await windowsProcessTreeSnapshot(pid);
+  if (!snapshot.proven && pidState(pid) !== "gone") {
+    snapshot = await windowsProcessTreeSnapshot(pid);
+  }
   const gracefulCode = await taskkill(pid, false);
   let remainingPids = await waitForPidsGone(snapshot.trackedPids, PROCESS_TREE_GRACE_MS);
   if (snapshot.proven && remainingPids.length === 0) {
