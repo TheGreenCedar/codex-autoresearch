@@ -167,6 +167,52 @@ test("ledger-doctor --json returns bounded structured health for malformed JSONL
   });
 });
 
+test("wrong-shaped ledger evidence stays diagnostic and blocks accepted state", async () => {
+  await withTempDir("ledger-record-shape", async (dir) => {
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    await writeFile(
+      ledgerPath,
+      [
+        JSON.stringify({ type: "config", metricName: "seconds", bestDirection: "lower" }),
+        "null",
+        JSON.stringify({ run: 1, metric: 5, status: "keep" }),
+        "",
+      ].join("\n"),
+    );
+
+    const result = await runCli(["state", "--cwd", dir]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, "ledger_jsonl_invalid");
+    assert.equal(payload.runs, 2);
+    assert.equal(payload.kept, 0);
+    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.deepEqual(
+      {
+        file: payload.parseErrors[0].file,
+        line: payload.parseErrors[0].line,
+        kind: payload.parseErrors[0].kind,
+        command: payload.parseErrors[0].command,
+      },
+      {
+        file: ledgerPath,
+        line: 2,
+        kind: "null",
+        command: "node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json",
+      },
+    );
+
+    const exported = await runCli(["export", "--cwd", dir]);
+    assert.notEqual(exported.code, 0);
+    assert.match(
+      `${exported.stdout}\n${exported.stderr}`,
+      /Corrupt autoresearch\.jsonl at line 2 .*Observed JSON kind: null.*ledger-doctor/,
+    );
+    assert.equal(await pathExists(path.join(dir, "autoresearch-dashboard.html")), false);
+  });
+});
+
 test("doctor routes corrupt ledgers to ledger-doctor guidance", async () => {
   await withTempDir("doctor-malformed-jsonl", async (dir) => {
     await writeFile(

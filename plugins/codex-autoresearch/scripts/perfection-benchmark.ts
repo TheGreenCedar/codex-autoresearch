@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { parseJsonlRecords } from "../lib/session-records.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -308,18 +309,15 @@ const checks = [
         screenshotDimensions.width >= 900 &&
         screenshotDimensions.height / screenshotDimensions.width <= 0.8;
       const demoJsonl = await readText("examples/demo-session/autoresearch.jsonl");
-      const demoEntries = demoJsonl
-        .split(/\r?\n/)
-        .filter((line) => line.trim().startsWith('{"run":'))
-        .map(
-          (line) =>
-            JSON.parse(line) as {
-              run?: number;
-              status?: string;
-              metric?: number;
-              metrics?: { memory_mb?: number };
-            },
-        );
+      const demoEntries = parseJsonlRecords(
+        demoJsonl,
+        path.join(pluginRoot, "examples/demo-session/autoresearch.jsonl"),
+      ).filter((entry) => entry.run != null) as Array<{
+        run?: number;
+        status?: string;
+        metric?: number;
+        metrics?: { memory_mb?: number };
+      }>;
       const demoDashboardSource = await readText("dashboard/src/demoData.ts");
       const demoTour = await readText("examples/demo-session/demo.md");
       const demoBaseline = demoEntries[0];

@@ -592,7 +592,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   }
 
   function isStrictLedgerParseError(error: unknown): boolean {
-    return /Invalid JSONL in .*[\\/]?autoresearch\.jsonl at line \d+:/i.test(errorMessage(error));
+    return /^Corrupt autoresearch\.jsonl at line \d+\b/i.test(errorMessage(error));
   }
 
   function repairFirstStateForInvalidLedger({

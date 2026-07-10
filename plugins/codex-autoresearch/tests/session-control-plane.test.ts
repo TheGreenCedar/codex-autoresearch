@@ -23,7 +23,7 @@ import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
 import { buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
-import { appendJsonl, jsonlPath, readJsonl } from "../lib/session-records.js";
+import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { resolveSessionPaths } from "../lib/session-paths.js";
 import {
@@ -74,6 +74,79 @@ test("session record ledger helpers use the repo-local resolver path", async () 
     assert.deepEqual(readJsonl(dir), [
       { type: "config", metricName: "score", bestDirection: "higher" },
     ]);
+  });
+});
+
+test("session record boundary rejects every JSON primitive with physical line evidence", async () => {
+  const invalidValues = [
+    { value: "null", kind: "null", position: 0 },
+    { value: "[]", kind: "array", position: 1 },
+    { value: '"text"', kind: "string", position: 2 },
+    { value: "42", kind: "number", position: 0 },
+    { value: "true", kind: "boolean", position: 1 },
+    { value: "false", kind: "boolean", position: 2 },
+  ];
+  await withTempDir("session-record-shapes", async (dir) => {
+    const ledgerPath = jsonlPath(dir);
+    const valid = JSON.stringify({ type: "config", metricName: "score" });
+    for (const invalid of invalidValues) {
+      const lines = [valid, valid, valid];
+      lines[invalid.position] = invalid.value;
+      if (invalid.kind === "string") lines.splice(2, 0, "");
+      await writeFile(ledgerPath, `${lines.join("\n")}\n`);
+      const expectedLine = invalid.position + 1 + (invalid.kind === "string" ? 1 : 0);
+      assert.throws(
+        () => readJsonl(dir),
+        (error) => {
+          const issue = ledgerRecordIssue(error);
+          assert.ok(issue);
+          assert.equal(issue.file, ledgerPath);
+          assert.equal(issue.line, expectedLine);
+          assert.equal(issue.kind, invalid.kind);
+          assert.match(issue.message, /Expected a non-array JSON object ledger record/);
+          assert.match(issue.command, /ledger-doctor --cwd <project> --json/);
+          return true;
+        },
+      );
+    }
+
+    await writeFile(ledgerPath, `${valid}\n\n{malformed\n`);
+    assert.throws(
+      () => readJsonl(dir),
+      (error) => {
+        const issue = ledgerRecordIssue(error);
+        assert.ok(issue);
+        assert.equal(issue.file, ledgerPath);
+        assert.equal(issue.line, 3);
+        assert.equal(issue.kind, "invalid-json");
+        assert.match(issue.message, /Invalid JSON syntax/);
+        assert.equal(
+          issue.command,
+          "node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json",
+        );
+        return true;
+      },
+    );
+  });
+});
+
+test("session record boundary accepts legacy objects and validates declared schema versions", async () => {
+  await withTempDir("session-record-schema", async (dir) => {
+    await writeFile(
+      jsonlPath(dir),
+      [
+        JSON.stringify({ type: "config", metricName: "score" }),
+        JSON.stringify({ type: "run", run: 1, schemaVersion: 1 }),
+        "",
+      ].join("\n"),
+    );
+    assert.equal(readJsonl(dir).length, 2);
+
+    await writeFile(jsonlPath(dir), `${JSON.stringify({ type: "run", schemaVersion: 2 })}\n`);
+    assert.throws(
+      () => readJsonl(dir),
+      /Unsupported schemaVersion; expected 1.*Observed JSON kind: object.*ledger-doctor/,
+    );
   });
 });
 
