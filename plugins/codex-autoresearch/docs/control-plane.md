@@ -30,7 +30,7 @@ A `big_idea` lane may record advice without approval. Turning it into implementa
 
 ## Resource contract
 
-Packet and lane work checks active process count, wall-clock budget, repeated command heads, output size, polling, and stale process residue.
+Packet and lane work checks active process count, wall-clock budget, repeated command heads, output size, polling, and the latest typed process lifecycle state. Historical prose about stale or orphaned PIDs is compatibility context only; it cannot create a blocker. Malformed lifecycle rows and terminal rows with unproven termination fail closed.
 
 When output is already large, use compact state, bounded file reads, `partial-results`, or an evidence index. Reprinting the same wall of output is not progress.
 

@@ -126,6 +126,7 @@ export function buildSessionReadModel({
   workflowFriction = [],
   finalization = null,
   commands = {},
+  processProgress = null,
   ...stateFields
 }: {
   workDir: string;
@@ -137,6 +138,7 @@ export function buildSessionReadModel({
   workflowFriction?: unknown[];
   finalization?: ReadModelRecord | null;
   commands?: ReadModelRecord;
+  processProgress?: unknown;
   qualityGap: ReadModelRecord | null;
   laneLifecycle: unknown;
   packetDiagnostics: unknown;
@@ -168,6 +170,7 @@ export function buildSessionReadModel({
       workflowFriction,
       finalization: effectiveFinalization,
       commands,
+      processProgress,
     }),
     finalization: effectiveFinalization,
   };
@@ -182,6 +185,7 @@ export function buildControlPlaneContracts({
   workflowFriction = [],
   finalization = null,
   commands = {},
+  processProgress = null,
 }: {
   workDir?: string;
   config: ReadModelRecord;
@@ -192,6 +196,7 @@ export function buildControlPlaneContracts({
   workflowFriction?: unknown[];
   finalization?: ReadModelRecord | null;
   commands?: ReadModelRecord;
+  processProgress?: unknown;
 }): ReadModelRecord {
   const finalizationClaim =
     config.finalizationClaim || state.config?.finalizationClaim || finalization?.finalizationClaim;
@@ -215,7 +220,9 @@ export function buildControlPlaneContracts({
     required: approvalRequirements,
   });
   const resourcePreflight = buildResourcePreflight({
-    entries: records,
+    entries: processProgress
+      ? [...records, { packetEvidence: { progressSnapshot: processProgress } }]
+      : records,
     budgets: resourceBudgetFromConfig(config),
   });
   const evidenceMaturity = classifyEvidenceMaturity({

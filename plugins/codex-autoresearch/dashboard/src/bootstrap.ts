@@ -22,7 +22,19 @@ export type LiveDashboardPayloadResult =
   | { ok: false; reason: string };
 
 const RUN_STATUSES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
-const AUXILIARY_ENTRY_TYPES = new Set(["research_fanout", "lane_result", "approval"]);
+const AUXILIARY_ENTRY_TYPES = new Set([
+  "research_fanout",
+  "lane_result",
+  "approval",
+  "process_lifecycle",
+]);
+const PROCESS_LIFECYCLE_EVENTS = new Set([
+  "started",
+  "observed-live",
+  "terminated",
+  "termination-failed",
+]);
+const ISO_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 const DELIVERY_MODES = new Set(["static-export", "live-server", "showcase"]);
 
 export function bootstrapDashboardPayload(
@@ -229,12 +241,43 @@ function auxiliaryEntryIssue(entry: Record<string, unknown>): boolean {
   if (entry.type === "lane_result") {
     return !recordOrNull(entry.lane) || !recordOrNull(entry.result);
   }
+  if (entry.type === "process_lifecycle") return processLifecycleEntryIssue(entry);
   return (
     entry.type !== "approval" ||
     typeof entry.gate !== "string" ||
     !entry.gate.trim() ||
     typeof entry.scope !== "string" ||
     !entry.scope.trim()
+  );
+}
+
+function processLifecycleEntryIssue(entry: Record<string, unknown>): boolean {
+  const identity = recordOrNull(entry.identity);
+  const packetId = identity?.packetId;
+  const processId = identity?.processId;
+  const termination = entry.termination === undefined ? null : recordOrNull(entry.termination);
+  return (
+    typeof packetId !== "string" ||
+    !packetId.trim() ||
+    packetId.length > 160 ||
+    !/^[A-Za-z0-9._:-]+$/.test(packetId) ||
+    typeof processId !== "string" ||
+    !processId.trim() ||
+    processId.length > 160 ||
+    !/^[A-Za-z0-9._:-]+$/.test(processId) ||
+    !PROCESS_LIFECYCLE_EVENTS.has(String(entry.event)) ||
+    typeof entry.at !== "string" ||
+    !ISO_UTC_TIMESTAMP_PATTERN.test(entry.at) ||
+    (entry.termination !== undefined &&
+      (!termination ||
+        typeof termination.proven !== "boolean" ||
+        typeof termination.reason !== "string" ||
+        !/^[a-z0-9_]{0,160}$/.test(termination.reason))) ||
+    (entry.termination !== undefined &&
+      entry.event !== "terminated" &&
+      entry.event !== "termination-failed") ||
+    (entry.event === "terminated" && termination?.proven === false) ||
+    (entry.event === "termination-failed" && termination?.proven === true)
   );
 }
 

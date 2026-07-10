@@ -58,6 +58,8 @@ Outside Git, the three transient records fall back to `autoresearch.last-run.jso
 | **Packet diagnostics** | Evidence loss such as missing citations, failed synthesis, or a benchmark failure hidden behind an optimistic summary. |
 
 Timeout proof uses native containment available without a runtime dependency: POSIX commands start in a detached process group and merge bounded recursive `ps` snapshots before graceful and forced signals; Windows merges bounded CIM descendant snapshots around `taskkill /T`. Every tracked PID must disappear before cleanup is reported as proven. Enumeration failure, an oversized tree, changed process identity, or a surviving tracked PID fails closed as `termination_failed`; deliberately reparented descendants that escape before either native snapshot remain an operating-system boundary and must not be treated as safely stopped without separate verification.
+
+Logged packet processes use redacted `process_lifecycle` rows keyed by packet and logical process identity. The resource governor folds rows in ledger order and trusts only the latest state per identity: `started`, `observed-live`, and `termination-failed` block; a later `terminated` row clears the identity. The Git-private progress snapshot supplies the same typed state while a packet is running, so `next` does not dirty a clean tracked ledger before `log`. Old prose about stale PIDs remains readable but produces only a migration warning, never active process state.
 | **Claim coverage** | The checks and measurements required to support the exact claim you want to make. |
 | **Promotion evidence** | Repeat, holdout, breadth, or explicit gate evidence that supports more than a local exploratory result. |
 

@@ -21,7 +21,7 @@ import { buildGoalContract } from "../lib/goal-frame.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
 import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
-import { buildResourcePreflight } from "../lib/process-governor.js";
+import { buildProcessLifecycleRecord, buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
@@ -316,7 +316,7 @@ test("approval ledger requires exact unexpired scoped approvals", () => {
   assert.match(status.blockers[0], /lane-c/);
 });
 
-test("resource preflight catches stale process residue, repeated commands, and output budgets", () => {
+test("resource preflight catches typed active processes, repeated commands, and output budgets", () => {
   const preflight = buildResourcePreflight({
     command: "rg -n needle src tests",
     entries: [
@@ -325,7 +325,12 @@ test("resource preflight catches stale process residue, repeated commands, and o
       { command: "rg -n needle src tests" },
       { command: "rg -n needle src tests" },
       { command: "rg -n needle src tests" },
-      { type: "process_manager", status: "stale", pid: 1234, reason: "reboot residue" },
+      buildProcessLifecycleRecord({
+        packetId: "packet-6-active",
+        processId: "benchmark",
+        event: "observed-live",
+        at: "2026-06-13T12:00:00.000Z",
+      }),
       { packetEvidence: { outputTokens: 30000, outputLines: 1500 } },
     ],
     budgets: {
@@ -336,7 +341,7 @@ test("resource preflight catches stale process residue, repeated commands, and o
   });
 
   assert.equal(preflight.canStart, false);
-  assert.match(preflight.blockers.join(" "), /Command head repeated|Stale process-manager/);
+  assert.match(preflight.blockers.join(" "), /Typed process lifecycle/);
   assert.match(preflight.warnings.join(" "), /bounded summaries|compact forensics/);
 });
 
@@ -358,7 +363,7 @@ test("resource preflight treats repeated benchmark command heads as warnings", (
   assert.match(preflight.warnings.join(" "), /Command head repeated 5 times/);
 });
 
-test("resource preflight residue does not echo raw ledger bodies", () => {
+test("historical process prose is warning-only and never creates trust state", () => {
   const preflight = buildResourcePreflight({
     entries: [
       {
@@ -371,79 +376,250 @@ test("resource preflight residue does not echo raw ledger bodies", () => {
     ],
   });
 
-  assert.equal(preflight.canStart, false);
-  assert.equal(preflight.residue.length, 1);
-  assert.deepEqual(preflight.residue[0], {
-    type: "response_item",
-    status: "stale-process-residue",
-    timestamp: "2026-06-13T12:00:00.000Z",
-    reason: "ledger entry matched process residue keywords",
-  });
-  assert.doesNotMatch(JSON.stringify(preflight.residue), /SECRET_TOKEN|private\.env|abc123/);
+  assert.equal(preflight.canStart, true);
+  assert.equal(preflight.status, "warning");
+  assert.deepEqual(preflight.residue, []);
+  assert.match(preflight.warnings.join(" "), /warning-only.*typed process_lifecycle/i);
+  assert.doesNotMatch(JSON.stringify(preflight), /SECRET_TOKEN|private\.env|abc123/);
 });
 
-test("resource preflight residue redacts unsafe ledger metadata", () => {
+test("typed process lifecycle blocks unclosed state and redacts identity metadata", () => {
   const preflight = buildResourcePreflight({
     entries: [
       {
-        type: "response_item SECRET_TOKEN=abc123",
-        timestamp: "C:/Users/alber/private.env",
-        payload: {
-          output: "pid 4321 stale reboot residue",
+        type: "process_lifecycle",
+        identity: {
+          packetId: "SECRET_TOKEN=abc123",
+          processId: "C:/Users/alber/private.env",
         },
+        event: "started",
+        at: "2026-06-13T12:00:00.000Z",
       },
     ],
   });
 
   assert.equal(preflight.canStart, false);
-  assert.deepEqual(preflight.residue, [
-    {
-      type: "ledger-entry",
-      status: "stale-process-residue",
-      timestamp: "",
-      reason: "ledger entry matched process residue keywords",
-    },
-  ]);
+  assert.equal(preflight.residue.length, 1);
+  assert.equal(preflight.residue[0].type, "process_lifecycle");
+  assert.equal(preflight.residue[0].status, "invalid-lifecycle");
+  assert.match(preflight.residue[0].identity, /^process-[a-f0-9]{12}$/);
   assert.doesNotMatch(
     JSON.stringify(preflight.residue),
     /SECRET_TOKEN|abc123|C:\/Users\/alber\/private\.env/,
   );
+  assert.throws(
+    () =>
+      buildProcessLifecycleRecord({
+        packetId: "SECRET_TOKEN=abc123",
+        processId: "C:/Users/alber/private.env",
+        event: "started",
+      }),
+    /identity is invalid/,
+  );
 });
 
-test("resource preflight residue maps token-shaped ledger types to generic entries", () => {
+test("latest terminal event clears active and termination-failed state in ledger order", () => {
   const preflight = buildResourcePreflight({
     entries: [
-      {
-        type: "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
-        status: "stale-process-residue",
-        timestamp: "2026-06-13T12:00:00Z",
-        reason: "ledger entry matched process residue keywords",
-        payload: {
-          output: "process_manager stale reboot residue",
-        },
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "observed-live",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "termination-failed",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "terminated",
+      }),
+    ],
+  });
+
+  assert.equal(preflight.canStart, true);
+  assert.deepEqual(preflight.residue, []);
+});
+
+test("lifecycle fold keeps only latest state per duplicate identity", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-b",
+        processId: "checks",
+        event: "termination-failed",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "terminated",
+      }),
+    ],
+  });
+
+  assert.equal(preflight.canStart, false);
+  assert.equal(preflight.residue.length, 1);
+  assert.equal(preflight.residue[0].status, "termination-failed");
+});
+
+test("structured #292 progress outcomes feed the same lifecycle fold", () => {
+  const baseProgress = {
+    packetId: "packet-7-active",
+    commandClass: "node script",
+    startedAt: "2026-06-13T12:00:00.000Z",
+  };
+  const failedEntry = {
+    packetEvidence: {
+      progressSnapshot: {
+        ...baseProgress,
+        exitState: "termination_failed",
+        terminationFailed: true,
+        termination: { proven: false, reason: "remaining_processes_alive" },
       },
+    },
+  };
+  const failed = buildResourcePreflight({
+    entries: [failedEntry],
+  });
+  const cleared = buildResourcePreflight({
+    entries: [
+      failedEntry,
       {
-        type: "AKIAIOSFODNN7EXAMPLE",
-        status: "stale-process-residue",
-        timestamp: "",
-        reason: "ledger entry matched process residue keywords",
-        payload: {
-          output: "process_manager stale reboot residue",
+        packetEvidence: {
+          progressSnapshot: {
+            ...baseProgress,
+            exitState: "timed_out",
+            terminationFailed: false,
+            termination: { proven: true, reason: "terminated" },
+          },
         },
       },
     ],
   });
 
-  const serializedResidue = JSON.stringify(preflight.residue);
+  assert.equal(failed.canStart, false);
+  assert.equal(failed.residue[0].status, "termination-failed");
+  assert.equal(cleared.canStart, true);
+  assert.deepEqual(cleared.residue, []);
+});
+
+test("next-command orchestration progress is not mistaken for a child process", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      {
+        packetEvidence: {
+          progressSnapshot: {
+            packetId: "packet-1-active",
+            commandClass: "autoresearch preflight",
+            startedAt: "2026-07-10T12:00:00.000Z",
+            exitState: "running",
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(preflight.canStart, true);
+  assert.deepEqual(preflight.residue, []);
+});
+
+test("lifecycle writer drops sensitive termination metadata", () => {
+  const record = buildProcessLifecycleRecord({
+    packetId: "packet-safe",
+    processId: "benchmark",
+    event: "termination-failed",
+    termination: {
+      proven: false,
+      reason: "C:/Users/alber/private.env SECRET_TOKEN=abc123",
+      command: "node secret.js --token abc123",
+      trackedPids: [1234],
+    },
+  });
+
+  assert.deepEqual(record.termination, { proven: false, reason: "" });
+  assert.doesNotMatch(JSON.stringify(record), /private\.env|SECRET_TOKEN|secret\.js|abc123|1234/);
+});
+
+test("malformed typed lifecycle rows block instead of bypassing process trust", () => {
+  for (const entry of [
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "started",
+      at: "not-a-timestamp",
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "started",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: false, reason: "remaining_processes_alive" },
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "termination-failed",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: true, reason: "terminated" },
+    },
+  ]) {
+    const preflight = buildResourcePreflight({ entries: [entry] });
+    assert.equal(preflight.canStart, false);
+    assert.equal(preflight.residue[0].status, "invalid-lifecycle");
+    assert.doesNotMatch(JSON.stringify(preflight.residue), /packet-malformed|not-a-timestamp/);
+  }
+});
+
+test("unproven terminated event cannot clear an active lifecycle identity", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      buildProcessLifecycleRecord({
+        packetId: "packet-unproven",
+        processId: "benchmark",
+        event: "started",
+      }),
+      {
+        type: "process_lifecycle",
+        identity: { packetId: "packet-unproven", processId: "benchmark" },
+        event: "terminated",
+        at: "2026-07-10T12:00:00.000Z",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      },
+    ],
+  });
 
   assert.equal(preflight.canStart, false);
   assert.deepEqual(
-    preflight.residue.map((fact) => fact.type),
-    ["ledger-entry", "ledger-entry"],
+    new Set(preflight.residue.map((record) => record.status)),
+    new Set(["process-active", "invalid-lifecycle"]),
   );
-  assert.doesNotMatch(
-    serializedResidue,
-    /ghp_abcdefghijklmnopqrstuvwxyz1234567890|AKIAIOSFODNN7EXAMPLE/,
+  assert.throws(
+    () =>
+      buildProcessLifecycleRecord({
+        packetId: "packet-unproven",
+        processId: "benchmark",
+        event: "terminated",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      }),
+    /cannot carry unproven termination evidence/,
   );
 });
 

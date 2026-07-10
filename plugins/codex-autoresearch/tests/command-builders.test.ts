@@ -14,7 +14,11 @@ import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
 import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
-import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/process-governor.js";
+import {
+  assertRunResourcePreflight,
+  buildActiveRunPacketId,
+  buildProcessLifecycleRecord,
+} from "../lib/process-governor.js";
 import { actionPolicyForTool, commandActionAliases, toolMetadata } from "../lib/tool-registry.js";
 
 test("command rendering quotes hostile benchmark args for the selected shell", () => {
@@ -71,12 +75,12 @@ test("run command helper blocks packets when resource budgets are exhausted", ()
         command: "node benchmark.js",
         config: {},
         entries: [
-          {
-            type: "process_manager",
-            status: "stale",
-            timestamp: "2026-06-01T00:00:00.000Z",
-            reason: "stale active_process residue after reboot",
-          },
+          buildProcessLifecycleRecord({
+            packetId: "packet-2-active",
+            processId: "benchmark",
+            event: "started",
+            at: "2026-06-01T00:00:00.000Z",
+          }),
         ],
       }),
     /Resource preflight blocked packet start:/,

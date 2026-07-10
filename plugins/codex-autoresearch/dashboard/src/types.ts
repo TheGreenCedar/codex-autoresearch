@@ -63,7 +63,7 @@ export interface SessionSegment {
 }
 
 export interface DashboardEntry {
-  type?: "config" | "run";
+  type?: "approval" | "config" | "lane_result" | "process_lifecycle" | "research_fanout" | "run";
   [key: string]: unknown;
 }
 
