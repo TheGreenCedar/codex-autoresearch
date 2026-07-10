@@ -6,7 +6,12 @@ import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
-import { finalizationPlanFingerprint, readAutoresearchLedger } from "./finalization-plan.js";
+import {
+  buildFinalizationEvidenceState,
+  commitReferencesMatch,
+  finalizationPlanFingerprint,
+  readAutoresearchLedger,
+} from "./finalization-plan.js";
 import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim-coverage.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
@@ -554,7 +559,9 @@ export async function finalizeCurrentTree(args: LooseObject) {
   const ready = Boolean(base && branch && branch !== trunk && !dirty && files.length);
   const planOutput = await defaultCurrentTreePlanOutput(workDir, branch || "autoresearch");
   const ledgerEntries = await readLedgerEntries(workDir);
-  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
+  const commitOrder = base ? await commitHashesBetween(base, "HEAD", workDir) : [];
+  const evidenceState = buildFinalizationEvidenceState(commitOrder, ledgerEntries);
+  const productClaimCoverage = evidenceState.productClaimCoverage;
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const currentTreeFingerprint = currentTreeFingerprintFor({
     base,
@@ -575,6 +582,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     excluded_commits: [] as CommitSummary[],
     excluded_commit_count: 0,
     overlap_files: [] as string[],
+    accepted_evidence_fingerprint: evidenceState.fingerprint,
     current_tree_coverage: {
       covered: ready,
       review_unit: "current_tree",
@@ -794,6 +802,14 @@ async function changedFilesBetween(
     .sort((a, b) => a.localeCompare(b));
 }
 
+async function commitHashesBetween(left: string, right: string, cwd: string): Promise<string[]> {
+  const result = await git(["log", "--reverse", "--format=%H", `${left}..${right}`], cwd);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 async function buildSemanticSafety({
   workDir,
   groups,
@@ -814,7 +830,7 @@ async function buildSemanticSafety({
         (run) =>
           run.run > group.run &&
           run.commit &&
-          commitRefsMayMatch(run.commit, group.commit) &&
+          commitReferencesMatch(run.commit, group.commit) &&
           run.status !== "keep" &&
           explicitEvidenceInvalidationText(run),
       );
@@ -867,12 +883,6 @@ async function keptCommitWasReverted(workDir: string, group: RunGroup): Promise<
       const [, subject = ""] = line.split("\x1f");
       return /^Revert\s+/i.test(subject) || subject.includes(group.shortCommit);
     });
-}
-
-function commitRefsMayMatch(left: unknown, right: unknown): boolean {
-  const a = String(left || "");
-  const b = String(right || "");
-  return Boolean(a && b && (a.startsWith(b) || b.startsWith(a)));
 }
 
 function explicitEvidenceInvalidationText(run: LooseObject): string {
