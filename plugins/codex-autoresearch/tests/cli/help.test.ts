@@ -4,6 +4,7 @@ import test from "node:test";
 import { renderCliHelp } from "../../lib/cli/help.js";
 import {
   CliUsageError,
+  cliDebugRequested,
   parseAutoresearchCliArgs,
   parseFinalizerCliArgs,
 } from "../../lib/cli/options.js";
@@ -198,6 +199,58 @@ test("typed CLI parsing rejects unknown options and invalid boolean strings", ()
     () => parseAutoresearchCliArgs(["lane-runner", "--allow-non-git-command"]),
     (error) => error instanceof CliUsageError && /allow-non-git-command/.test(error.message),
   );
+
+  for (const value of [
+    String.raw`C:\Users\alice\secret-project`,
+    "secret-token-shaped-value",
+    "line-one\nline-two\u001b[31m",
+  ]) {
+    assert.throws(
+      () => parseAutoresearchCliArgs(["state", `--compact=${value}`]),
+      (error) =>
+        error instanceof CliUsageError &&
+        error.message === "--compact expects a boolean value (true or false)." &&
+        !error.message.includes(value),
+    );
+  }
+});
+
+test("typed CLI parsing rejects missing string and list values before normalization", () => {
+  for (const args of [
+    ["state", "--cwd"],
+    ["state", "--cwd", "--"],
+    ["state", "--cwd", "--debug"],
+    ["setup", "--commit-paths", "--debug"],
+  ]) {
+    assert.throws(
+      () => parseAutoresearchCliArgs(args),
+      (error) =>
+        error instanceof CliUsageError &&
+        error.command === args[0] &&
+        /argument missing/.test(error.message),
+    );
+  }
+
+  assert.equal(parseAutoresearchCliArgs(["log", "--metric=-2"]).metric, "-2");
+  assert.equal(parseAutoresearchCliArgs(["log", "--metric", "-2"]).metric, "-2");
+
+  for (const args of [
+    ["--cwd", "--debug", "state"],
+    ["--commit-paths", "--debug", "setup"],
+  ]) {
+    assert.throws(
+      () => parseAutoresearchCliArgs(args),
+      (error) =>
+        error instanceof CliUsageError &&
+        error.command === args[2] &&
+        /argument missing/.test(error.message),
+    );
+  }
+
+  assert.deepEqual(parseAutoresearchCliArgs(["--cwd", ".", "state"]), {
+    _: ["state"],
+    cwd: ".",
+  });
 });
 
 test("typed CLI parsing supports root and command short help", () => {
@@ -239,4 +292,19 @@ test("finalizer parsing preserves leading booleans before its first positional",
     () => parseFinalizerCliArgs(["--collapse-overlap", "maybe", "plan"]),
     (error) => error instanceof CliUsageError && /boolean value/.test(error.message),
   );
+
+  for (const option of ["cwd", "output", "goal", "trunk"]) {
+    assert.throws(
+      () => parseFinalizerCliArgs([`--${option}`, "--debug", "plan"]),
+      (error) => error instanceof CliUsageError && /argument missing/.test(error.message),
+    );
+  }
+});
+
+test("debug detection is fail-safe for valid explicit debug requests", () => {
+  assert.equal(cliDebugRequested(["--debug=false"]), false);
+  assert.equal(cliDebugRequested(["--debug=perhaps"]), false);
+  assert.equal(cliDebugRequested(["--debug=true", "--debug=perhaps"]), true);
+  assert.equal(cliDebugRequested(["--debug=true", "--debug=false"]), true);
+  assert.equal(cliDebugRequested(["--cwd", "--debug", "plan"], true), true);
 });

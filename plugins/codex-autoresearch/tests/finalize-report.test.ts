@@ -107,6 +107,27 @@ test("finalizer CLI validates aliases, booleans, unknown options, and debug stac
   );
   assert.equal(leadingDebug.code, 1, leadingDebug.stderr);
   assert.match(leadingDebug.stderr, /\n\s+at\s/);
+
+  for (const option of ["cwd", "output", "goal", "trunk"]) {
+    const missingValue = await run(
+      process.execPath,
+      [finalizer, `--${option}`, "--debug", "plan"],
+      pluginRoot,
+      true,
+    );
+    assert.equal(missingValue.code, 1, missingValue.stderr);
+    assert.match(missingValue.stderr, new RegExp(`${option}.*argument missing`, "i"));
+    assert.match(missingValue.stderr, /\n\s+at\s/);
+  }
+
+  const debugThenMalformed = await run(
+    process.execPath,
+    [finalizer, "plan", "--bogus", "--debug=true", "--debug=perhaps"],
+    pluginRoot,
+    true,
+  );
+  assert.equal(debugThenMalformed.code, 1, debugThenMalformed.stderr);
+  assert.match(debugThenMalformed.stderr, /\n\s+at\s/);
 });
 
 test("session artifact modes preserve finalization, dirty tree, and source checkout policy", () => {

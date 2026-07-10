@@ -126,7 +126,7 @@ export function cliDebugRequested(
     if (token === "--debug") {
       const next = argv[index + 1];
       if (next && isBooleanLiteral(next)) {
-        enabled = booleanLiteral(next, "--debug");
+        if (booleanLiteral(next, "--debug")) enabled = true;
         index += 1;
       } else if (
         next &&
@@ -135,16 +135,25 @@ export function cliDebugRequested(
         !POSITIONAL_COMMAND_NAMES.has(next) &&
         !(allowLeadingPositional && !sawPositional)
       ) {
-        enabled = false;
+        index += 1;
       } else {
         enabled = true;
       }
     } else if (token.startsWith("--debug=")) {
       const value = token.slice("--debug=".length);
-      enabled = isBooleanLiteral(value) ? booleanLiteral(value, "--debug") : false;
+      if (isBooleanLiteral(value) && booleanLiteral(value, "--debug")) enabled = true;
     } else if (allowLeadingPositional && !token.includes("=")) {
       const definition = FINALIZER_OPTIONS.aliases.get(token.slice(2));
-      if (definition && definition.kind !== "boolean") index += 1;
+      const next = argv[index + 1];
+      if (
+        definition &&
+        definition.kind !== "boolean" &&
+        next != null &&
+        next !== "--" &&
+        !next.startsWith("-")
+      ) {
+        index += 1;
+      }
     }
   }
   return enabled;
@@ -282,7 +291,7 @@ function normalizeArgv(
   optionSet: OptionSet,
   booleanValues: Map<string, boolean>,
   command: string | null,
-  validateBooleans: boolean,
+  strict: boolean,
   leadingBooleanOptions: ReadonlySet<string> | null,
 ): string[] {
   const normalized: string[] = [];
@@ -312,7 +321,7 @@ function normalizeArgv(
       let value = true;
       if (inlineValue != null) {
         value =
-          !validateBooleans && !isBooleanLiteral(inlineValue)
+          !strict && !isBooleanLiteral(inlineValue)
             ? true
             : booleanLiteral(inlineValue, `--${rawName}`, command);
       } else {
@@ -329,7 +338,7 @@ function normalizeArgv(
           )
         ) {
           value =
-            !validateBooleans && !isBooleanLiteral(next)
+            !strict && !isBooleanLiteral(next)
               ? true
               : booleanLiteral(next, `--${rawName}`, command);
           index += 1;
@@ -344,6 +353,15 @@ function normalizeArgv(
       continue;
     }
     const next = argv[index + 1];
+    const missingValue =
+      next == null || next === "--" || (next.startsWith("-") && !/^-\d/.test(next));
+    if (missingValue) {
+      if (strict) {
+        throw new CliUsageError(`Option '--${rawName} <value>' argument missing.`, command);
+      }
+      normalized.push(`--${definition.name}=`);
+      continue;
+    }
     if (next != null && /^-\d/.test(next)) {
       normalized.push(`--${definition.name}=${next}`);
       index += 1;
@@ -378,10 +396,7 @@ function booleanLiteral(value: string, optionName: string, command: string | nul
   const normalized = value.toLowerCase();
   if (["1", "true", "yes", "y"].includes(normalized)) return true;
   if (["0", "false", "no", "n"].includes(normalized)) return false;
-  throw new CliUsageError(
-    `${optionName} expects a boolean value (true or false). Got ${JSON.stringify(value)}.`,
-    command,
-  );
+  throw new CliUsageError(`${optionName} expects a boolean value (true or false).`, command);
 }
 
 function isBooleanLiteral(value: string): boolean {
