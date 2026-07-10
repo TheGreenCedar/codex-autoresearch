@@ -23,6 +23,7 @@ export type LiveDashboardPayloadResult =
 
 const RUN_STATUSES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
 const AUXILIARY_ENTRY_TYPES = new Set(["research_fanout", "lane_result", "approval"]);
+const DELIVERY_MODES = new Set(["static-export", "live-server", "showcase"]);
 
 export function bootstrapDashboardPayload(
   entriesValue: unknown,
@@ -105,6 +106,74 @@ function dashboardMetaIssue(meta: Record<string, unknown>): string | null {
   }
   if (meta.viewModel !== undefined && !recordOrNull(meta.viewModel)) {
     return "Dashboard view model is not an object.";
+  }
+  if (
+    meta.refreshMs !== undefined &&
+    (typeof meta.refreshMs !== "number" || !Number.isFinite(meta.refreshMs) || meta.refreshMs < 1)
+  ) {
+    return "Dashboard refresh interval is not a positive finite number.";
+  }
+
+  const settings = recordOrNull(meta.settings);
+  if (settings?.deliveryMode !== undefined && typeof settings.deliveryMode !== "string") {
+    return "Dashboard settings delivery mode is not a string.";
+  }
+  if (settings?.showcaseMode !== undefined && typeof settings.showcaseMode !== "boolean") {
+    return "Dashboard settings showcaseMode flag is not a boolean.";
+  }
+
+  const guidance = recordOrNull(meta.modeGuidance);
+  for (const key of ["title", "detail"]) {
+    if (guidance?.[key] !== undefined && typeof guidance[key] !== "string") {
+      return `Dashboard mode guidance ${key} is not a string.`;
+    }
+  }
+
+  return dashboardModeIssue(meta, settings);
+}
+
+function dashboardModeIssue(
+  meta: Record<string, unknown>,
+  settings: Record<string, unknown> | null,
+): string | null {
+  const deliveryMode = meta.deliveryMode as string | undefined;
+  const settingsDeliveryMode = settings?.deliveryMode as string | undefined;
+  for (const mode of [deliveryMode, settingsDeliveryMode]) {
+    if (mode !== undefined && !DELIVERY_MODES.has(mode)) {
+      return "Dashboard delivery mode is not supported.";
+    }
+  }
+  if (
+    deliveryMode !== undefined &&
+    settingsDeliveryMode !== undefined &&
+    deliveryMode !== settingsDeliveryMode
+  ) {
+    return "Dashboard delivery mode conflicts with dashboard settings.";
+  }
+
+  const showcaseMode = meta.showcaseMode as boolean | undefined;
+  const settingsShowcaseMode = settings?.showcaseMode as boolean | undefined;
+  if (
+    showcaseMode !== undefined &&
+    settingsShowcaseMode !== undefined &&
+    showcaseMode !== settingsShowcaseMode
+  ) {
+    return "Dashboard showcase mode conflicts with dashboard settings.";
+  }
+
+  const mode = deliveryMode ?? settingsDeliveryMode;
+  const showcase = showcaseMode ?? settingsShowcaseMode;
+  if (mode === "showcase" && showcase !== true) {
+    return "Dashboard showcase delivery is missing its explicit showcase marker.";
+  }
+  if (showcase === true && mode !== "showcase") {
+    return "Dashboard showcase marker conflicts with the delivery mode.";
+  }
+  if (meta.liveRefreshAvailable === true && mode !== "live-server") {
+    return "Dashboard live refresh conflicts with the delivery mode.";
+  }
+  if (meta.liveActionsAvailable === true) {
+    return "Dashboard live actions are not supported by this read-only dashboard.";
   }
   return null;
 }

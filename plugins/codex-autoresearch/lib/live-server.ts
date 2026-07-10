@@ -144,7 +144,7 @@ export async function serveAutoresearch(args: LooseObject) {
           ok: false,
           error:
             error instanceof Error
-              ? error.message
+              ? redactEvidenceText(error.message, { workDir })
               : "Autoresearch dashboard server failed unexpectedly.",
         },
         500,

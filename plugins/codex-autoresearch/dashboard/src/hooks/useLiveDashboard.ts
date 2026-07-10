@@ -166,7 +166,7 @@ async function fetchLiveDashboardSnapshot(
     try {
       rawPayload = await viewModelResponse.json();
     } catch {
-      throw new Error("Live readout payload is not valid JSON. Restart serve, then reload.");
+      throw new Error("Live readout payload is not valid JSON.");
     }
     const payload = validateLiveDashboardPayload(rawPayload);
     if (!payload.ok) throw new Error(payload.reason);
@@ -194,7 +194,7 @@ function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveSta
 function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
   return {
     title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
-    detail: `Showing the last known valid readout. ${message}`,
+    detail: `Showing the last known valid readout. ${message} Restart the Autoresearch CLI: serve --cwd <project>. Then reload.`,
   };
 }
 
