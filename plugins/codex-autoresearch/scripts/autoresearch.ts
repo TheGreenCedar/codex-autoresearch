@@ -8927,8 +8927,11 @@ async function nextExperiment(args: any) {
     benchmarkContract: run.benchmarkContract || null,
     trustConfig: lastRunTrustConfigSnapshot(run.workDir, config, {
       benchmarkContractHash: run.benchmarkContract?.surfaceHash,
-      benchmarkCommand: run.command,
-      checksCommand: run.checks?.command || run.benchmarkContract?.checksCommand,
+      benchmarkCommand: redactCommandDisplay(run.command, { workDir: run.workDir }),
+      checksCommand: redactCommandDisplay(
+        run.checks?.command || run.benchmarkContract?.checksCommand,
+        { workDir: run.workDir },
+      ),
       checksPolicy: run.checksPolicy,
       packetEnvMode: run.packetEnvMode || "minimal",
     }),

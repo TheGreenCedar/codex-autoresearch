@@ -89,6 +89,7 @@ function markdownAnchors(content: string): Set<string> {
     const base = match[1]
       .toLowerCase()
       .replace(/<[^>]+>/g, "")
+      .replace(/[<>]/g, "")
       .replace(/[`*_~]/g, "")
       .replace(/[^\p{L}\p{N}\s-]/gu, "")
       .trim()
