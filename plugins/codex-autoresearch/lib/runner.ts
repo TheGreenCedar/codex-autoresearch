@@ -769,9 +769,8 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
   const trackedPids = entries.map((entry) => entry.pid);
   const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true);
   const forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
-  let preForceVerification: WindowsProcessIdentityVerification | null = null;
   if (forcedRemaining.length > 0) {
-    preForceVerification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
+    const preForceVerification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
     if (preForceVerification.proven && preForceVerification.pids.length > 0) {
       await taskkillPids(preForceVerification.pids, true);
     }
@@ -782,7 +781,6 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
     finalVerification = await verifyWindowsProcessIdentities(entries, finalCandidates);
   }
   const identityVerification = authoritativeWindowsIdentityVerification(
-    preForceVerification,
     finalCandidates,
     finalVerification,
   );
@@ -1071,7 +1069,6 @@ export async function verifyWindowsProcessIdentities(
 }
 
 export function authoritativeWindowsIdentityVerification(
-  preForce: WindowsProcessIdentityVerification | null,
   finalCandidates: number[],
   finalVerification: WindowsProcessIdentityVerification | null,
 ): WindowsProcessIdentityVerification {
@@ -1083,10 +1080,7 @@ export function authoritativeWindowsIdentityVerification(
   return {
     pids: candidates,
     proven: false,
-    reason:
-      preForce?.proven === false
-        ? preForce.reason
-        : "windows_process_identity_verification_missing",
+    reason: "windows_process_identity_verification_missing",
   };
 }
 

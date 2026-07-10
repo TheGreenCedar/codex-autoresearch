@@ -311,27 +311,29 @@ test("Windows identity-query failure keeps every candidate PID unproven", async 
   assert.deepEqual(result.pids, [41, 42]);
 });
 
-test("transient pre-force identity-query failure yields to final absence proof", () => {
-  const preForceFailure = {
-    pids: [41, 42],
+test("transient pre-force identity-query failure yields to final absence proof", async () => {
+  const entries = [
+    { pid: 41, started: "first" },
+    { pid: 42, started: "second" },
+  ];
+  const preForceFailure = await verifyWindowsProcessIdentities(entries, [41, 42], async () => ({
+    identities: new Map(),
     proven: false,
     reason: "windows_process_identity_enumeration_failed",
-  };
-  const finalAbsence = {
+  }));
+  const finalAbsence = await verifyWindowsProcessIdentities(entries, [41, 42], async () => ({
+    identities: new Map(),
+    proven: true,
+    reason: "windows_process_identities_enumerated",
+  }));
+
+  assert.equal(preForceFailure.proven, false);
+  assert.deepEqual(authoritativeWindowsIdentityVerification([41, 42], finalAbsence), {
     pids: [],
     proven: true,
     reason: "windows_process_identities_enumerated",
-  };
-
-  assert.deepEqual(
-    authoritativeWindowsIdentityVerification(preForceFailure, [41, 42], finalAbsence),
-    {
-      pids: [],
-      proven: true,
-      reason: "windows_process_identities_enumerated",
-    },
-  );
-  assert.deepEqual(authoritativeWindowsIdentityVerification(preForceFailure, [], null), {
+  });
+  assert.deepEqual(authoritativeWindowsIdentityVerification([], null), {
     pids: [],
     proven: true,
     reason: "windows_process_identities_absent",
@@ -344,7 +346,7 @@ test("final Windows identity-query failure remains fail closed", () => {
     proven: false,
     reason: "windows_process_identity_enumeration_failed",
   };
-  assert.deepEqual(authoritativeWindowsIdentityVerification(null, [41, 42], finalFailure), {
+  assert.deepEqual(authoritativeWindowsIdentityVerification([41, 42], finalFailure), {
     pids: [41, 42],
     proven: false,
     reason: "windows_process_identity_enumeration_failed",
