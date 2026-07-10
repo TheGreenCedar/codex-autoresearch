@@ -1,161 +1,135 @@
-# Architecture Diagrams
+# Architecture
 
-Autoresearch has three user-visible surfaces: the Codex skill, the CLI, and the read-only dashboard. The skill tells Codex how to run the loop, the CLI performs bounded operations, and durable session files remain the source of truth.
+Autoresearch has three visible surfaces and one source of truth:
 
-## Runtime surfaces
+- the **Codex skill** tells Codex how to run the workflow
+- the **CLI** reads, writes, validates, and executes session work
+- the **dashboard** renders current state without mutating it
+- the **session files** hold the durable record all three must agree on
+
+## Runtime flow
+
+```mermaid
+flowchart LR
+  U["User prompt"] --> S["Codex skill"]
+  S --> CLI["CLI"]
+  CLI --> Run["Benchmark and checks processes"]
+  CLI <--> State["Session files and Git-private packet state"]
+  State --> VM["Read model"]
+  VM --> Report["Terminal and compact state"]
+  VM --> Dash["Live dashboard or static export"]
+  CLI --> Final["Finalization planner"]
+  Final --> Git["Review branches"]
+```
+
+The skill does not own another database. The CLI and dashboard rebuild their answers from the target project's ledger, config, packet snapshots, research files, Git state, and runtime provenance.
+
+## State ownership
+
+| Area | Main owner |
+| --- | --- |
+| Public command dispatch | `scripts/autoresearch.ts`, `lib/cli-handlers.ts`, `lib/commands/*` |
+| Command help and tool contracts | `lib/cli/help.ts`, `lib/tool-schemas.ts`, `lib/tool-registry.ts` |
+| JSONL parsing | `lib/session-records.ts` |
+| Session state and packet decisions | `lib/session-core.ts`, `lib/session-read-model.ts` |
+| Benchmark execution | `lib/runner.ts`, `scripts/autoresearch.ts` |
+| Evidence and artifact indexing | `lib/evidence-*`, `lib/task-artifact-indexer.ts` |
+| Next-action governance | `lib/loop-governance.ts`, `lib/decision-guidance.ts`, `lib/operator-checklist.ts` |
+| Runtime and source trust | `lib/runtime-drift-doctor.ts`, `lib/source-cleanliness.ts`, `lib/gate-quality.ts` |
+| Parallel lanes | `lib/lane-lifecycle.ts`, `lib/portfolio-advisor.ts` |
+| Dashboard projection and server | `lib/dashboard-view-model.ts`, `lib/live-server.ts`, `lib/dashboard-health.ts` |
+| Finalization | `lib/finalize-preview.ts`, `lib/finalization-plan.ts`, `scripts/finalize-autoresearch.ts` |
+
+`scripts/autoresearch.ts` still owns the heavy `run`, `next`, and much of `log` because those paths share process execution, redaction, Git receipts, packet persistence, and structured experiment notes. New read-only projection logic belongs in focused command and read-model modules.
+
+## Packet write path
 
 ```mermaid
 flowchart TD
-  U["You in Codex"] --> S["codex-autoresearch skill"]
-  Goal["Codex Goal mode"] --> S
-  A["Resumed context"] --> S
-  S --> CLI["CLI commands"]
-  S --> SkillDocs["docs and references"]
-  CLI --> GoalBridge["codex-goal-brief"]
-  CLI --> Forensics["session-forensics"]
-  CLI --> LaneRunner["lane-runner"]
-  CLI --> Finalizer["finalize-autoresearch"]
-  CLI --> H["cli-handlers"]
-  GoalBridge --> Files
-  Forensics --> Files
-  LaneRunner --> Files
-  Finalizer --> Files
-  H --> Core["session, runner, recipes, dashboard view-model"]
-  Core --> Files["autoresearch.md / jsonl / config / ideas / research / evidence index"]
-  Core --> Dash["Live readout server and static export"]
-  Dash --> Browser["Audit and operate readouts"]
+  Next["next"] --> Proc["Run benchmark and checks"]
+  Proc --> Packet["Write last-run packet and evidence bundle"]
+  Packet --> Inspect["Human or Codex inspects metric, checks, diff"]
+  Inspect --> Log["log --from-last"]
+  Log --> Gate{"Decision safe?"}
+  Gate -- "keep" --> Commit["Scoped commit paths"]
+  Gate -- "discard / crash / checks_failed" --> Revert["Scoped experiment cleanup"]
+  Gate -- "measure" --> NoGit["Ledger only; no Git mutation"]
+  Commit --> Ledger["Append ledger and continuation"]
+  Revert --> Ledger
+  NoGit --> Ledger
 ```
 
-## Codex Goal boundary
-
-`codex-goal-brief` is a bridge, not a second goal engine. Codex owns thread-level Goal lifecycle; Autoresearch owns benchmark contracts, packet evidence, ASI, dashboard/state readouts, and Git safety. The bridge turns Autoresearch state into a Goal objective draft and completion audit.
+Pending transaction receipts make interrupted Git mutations visible. The next write is blocked until the ledger and worktree can be reconciled.
 
 ## Dashboard boundary
 
 ```mermaid
-flowchart TD
-  Files["Session files"] --> ViewModel["dashboard view-model"]
-  ViewModel --> Audit["Audit view"]
-  ViewModel --> Operate["Operate view"]
-  Audit --> Trace["Full ledger, ASI, evidence, lanes, provenance, diagnostics"]
-  Operate --> Monitor["Chart-first readiness, next action, blockers"]
-  ViewModel --> Export["Static HTML export"]
-  ViewModel --> Server["Live readout server"]
-```
-
-The dashboard is a readout, not a control plane. It shows next action, blockers, lanes, runtime provenance, packet diagnostics, and finalization pressure. Use the CLI for setup, packet runs, logging, gap review, export, and finalization.
-
-## Trust boundary
-
-```mermaid
 flowchart LR
-  Inputs["Commands, metrics, Git, files"] --> Validate["Schema and freshness checks"]
-  Validate --> Packet["Last-run packet"]
-  Packet --> Diagnostics["Packet diagnostics"]
-  Diagnostics --> Decision{"Decision allowed?"}
-  Decision -- "accepted/current keep" --> ScopedGit["Scoped commit paths or explicit commit"]
-  Decision -- "discard/rejected" --> ScopedRevert["Scoped revert paths"]
-  Decision -- "provisional/superseded/quarantined" --> AuditOnly["Audit-visible, not promotable"]
-  Decision -- "crash/checks_failed" --> Ledger["Metricless failure log"]
-  ScopedGit --> Ledger
-  ScopedRevert --> Ledger
-  AuditOnly --> Ledger
-  Ledger --> Continuation["Continuation contract"]
+  Files["Ledger, config, packet, Git, runtime"] --> Model["Dashboard view model"]
+  Model --> Live["Loopback live server"]
+  Model --> Export["Static HTML export"]
+  Live --> Browser["Read-only browser UI"]
+  Export --> Snapshot["Portable read-only snapshot"]
 ```
 
-## Loop governance flow
+The dashboard may show the canonical next action, blockers, metrics, lanes, packet diagnostics, runtime provenance, and finalization pressure. It does not expose setup, packet, logging, gap, or finalization mutation routes.
+
+The live server is loopback-only and validates Host headers. Static exports are snapshots; they cannot prove current packet freshness.
+
+## Codex Goal boundary
+
+Codex owns task-level Goal state. Autoresearch owns its benchmark contract, ledger, continuation, and completion audit.
+
+`codex-goal-brief` converts current Autoresearch state into an objective or completion-audit packet. It does not update Codex Goal state itself and does not read private Codex databases.
+
+## Parallel work
 
 ```mermaid
 flowchart TD
-  Inputs["autoresearch.jsonl + config + last-run packet"] --> State["Session state builder"]
-  State --> Governance["Loop governance"]
-  State --> Lanes["laneLifecycle"]
-  State --> Runtime["runtimeProvenance"]
-  State --> Diagnostics["packetDiagnostics"]
-  State --> Pressure["finalizationPressure"]
-  Governance --> Action["Canonical next action"]
-  Lanes --> Action
-  Runtime --> Action
-  Diagnostics --> Action
-  Pressure --> Action
-  Action --> Checklist["operatorChecklist"]
-  Action --> Contract["loopContract"]
-  Checklist --> Handoff["Codex resume handoff"]
-  Contract --> Compact["state / recommend-next / onboarding-packet"]
-  Action --> Dashboard["Read-only dashboard packet brake"]
-```
-
-Session state collects durable ledger, config, packet, lane, runtime, diagnostic, and finalization facts. Loop governance chooses whether another packet is allowed. The checklist compresses that choice into one command, one safety reason, one blocker, one evidence role, and one source.
-
-Field names: [state-fields](concepts.md#state-fields). Cross-surface contracts: [control-plane](control-plane.md).
-
-Module ownership: `session-records` owns JSONL parsing; `session-core` builds the state envelope; `session-read-model` owns readout projection; CLI handlers expose compact readouts; the dashboard renders the same packet brake without mutation controls.
-
-`scripts/autoresearch.ts` still owns heavy `run`, `next`, and most `log` flow because they share packet execution, redaction, Git mutation receipts, and ASI persistence. New read-only projection work should go through `lib/commands/*` and focused read-model helpers.
-
-## Parallel lane boundary
-
-```mermaid
-flowchart TD
-  Stuck["Serial loop stalls"] --> Fanout["Fanout plan"]
-  Fanout --> Scout["Read-only scout lanes"]
+  Parent["Parent session"] --> Fanout["Segment-scoped fanout plan"]
+  Fanout --> Scout["Read-only scouts"]
   Fanout --> Impl["Isolated implementation lanes"]
-  Scout --> Findings["Findings and evidence"]
-  Impl --> Packets["Measured packets"]
-  Findings --> Parent["Parent loop decision"]
+  Scout --> Evidence["Evidence and recommendation"]
+  Impl --> Packets["Measured packet candidates"]
+  Evidence --> Parent
   Packets --> Parent
-  Parent --> Ledger["Durable ledger and ASI"]
+  Parent --> Decision["One benchmark and keep/discard authority"]
 ```
 
-Fanout lanes are bounded helpers. The parent session remains responsible for benchmark contracts, keep/discard decisions, promotion status, and finalization.
+Lanes do not get independent finalization authority. The parent session owns the benchmark, accepted evidence, and branch plan.
 
-## Source layout
+## Source and package shape
+
+| Path | Role |
+| --- | --- |
+| `scripts/*.ts` | Authored command entrypoints |
+| `scripts/*.mjs` | Small public launchers and runtime hydration shims |
+| `lib/**/*.ts` | Reusable CLI, session, evidence, dashboard, and finalization logic |
+| `dashboard/src/` | React dashboard source |
+| `assets/dashboard-build/` | Generated dashboard assets; ignored in source, included in packages |
+| `dist/` | Generated Node runtime; ignored in source, included in release artifacts |
+| `skills/`, `docs/` | Codex contract and user/maintainer guidance |
+| `tests/`, `scripts/check.ts` | Product and packaging gates |
+
+The launcher calls `bootstrap-runtime.mjs` when a source-shaped install lacks `dist/`. Release packages already contain the built runtime.
+
+## Finalization path
 
 ```mermaid
 flowchart TD
-  Scripts["scripts/*.ts + scripts/*.mjs"] --> CLI["Public CLI shims and command functions"]
-  Lib["lib/*.ts"] --> Core["Reusable session, runner, recipe, dashboard logic"]
-  Dashboard["dashboard/src"] --> Assets["assets/dashboard-build"]
-  Assets --> Export["Self-contained export HTML"]
-  Docs["README + docs + skill"] --> Product["Human and agent onboarding"]
-  Tests["tests/*.ts"] --> Gate["npm run check / npm test"]
+  Keeps["Accepted current keeps"] --> Preview["finalize-preview"]
+  Tree["Canonical state routes to current-tree-finalization"] --> TreeReview["Review clean non-session diff and exact file set"]
+  TreeReview --> Plan
+  Preview --> Plan["Reviewed branch plan"]
+  Plan --> Branches["Create review branches"]
+  Branches --> Verify["Verify union and exclusions"]
+  Verify --> Publish["Push or PR, CI, merge"]
+  Publish --> MergeCheck["Verify merge"]
+  MergeCheck --> Cleanup["Cleanup-ready"]
 ```
 
-The `.mjs` launchers bootstrap the packaged runtime before loading compiled code.
+Normal finalization is backed only by accepted, current keeps. Rejected, provisional, superseded, quarantined, invalidated, later-discarded, and reverted evidence stays in the audit history but cannot enter those review branches.
 
-## CLI command path
+Current-tree finalization is a separate recovery contract. It packages an explicitly reviewed clean non-session branch diff when commit-level keep evidence no longer describes the work. The whole diff becomes the review unit, so its plan, file set, exclusions, claim evidence, and approval must be checked directly.
 
-Default help keeps the happy path short: `setup -> doctor -> next -> log -> state -> finalize-preview`. Advanced diagnostics are on `--help --all`.
-
-```mermaid
-sequenceDiagram
-  participant Codex
-  participant CLI as scripts/autoresearch.mjs
-  participant Bootstrap as bootstrap-runtime
-  participant Handlers as cli-handlers
-  participant Core as Core functions
-
-  Codex->>CLI: command with flags
-  CLI->>Bootstrap: ensure compiled runtime
-  CLI->>Handlers: dispatch command
-  Handlers->>Core: in-process handler
-  Core-->>Codex: JSON or text result
-```
-
-## Finalization
-
-```mermaid
-flowchart TD
-  A["Accepted/current kept evidence"] --> B["finalize-preview"]
-  B --> C{"Ready?"}
-  C -- "No" --> D["Report dirty tree, overlap, stale plan, or coverage warning"]
-  C -- "Yes" --> E["Create review branches outside dashboard"]
-  E --> F["Verify branch union and artifact exclusion"]
-  F --> G["Human review / merge / cleanup"]
-```
-
-Rejected, provisional, superseded, quarantined, invalidated, later-discarded, and reverted evidence stays visible for audit but must not be promoted into review branches.
-
----
-
-Previous: [Workflows](workflows.md) · Next: [Control plane](control-plane.md).
+The contracts shared by these surfaces are listed in [Control plane](control-plane.md).

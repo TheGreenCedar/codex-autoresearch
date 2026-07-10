@@ -107,12 +107,6 @@ test("displayed command quoting preserves backslashes before quotes", async () =
   assert.ok(result.commandDisplay.includes(expectedDisplay), result.commandDisplay);
 });
 
-test("README documents quality-gap loops for qualitative work", async () => {
-  const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
-  assert.match(readme, /quality[-_]gap/i);
-  assert.match(readme, /quality-gap|Concepts/i);
-});
-
 test("runner parses metrics, truncates tails, and reports timeouts", async () => {
   const metrics = parseMetricLines(
     ["metric seconds=1.25", "METRIC delta=-2", "METRIC scaled=1.5e+2", "METRIC __proto__=99"].join(
@@ -687,57 +681,6 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
 
   assert.match(codeql, /pull_request:/);
   assert.match(codeql, /branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/);
-});
-
-test("docs and skill describe the product-grade finalization bar", async () => {
-  const relativePaths = [
-    "plugins/codex-autoresearch/docs/finish.md",
-    "plugins/codex-autoresearch/docs/operate.md",
-    "plugins/codex-autoresearch/docs/trust.md",
-    "plugins/codex-autoresearch/docs/start.md",
-    "plugins/codex-autoresearch/docs/troubleshooting.md",
-    "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
-  ];
-  const docs = await Promise.all(
-    relativePaths.map(async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8")),
-  );
-  const combined = docs.join("\n");
-
-  for (const phrase of [
-    "product-grade",
-    "experimental primitive",
-    "claim coverage",
-    "accuracy",
-    "lazy behavior",
-    "finalization preview",
-  ]) {
-    assert.match(combined, new RegExp(phrase, "i"));
-  }
-});
-
-test("product docs and skill expose research-start fixed controls and ledger doctor", async () => {
-  const [skill, startDoc, operateDoc, trustDoc, troubleshootingDoc, finishDoc] = await Promise.all(
-    [
-      "plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md",
-      "plugins/codex-autoresearch/docs/start.md",
-      "plugins/codex-autoresearch/docs/operate.md",
-      "plugins/codex-autoresearch/docs/trust.md",
-      "plugins/codex-autoresearch/docs/troubleshooting.md",
-      "plugins/codex-autoresearch/docs/finish.md",
-    ].map(async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8")),
-  );
-
-  assert.match(skill, /research-start/);
-  assert.match(skill, /fixedControl/);
-  assert.match(skill, /ledger-doctor/);
-  assert.match(skill, /finalize-current-tree/);
-  assert.match(startDoc, /research-start/);
-  assert.match(operateDoc, /ledger-doctor/);
-  assert.match(trustDoc, /fixed control/i);
-  assert.match(trustDoc, /source-checkout/i);
-  assert.match(trustDoc, /review_required/);
-  assert.match(troubleshootingDoc, /ledger-doctor/);
-  assert.match(finishDoc, /finalize-current-tree/);
 });
 
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {

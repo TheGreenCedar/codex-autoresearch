@@ -194,6 +194,11 @@ function validateRepoRelativePath(file: unknown, cwd: string): string {
   if (normalized.startsWith(":")) {
     throw new Error(`Unsafe finalizer file path must not use Git pathspec magic: ${file}`);
   }
+  if (/[*?[\]]/.test(normalized)) {
+    throw new Error(
+      `Unsafe finalizer file path must be literal and contain no wildcard pathspec characters: ${file}`,
+    );
+  }
   const parts = normalized.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) {
     throw new Error(
@@ -305,11 +310,11 @@ async function pathExistsAt(ref: string, file: string, cwd: string): Promise<boo
 async function applyFileFromCommit(ref: string, file: unknown, cwd: string): Promise<void> {
   const safeFile = validateRepoRelativePath(file, cwd);
   if (await pathExistsAt(ref, safeFile, cwd)) {
-    await git(["checkout", ref, "--", safeFile], cwd);
+    await git(["--literal-pathspecs", "checkout", ref, "--", safeFile], cwd);
     return;
   }
   await fsp.rm(await resolveRepoRemovalTarget(cwd, safeFile), { recursive: true, force: true });
-  await git(["rm", "-r", "--ignore-unmatch", "--", safeFile], cwd, true);
+  await git(["--literal-pathspecs", "rm", "-r", "--ignore-unmatch", "--", safeFile], cwd, true);
 }
 
 function sourceStepsForGroup(group: CollectedGroup): CollectedSourceGroup[] {
@@ -888,7 +893,7 @@ async function existingBranchMatchesPlannedGroup(
       await git(["add", "-A"], cwd);
       await git(["commit", "--allow-empty", "-m", "verify: planned autoresearch group"], cwd);
       const diff = await git(
-        ["diff", "--quiet", verifyBranch, branch, "--", ...group.files],
+        ["--literal-pathspecs", "diff", "--quiet", verifyBranch, branch, "--", ...group.files],
         cwd,
         true,
       );

@@ -1,23 +1,24 @@
-# Demo Session
+# Demo session
 
 This demo is a 100-packet Autoresearch loop for optimizing an indexing pipeline's speed and memory footprint.
 
-The session starts at `10.00s`, trends down to a best kept `5.62s`, and carries memory footprint on every packet so the dashboard has real tradeoff texture instead of one lonely number doing interpretive dance.
+The session starts at `10.00s`, reaches a best kept result of `5.62s`, and records memory on every packet so the dashboard shows the tradeoff instead of runtime alone.
 
-## The Optimization Journey
+## What the loop tried
 
 Over 100 packets, the loop explores several distinct `lanes` and `families` of ideas:
 
-- **Packets 1-20 (The Easy Wins)**: Initial experiments focus on basic Node.js flags and I/O batch sizes. The score drops rapidly from 10.00s to around 7.50s.
-- **Packets 21-50 (The Memory Wall)**: Codex discovers that caching parsed ASTs drops speed to 6.20s, but blows up the memory footprint. The weighted score (which penalizes high memory) rejects several aggressive cache attempts until a balanced LRU cache is found.
-- **Packets 51-80 (The Plateau)**: The loop hits a plateau around 5.90s. The dashboard clearly shows repeated failures in the `parser-cache` family. Codex's ASI (`next_action_hint`) eventually pivots to a new lane: worker thread parallelization.
-- **Packets 81-100 (The Breakthrough)**: Worker threads break the plateau, dropping the final time to `5.62s` while keeping memory well within budget. The final weighted improvement is **43% better than baseline**.
+- **Packets 1-20:** Node.js flags and I/O batch sizes bring runtime from `10.00s` to about `7.50s`.
+- **Packets 21-50:** Parsed-AST caching reaches `6.20s` but uses too much memory. Several cache variants are rejected before a bounded LRU cache passes the weighted score.
+- **Packets 51-80:** Results flatten near `5.90s`. Repeated failures in the `parser-cache` family push the next-action note toward worker threads.
+- **Packets 81-100:** Worker threads reach `5.62s` without breaking the memory budget. Runtime is 43.8% lower than baseline; after the higher memory use is included, weighted cost improves by 24.3%.
 
-## Evidence Shape
+## What is in the ledger
 
 The ledger includes:
 
 - a demo-scoped commit surface: `autoresearch.sh`, `autoresearch.ps1`, `autoresearch.checks.ps1`, `autoresearch.md`, `autoresearch.ideas.md`, and `demo.md`
+- a baseline recorded as `measure`, before any implementation was changed
 - kept runs when an indexing strategy beats the current best metric
 - rejected runs when a new batching or cache idea is slower than the best kept path
 - checks-failed runs when a measurable packet is unsafe to keep

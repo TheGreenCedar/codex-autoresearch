@@ -8,6 +8,11 @@ import {
   type EvidenceIndex,
 } from "./evidence-index.js";
 import { resolveSafeResearchPath } from "./research-path-guard.js";
+import {
+  checkedAppendFile,
+  checkedAtomicWriteFile,
+  checkedEnsureDirectory,
+} from "./checked-write.js";
 import { type SessionForensicsSummary } from "./session-forensics.js";
 
 export interface ContextCapsuleWriteOptions {
@@ -49,17 +54,17 @@ export async function writeContextCapsule(
     importedAt: new Date().toISOString(),
     sourcePath: options.summary.sourcePath,
   };
-  await fsp.mkdir(safe.outputDir, { recursive: true });
-  await appendMarkdown(path.join(safe.outputDir, "session-digest.md"), digest);
-  await writeJson(path.join(safe.outputDir, "decision-capsule.json"), decisionCapsule);
-  await appendJsonl(path.join(safe.outputDir, "decisions.jsonl"), {
+  await checkedEnsureDirectory(options.cwd, safe.outputDir);
+  await appendMarkdown(safe.root, path.join(safe.outputDir, "session-digest.md"), digest);
+  await writeJson(safe.root, path.join(safe.outputDir, "decision-capsule.json"), decisionCapsule);
+  await appendJsonl(safe.root, path.join(safe.outputDir, "decisions.jsonl"), {
     type: "session_forensics_import",
     sourcePath: options.summary.sourcePath,
     importedAt: new Date().toISOString(),
     claimIds: claims.map((claim) => claim.id),
     decisionCapsule,
   });
-  await appendMarkdown(path.join(safe.outputDir, "quality-gaps.md"), gaps);
+  await appendMarkdown(safe.root, path.join(safe.outputDir, "quality-gaps.md"), gaps);
   const evidenceIndex = await mergeEvidenceClaims(options.cwd, safe.slug, claims);
   return { dryRun: false, outputDir: safe.outputDir, files, warnings: [], evidenceIndex };
 }
@@ -158,18 +163,18 @@ function qualityGapsMarkdown(summary: SessionForensicsSummary, claims: EvidenceC
   ].join("\n");
 }
 
-async function appendMarkdown(filePath: string, text: string) {
+async function appendMarkdown(root: string, filePath: string, text: string) {
   const existing = await fsp.readFile(filePath, "utf8").catch(() => "");
   const prefix = existing.trim() ? "\n\n" : "";
-  await fsp.writeFile(filePath, `${existing}${prefix}${text}`);
+  await checkedAtomicWriteFile(root, filePath, `${existing}${prefix}${text}`);
 }
 
-async function appendJsonl(filePath: string, value: unknown) {
-  await fsp.appendFile(filePath, `${JSON.stringify(value)}\n`);
+async function appendJsonl(root: string, filePath: string, value: unknown) {
+  await checkedAppendFile(root, filePath, `${JSON.stringify(value)}\n`);
 }
 
-async function writeJson(filePath: string, value: unknown) {
-  await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+async function writeJson(root: string, filePath: string, value: unknown) {
+  await checkedAtomicWriteFile(root, filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function topEntries(values: Record<string, number>, limit: number): [string, number][] {

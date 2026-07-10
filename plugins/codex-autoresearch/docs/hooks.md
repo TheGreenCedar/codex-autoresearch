@@ -1,67 +1,38 @@
-# Codex Hooks
+# Optional Codex hooks
 
-Hooks are optional guardrails for Autoresearch. Useful, maybe. Required for the normal loop, no.
+Hooks can remind Codex to read or log Autoresearch state at useful moments. They are not required, and they must never become the only place a safety rule lives.
 
-## Position
-
-- Keep hooks opt-in.
-- Do not enable hook templates by default.
-- Keep core behavior correct without hooks.
-- On Windows, treat hooks as less dependable as a default path.
-- Use `doctor hooks` for local feasibility and caveats.
+Autoresearch can print its conservative integration guidance:
 
 ```bash
 node scripts/autoresearch.mjs doctor hooks
 ```
 
-## Useful hook ideas
+`doctor hooks` does not probe the active Codex build or configuration. Its output is an Autoresearch compatibility note and may be more conservative than current Codex support, especially on Windows. Check the current Codex Hooks documentation and your local configuration before enabling a hook. The normal CLI path remains complete without hooks.
 
-Goal-aware reminders:
+## Useful reminders
 
-- run `codex-goal-brief --cwd <project>` when a run has a durable goal
-- pass the current goal objective and status into the command when available
-- complete the loop audit before reporting a goal as done
-- keep Codex Goal state in Codex; do not read private Codex SQLite or pretend the plugin can mutate thread goals
+| Event | Useful hook behavior |
+| --- | --- |
+| `SessionStart` | Print `onboarding-packet --compact`, the next safe action, and any goal advice |
+| `PostToolUse` | Notice `METRIC name=value` output and remind Codex to log the packet with a structured experiment note |
+| `Stop` | Warn about an unlogged last-run packet or a continuation that still forbids completion |
 
-`SessionStart`:
+For Codex Goal mode, a hook may suggest `codex-goal-brief --cwd <project>` and its completion audit. Goal lifecycle stays in Codex; the plugin does not read private Codex databases or mutate task goals.
 
-- run or suggest `onboarding-packet --compact`
-- surface the current next safe action
-- surface `goalAdvice` when a session has a durable goal
-- remind Codex to start the live dashboard when you asked for it or a fresh browser readout would help
+## Hard limits
 
-`PostToolUse`:
+Hooks are reminders or context injection. They do not replace:
 
-- notice shell output containing `METRIC name=value`
-- remind Codex to log the packet with ASI
-- warn if a packet command ran but no log decision followed
-
-`Stop`:
-
-- warn when an active last-run packet exists under `.git/autoresearch/` or the non-Git fallback `autoresearch.last-run.json`
-- warn when continuation says the loop is still active
-- suggest `state --compact` before final reporting
-- suggest `codex-goal-brief --cwd <project>` before reporting goal completion
-
-## Limits
-
-Hooks are experimental — best used as reminders or context injection, not irreversible enforcement.
-
-They must not replace:
-
-- CLI validation
-- unsafe command gates
+- benchmark and schema validation
+- command approval gates
 - last-run freshness checks
-- dashboard readout freshness checks
-- Git safety
-- human approval for irreversible work
+- Git scope and pending-transaction receipts
+- dashboard freshness labels
+- human approval for branch creation or other irreversible work
 
-Official docs:
+Official references:
 
 - <https://developers.openai.com/codex/hooks>
-- <https://developers.openai.com/codex/prompting#goal-mode>
+- <https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex>
 - <https://developers.openai.com/codex/concepts/customization#skills>
-
----
-
-Previous: [Troubleshooting](troubleshooting.md) · Next: [Index](index.md).

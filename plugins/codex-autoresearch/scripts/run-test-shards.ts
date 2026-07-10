@@ -12,6 +12,7 @@ type ShardResult = {
   label: string;
   stderr: string;
   stdout: string;
+  timedOut: boolean;
 };
 
 type ShardSpec = {
@@ -101,16 +102,23 @@ async function waitForTestFile(file: string): Promise<void> {
 function runNode(args: string[], env: NodeJS.ProcessEnv): Promise<ShardResult> {
   const label = args.at(-1) || "node";
   const startedAt = Date.now();
-  return runCommand([label, process.execPath, args], { cwd: process.cwd(), env }).then(
-    (result) => ({
-      code: result.code,
-      count: null,
-      durationSeconds: (Date.now() - startedAt) / 1000,
-      label,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    }),
+  const timeoutSeconds = parsePositiveInteger(
+    process.env.CODEX_AUTORESEARCH_TEST_SHARD_TIMEOUT_SECONDS || "120",
+    "CODEX_AUTORESEARCH_TEST_SHARD_TIMEOUT_SECONDS",
   );
+  return runCommand([label, process.execPath, args], {
+    cwd: process.cwd(),
+    env,
+    timeoutSeconds,
+  }).then((result) => ({
+    code: result.code,
+    count: null,
+    durationSeconds: (Date.now() - startedAt) / 1000,
+    label,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    timedOut: result.timedOut,
+  }));
 }
 
 async function discoverTestCount(file: string): Promise<number | null> {
@@ -122,7 +130,7 @@ async function discoverTestCount(file: string): Promise<number | null> {
     console.log(`${result.stdout}${result.stderr}`.trim());
     throw new Error(`Failed to discover test count for ${file}`);
   }
-  const match = result.stdout.match(/(?:^|\n)AUTORESEARCH_TEST_COUNT (\d+)(?:\r?\n|$)/);
+  const match = result.stdout.match(/(?:^|\n)(?:# )?AUTORESEARCH_TEST_COUNT (\d+)(?:\r?\n|$)/);
   return match ? Number(match[1]) : null;
 }
 
@@ -187,8 +195,9 @@ async function runWithLimit<T>(
 function summarize(result: ShardResult): string {
   const status = result.code === 0 ? "PASS" : "FAIL";
   const code = result.code === 0 ? "" : ` code=${result.code}`;
+  const timeout = result.timedOut ? " timeout=true" : "";
   const count = result.count == null ? "" : ` tests=${result.count}`;
-  return `${status} ${result.label}${code}${count} (${result.durationSeconds.toFixed(1)}s)`;
+  return `${status} ${result.label}${code}${timeout}${count} (${result.durationSeconds.toFixed(1)}s)`;
 }
 
 function printResult(result: ShardResult): void {
@@ -221,6 +230,17 @@ const results = await runWithLimit(
   jobs,
   printResult,
 );
+for (const [index, result] of results.entries()) {
+  if (!result.timedOut) continue;
+  const task = tasks[index];
+  const range = task.range
+    ? `${task.range.start}:${task.range.end} (${task.range.start + 1}-${task.range.end})`
+    : "entire file";
+  console.log(`RETRY timed-out range ${task.spec.file} ${range} serially (attempt 1/1)`);
+  const retry = await runShard(task);
+  results[index] = retry;
+  printResult(retry);
+}
 
 console.log(`Shard wall time: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 if (results.some((result) => result.code !== 0)) process.exitCode = 1;

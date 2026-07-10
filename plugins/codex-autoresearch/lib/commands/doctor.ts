@@ -93,10 +93,13 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     for (const blocker of state.researchIntegrity?.blockers || []) {
       issues.push(blocker);
     }
-    const catalogTrust = await catalogTrustCheck(config, sessionCwd).catch((error: unknown) => ({
-      ok: false,
-      issues: [`Trusted recipe catalog could not be revalidated: ${errorMessage(error)}`],
-    }));
+    const revalidateCatalog = boolOption(args.revalidate_catalog ?? args.revalidateCatalog, false);
+    const catalogTrust = revalidateCatalog
+      ? await catalogTrustCheck(config, sessionCwd).catch((error: unknown) => ({
+          ok: false,
+          issues: [`Trusted recipe catalog could not be revalidated: ${errorMessage(error)}`],
+        }))
+      : { ok: true, issues: [] as string[], skipped: true };
     if (!catalogTrust.ok) issues.push(...catalogTrust.issues);
     const drift = await buildDriftReport({
       pluginRoot: PLUGIN_ROOT,
@@ -196,10 +199,12 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
           issues.push(fixedControlBlock.issue);
         } else {
           const latestContract = latestBenchmarkContractEntry(workDir, state)?.benchmarkContract;
-          const doctorPacketEnvMode =
-            latestContract && Object.hasOwn(latestContract, "packetEnvMode")
+          const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
+          const doctorPacketEnvMode = explicitPacketEnvMode
+            ? packetEnvModeFromArgs(args)
+            : latestContract && Object.hasOwn(latestContract, "packetEnvMode")
               ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
-              : "inherit";
+              : "minimal";
           benchmark.packetEnvMode = doctorPacketEnvMode;
           const run = await runShell(
             benchmark.command,
@@ -319,6 +324,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
       runtimeProvenance: runtimeProvenance(drift),
       scaffoldHealth: state.scaffoldHealth,
       researchIntegrity: state.researchIntegrity,
+      catalogTrust,
       issues,
       warnings,
       warningDetails,

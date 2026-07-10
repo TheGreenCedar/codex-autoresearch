@@ -2,6 +2,7 @@ import {
   COMMAND_ARGUMENT_FIELDS,
   actionPolicyForTool,
   actionPolicyMutates,
+  commandActionAliases,
   toolNameForCliCommand,
   toolRegistry,
 } from "./tool-registry.js";
@@ -10,13 +11,7 @@ import type { UnknownRecord } from "./types/json.js";
 
 type LooseObject = UnknownRecord;
 
-export const DASHBOARD_COMMAND_KEY_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  doctorExplain: "doctor",
-  liveDashboard: "serve dashboard",
-  newSegmentDryRun: "new segment",
-  promoteGateDryRun: "promote gate",
-  state: "state",
-});
+export const DASHBOARD_COMMAND_KEY_ALIASES = commandActionAliases;
 
 export const DASHBOARD_COMMAND_FIELD_NAMES: ReadonlySet<string> = new Set([
   "argv",

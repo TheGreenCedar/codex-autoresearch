@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.join(".github", "workflows");
-const trustedOwners = new Set(["actions", "github"]);
 const shaPattern = /^[0-9a-f]{40}$/i;
 const violations = [];
 
@@ -21,12 +20,10 @@ for (const file of fs
       violations.push(`${file}:${index + 1} ${spec} is missing an immutable ref`);
       return;
     }
-    const action = spec.slice(0, at);
     const ref = spec.slice(at + 1);
-    const owner = action.split("/")[0];
-    if (!trustedOwners.has(owner) && !shaPattern.test(ref)) {
+    if (!shaPattern.test(ref)) {
       violations.push(
-        `${file}:${index + 1} ${spec} must pin third-party actions to a full-length SHA`,
+        `${file}:${index + 1} ${spec} must pin every external action to a full-length SHA`,
       );
     }
   });
@@ -37,4 +34,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log("Workflow policy passed: third-party GitHub Actions are pinned to full-length SHAs.");
+console.log("Workflow policy passed: all external GitHub Actions are pinned to full-length SHAs.");

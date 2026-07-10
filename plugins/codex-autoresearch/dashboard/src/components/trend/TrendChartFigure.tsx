@@ -376,14 +376,7 @@ function initialSelectedRunNumber(chartData: ChartDatum[]) {
 }
 
 function isTabbableChartPoint(payload: ChartDatum, selectedRunNumber: number | null) {
-  return (
-    payload.runNumber === selectedRunNumber ||
-    payload.latest ||
-    payload.best ||
-    payload.status === "discard" ||
-    payload.status === "crash" ||
-    payload.status === "checks_failed"
-  );
+  return payload.runNumber === selectedRunNumber;
 }
 
 function ChartActiveDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDatum }) {

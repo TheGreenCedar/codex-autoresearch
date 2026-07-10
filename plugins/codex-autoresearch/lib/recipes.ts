@@ -1,14 +1,31 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
-import http from "node:http";
+import dns from "node:dns/promises";
 import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import { resolvePackageRoot } from "./runtime-paths.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
 const RECIPE_CATALOG_TIMEOUT_MS = 10_000;
+const NON_GLOBAL_CATALOG_ADDRESSES = buildNonGlobalCatalogBlockList();
+const NON_GLOBAL_IPV6_SUBNETS = [
+  ["::", 128],
+  ["::1", 128],
+  ["::ffff:0:0", 96],
+  ["100::", 64],
+  ["2001:2::", 48],
+  ["2001:10::", 28],
+  ["2001:20::", 28],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+] as const;
 const REQUIRED_EXTERNAL_RECIPE_FIELDS = [
   "id",
   "title",
@@ -429,12 +446,17 @@ export async function loadRecipeCatalogWithProvenance(
 }
 
 function resolveCatalogReadSource(catalog: string, baseDir = ""): string {
-  if (/^https?:\/\//i.test(catalog)) return catalog;
+  if (/^https:\/\//i.test(catalog)) return catalog;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(catalog)) {
+    throw new Error(
+      "Remote recipe catalogs must use public HTTPS URLs; internal catalogs must be local files.",
+    );
+  }
   return path.isAbsolute(catalog) ? catalog : path.resolve(baseDir || process.cwd(), catalog);
 }
 
 function catalogSourceForProvenance(catalog: string, baseDir = ""): string {
-  if (/^https?:\/\//i.test(catalog)) return catalog;
+  if (/^https:\/\//i.test(catalog)) return catalog;
   const resolved = resolveCatalogReadSource(catalog, baseDir);
   if (baseDir) {
     const relative = path.relative(baseDir, resolved);
@@ -521,7 +543,19 @@ function sha256(text: string): string {
 }
 
 async function fetchText(url: string): Promise<string> {
-  const client = url.startsWith("https:") ? https : http;
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new Error("Remote recipe catalogs must use public HTTPS URLs without credentials.");
+  }
+  const addresses = net.isIP(parsed.hostname)
+    ? [{ address: parsed.hostname, family: net.isIP(parsed.hostname) }]
+    : await dns.lookup(parsed.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => !isPublicCatalogAddress(address))) {
+    throw new Error(
+      `Recipe catalog host must resolve only to public addresses: ${parsed.hostname}`,
+    );
+  }
+  const selected = addresses[0];
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
     const fail = (error: Error) => {
@@ -534,34 +568,41 @@ async function fetchText(url: string): Promise<string> {
       settled = true;
       resolve(value);
     };
-    const request = client
-      .get(url, (res) => {
-        const statusCode = res.statusCode ?? 0;
-        if (statusCode < 200 || statusCode >= 300) {
-          fail(new Error(`HTTP ${statusCode} while fetching recipe catalog`));
-          res.resume();
-          return;
-        }
-        const contentLength = Number(res.headers["content-length"] || 0);
-        if (catalogSizeExceedsLimit(contentLength)) {
-          fail(catalogTooLargeError());
-          res.destroy();
-          return;
-        }
-        let body = "";
-        let bytes = 0;
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          bytes += Buffer.byteLength(chunk, "utf8");
-          if (catalogSizeExceedsLimit(bytes)) {
+    const request = https
+      .get(
+        url,
+        {
+          lookup: (_hostname, _options, callback) =>
+            callback(null, selected.address, selected.family as 4 | 6),
+        },
+        (res) => {
+          const statusCode = res.statusCode ?? 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            fail(new Error(`HTTP ${statusCode} while fetching recipe catalog`));
+            res.resume();
+            return;
+          }
+          const contentLength = Number(res.headers["content-length"] || 0);
+          if (catalogSizeExceedsLimit(contentLength)) {
             fail(catalogTooLargeError());
             res.destroy();
             return;
           }
-          body += chunk;
-        });
-        res.on("end", () => succeed(body));
-      })
+          let body = "";
+          let bytes = 0;
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            bytes += Buffer.byteLength(chunk, "utf8");
+            if (catalogSizeExceedsLimit(bytes)) {
+              fail(catalogTooLargeError());
+              res.destroy();
+              return;
+            }
+            body += chunk;
+          });
+          res.on("end", () => succeed(body));
+        },
+      )
       .on("error", fail);
     request.setTimeout(RECIPE_CATALOG_TIMEOUT_MS, () => {
       request.destroy(
@@ -569,6 +610,67 @@ async function fetchText(url: string): Promise<string> {
       );
     });
   });
+}
+
+export function isPublicCatalogAddress(address: string): boolean {
+  const normalized = address.toLowerCase().split("%")[0];
+  const family = net.isIP(normalized);
+  if (family === 4) return !NON_GLOBAL_CATALOG_ADDRESSES.check(normalized, "ipv4");
+  if (family !== 6) return false;
+  const value = ipv6Value(normalized);
+  return !NON_GLOBAL_IPV6_SUBNETS.some(([subnet, prefix]) => {
+    const shift = 128n - BigInt(prefix);
+    return value >> shift === ipv6Value(subnet) >> shift;
+  });
+}
+
+function buildNonGlobalCatalogBlockList(): net.BlockList {
+  const blockList = new net.BlockList();
+  for (const [address, prefix] of [
+    ["0.0.0.0", 8],
+    ["10.0.0.0", 8],
+    ["100.64.0.0", 10],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["172.16.0.0", 12],
+    ["192.0.0.0", 24],
+    ["192.0.2.0", 24],
+    ["192.88.99.0", 24],
+    ["192.168.0.0", 16],
+    ["198.18.0.0", 15],
+    ["198.51.100.0", 24],
+    ["203.0.113.0", 24],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ] as const) {
+    blockList.addSubnet(address, prefix, "ipv4");
+  }
+  return blockList;
+}
+
+function ipv6Value(address: string): bigint {
+  const [left = "", right = ""] = address.split("::", 2);
+  const leftParts = ipv6Parts(left);
+  const rightParts = ipv6Parts(right);
+  const missing = 8 - leftParts.length - rightParts.length;
+  const parts = address.includes("::")
+    ? [...leftParts, ...Array.from({ length: missing }, () => "0"), ...rightParts]
+    : leftParts;
+  return parts.reduce((value, part) => (value << 16n) | BigInt(`0x${part || "0"}`), 0n);
+}
+
+function ipv6Parts(value: string): string[] {
+  const parts = value ? value.split(":") : [];
+  const last = parts.at(-1) || "";
+  if (!last.includes(".")) return parts;
+  const octets = last.split(".").map(Number);
+  parts.splice(
+    -1,
+    1,
+    ((octets[0] << 8) | octets[1]).toString(16),
+    ((octets[2] << 8) | octets[3]).toString(16),
+  );
+  return parts;
 }
 
 function catalogSizeExceedsLimit(bytes: number): boolean {

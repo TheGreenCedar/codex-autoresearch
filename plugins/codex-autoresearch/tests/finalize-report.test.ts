@@ -6,7 +6,12 @@ import { finalizePreview } from "../lib/finalize-preview.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "../lib/session-artifacts.js";
 import { AUTORESEARCH_DASHBOARD_FILE, AUTORESEARCH_SESSION_FILES } from "../lib/session-paths.js";
-import { runProcess, testGitArgs, withTempDir as withNamedTempDir } from "./helpers/process.js";
+import {
+  configureTestGitRepo,
+  runProcess,
+  testGitArgs,
+  withTempDir as withNamedTempDir,
+} from "./helpers/process.js";
 import test from "./helpers/sharded-test.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -23,7 +28,9 @@ async function run(command, args, cwd, allowFailure = false) {
 }
 
 async function git(args, cwd) {
-  return await run("git", testGitArgs(args), cwd);
+  const result = await run("git", testGitArgs(args), cwd);
+  if (args[0] === "init") await configureTestGitRepo(cwd);
+  return result;
 }
 
 async function writeFile(file, contents) {
@@ -467,7 +474,7 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalizer rejects Git pathspec magic in plan files",
+  "finalizer rejects wildcard Git pathspecs in plan files",
   "autoresearch-finalize-pathspec-",
   async (root) => {
     const repo = path.join(root, "repo");
@@ -499,10 +506,10 @@ testWithTempRoot(
           groups: [
             {
               title: "Pathspec plan",
-              body: "Should reject magic.",
+              body: "Should reject wildcard expansion.",
               last_commit: finalTree,
               slug: "pathspec-plan",
-              files: [":(top)"],
+              files: ["*.txt"],
             },
           ],
         },
@@ -514,7 +521,7 @@ testWithTempRoot(
 
     const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr + result.stdout, /pathspec magic/);
+    assert.match(result.stderr + result.stdout, /literal.*wildcard|wildcard.*pathspec/i);
     const branches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
     assert.equal(branches, "");
   },

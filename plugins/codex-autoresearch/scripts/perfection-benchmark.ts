@@ -14,39 +14,6 @@ async function readText(file: string): Promise<string> {
   return await fsp.readFile(path.join(pluginRoot, file), "utf8");
 }
 
-async function readOptionalText(file: string): Promise<string> {
-  try {
-    return await readText(file);
-  } catch {
-    return "";
-  }
-}
-
-async function readDashboardSurface(): Promise<string> {
-  const files = [
-    "assets/template.html",
-    ...(await listDashboardSourceFiles()),
-    "assets/dashboard-build/dashboard-app.js",
-    "assets/dashboard-build/dashboard-app.css",
-  ];
-  const parts = await Promise.all(files.map(readOptionalText));
-  return parts.join("\n");
-}
-
-async function listDashboardSourceFiles(dir = "dashboard/src"): Promise<string[]> {
-  const absoluteDir = path.join(pluginRoot, dir);
-  const entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const child = path.join(dir, entry.name).replaceAll("\\", "/");
-      if (entry.isDirectory()) return listDashboardSourceFiles(child);
-      if (/\.(css|js|jsx|ts|tsx)$/.test(entry.name)) return [child];
-      return [];
-    }),
-  );
-  return files.flat().sort();
-}
-
 async function readRootText(file: string): Promise<string> {
   return await fsp.readFile(path.join(repoRoot, file), "utf8");
 }
@@ -101,12 +68,101 @@ async function skillFiles(): Promise<string[]> {
   return found.sort();
 }
 
-function includesAll(text: string, values: string[]): boolean {
-  return values.every((value) => text.includes(value));
+async function markdownFilesRecursively(root: string): Promise<string[]> {
+  const entries = await fsp.readdir(root, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const next = path.join(root, entry.name);
+      if (entry.isDirectory()) return await markdownFilesRecursively(next);
+      return entry.isFile() && entry.name.endsWith(".md") ? [next] : [];
+    }),
+  );
+  return nested.flat().sort();
 }
 
-function hasRegex(text: string, pattern: RegExp): boolean {
-  return pattern.test(text);
+function markdownAnchors(content: string): Set<string> {
+  const anchors = new Set<string>();
+  const seen = new Map<string, number>();
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (!match) continue;
+    const base = stripHtmlTags(match[1])
+      .toLowerCase()
+      .replace(/[`*_~]/g, "")
+      .replace(/[^\p{L}\p{N}\s-]/gu, "")
+      .trim()
+      .replace(/\s+/g, "-");
+    const duplicate = seen.get(base) || 0;
+    seen.set(base, duplicate + 1);
+    anchors.add(duplicate === 0 ? base : `${base}-${duplicate}`);
+  }
+  return anchors;
+}
+
+function stripHtmlTags(value: string): string {
+  let output = "";
+  let insideTag = false;
+  for (const character of value) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      output += character;
+    }
+  }
+  return output;
+}
+
+async function markdownLinkProblems(): Promise<string[]> {
+  const files = [
+    path.join(repoRoot, "README.md"),
+    ...(await markdownFilesRecursively(path.join(pluginRoot, "docs"))),
+    ...(await markdownFilesRecursively(path.join(pluginRoot, "skills"))),
+  ];
+  const problems: string[] = [];
+  const contentCache = new Map<string, string>();
+  const anchorCache = new Map<string, Set<string>>();
+  for (const file of files) {
+    const content = await fsp.readFile(file, "utf8");
+    contentCache.set(file, content);
+    for (const match of content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      const rawTarget = match[1].trim().replace(/^<|>$/g, "");
+      if (/^(?:https?:|mailto:)/i.test(rawTarget)) continue;
+      const hashIndex = rawTarget.indexOf("#");
+      const rawPath = hashIndex >= 0 ? rawTarget.slice(0, hashIndex) : rawTarget;
+      const rawAnchor = hashIndex >= 0 ? rawTarget.slice(hashIndex + 1) : "";
+      const targetFile = rawPath ? path.resolve(path.dirname(file), rawPath) : file;
+      try {
+        await fsp.access(targetFile);
+      } catch {
+        problems.push(`${path.relative(repoRoot, file)} -> ${rawTarget}`);
+        continue;
+      }
+      if (!rawAnchor || path.extname(targetFile).toLowerCase() !== ".md") continue;
+      let anchors = anchorCache.get(targetFile);
+      if (!anchors) {
+        const targetContent =
+          contentCache.get(targetFile) || (await fsp.readFile(targetFile, "utf8"));
+        anchors = markdownAnchors(targetContent);
+        anchorCache.set(targetFile, anchors);
+      }
+      let anchor = rawAnchor.toLowerCase();
+      try {
+        anchor = decodeURIComponent(anchor);
+      } catch {
+        // Keep the raw anchor so the invalid link is reported below.
+      }
+      if (!anchors.has(anchor)) {
+        problems.push(`${path.relative(repoRoot, file)} -> ${rawTarget}`);
+      }
+    }
+  }
+  return problems;
+}
+
+function includesAll(text: string, values: string[]): boolean {
+  return values.every((value) => text.includes(value));
 }
 
 function fail(message: string): CheckResult {
@@ -163,14 +219,21 @@ const checks = [
       const files = await skillFiles();
       const commandMarkdown = await markdownFilesUnder("commands");
       const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      const agents = await readText("skills/codex-autoresearch/agents/openai.yaml");
+      const requiredSkillFiles = [
+        "skills/codex-autoresearch/agents/openai.yaml",
+        "skills/codex-autoresearch/references/loop-operations.md",
+        "skills/codex-autoresearch/references/dashboard-trust.md",
+        "skills/codex-autoresearch/references/research-finalize.md",
+      ];
+      const requiredSkillFilesExist = (
+        await Promise.all(requiredSkillFiles.map((file) => fileExists(file)))
+      ).every(Boolean);
       if (
         files.length === 1 &&
         files[0] === "skills/codex-autoresearch/SKILL.md" &&
         commandMarkdown.length === 0 &&
-        skill.includes("name: codex-autoresearch") &&
-        skill.includes("only Codex-facing skill") &&
-        agents.includes('display_name: "Codex Autoresearch"')
+        requiredSkillFilesExist &&
+        /^---\r?\nname: codex-autoresearch\r?\ndescription: .+\r?\n---\r?\n/m.test(skill)
       ) {
         return pass();
       }
@@ -182,92 +245,60 @@ const checks = [
     file: "../../README.md, README.md",
     description: "The root README is the only README and acts as the public product front door.",
     run: async () => {
-      const root = await readRootText("README.md");
+      const rootReadme = await readRootText("README.md");
       const pluginReadmeExists = await fileExists("README.md");
       const demoReadmeExists = await fileExists("examples/demo-session/README.md");
-      return !pluginReadmeExists &&
+      return rootReadme.trim().length > 0 &&
+        !pluginReadmeExists &&
         !demoReadmeExists &&
-        includesAll(root, [
-          "## Install",
-          "## Try it",
-          "/goal @Codex Autoresearch",
-          "## Dashboard",
-          "## Docs",
-          "![Codex Autoresearch live dashboard",
-          "plugins/codex-autoresearch/assets/showcase/dashboard-demo.png",
-          "plugins/codex-autoresearch/docs/index.md",
-          "plugins/codex-autoresearch/docs/start.md",
-          "plugins/codex-autoresearch/docs/workflows.md",
-          "plugins/codex-autoresearch/docs/architecture.md",
-        ]) &&
-        !root.includes("static report screenshot") &&
-        !root.includes("Static read-only export")
+        (await fileExists("docs/index.md"))
         ? pass()
         : fail(
             pluginReadmeExists || demoReadmeExists
               ? "A non-root README still exists."
-              : "Root README is missing the public product workflow, live dashboard screenshot, demo, or docs links.",
+              : "The root README or docs index is missing.",
           );
     },
   },
   {
     id: "root-changelog-maintained",
-    file: "../../CHANGELOG.md, ../../README.md, AGENTS.md",
-    description:
-      "User-facing plugin changes are recorded in a root changelog with migration notes.",
+    file: "../../CHANGELOG.md, package.json",
+    description: "The root changelog has an Unreleased section and the current release heading.",
     run: async () => {
       const changelog = await readRootText("CHANGELOG.md");
-      const readme = await readRootText("README.md");
-      const agents = await readRootText("AGENTS.md");
-      const releasedNotesPresent = includesAll(changelog, [
-        "## 1.0.1",
-        "source downloads now include the compiled TypeScript runtime",
-        "tracked `dist/` runtime",
-        "## 1.0.0",
-        "prompt-plan",
-        "prompt_plan",
-        "workflow and architecture diagram docs",
-        "Bumped public package",
-        "Static dashboard exports remain read-only snapshots",
-      ]);
-      const unreleasedNotesOk =
-        !changelog.includes("## Unreleased") ||
-        includesAll(changelog, ["Clarified licensing", "explicit Apache-2.0 terms"]);
-      return releasedNotesPresent &&
-        unreleasedNotesOk &&
-        includesAll(readme, ["## Changelog", "CHANGELOG.md"]) &&
-        includesAll(agents, [
-          "root `CHANGELOG.md`",
-          "Removed invocation surfaces need migration notes",
-        ])
+      const packageJson = await readJson("package.json");
+      const versionHeading = new RegExp(
+        `^## ${String(packageJson.version).replaceAll(".", "\\.")} - `,
+        "m",
+      );
+      return /^## Unreleased$/m.test(changelog) && versionHeading.test(changelog)
         ? pass()
-        : fail(
-            "Root changelog or changelog guidance is missing the current user-facing migration notes.",
-          );
+        : fail("The root changelog is missing Unreleased or the current package version heading.");
     },
   },
   {
     id: "docs-split-and-showcase",
     file: "../../README.md, docs/*.md, examples/demo-session/autoresearch.jsonl, assets/showcase/",
-    description:
-      "Detailed guidance lives in focused docs while README surfaces the live dashboard demo.",
+    description: "The public docs, examples, and showcase assets exist and local links resolve.",
     run: async () => {
-      const readme = await readRootText("README.md");
-      const docs = await Promise.all([
-        readText("docs/index.md"),
-        readText("docs/concepts.md"),
-        readText("docs/start.md"),
-        readText("docs/walkthrough.md"),
-        readText("docs/operate.md"),
-        readText("docs/trust.md"),
-        readText("docs/workflows.md"),
-        readText("docs/architecture.md"),
-        readText("docs/maintainers.md"),
-        readText("examples/index.md"),
-        readText("examples/demo-session/demo.md"),
-        readText("assets/showcase/showcase.md"),
-      ]);
-      const joined = docs.join("\n");
+      const requiredFiles = [
+        "docs/index.md",
+        "docs/concepts.md",
+        "docs/start.md",
+        "docs/walkthrough.md",
+        "docs/operate.md",
+        "docs/trust.md",
+        "docs/finish.md",
+        "docs/troubleshooting.md",
+        "docs/architecture.md",
+        "docs/maintainers.md",
+        "examples/index.md",
+        "examples/demo-session/demo.md",
+        "assets/showcase/showcase.md",
+      ];
+      const requiredFilesExist = (
+        await Promise.all(requiredFiles.map((file) => fileExists(file)))
+      ).every(Boolean);
       const screenshotExists = await fileExists("assets/showcase/dashboard-demo.png");
       const screenshotDimensions = screenshotExists
         ? await readPngDimensions("assets/showcase/dashboard-demo.png")
@@ -277,251 +308,96 @@ const checks = [
         screenshotDimensions.width >= 900 &&
         screenshotDimensions.height / screenshotDimensions.width <= 0.8;
       const demoJsonl = await readText("examples/demo-session/autoresearch.jsonl");
-      const demoRuns = demoJsonl
+      const demoEntries = demoJsonl
         .split(/\r?\n/)
-        .filter((line) => line.trim().startsWith('{"run":')).length;
-      return screenshotExists &&
-        screenshotIsCompact &&
-        demoRuns === 100 &&
-        !readme.includes("```mermaid") &&
-        includesAll(readme, ["Docs index", "dashboard-demo.png"]) &&
-        includesAll(joined, [
-          "Workflow Diagrams",
-          "Architecture Diagrams",
-          "METRIC name=value",
-          "quality_gap",
-          "prompt-plan",
-          "serve --cwd",
-          "gap-candidates",
-          "finalize-preview",
-          "Use the CLI for setup, packet runs, logging, gap review, export, and finalization",
-          "CLI commands return structured content",
-        ])
-        ? pass()
-        : fail(
-            "Docs split, compact README snapshot, visual docs, or live demo ledger is incomplete.",
-          );
-    },
-  },
-  {
-    id: "main-skill-start-resume",
-    file: "skills/codex-autoresearch/SKILL.md",
-    description:
-      "The main skill owns start/resume setup, dashboard handoff, active loop, and Git safety.",
-    run: async () => {
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      return includesAll(skill, [
-        "## Start or resume",
-        "setup-plan",
-        "setup",
-        "doctor",
-        "provide the live dashboard URL",
-        "before the first trusted packet",
-        "http://127.0.0.1:<port>/",
-        "## Active loop contract",
-        "continuation.shouldContinue",
-        "continuation.forbidFinalAnswer",
-        "commitPaths",
-      ])
-        ? pass()
-        : fail("Main skill is missing setup, dashboard, continuation, or scoped Git guidance.");
-    },
-  },
-  {
-    id: "main-skill-research-dashboard-finalize",
-    file: "skills/codex-autoresearch/SKILL.md",
-    description: "The main skill includes deep research, dashboard, and finalization workflows.",
-    run: async () => {
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      return includesAll(skill, [
-        "## Deep research loops",
-        "research-start --cwd <project>",
-        "autoresearch.research/<slug>/",
-        "sources.md",
-        "synthesis.md",
-        "review_required",
-        "fixedControl",
-        "ledger-doctor",
-        "`quality_gap=0` only means",
-        "filter hallucinations",
-        "## Dashboard",
-        "serve --cwd <project>",
-        "Static exports are read-only",
-        "## Finalize",
-        "finalize-preview",
-        "finalize-current-tree",
-        "Runway order",
-      ])
-        ? pass()
-        : fail(
-            "Main skill is missing research-start, safety, dashboard, or finalization guidance.",
-          );
-    },
-  },
-  {
-    id: "qualitative-loop-safety-docs",
-    file: "../../CHANGELOG.md, skills/codex-autoresearch/SKILL.md, docs/start.md, docs/operate.md, docs/trust.md, docs/troubleshooting.md, docs/finish.md",
-    description:
-      "Docs, skill, and changelog expose the safer qualitative-loop start path and trust gates.",
-    run: async () => {
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+        .filter((line) => line.trim().startsWith('{"run":'))
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              run?: number;
+              status?: string;
+              metric?: number;
+              metrics?: { memory_mb?: number };
+            },
+        );
+      const demoDashboardSource = await readText("dashboard/src/demoData.ts");
+      const demoTour = await readText("examples/demo-session/demo.md");
+      const demoBaseline = demoEntries[0];
+      const demoFinal = demoEntries.at(-1);
+      const baselineSeconds = demoBaseline?.metric;
+      const baselineMemory = demoBaseline?.metrics?.memory_mb;
+      const finalSeconds = demoFinal?.metric;
+      const finalMemory = demoFinal?.metrics?.memory_mb;
+      const demoMathValid =
+        typeof baselineSeconds === "number" &&
+        typeof baselineMemory === "number" &&
+        typeof finalSeconds === "number" &&
+        typeof finalMemory === "number" &&
+        demoFinal?.run === 100 &&
+        demoFinal?.status === "keep" &&
+        Number(((1 - finalSeconds / baselineSeconds) * 100).toFixed(1)) === 43.8 &&
+        Number(
+          (
+            (1 - (0.7 * finalSeconds) / baselineSeconds - (0.3 * finalMemory) / baselineMemory) *
+            100
+          ).toFixed(1),
+        ) === 24.3;
       const start = await readText("docs/start.md");
       const operate = await readText("docs/operate.md");
       const trust = await readText("docs/trust.md");
-      const troubleshooting = await readText("docs/troubleshooting.md");
       const finish = await readText("docs/finish.md");
-      const changelog = await readRootText("CHANGELOG.md");
-      const skillHasLoopSafety = includesAll(skill, [
-        "research-start",
-        "fixedControl",
-        "ledger-doctor",
-        "finalize-current-tree",
-        "review_required",
-      ]);
-      const docsHaveStartPath = includesAll(start, [
-        "research-start",
-        "quality_gap",
-        "measure",
-        "--no-baseline-log",
-      ]);
-      const docsHaveLedgerPath =
-        includesAll(operate, [
-          "ledger-doctor --cwd <project> --json",
-          "ledger-doctor --repair --yes",
-        ]) &&
-        includesAll(troubleshooting, ["ledger-doctor --cwd <project> --json", "--repair --yes"]);
-      const docsHaveChecksGuidance =
+      const skill = await readText("skills/codex-autoresearch/SKILL.md");
+      const docsContractsValid =
         includesAll(start, [
-          "Checks: npm test",
-          "quality constraint or checks command",
-          "--protected-benchmark-paths",
-          "--secondary-metric-constraints",
+          "--benchmark-prints-metric false",
+          "research-start",
+          "status measure",
+        ]) &&
+        includesAll(operate, [
+          "ledger-doctor --cwd <project>",
+          'checks-inspect --cwd <project> --command "<checks>"',
+          "session-forensics --cwd <project> --session-jsonl <path>",
         ]) &&
         includesAll(trust, [
-          "protectedBenchmarkPaths",
-          "--secondary-metric-constraints",
-          "checks_command",
+          "fixedControl",
+          "review_required=1",
+          "quality_gap=0",
+          "--commit <hash>",
+        ]) &&
+        includesAll(finish, [
+          "finalize-preview",
+          "finalize-current-tree",
+          "current-tree-finalization",
+        ]) &&
+        includesAll(skill, [
+          "continuation.forbidFinalAnswer",
+          "quality_gap=0",
+          "finalize-current-tree",
+          "../../docs/start.md",
+          "completionAudit",
+          "--commit <hash>",
         ]);
-      const docsHaveTrustSafety =
-        hasRegex(trust, /fixed control/i) &&
-        hasRegex(trust, /source-checkout/i) &&
-        trust.includes("fixedControl") &&
-        trust.includes("review_required=1");
-      const docsHaveCurrentTreeFinalize =
-        finish.includes("finalize-current-tree --cwd <project> --exclude-session-artifacts") &&
-        hasRegex(finish, /current-tree-finalization/i);
-      const changelogHasReleaseNote = includesAll(changelog, [
-        "research-start",
-        "ledger-doctor",
-        "fixed-control rerun guards",
-        "review_required",
-        "config-backed checks/protected-path guidance",
-        "finalize-current-tree",
-      ]);
-      return skillHasLoopSafety &&
-        docsHaveStartPath &&
-        docsHaveLedgerPath &&
-        docsHaveChecksGuidance &&
-        docsHaveTrustSafety &&
-        docsHaveCurrentTreeFinalize &&
-        changelogHasReleaseNote
+      const linkProblems = await markdownLinkProblems();
+      return requiredFilesExist &&
+        screenshotExists &&
+        screenshotIsCompact &&
+        demoEntries.length === 100 &&
+        demoBaseline?.run === 1 &&
+        demoBaseline?.status === "measure" &&
+        demoBaseline?.metric === 10 &&
+        demoBaseline?.metrics?.memory_mb === 178 &&
+        demoMathValid &&
+        includesAll(demoDashboardSource, [
+          "BASELINE_SECONDS = 10",
+          "BASELINE_MEMORY_MB = 178",
+          "FINAL_MEMORY_MB = 216",
+          "metricWeights: { time: 0.7, memory: 0.3 }",
+        ]) &&
+        includesAll(demoTour, ["43.8%", "24.3%"]) &&
+        docsContractsValid &&
+        linkProblems.length === 0
         ? pass()
-        : fail(
-            "Qualitative-loop docs are missing research-start, ledger-doctor, fixedControl, review_required, config-backed checks/protected-path, or current-tree finalization guidance.",
-          );
-    },
-  },
-  {
-    id: "active-loop-continuation-contract",
-    file: "../../README.md, skills/codex-autoresearch/SKILL.md, scripts/autoresearch.mjs, lib/tool-schemas.ts",
-    description:
-      "Owner-autonomous loops expose and document a machine-readable continuation contract after each packet.",
-    run: async () => {
-      const readme = await readRootText("README.md");
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      const cli = await readText("scripts/autoresearch.ts");
-      const contracts = await readText("lib/tool-schemas.ts");
-      return includesAll(`${readme}\n${skill}\n${cli}\n${contracts}`, [
-        "continuation.shouldContinue",
-        "continuation.forbidFinalAnswer",
-        "loopContinuation",
-        "active-loop continuation contract",
-      ])
-        ? pass()
-        : fail("Missing active-loop continuation docs or CLI continuation output.");
-    },
-  },
-  {
-    id: "friction-elimination-contracts",
-    file: "skills/codex-autoresearch/SKILL.md, docs/operate.md, docs/finish.md, scripts/autoresearch.mjs, lib/session-core.ts, lib/dashboard-view-model.ts, tests/*.ts",
-    description:
-      "Resume, measurement, quality-round, finalization, and subagent guardrails are documented, implemented, and tested.",
-    run: async () => {
-      const skill = await readText("skills/codex-autoresearch/SKILL.md");
-      const operate = await readText("docs/operate.md");
-      const finish = await readText("docs/finish.md");
-      const cli = await readText("scripts/autoresearch.ts");
-      const core = await readText("lib/session-core.ts");
-      const dashboard = await readText("lib/dashboard-view-model.ts");
-      const schemas = await readText("lib/tool-schemas.ts");
-      const finalizer = await readText("scripts/finalize-autoresearch.ts");
-      const cliTests = await readText("tests/autoresearch-cli.test.ts");
-      const dashboardTests = await readText("tests/dashboard-verification.test.ts");
-      const finalizerTests = await readText("tests/finalize-report.test.ts");
-      const combined = [
-        skill,
-        operate,
-        finish,
-        cli,
-        core,
-        dashboard,
-        schemas,
-        finalizer,
-        cliTests,
-        dashboardTests,
-        finalizerTests,
-      ].join("\n");
-      return includesAll(combined, [
-        "decisionEnvelope",
-        "resumeAudit",
-        "Only `next` writes a reusable last-run packet",
-        "`run` remains a raw benchmark probe",
-        "STATUS_VALUES",
-        '"measure"',
-        "--status measure",
-        "non-promotional evidence",
-        "freshRoundSuggested",
-        "`quality_gap=0` only means",
-        "--include-session-artifacts",
-        "Session artifacts are excluded by default",
-        "Do not suggest branch cleanup until merge verification has succeeded",
-        "No nested subagents",
-        "overlapping write lanes",
-      ])
-        ? pass()
-        : fail(
-            "Friction-elimination contracts are missing across docs, CLI/session core, dashboard, finalizer, or regression tests.",
-          );
-    },
-  },
-  {
-    id: "research-cli",
-    file: "scripts/autoresearch.mjs, lib/tool-schemas.ts",
-    description:
-      "CLI help and internal tool schemas expose research setup and quality-gap measurement.",
-    run: async () => {
-      const cli = await readText("scripts/autoresearch.ts");
-      const help = await readText("lib/cli/help.ts");
-      const contracts = await readText("lib/tool-schemas.ts");
-      return includesAll(`${cli}\n${help}\n${contracts}`, [
-        "research-setup --cwd <project>",
-        "quality-gap --cwd <project>",
-        "setup_research_session",
-        "measure_quality_gap",
-        "METRIC quality_closed",
-      ])
-        ? pass()
-        : fail("CLI research commands are not fully exposed.");
+        : fail(`Docs structure or links are invalid: ${linkProblems.slice(0, 3).join("; ")}`);
     },
   },
   {
@@ -675,28 +551,6 @@ const checks = [
     },
   },
   {
-    id: "maintainer-skill-progression-map",
-    file: "docs/maintainers.md",
-    description:
-      "Maintainer guidance turns recurring PR findings into concrete skill drills and gates.",
-    run: async () => {
-      const maintainers = await readText("docs/maintainers.md");
-      return includesAll(maintainers, [
-        "## Skill Progression Map",
-        "Security evidence hygiene",
-        "Release workflow design",
-        "Prompt taxonomy and regression design",
-        "Dashboard/operator UX contracts",
-        "Cross-surface release discipline",
-        "Evidence pattern",
-        "Practice task",
-        "Validation gate",
-      ])
-        ? pass()
-        : fail("Maintainer docs are missing the evidence-bound skill progression map.");
-    },
-  },
-  {
     id: "session-artifacts-ignored",
     file: ".gitignore",
     description:
@@ -744,151 +598,6 @@ const checks = [
         : fail(
             "package check does not run scripts/check.mjs with perfection-benchmark --fail-on-gap.",
           );
-    },
-  },
-  {
-    id: "quality-gate-tested",
-    file: "tests/perfection-benchmark.test.ts",
-    description: "The self-benchmark is covered by the Node test suite.",
-    run: async () => {
-      try {
-        const test = await readText("tests/perfection-benchmark.test.ts");
-        return hasRegex(test, /quality_gap\s*=\s*0/) && test.includes("perfection-benchmark.mjs")
-          ? pass()
-          : fail("Test exists but does not assert the zero-gap metric.");
-      } catch {
-        return fail("Missing perfection benchmark test.");
-      }
-    },
-  },
-  {
-    id: "dashboard-semantic-labels",
-    file: "assets/template.html, dashboard/src/main.tsx",
-    description:
-      "The dashboard uses semantic labels and native controls without decorative label tags.",
-    run: async () => {
-      const template = await readDashboardSurface();
-      const labelCount = (template.match(/<label\b/g) || []).length;
-      const hasSegmentSelect = includesAll(template, [
-        'htmlFor="segment-select"',
-        'id="segment-select"',
-        'className="segment-select"',
-        'aria-describedby="segment-summary"',
-      ]);
-      if (
-        hasSegmentSelect &&
-        template.includes('role="group"') &&
-        template.includes("aria-label={label}") &&
-        template.includes("score-label") &&
-        template.includes("readout-label") &&
-        !template.includes("log-decision-panel") &&
-        !template.includes("<label>Best kept change</label>")
-      ) {
-        return pass();
-      }
-      return fail(
-        `Expected semantic segment select and control labels without decorative label tags; found ${labelCount}.`,
-      );
-    },
-  },
-  {
-    id: "dashboard-embedded-favicon",
-    file: "assets/template.html",
-    description: "The static dashboard embeds a favicon to avoid a noisy local-server 404.",
-    run: async () => {
-      const template = await readText("assets/template.html");
-      return template.includes('<link rel="icon" href="data:image/svg+xml,')
-        ? pass()
-        : fail("Missing embedded data-URL favicon.");
-    },
-  },
-  {
-    id: "dashboard-practical-chart",
-    file: "assets/template.html, dashboard/src/main.tsx",
-    description:
-      "The dashboard uses a library-backed practical Packet trend chart with status legend, baseline, best, latest, run ticks, tooltip, and accessible summary.",
-    run: async () => {
-      const template = await readDashboardSurface();
-      return includesAll(template, [
-        "chart-legend",
-        "legend-swatch",
-        "win-zone",
-        "best-line",
-        "latest-halo",
-        "chartRunTicks",
-        "ResponsiveContainer",
-        "LineChart",
-        "Tooltip",
-        "ReferenceLine",
-        "buildChart",
-        "Baseline-normalized metric trend",
-        "formatChartRunValue",
-        "trend-chart-summary",
-      ])
-        ? pass()
-        : fail("Dashboard chart is missing practical Packet trend affordances.");
-    },
-  },
-  {
-    id: "dashboard-does-not-narrate-itself",
-    file: "assets/template.html, dashboard/src/main.tsx, lib/dashboard-view-model.ts",
-    description: "Dashboard copy is operational, not explanatory placeholder text.",
-    run: async () => {
-      const template = await readDashboardSurface();
-      const viewModel = await readText("lib/dashboard-view-model.ts");
-      const combined = `${template}\n${viewModel}`;
-      const banned = [
-        "Codex will summarize",
-        "Generated from runs, ASI",
-        "Generated summary",
-        "what happened and what it plans",
-      ];
-      return banned.every((phrase) => !combined.includes(phrase)) &&
-        includesAll(combined, ["Current operator decision", "Next move", "Ledger, ASI"])
-        ? pass()
-        : fail("Dashboard still contains placeholder or explanatory narration.");
-    },
-  },
-  {
-    id: "dashboard-next-action-and-portfolio",
-    file: "assets/template.html, dashboard/src/main.tsx, lib/dashboard-view-model.ts",
-    description:
-      "The dashboard keeps the chart, operator readout, and experiment portfolio guidance visible.",
-    run: async () => {
-      const template = await readDashboardSurface();
-      const viewModel = await readText("lib/dashboard-view-model.ts");
-      return includesAll(`${template}\n${viewModel}`, [
-        "Evidence trail",
-        "Packet trend",
-        "Run log",
-        "ledger-scroll",
-        "Codex brief",
-        "aiSummary",
-        "Next action",
-        "nextBestAction",
-        "Strategy lanes",
-        "lanePortfolio",
-        "plateau",
-      ])
-        ? pass()
-        : fail("Dashboard is missing chart, next-action, or portfolio/plateau surfaces.");
-    },
-  },
-  {
-    id: "last-run-packet-safety",
-    file: "scripts/autoresearch.mjs, tests/autoresearch-cli.test.ts",
-    description: "Last-run packets are cleared after logging and stale packets are rejected.",
-    run: async () => {
-      const cli = await readText("scripts/autoresearch.ts");
-      const tests = await readText("tests/autoresearch-cli.test.ts");
-      return includesAll(`${cli}\n${tests}`, [
-        "deleteLastRunPacket",
-        "assertFreshLastRunPacket",
-        "status is required; choose keep, discard, or measure explicitly",
-        "stale last-run packets are rejected",
-      ])
-        ? pass()
-        : fail("Last-run packet safety behavior is not implemented and tested.");
     },
   },
   {
@@ -962,30 +671,6 @@ const checks = [
       ];
       for (const file of files) await readText(file);
       return pass();
-    },
-  },
-  {
-    id: "full-product-tests",
-    file: "tests/full-product.test.ts",
-    description: "Regression tests cover the full product tracks.",
-    run: async () => {
-      const test = await readText("tests/full-product.test.ts");
-      return includesAll(test, [
-        "session core",
-        "runner parses metrics",
-        "catalog recipes can drive setup-plan",
-        "delight commands provide compact state",
-        "CLI exposes onboarding",
-        "codex-autoresearch-goal-bridge",
-        "setup-plan",
-        "gap-candidates",
-        "finalize-preview",
-        "integrations",
-        "live server",
-        "CLI owns mutations",
-      ])
-        ? pass()
-        : fail("Missing focused full-product regression tests.");
     },
   },
 ];

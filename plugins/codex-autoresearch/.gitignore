@@ -12,6 +12,8 @@ tmp/
 /autoresearch.research/
 /autoresearch.config.json
 /autoresearch.last-run.json
+/.codex-autoresearch-runtime.lock
+/.codex-autoresearch-runtime.lock.recovery-*
 /autoresearch.sh
 /autoresearch.ps1
 /autoresearch.checks.sh

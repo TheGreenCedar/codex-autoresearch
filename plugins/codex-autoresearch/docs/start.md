@@ -1,188 +1,82 @@
-# Start
+# Start with a baseline
 
-Get one honest packet measured, logged, and ready to resume in about five minutes.
+A good Autoresearch session begins with a result you can reproduce before any code changes. You need a goal, a benchmark, one primary metric, a correctness check, and a sensible boundary around the files Codex may edit. The plugin can help fill in missing details, but it cannot decide what "better" means for your product.
 
-## What you need
-
-- a target repo or child package
-- one goal
-- one primary metric
-- a benchmark command or recipe
-- optional correctness checks
-- a scoped file surface for commits and reverts
-- Codex plugin marketplace access
-- Git for reviewable kept work
-- Node.js 24 or newer, plus npm, when developing the local source checkout
-
-The benchmark must print:
-
-```text
-METRIC name=value
-```
-
-Example:
+The benchmark must print the primary metric in this form:
 
 ```text
 METRIC seconds=12.34
-METRIC memory_mb=410
 ```
 
-The configured primary metric drives keep/discard decisions. `measure` records baseline or diagnostic evidence without promotion. Secondary metrics explain tradeoffs.
+It may print other metrics too. If runtime is the primary metric, memory or coverage can still be recorded as guardrails, but they do not replace the number the loop is trying to improve.
 
-## First successful packet
+## Start from Codex
 
-Start with one baseline packet. Do not optimize yet.
-
-| Step | Action | Done when |
-| --- | --- | --- |
-| 1 | Name the goal, metric, benchmark, checks, and editable scope. | Codex can say what should improve and what files it may touch. |
-| 2 | Run read-only planning only if those essentials are unclear. | `setup-plan` or `prompt-plan` returns a setup path without creating session files. |
-| 3 | Set up the session. | `autoresearch.md`, `autoresearch.jsonl`, and config files exist in the target project. |
-| 4 | Run `doctor --check-benchmark --explain`. | The benchmark emits the primary `METRIC` and trust blockers are visible. |
-| 5 | Run one packet with `next`. | A fresh last-run packet is stored under `.git/autoresearch/` in Git repos, or as a worktree fallback file outside Git. |
-| 6 | Log the packet as `measure`. | Baseline evidence is saved without claiming a keep. |
-| 7 | Read `state --report` or `recommend-next --compact`. | The next action and blockers are explicit before spending another packet. |
-
-## Codex prompt
-
-Broad prompt:
+This prompt contains enough information to run without a long setup conversation:
 
 ```text
-/goal @Codex Autoresearch improve the speed of my indexer's pipeline, while keeping it memory efficient.
-```
-
-Codex will likely call `prompt-plan` first to infer metric defaults, safety constraints, experiment lanes, and missing essentials. `prompt-plan` is read-only — it does not create session files until `setup` runs.
-
-Specific prompt:
-
-```text
-/goal @Codex Autoresearch indexing pipeline speed and memory footprint optimization.
+/goal @Codex Autoresearch make the unit tests faster.
 Benchmark: npm test -- --runInBand
+Wrap that raw command so the benchmark prints METRIC seconds=<number>.
 Metric: seconds, lower is better
 Checks: npm test
 Scope: test runner config and test helpers only
+Measure a baseline before changing code. Stop after 5 attempts or 30 minutes.
 ```
 
-Ask for the live dashboard when you want a visual readout or fresh browser state. Before another packet, read `state --report` or `recommend-next --compact` and clear any blockers it names. Field names are in [state-fields](concepts.md#state-fields).
+If the benchmark is not obvious, describe the outcome and ask Codex to propose a measurement first. It can use `prompt-plan` or `setup-plan` to do that without writing session files. Read the proposal before setup. A command that is easy to measure but unrelated to the actual goal is worse than no benchmark at all.
 
-## CLI path
+## Start from the CLI
 
-Run package-local commands from `plugins/codex-autoresearch`. The `--cwd <project>` argument points at the repo or child package you want to improve; it is not necessarily the package root.
+These commands are for a source checkout. If you installed the plugin through Codex, ask `@Codex Autoresearch` to perform this step. To run the commands yourself, clone this repository and change into `plugins/codex-autoresearch`. The `--cwd` value points at the project being improved; it does not have to be the plugin directory. A configured `workingDir` stays inside that project unless the command explicitly includes `--allow-outside-workdir`.
 
 ```bash
-# Optional read-only planning; choose setup-plan for structured inputs or prompt-plan for prose.
-node scripts/autoresearch.mjs setup-plan --cwd <project> --name "Runtime loop" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand"
-node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "Improve runtime loop speed while preserving correctness."
-node scripts/autoresearch.mjs setup --cwd <project> --name "Runtime loop" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand"
+git -C <project> status --short --branch
+node scripts/autoresearch.mjs setup --cwd <project> --name "Test runtime" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand" --benchmark-prints-metric false --checks-command "npm test"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
 node scripts/autoresearch.mjs next --cwd <project>
 node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-Happy path: `setup -> doctor -> next -> log -> state -> finalize-preview`.
+Check the status before setup. Unrelated dirty files need to stay outside the experiment's commit and cleanup paths. Setup then writes the session contract. `--benchmark-prints-metric false` tells Autoresearch to time a raw command that does not print its own `METRIC` line. Doctor runs the cheap trust checks and verifies the resulting metric. `next` records a fresh packet, and the first log uses `measure` because nothing has improved yet; it is only the baseline. The state report then tells you whether the session is ready for an experiment or needs repair first.
 
-`setup-plan` and `prompt-plan` are read-only. Use them when essentials are ambiguous; skip them when goal, metric, benchmark, and scope are already known. `serve` is the optional live dashboard handoff. Use `node scripts/autoresearch.mjs --help --all` for the full command index.
+## Keep Git and the benchmark honest
 
-`benchmark-lint` and `doctor` answer different questions. `benchmark-lint` can pass because the benchmark emits the configured primary `METRIC`; `doctor --check-benchmark --explain` can still block because the worktree is dirty, runtime is stale, promotion metadata is missing, or other trust checks fail.
-
-## Qualitative loops
-
-For docs, UX, architecture, product study, or other qualitative improvement loops, use the bundled start command:
+Before a later result can be kept, tell Autoresearch which files it may commit:
 
 ```bash
-node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
+node scripts/autoresearch.mjs config --cwd <project> --commit-paths "vitest.config.ts,tests/helpers/"
 ```
 
-`research-start` keeps the awkward first mile together: it creates `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates the command, records the first baseline as `measure`, and prints the resume commands. Pass `--no-baseline-log` only when that first baseline should be inspected before it becomes ledger evidence.
+Cleanup after `discard`, `crash`, or `checks_failed` should receive explicit `--revert-paths`; otherwise configured keep paths may define the experiment scope. Do not use `--allow-add-all` unless every dirty file belongs to the experiment.
 
-After setup, optional stop conditions:
+If the benchmark depends on fixtures or a small contract file, protect those paths so a code change cannot quietly make the test easier:
 
 ```bash
-node scripts/autoresearch.mjs config --cwd <project> --packet-budget 5 --wall-clock-budget-seconds 1800 --budget-note "Stop after the first focused pass."
+node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/"
 ```
 
-Budget exhaustion is a stop/rescope signal — not proof the optimization goal is complete. Autoresearch does not track API or billing spend without an external integration.
-
-For benchmark-sensitive loops, record protected paths and secondary guardrails after the real benchmark is configured:
+Secondary constraints are useful when the obvious improvement can hide a known cost:
 
 ```bash
-node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/" --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
+node scripts/autoresearch.mjs config --cwd <project> --secondary-metric-constraints "memory_mb <= baseline * 1.05,coverage >= baseline" --secondary-metric-constraint-mode blocking
 ```
 
-The primary metric still drives the loop. Blocking secondary constraints turn violating keeps into provisional evidence so finalization cannot promote them silently.
+A result that violates a blocking constraint stays provisional even if the primary metric improved.
 
-For retrieval, search, ranking, accessibility, safety, or speed work that can break correctness, add a quality constraint or checks command before treating a speed win as product-grade.
+## Qualitative work
 
-In Git repositories, set the commit and revert scope before the first packet that might become a keep:
+Docs, UX, architecture, and product research do not always have a natural performance metric. For those, start a research session with an accepted checklist:
 
 ```bash
-node scripts/autoresearch.mjs config --cwd <project> --commit-paths "src/hot-path.ts,tests/hot-path.test.ts" --revert-paths "src/hot-path.ts,tests/hot-path.test.ts"
+node scripts/autoresearch.mjs research-start --cwd <project> --slug docs-pass --goal "Make the setup docs clear to a first-time user."
 ```
 
-Use `log --commit-paths ...` for a one-off keep when you cannot set durable scope yet. Leave scope empty only when every dirty source file belongs to the packet and you are intentionally using `--allow-add-all`.
+`research-start` creates a scratchpad under `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates it, and normally records the first baseline as `measure`. Pass `--no-baseline-log` if you want to inspect that first checklist before it enters the ledger.
 
-Use `recommend-next --compact` when you want exactly one safe next action:
+When the correctness command or edit scope is already known, pass `--checks-command` and `--commit-paths` to `research-start`. Otherwise configure them before the first keep.
 
-```bash
-node scripts/autoresearch.mjs recommend-next --cwd <project> --compact
-```
+The scratchpad keeps sources, judgment, accepted gaps, and deliverables separate. When the metric reaches zero, the accepted checklist for that round is closed. It does not mean the subject has been exhausted.
 
-Use `state --report` for a compact terminal readout (`report.text` and `report.json`): blockers first, then next action, gate quality, runtime drift, dashboard status, and packet diagnostics.
-
-## Session files
-
-| File | Purpose |
-| --- | --- |
-| `autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions. |
-| `autoresearch.jsonl` | Append-only config, packet, metric, status, commit, and ASI history. |
-| `autoresearch.config.json` | Runtime settings such as budgets, commit paths, and protected benchmark paths. |
-| `autoresearch.sh` or `autoresearch.ps1` | Repeatable benchmark entrypoint. |
-| `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness checks. |
-| `autoresearch.ideas.md` | Deferred hypotheses, avoided lanes, and next-action notes. |
-| `.git/autoresearch/last-run.json` | Git-private active last-packet record written by `next`. |
-| `.git/autoresearch/progress.json` | Git-private active progress snapshot for slow packets. |
-| `autoresearch.last-run.json` | Non-Git fallback last-packet record. |
-| `autoresearch.progress.json` | Non-Git fallback progress snapshot. |
-| `autoresearch.research/<slug>/` | Deep-research and quality-gap scratchpad. |
-| `autoresearch.pending-transaction.json` | Non-Git fallback receipt for an interrupted log mutation. |
-| `.git/autoresearch/pending-log-*.json` | Git-private pending log receipts that block unsafe continuation. |
-
-In Git repositories, active last-run packets, progress snapshots, and pending log-mutation receipts live under `.git/autoresearch/` instead of the worktree. The `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` files are fallback paths for sessions outside Git.
-
-## First packet
-
-Run:
-
-```bash
-node scripts/autoresearch.mjs next --cwd <project>
-```
-
-Then log from the last packet:
-
-```bash
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
-```
-
-Before any mutating log, keep, discard, or revert-producing command, check Git state and scope:
-
-- `git status --short` has no unrelated source changes mixed into the packet.
-- `commitPaths` and `revertPaths` point only at files owned by the experiment, or the mutating `log` call passes explicit `--commit-paths` / `--revert-paths`.
-- protected benchmark paths are clean unless you are intentionally starting a new segment.
-- `state --compact` or `doctor --explain` does not show stale packet, dirty source, runtime drift, pending transaction, or finalization blocker that changes the decision.
-
-Use `measure` for a baseline or diagnostic. Use `keep` only after a changed packet is safe to preserve. Use `discard`, `crash`, or `checks_failed` when the packet does not produce a safe improvement.
-
-## What good looks like
-
-- `doctor` has no blocking issues.
-- The benchmark emits the configured primary metric.
-- The live dashboard URL is available when a fresh visual readout is needed.
-- The last packet is fresh before logging.
-- ASI names hypothesis, evidence, rollback reason for rejected paths, and next action.
-- Product-grade claims have claim coverage; otherwise the output is an experimental primitive. See [Finish](finish.md).
-
----
-
-Previous: [Concepts](concepts.md) · Next: [Walkthrough](walkthrough.md) — narrated end-to-end loop.
+Setup creates several local files and, in Git repositories, transient state under `.git/autoresearch/`. [Concepts](concepts.md#session-files) lists them. The [Walkthrough](walkthrough.md) continues from here with a full measured change.

@@ -1,6 +1,8 @@
 import { errorMessage, indent, node, runPhase, type CommandSpec } from "./check-common.js";
 import { resolveNpmCommand } from "./npm-command.js";
 
+export const PRODUCT_PHASE_TIMEOUT_SECONDS = 1_800;
+
 export async function runProductPhase(): Promise<boolean> {
   let productChecks: CommandSpec[];
   try {
@@ -11,7 +13,10 @@ export async function runProductPhase(): Promise<boolean> {
     console.log(indent(errorMessage(error)));
     return false;
   }
-  return runPhase("product", productChecks, { streamOutput: true, timeoutSeconds: 900 });
+  return runPhase("product", productChecks, {
+    streamOutput: true,
+    timeoutSeconds: PRODUCT_PHASE_TIMEOUT_SECONDS,
+  });
 }
 
 async function productCheckCommands(): Promise<CommandSpec[]> {

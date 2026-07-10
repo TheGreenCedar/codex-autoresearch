@@ -1,16 +1,10 @@
-# Finish
+# Finish a session
 
-Use finalization when a noisy loop has useful kept commits that should become reviewable work.
+An Autoresearch branch often contains useful work mixed with experiments, corrections, and session files. Finalization separates the current accepted work into something another person can review. It does not strengthen the evidence or decide that the change is ready to ship.
 
-## Preview first
+## Preview before changing branches
 
-```bash
-node scripts/autoresearch.mjs finalize-preview --cwd <project>
-```
-
-Preview is read-only. It reports readiness, blockers, overlap, dirty-tree status, finalization readiness, current-tree fingerprints, included/excluded files, and a next action.
-
-Before any branch-changing path:
+The manual commands on this page assume a source checkout opened at `plugins/codex-autoresearch`. Marketplace users can ask `@Codex Autoresearch` to preview and finalize the session.
 
 ```bash
 git status --short
@@ -18,112 +12,48 @@ node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-Proceed only when unrelated dirty files are isolated, session artifacts are intentionally handled, protected benchmark paths are not drifting silently, and the preview still describes the branch you intend to create.
+The preview shows which accepted keeps are still current, what files they cover, what will be excluded, and what blocks branch creation. It also reports dirty-tree problems, overlap between proposed groups, stale plans, and gaps between the claim and the evidence.
 
-For slow or noisy source branches:
+Use `--trunk origin/main` when the default branch cannot be inferred. Add `--progress` when a large history is quiet long enough to look stuck.
 
-```bash
-node scripts/autoresearch.mjs finalize-preview --cwd <project> --progress
-```
+In normal finalization, only accepted, current keeps can enter a review branch. Baselines, measurements, rejected or provisional work, failed checks, crashes, invalidated results, later discards, and reverted changes stay in the ledger but stay out of the branch. Session artifacts are excluded unless the reviewer explicitly asks for them.
 
-Preview reports semantic safety: kept commits later discarded or invalidated, kept commits later reverted, and final non-session branch files not covered by selected review groups.
+## Say only what the evidence supports
 
-Preview and state also report `finalizationRunway` — the publication path. Stages include preview, branch creation, local-only, pushed/PR, CI, merge, merge verification, and cleanup-ready. A local branch with no push or PR evidence is local-only, not final.
+A branch can be mechanically ready for review while the product claim is still weak. Before calling work product-grade or merge-ready, compare the claim with the accepted checks and measurements. Search, ranking, lazy behavior, accessibility, safety, and performance claims need proof of those behaviors, not merely a better number from one workload.
 
-## Product-grade finalization bar
+When that proof is missing, describe the branch as experimental review work. The preview is a receipt for branch contents and evidence; it is not a release certificate.
 
-An experimental primitive is not a shippable deliverable.
+## Use the current tree when commit history is stale
 
-A finalization preview can package evidence for review but must not imply product-grade readiness when the product claim is unproven. The preview is a branch/readiness receipt: useful for review, still possibly experimental.
+Sometimes the final branch contents are correct even though the old kept commits no longer describe them cleanly. A correction may have been committed separately, an earlier keep may have been reverted, or support work may sit outside the original packet.
 
-For shippable retrieval, search, ranking, or performance work, compare claim coverage against accepted evidence before using merge-ready language. Retrieval and lazy semantic search claims need proof such as retrieval accuracy, recall/MRR/hit@k, lazy behavior under realistic load, sidecar safety, and docs or tests. A faster benchmark alone is not enough.
-
-When claim coverage is missing, describe the branch as experimental or development review only:
-
-```text
-Experimental review branch only: product-grade proof is missing.
-```
-
-If the default branch is ambiguous:
+When state routes to `current-tree-finalization`, use:
 
 ```bash
-node scripts/autoresearch.mjs finalize-preview --cwd <project> --trunk origin/main
-```
-
-## Review what counts
-
-Only accepted/current `status: "keep"` entries are candidates for review branches.
-
-Rejected, provisional, superseded, quarantined, measured, discarded, crashed, failed-checks, unlogged, or unknown-history work must not leak into final branches.
-
-If branch contents are right but commit-level kept evidence is stale:
-
-```bash
-git status --short
-node scripts/autoresearch.mjs finalize-preview --cwd <project>
 node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-session-artifacts
 ```
 
-When `state --report` reports `current-tree-finalization`, run `finalize-current-tree --cwd <project> --exclude-session-artifacts` as the primary command. Do not substitute generic `finalize-preview`; preview can explain the blocker, but current-tree mode is the route that packages the current non-session branch diff.
+This is an exceptional recovery route, not keep-backed finalization. It treats the entire clean non-session branch diff as one explicitly reviewed unit and may include corrections or support work that was never logged as a keep. Use it only when canonical state names `current-tree-finalization`. Verify the clean tree, exact file set, session exclusions, claim evidence, and generated plan before approval.
 
-Current-tree mode states that the current tree, not old kept commits, is the review unit. Session artifacts are excluded by default.
+## Create and verify the review branches
 
-If `state --report` shows `session-artifacts-dirty`, temporarily stash or commit session files before branch-changing finalization.
-
-Use the escape hatch only when the reviewer explicitly wants session files in the branch:
+From the reviewed source branch, write a plan:
 
 ```bash
-node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --include-session-artifacts
+node scripts/finalize-autoresearch.mjs plan --cwd <project> --goal <short-goal> --output groups.json
 ```
 
-## Plan branches
+Read the plan before mutation. Check the source branch and `HEAD`, trunk, merge base, file groups, exclusions, overlap, and fingerprint. If any of those change after review, generate a new plan.
 
-From the autoresearch source branch:
-
-```bash
-node scripts/finalize-autoresearch.mjs plan --cwd <project> --goal <short-goal>
-```
-
-Review the plan before mutation: source branch, `HEAD`, merge base, planned file sets, excluded commits, semantic safety blockers, final-tree coverage, overlap decisions, and plan fingerprint.
-
-## Create branches
-
-After preview and approval, create the planned review branches from the reviewed plan file:
+After approval, pass the plan file back to the finalizer:
 
 ```bash
 node scripts/finalize-autoresearch.mjs --cwd <project> <groups.json>
 ```
 
-`<groups.json>` is the path produced by `plan`. Rerun `plan` first if the source branch, trunk, merge base, kept commits, or dirty-tree state changed after review.
+Existing branches are classified before reuse. A matching name is not enough; the branch has to match the current plan.
 
-Ask for approval before branch creation unless you already approved finalization.
+Before handoff, verify that the union of the review branches contains every intended file, excludes session and rejected work, reports the same metric movement as the ledger, and uses language supported by the checks.
 
-After branch creation, verify:
-
-- branch union includes all intended kept files
-- session artifacts are excluded unless intentionally included
-- finalizer output explains included, excluded, and why
-- excluded commits did not leak planned files
-- generated review summary is accurate
-- cleanup targets are recorded without executable cleanup commands
-
-If a review branch already exists, the finalizer classifies it before reuse. Divergent, stale, checked-out, or unsafe branches stop with the runway recovery reason.
-
-## Final report
-
-Report:
-
-- created review branches
-- files and behavior covered
-- metric movement
-- verification commands
-- review summary path
-- remaining blockers or risk
-- merge verification status
-- cleanup targets only after merge verification succeeds
-
-Do not suggest branch cleanup until merge verification has succeeded.
-
----
-
-Previous: [Trust](trust.md) · Next: [Recipes](recipes.md) — built-in recipes and external catalogs.
+The publication path is preview, approval, branch creation, local verification, push or pull request, CI, merge, and merge verification. Cleanup comes after that. Until the merge is verified, cleanup targets are notes rather than commands.

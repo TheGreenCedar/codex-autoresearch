@@ -11,15 +11,15 @@ import { fileURLToPath } from "node:url";
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const screenshotPath = path.join(pluginRoot, "tmp", "dashboard-browser-a11y-modal.png");
 
-test("real browser keeps chart point modal keyboard flow accessible", async () => {
+test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
   const browserExecutable = resolveBrowserExecutable();
   assert.ok(
     browserExecutable,
     "Set CODEX_AUTORESEARCH_BROWSER to Chrome or Edge for the opt-in browser accessibility check.",
   );
 
-  const html = await dashboardHtml();
-  const server = await serveHtml(html);
+  const fixture = await dashboardHtml();
+  const server = await serveHtml(fixture.html, fixture.livePayload);
   let browser;
 
   try {
@@ -34,6 +34,36 @@ test("real browser keeps chart point modal keyboard flow accessible", async () =
       );
       await waitForPageReady(client, page.sessionId);
       await waitForSelector(client, page.sessionId, ".chart-point-button");
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('#ledger-body')?.textContent?.includes('#5001')",
+        "Live refresh did not render run #5001.",
+      );
+      const initialLedger = await evaluate(
+        client,
+        page.sessionId,
+        `(() => ({
+          rows: document.querySelectorAll('#ledger-body tr').length,
+          loadText: document.querySelector('.ledger-load-more button')?.textContent?.trim() || '',
+          tabbablePoints: document.querySelectorAll('.chart-point-button[tabindex="0"]').length
+        }))()`,
+      );
+      assert.equal(initialLedger.rows, 100);
+      assert.equal(initialLedger.loadText, "Load 100 older");
+      assert.equal(initialLedger.tabbablePoints, 1);
+
+      await evaluate(
+        client,
+        page.sessionId,
+        "document.querySelector('.ledger-load-more button').click()",
+      );
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelectorAll('#ledger-body tr').length === 200",
+        "Large ledger did not load the next 100 older rows.",
+      );
 
       const opener = await tabUntil(client, page.sessionId, ".chart-point-button", 80);
       assert.equal(opener.matches, true, `Tab did not reach a chart point: ${opener.summary}`);
@@ -74,6 +104,36 @@ test("real browser keeps chart point modal keyboard flow accessible", async () =
         `.chart-point-button[data-chart-run="${opener.run}"]`,
       );
 
+      await client.send(
+        "Emulation.setEmulatedMedia",
+        { features: [{ name: "prefers-reduced-motion", value: "reduce" }] },
+        page.sessionId,
+      );
+      const reducedMotion = await evaluate(
+        client,
+        page.sessionId,
+        "getComputedStyle(document.querySelector('.latest-halo-ui')).animationDuration",
+      );
+      assert.ok(["0.001ms", "1e-06s"].includes(reducedMotion), reducedMotion);
+
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
+        page.sessionId,
+      );
+      const mobile = await evaluate(
+        client,
+        page.sessionId,
+        `(() => {
+          const shell = document.querySelector('.runboard-shell').getBoundingClientRect();
+          return {
+            noPageOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+            shellFits: shell.left >= 0 && shell.right <= window.innerWidth + 1
+          };
+        })()`,
+      );
+      assert.deepEqual(mobile, { noPageOverflow: true, shellFits: true });
+
       console.log(`ARTIFACT dashboard_browser_a11y_screenshot=${screenshotPath}`);
     } finally {
       await client.close();
@@ -97,44 +157,65 @@ async function dashboardHtml() {
   const entries = [
     {
       type: "config",
-      name: "browser chart modal accessibility",
+      name: "browser dashboard smoke",
       metricName: "seconds",
       bestDirection: "lower",
       metricUnit: "s",
     },
-    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+    ...Array.from({ length: 5_000 }, (_, index) => ({
+      type: "run",
+      run: index + 1,
+      metric: 5_002 - (index + 1),
+      status: index === 0 ? "measure" : index % 11 === 0 ? "discard" : "keep",
+      description: `Run ${index + 1}`,
+      confidence: Math.min(5, Math.floor(index / 1_000) + 1),
+    })),
+  ];
+  const liveEntries = [
+    ...entries,
     {
       type: "run",
-      run: 2,
-      metric: 4,
-      status: "discard",
-      description: "Rejected shortcut",
-      confidence: 2,
-    },
-    {
-      type: "run",
-      run: 3,
-      metric: 3,
+      run: 5_001,
+      metric: 1,
       status: "keep",
-      description: "Improved candidate",
-      confidence: 3,
+      description: "Live refreshed run 5001",
+      confidence: 5,
     },
   ];
-  const meta = { deliveryMode: "static-export", liveActionsAvailable: false, commands: [] };
-  return template
+  const meta = {
+    deliveryMode: "live-server",
+    liveRefreshAvailable: true,
+    liveActionsAvailable: false,
+    refreshMs: 60_000,
+    commands: [],
+  };
+  const html = template
     .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
       JSON.stringify(entries).replaceAll("<", "\\u003c"),
     )
     .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replaceAll("<", "\\u003c"))
     .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
     .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+  return {
+    html,
+    livePayload: {
+      ledgerEntries: liveEntries,
+      ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_001 },
+      summary: { segment: 0, baseline: 5_001, best: 1, runs: 5_001 },
+    },
+  };
 }
 
-async function serveHtml(html) {
+async function serveHtml(html, livePayload) {
   const server = http.createServer((request, response) => {
     if (request.url === "/" || request.url === "/index.html") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(html);
+      return;
+    }
+    if (request.url === "/view-model.json") {
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify(livePayload));
       return;
     }
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

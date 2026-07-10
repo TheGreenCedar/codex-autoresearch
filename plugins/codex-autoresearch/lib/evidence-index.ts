@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { resolveSafeResearchPath } from "./research-path-guard.js";
+import { checkedAtomicWriteFile, checkedEnsureDirectory } from "./checked-write.js";
 import { unknownRecordOrEmpty, unknownRecordOrNull } from "./types/json.js";
 
 export interface EvidenceIndex {
@@ -50,7 +51,7 @@ export async function mergeEvidenceClaims(
   slug: string,
   claims: EvidenceClaim[],
 ): Promise<EvidenceIndex> {
-  const { outputDir } = await resolveSafeResearchPath(cwd, slug);
+  const { root, outputDir } = await resolveSafeResearchPath(cwd, slug);
   const current = await readEvidenceIndex(cwd, slug);
   const byId = new Map(current.claims.map((claim) => [claim.id, claim]));
   for (const claim of claims.map(normalizeEvidenceClaim)) {
@@ -64,8 +65,9 @@ export async function mergeEvidenceClaims(
     schemaVersion: 1,
     claims: [...byId.values()].sort((left, right) => left.id.localeCompare(right.id)),
   });
-  await fsp.mkdir(outputDir, { recursive: true });
-  await fsp.writeFile(
+  await checkedEnsureDirectory(cwd, outputDir);
+  await checkedAtomicWriteFile(
+    root,
     path.join(outputDir, "evidence-index.json"),
     `${JSON.stringify(index, null, 2)}\n`,
   );

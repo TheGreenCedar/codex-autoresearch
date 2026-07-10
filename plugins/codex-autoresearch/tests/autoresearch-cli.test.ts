@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
@@ -10,6 +21,7 @@ import { redactCommandDisplay } from "../lib/evidence-redaction.js";
 import { dashboardCommandSafety } from "../lib/dashboard-command-safety.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { resolveSessionPaths, sessionPathIdentity } from "../lib/session-paths.js";
 import { writeServeRegistry } from "../lib/dashboard-server-registry.js";
 import {
   PARTIAL_RESULT_ARTIFACT_MAX_BYTES,
@@ -262,6 +274,9 @@ test("ledger-doctor --repair --yes backs up and normalizes duplicates without de
     assert.equal(payload.repair.changed, true);
     assert.match(path.basename(payload.backupPath), /^autoresearch\.jsonl\.repair-backup-/);
     assert.equal(await readFile(payload.backupPath, "utf8"), before);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(payload.backupPath)).mode & 0o777, 0o600);
+    }
     assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
     assert.equal(payload.repairedLedgerHealth.ok, true);
 
@@ -2878,14 +2893,53 @@ test("external catalog recipes require trust and record provenance", async () =>
     const doctor = await runCli(["doctor", "--cwd", dir]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
-    assert.equal(doctorPayload.ok, false);
-    assert.match(doctorPayload.issues.join("\n"), /Trusted catalog recipe changed/);
+    assert.equal(doctorPayload.catalogTrust.skipped, true);
+    assert.equal(
+      doctorPayload.issues.some((issue) => /Trusted catalog recipe changed/.test(issue)),
+      false,
+    );
+
+    const revalidatedDoctor = await runCli(["doctor", "--cwd", dir, "--revalidate-catalog"]);
+    assert.equal(revalidatedDoctor.code, 0, revalidatedDoctor.stderr);
+    const revalidatedPayload = JSON.parse(revalidatedDoctor.stdout);
+    assert.equal(revalidatedPayload.ok, false);
+    assert.match(revalidatedPayload.issues.join("\n"), /Trusted catalog recipe changed/);
 
     const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
     const nextPayload = JSON.parse(next.stdout);
-    assert.equal(nextPayload.ok, false);
-    assert.match(nextPayload.doctor.issues.join("\n"), /Trusted catalog recipe changed/);
+    assert.equal(nextPayload.doctor.catalogTrust.skipped, true);
+  });
+});
+
+test("doctor skips remote catalog requests unless revalidation is explicit", async () => {
+  await withTempDir("catalog-doctor-opt-in", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "catalog doctor", "--metric-name", "seconds"]);
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      `${JSON.stringify(
+        {
+          recipeCatalogProvenance: {
+            source: "https://127.0.0.1:9/recipes.json",
+            recipeId: "private",
+            recipeHash: "0".repeat(64),
+            catalogHash: "0".repeat(64),
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const defaultDoctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(defaultDoctor.code, 0, defaultDoctor.stderr);
+    assert.equal(JSON.parse(defaultDoctor.stdout).catalogTrust.skipped, true);
+
+    const revalidated = await runCli(["doctor", "--cwd", dir, "--revalidate-catalog"]);
+    assert.equal(revalidated.code, 0, revalidated.stderr);
+    const payload = JSON.parse(revalidated.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.issues.join("\n"), /public addresses/);
   });
 });
 
@@ -3360,7 +3414,7 @@ test("command and env files are included in benchmark contract drift", async () 
   });
 });
 
-test("packet env mode is part of benchmark contract and doctor recheck", async () => {
+test("packet env defaults to minimal and is part of benchmark contract and doctor recheck", async () => {
   await withTempDir("packet-env-mode-contract", async (dir) => {
     await runCli([
       "init",
@@ -3393,8 +3447,6 @@ test("packet env mode is part of benchmark contract and doctor recheck", async (
         dir,
         "--command",
         command,
-        "--packet-env-mode",
-        "minimal",
         "--checks-policy",
         "manual",
       ]);
@@ -3427,10 +3479,55 @@ test("packet env mode is part of benchmark contract and doctor recheck", async (
       const doctorPayload = JSON.parse(doctor.stdout);
       assert.equal(doctorPayload.benchmark.packetEnvMode, "minimal");
       assert.equal(doctorPayload.benchmark.parsedMetrics.score, 1);
+
+      const inheritedDoctor = await runCli([
+        "doctor",
+        "--cwd",
+        dir,
+        "--command",
+        command,
+        "--check-benchmark",
+        "--packet-env-mode",
+        "inherit",
+      ]);
+      assert.equal(inheritedDoctor.code, 0, inheritedDoctor.stderr);
+      const inheritedDoctorPayload = JSON.parse(inheritedDoctor.stdout);
+      assert.equal(inheritedDoctorPayload.benchmark.packetEnvMode, "inherit");
+      assert.equal(inheritedDoctorPayload.benchmark.parsedMetrics.score, 2);
     } finally {
       if (previous == null) delete process.env.AUTORESEARCH_ENV_MODE_REVIEW;
       else process.env.AUTORESEARCH_ENV_MODE_REVIEW = previous;
     }
+  });
+});
+
+test("working directories outside cwd require per-command authorization", async () => {
+  await withTempDir("outside-working-directory", async (root) => {
+    const session = path.join(root, "session");
+    const target = path.join(root, "target");
+    await mkdir(session, { recursive: true });
+    await mkdir(target, { recursive: true });
+    await writeFile(
+      path.join(session, "autoresearch.config.json"),
+      `${JSON.stringify({ workingDir: "../target" }, null, 2)}\n`,
+    );
+
+    const blocked = await runCli(["state", "--cwd", session]);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /--allow-outside-workdir/);
+
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      session,
+      "--allow-outside-workdir",
+      "--name",
+      "external target",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 0, initialized.stderr);
+    await access(path.join(target, "autoresearch.jsonl"));
   });
 });
 
@@ -5626,6 +5723,44 @@ test("next allows clean repos with broad scoped commit paths", async () => {
   });
 });
 
+test("next blocks when dirty fingerprint bytes exceed the total budget", async () => {
+  await withTempDir("oversized-dirty-fingerprint", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "base\n");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "oversized fingerprint",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 0, initialized.stderr);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "oversized.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
+
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const payload = JSON.parse(next.stdout);
+    assert.equal(payload.code, "next_blocked_by_truncated_fingerprints");
+    assert.match(JSON.stringify(payload.git), /fingerprint_byte_budget/);
+  });
+});
+
 test("last-run packets are rejected when config changes before logging", async () => {
   await withTempDir("config-stale-last-run", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "first config", "--metric-name", "seconds"]);
@@ -5666,6 +5801,138 @@ test("last-run packets are rejected when config changes before logging", async (
     ]);
     assert.notEqual(stale.code, 0);
     assert.match(stale.stderr, /session config changed/);
+  });
+});
+
+test("last-run freshness hashes execution policy and commit scope", async () => {
+  await withTempDir("trust-config-stale-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "trust config", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.match(packet.history.trustConfig.hash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      packet.history.trustConfig.fields,
+      [...packet.history.trustConfig.fields].sort(),
+    );
+    assert.equal(JSON.stringify(packet.history.trustConfig).includes(command), false);
+
+    const configured = await runCli([
+      "config",
+      "--cwd",
+      dir,
+      "--checks-policy",
+      "on-improvement",
+      "--commit-paths",
+      "src",
+    ]);
+    assert.equal(configured.code, 0, configured.stderr);
+    const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(dashboard.code, 0, dashboard.stderr);
+    const dashboardPayload = JSON.parse(dashboard.stdout);
+    assert.equal(dashboardPayload.viewModel.lastRun.freshness.fresh, false);
+    assert.match(
+      dashboardPayload.viewModel.lastRun.freshness.reason,
+      /execution, checks, scope, or recipe trust configuration changed/,
+    );
+    assert.notEqual(dashboardPayload.viewModel.nextBestAction.kind, "next");
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Stale trust config",
+    ]);
+    assert.notEqual(logged.code, 0);
+    assert.match(logged.stderr, /execution, checks, scope, or recipe trust configuration changed/);
+  });
+});
+
+test("packet command tampering is stale in dashboard and next preflight", async () => {
+  await withTempDir("command-stale-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "command trust", "--metric-name", "seconds"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const first = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(first.code, 0, first.stderr);
+    const packet = JSON.parse(first.stdout);
+    packet.run.command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=999')"`;
+    await writeFile(packet.lastRunPath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+
+    const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
+    assert.equal(dashboard.code, 0, dashboard.stderr);
+    const dashboardPayload = JSON.parse(dashboard.stdout);
+    assert.equal(dashboardPayload.viewModel.lastRun.freshness.fresh, false);
+    assert.match(dashboardPayload.viewModel.lastRun.freshness.reason, /execution, checks, scope/);
+    assert.equal(dashboardPayload.viewModel.nextBestAction.kind, "stale-packet");
+
+    const replacement = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(replacement.code, 0, replacement.stderr);
+    assert.equal(
+      JSON.parse(replacement.stdout).run.command,
+      redactCommandDisplay(command, { workDir: dir }),
+    );
+  });
+});
+
+test("oversized benchmark contract files block packet freshness", async () => {
+  await withTempDir("oversized-contract-last-run", async (dir) => {
+    await runCli(["init", "--cwd", dir, "--name", "contract budget", "--metric-name", "seconds"]);
+    await writeFile(path.join(dir, "Cargo.toml"), Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const next = await runCli([
+      "next",
+      "--cwd",
+      dir,
+      "--command",
+      command,
+      "--checks-policy",
+      "manual",
+    ]);
+    assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.history.benchmarkContract.fingerprintByteBudgetExceeded, true);
+    assert.match(JSON.stringify(packet.history.benchmarkContract.files), /fingerprint_byte_budget/);
+
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Oversized contract",
+    ]);
+    assert.notEqual(logged.code, 0);
+    assert.match(logged.stderr, /fingerprint byte budget/);
   });
 });
 
@@ -6642,6 +6909,9 @@ test("static export does not call a same-process registry a live dashboard witho
 test("state health rejects an alive HTTP response for a different cwd", async () => {
   await withTempDir("state-dashboard-health-wrong-cwd", async (dir) => {
     const otherDir = path.join(dir, "other");
+    const expectedSessionIdentity = sessionPathIdentity(
+      resolveSessionPaths({ sessionCwd: dir, workDir: dir }),
+    );
     await mkdir(otherDir, { recursive: true });
     await runCli([
       "init",
@@ -6661,7 +6931,9 @@ test("state health rejects an alive HTTP response for a different cwd", async ()
             dashboard: {
               pid: process.pid,
               port: addressPort(server),
-              cwd: path.resolve(otherDir),
+              sessionIdentity: sessionPathIdentity(
+                resolveSessionPaths({ sessionCwd: otherDir, workDir: otherDir }),
+              ),
               version: PLUGIN_VERSION,
               liveness: "alive",
             },
@@ -6680,6 +6952,8 @@ test("state health rejects an alive HTTP response for a different cwd", async ()
         pid: process.pid,
         port,
         cwd: dir,
+        sessionCwd: dir,
+        sessionPathIdentity: expectedSessionIdentity,
         startedAt: "2026-06-02T00:00:00.000Z",
         version: PLUGIN_VERSION,
         healthUrl: `http://127.0.0.1:${port}/health`,
@@ -6704,6 +6978,9 @@ test("state health rejects an alive HTTP response for a different cwd", async ()
 
 test("state health accepts an alive same-cwd current-version HTTP response", async () => {
   await withTempDir("state-dashboard-health-alive", async (dir) => {
+    const expectedSessionIdentity = sessionPathIdentity(
+      resolveSessionPaths({ sessionCwd: dir, workDir: dir }),
+    );
     await runCli([
       "init",
       "--cwd",
@@ -6722,7 +6999,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
             dashboard: {
               pid: process.pid,
               port: addressPort(server),
-              cwd: path.resolve(dir),
+              sessionIdentity: expectedSessionIdentity,
               version: PLUGIN_VERSION,
               liveness: "alive",
             },
@@ -6741,6 +7018,8 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
         pid: process.pid,
         port,
         cwd: dir,
+        sessionCwd: dir,
+        sessionPathIdentity: expectedSessionIdentity,
         startedAt: "2026-06-02T00:00:00.000Z",
         version: PLUGIN_VERSION,
         healthUrl: `http://127.0.0.1:${port}/health`,
@@ -7302,6 +7581,56 @@ test("discard cleanup rejects Git pathspec magic in revert paths", async () => {
   });
 });
 
+test("discard preservation rejects linked Autoresearch-owned directories", async (t) => {
+  await withTempDir("discard-linked-owned-dir", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "tracked.txt"), "before\n");
+    await git(dir, ["add", "tracked.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await runCli(["init", "--cwd", dir, "--name", "linked preserve", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    const outside = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "victim.txt"), "outside\n");
+    try {
+      await symlink(
+        outside,
+        path.join(dir, "autoresearch.research"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      t.skip(`directory links are unavailable: ${String(error)}`);
+      await rm(outside, { recursive: true, force: true });
+      return;
+    }
+    try {
+      await writeFile(path.join(dir, "tracked.txt"), "after\n");
+      const result = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        "1",
+        "--status",
+        "discard",
+        "--description",
+        "Reject linked preservation",
+        "--allow-dirty-revert",
+      ]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /symlink|junction/);
+      assert.equal(await readFile(path.join(outside, "victim.txt"), "utf8"), "outside\n");
+    } finally {
+      await unlink(path.join(dir, "autoresearch.research")).catch(() => {});
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 test("keep logs allow tracked deletions in commit paths", async () => {
   await withTempDir("tracked-deletion-commit-path", async (dir) => {
     await git(dir, ["init"]);
@@ -7336,6 +7665,86 @@ test("keep logs allow tracked deletions in commit paths", async () => {
       await git(dir, ["show", "--name-status", "--format=", "HEAD"]),
       /D\s+tracked\.txt/,
     );
+  });
+});
+
+test("scoped keep commits preserve unrelated staged files", async () => {
+  await withTempDir("scoped-keep-preserves-index", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "scoped.txt"), "before\n");
+    await writeFile(path.join(dir, "unrelated.txt"), "before\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "scoped keep",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 0, initialized.stderr);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+
+    await writeFile(path.join(dir, "scoped.txt"), "after\n");
+    await writeFile(path.join(dir, "unrelated.txt"), "staged elsewhere\n");
+    await git(dir, ["add", "unrelated.txt"]);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "keep",
+      "--description",
+      "Commit only the scoped file",
+      "--commit-paths",
+      "scoped.txt",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.equal(await git(dir, ["show", "--format=", "--name-only", "HEAD"]), "scoped.txt");
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "unrelated.txt");
+  });
+});
+
+test("Git scope options reject wildcard pathspec characters", async () => {
+  await withTempDir("wildcard-pathspec-rejection", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await writeFile(path.join(dir, "file.txt"), "before\n");
+    await git(dir, ["add", "file.txt"]);
+    await git(dir, ["commit", "-m", "initial"]);
+    await runCli(["init", "--cwd", dir, "--name", "wildcards", "--metric-name", "seconds"]);
+    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["commit", "-m", "session"]);
+    await writeFile(path.join(dir, "file.txt"), "after\n");
+    for (const [option, value] of [
+      ["--commit-paths", "*.txt"],
+      ["--commit-paths", "file?.txt"],
+      ["--revert-paths", "src/[ab].txt"],
+    ]) {
+      const result = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--metric",
+        "1",
+        "--status",
+        option === "--revert-paths" ? "discard" : "keep",
+        "--description",
+        "Reject wildcard pathspec",
+        option,
+        value,
+      ]);
+      assert.notEqual(result.code, 0, `${option} ${value}`);
+      assert.match(result.stderr, /literal project-relative paths|wildcard/i);
+    }
   });
 });
 
@@ -7407,11 +7816,69 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
     ]);
     assert.equal(logged.code, 0, logged.stderr);
     await access(path.join(dir, ".git", "autoresearch"));
+    const worktreeStatus = await git(dir, ["status", "--porcelain=v1", "-uall"]);
+    const committedPaths = await git(dir, ["show", "--name-only", "--format=", "HEAD"]);
+    assert.doesNotMatch(worktreeStatus, /autoresearch-mutation\.lock|\.recovery-/);
+    assert.doesNotMatch(committedPaths, /autoresearch-mutation\.lock|\.recovery-/);
 
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
     const warningCodes = JSON.parse(state.stdout).warningDetails.map((warning) => warning.code);
     assert.ok(!warningCodes.includes("stale_benchmark_artifacts"));
+  });
+});
+
+test("Git-private state accepts a repository reached through a canonicalized ancestor", async (t) => {
+  await withTempDir("git-private-aliased-root", async (dir) => {
+    const realParent = path.join(dir, "real");
+    const realRepo = path.join(realParent, "repo");
+    const aliasParent = path.join(dir, "alias");
+    await mkdir(realRepo, { recursive: true });
+    try {
+      await symlink(realParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory links are unavailable: ${String(error)}`);
+      return;
+    }
+    const aliasedRepo = path.join(aliasParent, "repo");
+    await git(aliasedRepo, ["init"]);
+    await writeFile(path.join(aliasedRepo, "tracked.txt"), "base\n", "utf8");
+    await git(aliasedRepo, ["add", "tracked.txt"]);
+    await git(aliasedRepo, ["commit", "-m", "initial"]);
+
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      aliasedRepo,
+      "--name",
+      "aliased Git-private state",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 0, initialized.stderr);
+    await writeFile(
+      path.join(aliasedRepo, "packet.command"),
+      "node -e \"console.log('METRIC seconds=1')\"\n",
+      "utf8",
+    );
+    const packet = await runCli(["next", "--cwd", aliasedRepo, "--command-file", "packet.command"]);
+    assert.equal(packet.code, 0, packet.stderr);
+    await access(path.join(realRepo, ".git", "autoresearch", "last-run.json"));
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      aliasedRepo,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Record packet through aliased repository path",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.match(
+      await readFile(path.join(realRepo, "autoresearch.jsonl"), "utf8"),
+      /Record packet through aliased repository path/,
+    );
   });
 });
 
@@ -7679,6 +8146,55 @@ test("discard reverts scoped experiment paths without deleting unrelated dirty w
     assert.equal(await readFile(path.join(dir, "src", "value.txt"), "utf8"), "base\n");
     assert.equal(await readFile(path.join(dir, "notes.txt"), "utf8"), "unrelated dirty work\n");
   });
+});
+
+test("crash and checks_failed logs clean configured experiment paths only", async () => {
+  for (const status of ["crash", "checks_failed"] as const) {
+    await withTempDir(`safe-${status}-cleanup`, async (dir) => {
+      await git(dir, ["init"]);
+      await git(dir, ["config", "user.email", "codex@example.test"]);
+      await git(dir, ["config", "user.name", "Codex Test"]);
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "value.txt"), "base\n", "utf8");
+      await git(dir, ["add", "-A"]);
+      await git(dir, ["commit", "-m", "initial"]);
+
+      await runCli([
+        "init",
+        "--cwd",
+        dir,
+        "--name",
+        `${status} cleanup`,
+        "--metric-name",
+        "seconds",
+      ]);
+      await writeFile(
+        path.join(dir, "autoresearch.config.json"),
+        JSON.stringify({ commitPaths: ["src"] }, null, 2),
+      );
+      await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
+      await git(dir, ["commit", "-m", "session"]);
+
+      await writeFile(path.join(dir, "src", "value.txt"), "experiment\n", "utf8");
+      await writeFile(path.join(dir, "notes.txt"), "unrelated dirty work\n", "utf8");
+
+      const args = [
+        "log",
+        "--cwd",
+        dir,
+        "--status",
+        status,
+        "--description",
+        `Clean ${status} experiment`,
+      ];
+      if (status === "checks_failed") args.push("--metric", "2");
+      const result = await runCli(args);
+      assert.equal(result.code, 0, result.stderr);
+
+      assert.equal(await readFile(path.join(dir, "src", "value.txt"), "utf8"), "base\n");
+      assert.equal(await readFile(path.join(dir, "notes.txt"), "utf8"), "unrelated dirty work\n");
+    });
+  }
 });
 
 test("discard without scoped paths refuses to clean a dirty git tree", async () => {
@@ -8751,14 +9267,20 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
   const doctorArgs = validateToolArguments("doctor_session", {
     workingDir: "C:/repo",
     allowFixedControlRerun: true,
+    packetEnvMode: "inherit",
+    revalidateCatalog: true,
   });
   assert.deepEqual(doctorArgs, {
     working_dir: "C:/repo",
     allow_fixed_control_rerun: true,
+    packet_env_mode: "inherit",
+    revalidate_catalog: true,
   });
   assert.deepEqual(normalizeRuntimeToolArguments("doctor_session", doctorArgs), {
     cwd: "C:/repo",
     allowFixedControlRerun: true,
+    packetEnvMode: "inherit",
+    revalidateCatalog: true,
   });
   const ledgerDoctorArgs = validateToolArguments("ledger_doctor", {
     workingDir: "C:/repo",
@@ -9922,145 +10444,6 @@ test("runtime release artifacts trim trailing slashes without regex matching", a
   );
 });
 
-test("source launcher hydrates runtime only after release checksum verification", async () => {
-  await withTempDir("runtime-hydration-integrity", async (dir) => {
-    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
-    const release = await createRuntimeReleaseAsset(dir);
-    const bootstrap = await import(
-      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
-    );
-
-    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
-      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
-        releaseBaseUrl,
-      });
-      const runtimeText = await readFile(new URL(runtimeHref), "utf8");
-      assert.equal(runtimeText, "export const hydratedRuntime = true;\n");
-
-      const runtime = await import(`${runtimeHref}?integrity=${Date.now()}`);
-      assert.equal(runtime.hydratedRuntime, true);
-      await access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"));
-    });
-  });
-});
-
-test("source launcher hydrates packaged dashboard assets before source-shaped export", async () => {
-  await withTempDir("runtime-hydration-dashboard-export", async (dir) => {
-    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
-    await mkdir(path.join(pluginDir, "assets"), { recursive: true });
-    await writeFile(
-      path.join(pluginDir, "assets", "template.html"),
-      [
-        "<!doctype html>",
-        '<div id="dashboard-root"></div>',
-        "<style>__AUTORESEARCH_DASHBOARD_CSS__</style>",
-        "<script>__AUTORESEARCH_DASHBOARD_APP__</script>",
-        '<script type="application/json">__AUTORESEARCH_DATA_PAYLOAD__</script>',
-        '<script type="application/json">__AUTORESEARCH_META_PAYLOAD__</script>',
-      ].join("\n"),
-      "utf8",
-    );
-    await assert.rejects(
-      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
-    );
-
-    const runtimeText = [
-      'import fs from "node:fs";',
-      'import path from "node:path";',
-      'import { fileURLToPath } from "node:url";',
-      "export const hydratedRuntime = true;",
-      "export function exportDashboardHtml(workDir) {",
-      '  const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");',
-      '  const template = fs.readFileSync(path.join(pluginRoot, "assets", "template.html"), "utf8");',
-      '  const app = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.js"), "utf8");',
-      '  const css = fs.readFileSync(path.join(pluginRoot, "assets", "dashboard-build", "dashboard-app.css"), "utf8");',
-      "  const html = template",
-      '    .replace("__AUTORESEARCH_DASHBOARD_CSS__", css)',
-      '    .replace("__AUTORESEARCH_DASHBOARD_APP__", app)',
-      '    .replace("__AUTORESEARCH_DATA_PAYLOAD__", JSON.stringify([{ name: "package dashboard smoke" }]))',
-      '    .replace("__AUTORESEARCH_META_PAYLOAD__", JSON.stringify({ deliveryMode: "static-export" }));',
-      '  const outputPath = path.join(workDir, "autoresearch-dashboard.html");',
-      '  fs.writeFileSync(outputPath, html, "utf8");',
-      "  return outputPath;",
-      "}",
-    ].join("\n");
-    const release = await createRuntimeReleaseAsset(dir, {
-      dashboardAppText: 'window.__hydratedDashboardAsset = "release-dashboard-app";\n',
-      dashboardCssText: "#dashboard-root { color: rgb(12, 34, 56); }\n",
-      runtimeText: `${runtimeText}\n`,
-    });
-    const bootstrap = await import(
-      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
-    );
-
-    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
-      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
-        releaseBaseUrl,
-      });
-      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"));
-      await access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"));
-
-      const runtime = await import(`${runtimeHref}?dashboard=${Date.now()}`);
-      const outputPath = runtime.exportDashboardHtml(dir);
-      const dashboardHtml = await readFile(outputPath, "utf8");
-      assert.match(dashboardHtml, /release-dashboard-app/);
-      assert.match(dashboardHtml, /rgb\(12, 34, 56\)/);
-      assert.match(dashboardHtml, /package dashboard smoke/);
-    });
-  });
-});
-
-test("source launcher does not treat source-shaped runtime as ready without dashboard assets", async () => {
-  await withTempDir("runtime-hydration-existing-runtime-missing-dashboard", async (dir) => {
-    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
-    await mkdir(path.join(pluginDir, "dist", "scripts"), { recursive: true });
-    await writeFile(
-      path.join(pluginDir, "dist", "scripts", "autoresearch.mjs"),
-      "export const sourceRuntimeWithoutDashboardAssets = true;\n",
-      "utf8",
-    );
-    await writeFile(path.join(pluginDir, "tsdown.config.ts"), "export default {};\n", "utf8");
-    await writeFile(path.join(pluginDir, "scripts", "autoresearch.ts"), "export {};\n", "utf8");
-    await assert.rejects(
-      access(path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js")),
-    );
-
-    const release = await createRuntimeReleaseAsset(dir, {
-      dashboardAppText: 'window.__hydratedDashboardAsset = "existing-runtime-missing-assets";\n',
-      dashboardCssText: "#dashboard-root { color: rgb(98, 76, 54); }\n",
-      runtimeText: "export const hydratedRuntime = true;\n",
-    });
-    const bootstrap = await import(
-      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
-    );
-
-    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
-      const runtimeHref = await bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, {
-        releaseBaseUrl,
-      });
-
-      assert.equal(
-        await readFile(new URL(runtimeHref), "utf8"),
-        "export const hydratedRuntime = true;\n",
-      );
-      assert.match(
-        await readFile(
-          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.js"),
-          "utf8",
-        ),
-        /existing-runtime-missing-assets/,
-      );
-      assert.match(
-        await readFile(
-          path.join(pluginDir, "assets", "dashboard-build", "dashboard-app.css"),
-          "utf8",
-        ),
-        /rgb\(98, 76, 54\)/,
-      );
-    });
-  });
-});
-
 test("source launcher fails closed when release checksum metadata is missing", async () => {
   await withTempDir("runtime-hydration-missing-checksum", async (dir) => {
     const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
@@ -10153,26 +10536,6 @@ test("source launcher rejects checksum manifests for the wrong release asset", a
         () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
         new RegExp(
           `Checksum manifest expected asset codex-autoresearch-${escapeRegExp(PLUGIN_VERSION)}\\.tgz, got codex-autoresearch-0\\.0\\.0\\.tgz`,
-        ),
-      );
-    });
-    await assert.rejects(access(path.join(pluginDir, "dist", "scripts", "autoresearch.mjs")));
-  });
-});
-
-test("source launcher rejects checksummed tarballs for the wrong package version", async () => {
-  await withTempDir("runtime-hydration-wrong-version", async (dir) => {
-    const { pluginDir, importerUrl } = await writeFakeSourcePlugin(dir);
-    const release = await createRuntimeReleaseAsset(dir, { packageVersion: "0.0.0" });
-    const bootstrap = await import(
-      pathToFileURL(path.join(pluginRoot, "scripts", "bootstrap-runtime.mjs")).href
-    );
-
-    await withReleaseServer(release.releaseDir, PLUGIN_VERSION, async (releaseBaseUrl) => {
-      await assert.rejects(
-        () => bootstrap.ensureRuntime("autoresearch.mjs", importerUrl, { releaseBaseUrl }),
-        new RegExp(
-          `Release tarball package version mismatch: expected ${escapeRegExp(PLUGIN_VERSION)}, got 0\\.0\\.0`,
         ),
       );
     });

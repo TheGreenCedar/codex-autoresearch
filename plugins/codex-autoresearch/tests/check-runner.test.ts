@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveSpawnCommand } from "../scripts/check-runner.js";
+import { PRODUCT_PHASE_TIMEOUT_SECONDS } from "../lib/checks/product-phase.js";
 import {
   dashboardExportAssetIssues,
   dashboardGeneratedDemoExport,
@@ -16,6 +17,10 @@ import {
   resolveNpmCommand,
 } from "../scripts/check.js";
 import { runProcess } from "./helpers/process.js";
+
+test("product gate leaves enough time for one isolated shard retry", () => {
+  assert.ok(PRODUCT_PHASE_TIMEOUT_SECONDS >= 1_800);
+});
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
   assert.throws(

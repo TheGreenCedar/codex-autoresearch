@@ -31,6 +31,7 @@ import {
   researchDirPathForSession,
   resolveSessionPaths,
 } from "./session-paths.js";
+import { isPathInside } from "./path-containment.js";
 
 export {
   appendJsonl,
@@ -139,20 +140,34 @@ export function readConfig(sessionCwd: string): LooseObject {
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
-export function resolveWorkDir(cwdArg?: string): {
+export function resolveWorkDir(
+  cwdArg?: string,
+  options: { allowOutsideWorkdir?: boolean } = {},
+): {
   sessionCwd: string;
   workDir: string;
   config: LooseObject;
+  sessionPaths: ReturnType<typeof resolveSessionPaths>;
 } {
   const sessionCwd = path.resolve(
     cwdArg || process.env.CODEX_AUTORESEARCH_WORKDIR || process.cwd(),
   );
   const config = readConfig(sessionCwd);
   const workDir = config.workingDir ? path.resolve(sessionCwd, config.workingDir) : sessionCwd;
+  if (!isPathInside(sessionCwd, workDir) && options.allowOutsideWorkdir !== true) {
+    throw new Error(
+      `Configured working directory is outside --cwd: ${workDir}. Pass --allow-outside-workdir to authorize it explicitly.`,
+    );
+  }
   if (!fs.existsSync(workDir) || !fs.statSync(workDir).isDirectory()) {
     throw new Error(`Working directory does not exist: ${workDir}`);
   }
-  return { sessionCwd, workDir, config };
+  return {
+    sessionCwd,
+    workDir,
+    config,
+    sessionPaths: resolveSessionPaths({ sessionCwd, workDir }),
+  };
 }
 
 export function bestMetric(runs: RunRecord[], direction: Direction | string): number | null {
