@@ -36,7 +36,6 @@ type DashboardCommandListOptions = {
 
 export interface DashboardRuntime {
   buildDriftReport?: typeof buildDriftReport;
-  dashboardCommands: (workDir: string, qualityGap?: UnknownRecord | null) => UnknownRecord[];
   dashboardViewModel: (
     workDir: string,
     config: UnknownRecord,
@@ -182,7 +181,7 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
     throw new Error(`No autoresearch.jsonl found in ${workDir}`);
   }
   const output = resolveOutputInside(workDir, args.output);
-  const commands = runtime.dashboardCommands(workDir);
+  const commands = dashboardCommands(workDir);
   const generatedAt = new Date().toISOString();
   const showcaseExport = boolOption(args.showcase ?? args.showcaseMode, false);
   const deliveryMode = showcaseExport ? "showcase" : "static-export";
@@ -332,7 +331,7 @@ export async function serveDashboard(args: UnknownRecord, runtime: DashboardRunt
           detail: "Live refresh is available; actions stay in CLI.",
         },
         refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
-        commands: runtime.dashboardCommands(workDir),
+        commands: dashboardCommands(workDir),
         settings: buildDashboardSettings(config, dashboardContext),
         viewModel: {},
       });

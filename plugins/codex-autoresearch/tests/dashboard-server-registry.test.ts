@@ -70,26 +70,15 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
 
       let serveAttempts = 0;
       const runtime = {
-        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
         buildDriftReport: async () => {
           throw new Error("registry reuse should not build drift before returning");
         },
-        dashboardCommands: () => [],
-        dashboardHtml: () => "",
-        dashboardSettings: () => ({}),
         dashboardViewModel: async () => ({}),
-        operationProgress: (options) => options,
-        pluginRoot: process.cwd(),
-        pluginVersion: PLUGIN_VERSION,
-        readJsonl: () => [],
-        resolveOutputInside: () => "",
         resolveWorkDir: () => ({ workDir: dir, config: {}, sessionPaths }),
         serveAutoresearch: async () => {
           serveAttempts += 1;
           throw new Error("healthy registry should be reused");
         },
-        shellQuote: JSON.stringify,
-        writeFile: async () => {},
       };
 
       const result = await serveDashboard({ cwd: dir }, runtime);
@@ -150,17 +139,8 @@ test("serve dashboard command does not reuse target-cwd registry for wrapper ses
 
       let serveAttempts = 0;
       const runtime = {
-        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
         buildDriftReport: async () => ({ ok: true }),
-        dashboardCommands: () => [],
-        dashboardHtml: () => "",
-        dashboardSettings: () => ({}),
         dashboardViewModel: async () => ({}),
-        operationProgress: (options) => options,
-        pluginRoot: process.cwd(),
-        pluginVersion: PLUGIN_VERSION,
-        readJsonl: () => [],
-        resolveOutputInside: () => "",
         resolveWorkDir: () => ({ workDir: target, config: {}, sessionPaths: wrapperSessionPaths }),
         serveAutoresearch: async () => {
           serveAttempts += 1;
@@ -172,8 +152,6 @@ test("serve dashboard command does not reuse target-cwd registry for wrapper ses
             workDir: target,
           };
         },
-        shellQuote: JSON.stringify,
-        writeFile: async () => {},
       };
 
       const result = await serveDashboard({ cwd: wrapper }, runtime);
@@ -202,17 +180,8 @@ test("serve dashboard resolves config fresh for deferred live view model", async
       },
     };
     const runtime = {
-      boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
       buildDriftReport: async () => ({ ok: true, status: "fresh" }),
-      dashboardCommands: () => [],
-      dashboardHtml: () => "",
-      dashboardSettings: (config) => ({ version: config.version }),
       dashboardViewModel: async (_workDir, config) => ({ summary: { runs: config.version } }),
-      operationProgress: (options) => options,
-      pluginRoot: process.cwd(),
-      pluginVersion: PLUGIN_VERSION,
-      readJsonl: () => [],
-      resolveOutputInside: () => "",
       resolveWorkDir: () => ({
         workDir: dir,
         config: { dashboardRefreshSeconds: 1, version: configVersion },
@@ -228,8 +197,6 @@ test("serve dashboard resolves config fresh for deferred live view model", async
           workDir: dir,
         };
       },
-      shellQuote: JSON.stringify,
-      writeFile: async () => {},
     };
 
     await serveDashboard({ cwd: dir, port: 0 }, runtime);

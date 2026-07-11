@@ -1,7 +1,8 @@
 import type { UnknownRecord } from "../types/json.js";
+import path from "node:path";
 import type { ProcessRunResult } from "../runner.js";
 import { runProcess, runShell, tailText } from "../runner.js";
-import { normalizeBoundedLaneRecommendation } from "../lane-briefs.js";
+import { normalizeBoundedLaneRecommendation, summarizeLaneLessons } from "../lane-briefs.js";
 import {
   approvalRecordsFromLedger,
   buildApprovalRecord,
@@ -9,47 +10,31 @@ import {
 } from "../approval-ledger.js";
 import { boolOption, positiveIntegerOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { defaultCommandShell, quoteShellArg } from "../command-rendering.js";
+import { displayGitPath } from "../git-paths.js";
+import { gitDirtyPathDetails, gitOutput, insideGitRepo, runGit } from "../git-private-state.js";
+import { normalizeRelativePaths } from "../literal-paths.js";
+import {
+  buildParallelOrchestrationContext,
+  latestLaneResults,
+  normalizeParallelLane,
+} from "../parallel-orchestration.js";
+import { resolvePackageRoot } from "../runtime-paths.js";
 import { buildDashboardSettings } from "./dashboard.js";
 import { currentState } from "../session-core.js";
 import { appendJsonl, readJsonl } from "../session-records.js";
 
 export interface LaneRunnerRuntime {
-  assertNoDirtyPathsOutsideWriteScope: (workDir: string, writeScope: string[]) => Promise<void>;
-  assertWriteScopeIntegrity: (
-    workDir: string,
-    writeScope: string[],
-    before: UnknownRecord,
-  ) => Promise<void>;
-  buildParallelOrchestrationContext: (options: {
-    workDir: string;
-    state: UnknownRecord;
-    config: UnknownRecord;
-    settings?: UnknownRecord;
-  }) => UnknownRecord & { parallelLanes: UnknownRecord[] };
-  commandLooksUnsafeForWriteScope: (command: string) => boolean;
-  latestLaneResults: (workDir: string, segment?: number | null) => UnknownRecord[];
-  normalizeLaneMode: (value: unknown, fallback: string) => string;
-  normalizeParallelLane: (
-    lane: UnknownRecord,
-    index: number,
-    config: UnknownRecord,
-  ) => UnknownRecord;
-  normalizeRelativePaths: (paths: unknown, optionName?: string) => string[];
-  resolveLaneWorktree: (workDir: string, worktreePath: string) => Promise<string>;
   runShell?: typeof runShell;
-  synthesizeLaneDecision: (options: {
-    workDir: string;
-    laneResults: UnknownRecord[];
-    fallbackLane?: UnknownRecord | null;
-  }) => UnknownRecord;
-  writeScopeSnapshot: (workDir: string) => Promise<UnknownRecord>;
 }
 
-export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime) {
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+
+export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime = {}) {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const settings = buildDashboardSettings(config);
-  const { parallelLanes: lanes } = runtime.buildParallelOrchestrationContext({
+  const { parallelLanes: lanes } = buildParallelOrchestrationContext({
     workDir,
     state,
     config,
@@ -61,8 +46,8 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
   const lane =
     lanes.find(
       (candidate: UnknownRecord) => candidate.id === laneId || candidate.label === laneId,
-    ) || runtime.normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
-  const mode = runtime.normalizeLaneMode(args.mode, String(lane.mode || "read_only_scout"));
+    ) || normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
+  const mode = normalizeLaneMode(args.mode, String(lane.mode || "read_only_scout"));
   const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
   const command = String(args.command || "").trim();
   const humanApproval = boolOption(
@@ -90,7 +75,7 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
       300,
       "--time-budget-seconds",
     ) || 300;
-  const writeScope = runtime.normalizeRelativePaths(
+  const writeScope = normalizeRelativePaths(
     args.write_scope ?? args.writeScope ?? args.commit_paths ?? args.commitPaths,
     "--write-scope",
   );
@@ -121,7 +106,7 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
     !worktreePath &&
     writeScope.length > 0 &&
     command &&
-    runtime.commandLooksUnsafeForWriteScope(command)
+    commandLooksUnsafeForWriteScope(command)
   ) {
     throw new Error(
       "Implementation lane --write-scope cannot run git cleanup, history, or stash commands in the main checkout; use a separate --worktree.",
@@ -130,7 +115,7 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
 
   const runCwd =
     mode === "implementation" && worktreePath
-      ? await runtime.resolveLaneWorktree(workDir, worktreePath)
+      ? await resolveLaneWorktree(workDir, worktreePath)
       : workDir;
   const beforeStatus =
     mode === "read_only_scout" && command && !dryRun
@@ -138,8 +123,8 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
       : null;
   let writeScopeBefore: UnknownRecord | null = null;
   if (mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun) {
-    await runtime.assertNoDirtyPathsOutsideWriteScope(workDir, writeScope);
-    writeScopeBefore = await runtime.writeScopeSnapshot(workDir);
+    await assertNoDirtyPathsOutsideWriteScope(workDir, writeScope);
+    writeScopeBefore = await writeScopeSnapshot(workDir);
   }
   let commandResult: UnknownRecord | null = null;
   if (command && !dryRun) {
@@ -194,7 +179,7 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
       }
     }
     if (writeScopeBefore) {
-      await runtime.assertWriteScopeIntegrity(workDir, writeScope, writeScopeBefore);
+      await assertWriteScopeIntegrity(workDir, writeScope, writeScopeBefore);
     }
   }
 
@@ -291,22 +276,23 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
     },
     result,
   };
-  const existingResults = runtime.latestLaneResults(workDir, state.segment);
+  const existingResults = latestLaneResults(workDir, state.segment);
   const laneResults = dryRun ? existingResults : [...existingResults, entry];
-  const coordinatorRecommendation = runtime.synthesizeLaneDecision({
+  const coordinatorRecommendation = synthesizeLaneDecision({
     workDir,
     laneResults,
     fallbackLane: lane,
   });
   if (mode === "big_idea" && !approvalSatisfied) {
-    coordinatorRecommendation.status = "awaiting_human_approval";
-    coordinatorRecommendation.nextAction =
-      "Ask the operator to approve or reject the big-idea architecture recommendation before starting an implementation lane or measured packet.";
-    coordinatorRecommendation.measuredPacket =
-      "Blocked until human approval is recorded for this big-idea lane.";
-    coordinatorRecommendation.commandHint = "";
-    coordinatorRecommendation.approvalRequired = true;
-    coordinatorRecommendation.approvalGate = result.approvalGate;
+    Object.assign(coordinatorRecommendation, {
+      status: "awaiting_human_approval",
+      nextAction:
+        "Ask the operator to approve or reject the big-idea architecture recommendation before starting an implementation lane or measured packet.",
+      measuredPacket: "Blocked until human approval is recorded for this big-idea lane.",
+      commandHint: "",
+      approvalRequired: true,
+      approvalGate: result.approvalGate,
+    });
   }
   if (!dryRun) {
     if (approvalGate && humanApproval) {
@@ -329,6 +315,182 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
     result,
     coordinatorRecommendation,
   };
+}
+
+function normalizeLaneMode(value: unknown, fallback: string) {
+  const raw = String(value || fallback || "read_only_scout")
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (["read_only", "readonly", "scout", "read_only_scout"].includes(raw)) {
+    return "read_only_scout";
+  }
+  if (["implementation", "isolated_worktree", "mutating"].includes(raw)) return "implementation";
+  if (["big_idea", "bigidea", "architecture", "distant"].includes(raw)) return "big_idea";
+  throw new Error("--mode must be read_only_scout, implementation, or big_idea.");
+}
+
+const LANE_GIT_WRITE_SCOPE_UNSAFE =
+  "am|apply|bisect|checkout|cherry-pick|clean|commit|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag|worktree";
+const LANE_PACKAGE_MANAGER_MUTATING =
+  "(?:npm\\s+(?:ci|install|i|update|uninstall|remove|add)|pnpm\\s+(?:add|install|remove|update|uninstall)|yarn\\s+(?:add|install|remove|upgrade|uninstall)|bun\\s+(?:add|install|remove))";
+
+function commandLooksUnsafeForWriteScope(command: string) {
+  const packageMutating = new RegExp(
+    `(^|[\\s;&|])${LANE_PACKAGE_MANAGER_MUTATING}(\\s|$)`,
+    "i",
+  ).test(command);
+  const gitUnsafeForWriteScope = new RegExp(
+    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_WRITE_SCOPE_UNSAFE})\\b`,
+    "i",
+  ).test(command);
+  return gitUnsafeForWriteScope || packageMutating;
+}
+
+async function gitTopLevel(cwd: string) {
+  const result = await runGit(["rev-parse", "--show-toplevel"], cwd);
+  if (result.code !== 0) throw new Error(`Git worktree lookup failed: ${gitOutput(result, cwd)}`);
+  return path.resolve(cwd, result.stdout.trim());
+}
+
+async function gitCommonDirectory(cwd: string) {
+  const result = await runGit(["rev-parse", "--git-common-dir"], cwd);
+  if (result.code !== 0) throw new Error(`Git common-dir lookup failed: ${gitOutput(result, cwd)}`);
+  return path.resolve(cwd, result.stdout.trim());
+}
+
+async function gitRef(cwd: string, ref: string) {
+  const result = await runGit(["rev-parse", "--verify", ref], cwd);
+  return result.code === 0 ? result.stdout.trim() : "";
+}
+
+async function resolveLaneWorktree(workDir: string, worktreePath: string) {
+  const runCwd = path.resolve(workDir, worktreePath);
+  const [baseTopLevel, laneInsideGit] = await Promise.all([
+    gitTopLevel(workDir),
+    insideGitRepo(runCwd).catch(() => false),
+  ]);
+  if (!laneInsideGit) {
+    throw new Error(`Implementation lane worktree must be an existing Git worktree: ${runCwd}`);
+  }
+  const laneTopLevel = await gitTopLevel(runCwd);
+  if (path.resolve(baseTopLevel) === path.resolve(laneTopLevel)) {
+    throw new Error("Implementation lane --worktree must point at a separate Git worktree.");
+  }
+  const [baseCommonDir, laneCommonDir] = await Promise.all([
+    gitCommonDirectory(baseTopLevel),
+    gitCommonDirectory(laneTopLevel),
+  ]);
+  if (path.resolve(baseCommonDir) !== path.resolve(laneCommonDir)) {
+    throw new Error("Implementation lane --worktree must belong to the same Git repository.");
+  }
+  return laneTopLevel;
+}
+
+function dirtyPathWithinScope(relativePath: string, writeScope: string[]) {
+  return writeScope.some((scope) => relativePath === scope || relativePath.startsWith(`${scope}/`));
+}
+
+async function dirtyPathsOutsideWriteScope(workDir: string, writeScope: string[]) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  return (await gitDirtyPathDetails(workDir))
+    .map((entry) => entry.path)
+    .filter((relativePath) => !dirtyPathWithinScope(relativePath, writeScope));
+}
+
+async function assertNoDirtyPathsOutsideWriteScope(workDir: string, writeScope: string[]) {
+  const outside = await dirtyPathsOutsideWriteScope(workDir, writeScope);
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside
+        .slice(0, 8)
+        .map(displayGitPath)
+        .join(", ")}`,
+    );
+  }
+}
+
+async function writeScopeSnapshot(workDir: string) {
+  if (!(await insideGitRepo(workDir).catch(() => false))) {
+    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
+  }
+  return {
+    head: await gitRef(workDir, "HEAD"),
+    stash: await gitRef(workDir, "refs/stash"),
+  };
+}
+
+async function assertWriteScopeIntegrity(
+  workDir: string,
+  writeScope: string[],
+  before: UnknownRecord,
+) {
+  const after = await writeScopeSnapshot(workDir);
+  if (before.head !== after.head) {
+    throw new Error(
+      "Implementation lane --write-scope cannot move HEAD; use a separate --worktree for commits or history changes.",
+    );
+  }
+  if (before.stash !== after.stash) {
+    throw new Error(
+      "Implementation lane --write-scope cannot create or change git stash entries; use a separate --worktree for hidden cleanup.",
+    );
+  }
+  const outside = await dirtyPathsOutsideWriteScope(workDir, writeScope);
+  if (outside.length) {
+    throw new Error(
+      `Implementation lane changed files outside --write-scope: ${outside
+        .slice(0, 8)
+        .map(displayGitPath)
+        .join(", ")}`,
+    );
+  }
+}
+
+function synthesizeLaneDecision({
+  workDir,
+  laneResults,
+  fallbackLane,
+}: {
+  workDir: string;
+  laneResults: UnknownRecord[];
+  fallbackLane?: UnknownRecord | null;
+}) {
+  const completed = laneResults
+    .filter((entry) => selectableLaneResult(entry.result as UnknownRecord | null | undefined))
+    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  const selected = completed.find((entry) => {
+    const result = entry.result as UnknownRecord | undefined;
+    return Boolean(result?.recommendation || result?.summary);
+  });
+  const selectedResult = selected?.result as UnknownRecord | undefined;
+  const nextAction =
+    selectedResult?.recommendation ||
+    selectedResult?.summary ||
+    fallbackLane?.nextActionHint ||
+    "Run one read-only scout lane, then choose one isolated implementation candidate for the next measured packet.";
+  const shell = defaultCommandShell();
+  return {
+    status: selected ? "ready" : "needs_lane_result",
+    sourceLane: (selected?.lane as UnknownRecord | undefined)?.id || fallbackLane?.id || "",
+    nextAction,
+    lessonsToAvoid: summarizeLaneLessons(laneResults),
+    measuredPacket:
+      "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
+    commandHint: `node ${quoteShellArg(
+      path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+      shell,
+    )} next --cwd ${quoteShellArg(workDir, shell)} --compact`,
+  };
+}
+
+function selectableLaneResult(result: UnknownRecord | null | undefined): boolean {
+  const status = String(result?.status || "").toLowerCase();
+  return (
+    (status === "completed" || status === "approved") &&
+    (result?.evidenceAccepted === true || Boolean(result?.recommendation || result?.summary))
+  );
 }
 
 type ReadOnlyGitPolicy = {

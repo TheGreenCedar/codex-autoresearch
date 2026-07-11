@@ -109,7 +109,6 @@ import { artifactList } from "../lib/evidence-registry.js";
 import { isPathInside } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { displayGitPath } from "../lib/git-paths.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
 import { fixedControlBlockForCommand } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
@@ -125,22 +124,13 @@ import {
   replacementNextCommandForLastRun,
   resolveLastRunPath,
 } from "../lib/last-run-store.js";
-import {
-  gitDirtyPathDetails,
-  gitOutput,
-  insideGitRepo,
-  privateStateWriteRoot,
-  runGit as git,
-} from "../lib/git-private-state.js";
+import { privateStateWriteRoot } from "../lib/git-private-state.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
-import { summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
 import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
   buildParallelLanes,
   buildParallelOrchestrationContext,
-  latestLaneResults,
-  normalizeParallelLane,
 } from "../lib/parallel-orchestration.js";
 import {
   benchmarkIntegrityPreflight,
@@ -293,20 +283,18 @@ const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
 
 async function exportDashboard(args: LooseObject): Promise<LooseObject> {
   const { exportDashboard: runExportDashboard } = await import("../lib/commands/dashboard.js");
-  return await runExportDashboard(args, dashboardRuntime());
+  return await runExportDashboard(args, {
+    dashboardViewModel,
+    serveAutoresearch: serveAutoresearchLazy,
+  });
 }
 
 async function serveDashboard(args: LooseObject): Promise<LooseObject> {
   const { serveDashboard: runServeDashboard } = await import("../lib/commands/dashboard.js");
-  return await runServeDashboard(args, dashboardRuntime());
-}
-
-function dashboardRuntime() {
-  return {
-    dashboardCommands,
+  return await runServeDashboard(args, {
     dashboardViewModel,
     serveAutoresearch: serveAutoresearchLazy,
-  };
+  });
 }
 
 async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
@@ -338,19 +326,7 @@ async function sessionForensics(args: LooseObject): Promise<LooseObject> {
 
 async function laneRunner(args: LooseObject): Promise<LooseObject> {
   const { laneRunner: runLaneRunner } = await import("../lib/commands/lane-runner.js");
-  return await runLaneRunner(args, {
-    assertNoDirtyPathsOutsideWriteScope,
-    assertWriteScopeIntegrity,
-    buildParallelOrchestrationContext,
-    commandLooksUnsafeForWriteScope,
-    latestLaneResults,
-    normalizeLaneMode,
-    normalizeParallelLane,
-    normalizeRelativePaths,
-    resolveLaneWorktree,
-    synthesizeLaneDecision,
-    writeScopeSnapshot,
-  });
+  return await runLaneRunner(args);
 }
 
 function usage(options: { all?: boolean; command?: string | null } = {}) {
@@ -4837,191 +4813,6 @@ function formatJsonl(records: Array<Record<string, unknown>>): string {
 
 function ledgerBackupTimestamp(date = new Date()): string {
   return date.toISOString().replace(/[:.]/g, "-");
-}
-
-function normalizeLaneMode(value: unknown, fallback: string) {
-  const raw = String(value || fallback || "read_only_scout")
-    .toLowerCase()
-    .replace(/-/g, "_");
-  if (["read_only", "readonly", "scout", "read_only_scout"].includes(raw)) return "read_only_scout";
-  if (["implementation", "isolated_worktree", "mutating"].includes(raw)) return "implementation";
-  if (["big_idea", "bigidea", "architecture", "distant"].includes(raw)) return "big_idea";
-  throw new Error("--mode must be read_only_scout, implementation, or big_idea.");
-}
-
-type LaneCommandSafety = {
-  unsafeForWriteScope: boolean;
-};
-
-const LANE_GIT_WRITE_SCOPE_UNSAFE =
-  "am|apply|bisect|checkout|cherry-pick|clean|commit|merge|pull|push|rebase|reset|restore|revert|stash|switch|tag|worktree";
-const LANE_PACKAGE_MANAGER_MUTATING =
-  "(?:npm\\s+(?:ci|install|i|update|uninstall|remove|add)|pnpm\\s+(?:add|install|remove|update|uninstall)|yarn\\s+(?:add|install|remove|upgrade|uninstall)|bun\\s+(?:add|install|remove))";
-
-function classifyLaneCommandSafety(command: string): LaneCommandSafety {
-  const packageMutating = new RegExp(
-    `(^|[\\s;&|])${LANE_PACKAGE_MANAGER_MUTATING}(\\s|$)`,
-    "i",
-  ).test(command);
-  const gitUnsafeForWriteScope = new RegExp(
-    `(^|[\\s;&|])git\\b[^\\r\\n;&|]*\\b(${LANE_GIT_WRITE_SCOPE_UNSAFE})\\b`,
-    "i",
-  ).test(command);
-  return {
-    unsafeForWriteScope: gitUnsafeForWriteScope || packageMutating,
-  };
-}
-
-function commandLooksUnsafeForWriteScope(command: string) {
-  return classifyLaneCommandSafety(command).unsafeForWriteScope;
-}
-
-async function gitTopLevel(cwd: string) {
-  const result = await git(["rev-parse", "--show-toplevel"], cwd);
-  if (result.code !== 0) throw new Error(`Git worktree lookup failed: ${gitOutput(result, cwd)}`);
-  return path.resolve(cwd, result.stdout.trim());
-}
-
-async function gitCommonDirectory(cwd: string) {
-  const result = await git(["rev-parse", "--git-common-dir"], cwd);
-  if (result.code !== 0) throw new Error(`Git common-dir lookup failed: ${gitOutput(result, cwd)}`);
-  const value = result.stdout.trim();
-  return path.resolve(cwd, value);
-}
-
-async function gitRef(cwd: string, ref: string) {
-  const result = await git(["rev-parse", "--verify", ref], cwd);
-  return result.code === 0 ? result.stdout.trim() : "";
-}
-
-async function resolveLaneWorktree(workDir: string, worktreePath: string) {
-  const runCwd = path.resolve(workDir, worktreePath);
-  const [baseTopLevel, laneInsideGit] = await Promise.all([
-    gitTopLevel(workDir),
-    insideGitRepo(runCwd).catch(() => false),
-  ]);
-  if (!laneInsideGit) {
-    throw new Error(`Implementation lane worktree must be an existing Git worktree: ${runCwd}`);
-  }
-  const laneTopLevel = await gitTopLevel(runCwd);
-  if (path.resolve(baseTopLevel) === path.resolve(laneTopLevel)) {
-    throw new Error("Implementation lane --worktree must point at a separate Git worktree.");
-  }
-  const [baseCommonDir, laneCommonDir] = await Promise.all([
-    gitCommonDirectory(baseTopLevel),
-    gitCommonDirectory(laneTopLevel),
-  ]);
-  if (path.resolve(baseCommonDir) !== path.resolve(laneCommonDir)) {
-    throw new Error("Implementation lane --worktree must belong to the same Git repository.");
-  }
-  return laneTopLevel;
-}
-
-function dirtyPathWithinScope(relativePath: string, writeScope: string[]) {
-  return writeScope.some((scope) => relativePath === scope || relativePath.startsWith(`${scope}/`));
-}
-
-async function assertDirtyPathsWithinWriteScope(workDir: string, writeScope: string[]) {
-  if (!(await insideGitRepo(workDir).catch(() => false))) {
-    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
-  }
-  const dirty = await gitDirtyPathDetails(workDir);
-  const outside = dirty
-    .map((entry: any) => entry.path)
-    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
-  if (outside.length) {
-    throw new Error(
-      `Implementation lane changed files outside --write-scope: ${outside
-        .slice(0, 8)
-        .map(displayGitPath)
-        .join(", ")}`,
-    );
-  }
-}
-
-async function assertNoDirtyPathsOutsideWriteScope(workDir: string, writeScope: string[]) {
-  if (!(await insideGitRepo(workDir).catch(() => false))) {
-    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
-  }
-  const dirty = await gitDirtyPathDetails(workDir);
-  const outside = dirty
-    .map((entry: any) => entry.path)
-    .filter((relativePath: string) => !dirtyPathWithinScope(relativePath, writeScope));
-  if (outside.length) {
-    throw new Error(
-      `Implementation lane --write-scope cannot start with dirty files outside scope: ${outside
-        .slice(0, 8)
-        .map(displayGitPath)
-        .join(", ")}`,
-    );
-  }
-}
-
-async function writeScopeSnapshot(workDir: string) {
-  if (!(await insideGitRepo(workDir).catch(() => false))) {
-    throw new Error("Implementation lane --write-scope verification requires a Git worktree.");
-  }
-  return {
-    head: await gitRef(workDir, "HEAD"),
-    stash: await gitRef(workDir, "refs/stash"),
-  };
-}
-
-async function assertWriteScopeIntegrity(
-  workDir: string,
-  writeScope: string[],
-  before: LooseObject,
-) {
-  const after = await writeScopeSnapshot(workDir);
-  if (before.head !== after.head) {
-    throw new Error(
-      "Implementation lane --write-scope cannot move HEAD; use a separate --worktree for commits or history changes.",
-    );
-  }
-  if (before.stash !== after.stash) {
-    throw new Error(
-      "Implementation lane --write-scope cannot create or change git stash entries; use a separate --worktree for hidden cleanup.",
-    );
-  }
-  await assertDirtyPathsWithinWriteScope(workDir, writeScope);
-}
-
-function synthesizeLaneDecision({
-  workDir,
-  laneResults,
-  fallbackLane,
-}: {
-  workDir: string;
-  laneResults: LooseObject[];
-  fallbackLane?: LooseObject | null;
-}) {
-  const completed = laneResults
-    .filter((entry) => selectableLaneResult(entry?.result))
-    .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
-  const selected = completed.find((entry) => entry.result?.recommendation || entry.result?.summary);
-  const nextAction =
-    selected?.result?.recommendation ||
-    selected?.result?.summary ||
-    fallbackLane?.nextActionHint ||
-    "Run one read-only scout lane, then choose one isolated implementation candidate for the next measured packet.";
-  const lessonsToAvoid = summarizeLaneLessons(laneResults);
-  return {
-    status: selected ? "ready" : "needs_lane_result",
-    sourceLane: selected?.lane?.id || fallbackLane?.id || "",
-    nextAction,
-    lessonsToAvoid,
-    measuredPacket:
-      "Run exactly one next measured packet for the selected action, then log keep/discard/crash with ASI.",
-    commandHint: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact`,
-  };
-}
-
-function selectableLaneResult(result: LooseObject | null | undefined): boolean {
-  const status = String(result?.status || "").toLowerCase();
-  return (
-    (status === "completed" || status === "approved") &&
-    (result?.evidenceAccepted === true || Boolean(result?.recommendation || result?.summary))
-  );
 }
 
 async function researchFanout(args: LooseObject) {

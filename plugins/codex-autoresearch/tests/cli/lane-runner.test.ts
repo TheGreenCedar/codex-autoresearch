@@ -25,66 +25,57 @@ const delimitedItems = (label: string, count: number, length: number) =>
   Array.from({ length: count }, (_, index) => longText(`${label}-${index + 1}`, length)).join("; ");
 
 test("lane-runner stops before post-run probes when termination is unproven", async () => {
-  let postRunProbeCalled = false;
-  let synthesisCalled = false;
-  const runtime = {
-    assertNoDirtyPathsOutsideWriteScope: async () => {},
-    assertWriteScopeIntegrity: async () => {
-      postRunProbeCalled = true;
-    },
-    buildParallelOrchestrationContext: () => ({
-      parallelLanes: [{ id: "unsafe-lane", label: "Unsafe lane", mode: "implementation" }],
-    }),
-    commandLooksUnsafeForWriteScope: () => false,
-    latestLaneResults: () => [],
-    normalizeLaneMode: (value) => String(value),
-    normalizeParallelLane: (lane) => lane,
-    normalizeRelativePaths: (value) => (Array.isArray(value) ? value.map(String) : []),
-    resolveLaneWorktree: async (_workDir, worktreePath) => worktreePath,
-    runShell: async () =>
-      ({
-        exitCode: null,
-        timedOut: true,
-        terminationFailed: true,
-        termination: {
-          attempted: true,
-          escalated: true,
-          method: "none",
-          pid: 4242,
-          platform: process.platform,
-          proven: false,
-          reason: "injected_termination_failure",
-          remainingPids: [4242],
-          trackedPids: [4242],
-        },
-        durationSeconds: 1,
-        output: "partial output",
-      }) as never,
-    synthesizeLaneDecision: () => {
-      synthesisCalled = true;
-      return {};
-    },
-    writeScopeSnapshot: async () => ({}),
-  } satisfies LaneRunnerRuntime;
+  await withTempDir("autoresearch", "lane-runner-termination", async (dir) => {
+    await runGit(dir, ["init"]);
+    const init = await setupFixture(dir, {
+      name: "termination probe",
+      metricName: "quality_gap",
+    });
+    assert.equal(init.code, 0, init.stderr);
+    await runGit(dir, ["add", "-A"]);
+    await runGit(dir, ["commit", "-m", "base"]);
 
-  const result = await laneRunner(
-    {
-      cwd: process.cwd(),
-      laneId: "unsafe-lane",
-      mode: "implementation",
-      command: "node task.mjs",
-      writeScope: ["src"],
-      yes: true,
-    },
-    runtime,
-  );
+    const runtime = {
+      runShell: async () => {
+        await runGit(dir, ["commit", "--allow-empty", "-m", "would fail post-run integrity"]);
+        return {
+          exitCode: null,
+          timedOut: true,
+          terminationFailed: true,
+          termination: {
+            attempted: true,
+            escalated: true,
+            method: "none",
+            pid: 4242,
+            platform: process.platform,
+            proven: false,
+            reason: "injected_termination_failure",
+            remainingPids: [4242],
+            trackedPids: [4242],
+          },
+          durationSeconds: 1,
+          output: "partial output",
+        } as never;
+      },
+    } satisfies LaneRunnerRuntime;
 
-  assert.equal(result.ok, false);
-  assert.equal(result.code, "termination_failed");
-  assert.equal(result.result.commandResult.termination.pid, 4242);
-  assert.equal(result.coordinatorRecommendation.status, "blocked");
-  assert.equal(postRunProbeCalled, false);
-  assert.equal(synthesisCalled, false);
+    const result = await laneRunner(
+      {
+        cwd: dir,
+        laneId: "unsafe-lane",
+        mode: "implementation",
+        command: "node task.mjs",
+        writeScope: ["src"],
+        yes: true,
+      },
+      runtime,
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "termination_failed");
+    assert.equal(result.result.commandResult.termination.pid, 4242);
+    assert.equal(result.coordinatorRecommendation.status, "blocked");
+  });
 });
 
 test("lane-runner big_idea mode is read-only, approval-gated, and bounded", async () => {
