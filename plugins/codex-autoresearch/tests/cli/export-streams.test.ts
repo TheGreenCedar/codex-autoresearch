@@ -4,11 +4,11 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, runSpawnedCli, withTempDir } from "../helpers/cli-test-context.js";
+import { runCli, runSpawnedCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
 test("export refuses to write outside the working directory", async () => {
   await withTempDir("contained-export", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "contained export", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "contained export" });
     await runCli([
       "log",
       "--cwd",
@@ -29,7 +29,7 @@ test("export refuses to write outside the working directory", async () => {
 
 test("export refuses to write through linked directories outside the working directory", async (t) => {
   await withTempDir("linked-contained-export", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "linked export", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "linked export" });
     await runCli([
       "log",
       "--cwd",
@@ -72,7 +72,7 @@ test("export refuses to write through linked directories outside the working dir
 
 test("export is compact by default and full with json-full", async () => {
   await withTempDir("compact-export", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "compact export", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "compact export" });
     await runCli([
       "log",
       "--cwd",
@@ -103,7 +103,7 @@ test("export is compact by default and full with json-full", async () => {
 
 test("export progress writes stderr heartbeats without corrupting JSON stdout", async () => {
   await withTempDir("export-progress-json", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "export progress", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "export progress" });
 
     const result = await runSpawnedCli(["export", "--cwd", dir, "--json-full", "--progress"]);
     assert.equal(result.code, 0, result.stderr);
@@ -115,11 +115,11 @@ test("export progress writes stderr heartbeats without corrupting JSON stdout", 
 
 test("large benchmark output is capped and marked truncated", async () => {
   await withTempDir("large-output", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "large output", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "large output" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.outputTruncated, true);
     assert.ok(payload.tailOutput.length < 9000);
     assert.equal(payload.parsedPrimary, 1);
@@ -128,11 +128,11 @@ test("large benchmark output is capped and marked truncated", async () => {
 
 test("large no-newline benchmark tails do not hide early metrics", async () => {
   await withTempDir("large-no-newline-output", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "large no newline", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "large no newline" });
     const command = `${quoteForShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.outputTruncated, true);
     assert.ok(payload.tailOutput.length < 9000);
     assert.equal(payload.parsedPrimary, 2);
@@ -141,19 +141,11 @@ test("large no-newline benchmark tails do not hide early metrics", async () => {
 
 test("large metric streams retain bounded metrics and primary evidence", async () => {
   await withTempDir("large-metric-stream", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "large metric stream",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "large metric stream" });
     const command = `${quoteForShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.metricsTruncated, true);
     assert.equal(payload.parsedPrimary, 1);
     assert.equal(payload.parsedMetrics.seconds, 1);
@@ -163,15 +155,7 @@ test("large metric streams retain bounded metrics and primary evidence", async (
 
 test("large metric streams keep a primary metric outside retained output tails", async () => {
   await withTempDir("large-metric-primary-middle", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "large primary stream",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "large primary stream" });
     const emitter = path.join(dir, "emit-metrics.mjs");
     await writeFile(
       emitter,
@@ -191,9 +175,9 @@ test("large metric streams keep a primary metric outside retained output tails",
       "utf8",
     );
     const command = `${quoteForShell(process.execPath)} ${quoteForShell(emitter)}`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.ok, true);
     assert.equal(payload.metricsTruncated, true);
     assert.equal(payload.parsedPrimary, 7);

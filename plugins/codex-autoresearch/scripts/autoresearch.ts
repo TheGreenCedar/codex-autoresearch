@@ -53,6 +53,7 @@ import {
   resolveActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
+import { compatibilityErrorForCli } from "../lib/command-table.js";
 import {
   CliUsageError,
   cliDebugRequested,
@@ -297,7 +298,6 @@ type PartialResultsModule = typeof import("../lib/partial-results.js");
 type InspectCommandsModule = typeof import("../lib/commands/inspect.js");
 type LaneRunnerCommandModule = typeof import("../lib/commands/lane-runner.js");
 type PartialResultsCommandModule = typeof import("../lib/commands/partial-results.js");
-type IntegrationsModule = typeof import("../lib/integrations.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
 type InspectCommandHandlers = ReturnType<InspectCommandsModule["createInspectCommands"]>;
 
@@ -307,7 +307,6 @@ let partialResultsModulePromise: Promise<PartialResultsModule> | null = null;
 let inspectCommandsModulePromise: Promise<InspectCommandsModule> | null = null;
 let laneRunnerCommandModulePromise: Promise<LaneRunnerCommandModule> | null = null;
 let partialResultsCommandModulePromise: Promise<PartialResultsCommandModule> | null = null;
-let integrationsModulePromise: Promise<IntegrationsModule> | null = null;
 let liveServerModulePromise: Promise<LiveServerModule> | null = null;
 
 function dashboardViewModelModule(): Promise<DashboardViewModelModule> {
@@ -340,11 +339,6 @@ function partialResultsCommandModule(): Promise<PartialResultsCommandModule> {
   return partialResultsCommandModulePromise;
 }
 
-function integrationsModule(): Promise<IntegrationsModule> {
-  integrationsModulePromise ??= import("../lib/integrations.js");
-  return integrationsModulePromise;
-}
-
 function liveServerModule(): Promise<LiveServerModule> {
   liveServerModulePromise ??= import("../lib/live-server.js");
   return liveServerModulePromise;
@@ -372,12 +366,6 @@ async function discoverPartialResultCandidatesLazy(
   ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
 ): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
   return (await partialResultsModule()).discoverPartialResultCandidates(...args);
-}
-
-async function integrationsCommandLazy(
-  ...args: Parameters<IntegrationsModule["integrationsCommand"]>
-): Promise<Awaited<ReturnType<IntegrationsModule["integrationsCommand"]>>> {
-  return (await integrationsModule()).integrationsCommand(...args);
 }
 
 async function serveAutoresearchLazy(
@@ -6131,7 +6119,7 @@ async function configureSession(args: LooseObject) {
   };
 }
 
-async function initExperiment(args: LooseObject) {
+export async function initExperiment(args: LooseObject) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   if (!args.name) throw new Error("name is required");
   if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
@@ -9420,25 +9408,6 @@ async function nextExperimentWithActiveProgress(args: any) {
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
 }
 
-async function runStandaloneExperiment(args: LooseObject) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  return await runWithRequiredCleanup(
-    async () => {
-      const retainedProgress = await readActiveProgressSnapshot(workDir);
-      if (retainedProgress?.exitState === "termination_failed") {
-        const error = new Error(
-          "Prior process-tree termination is unproven. Verify the reported PID and descendants are absent, then clear retained progress before another run.",
-        ) as Error & { code: string };
-        error.code = "termination_failed";
-        throw error;
-      }
-      return await runExperiment(args);
-    },
-    () => deleteActiveProgressSnapshotIfSafe(workDir),
-    "Failed to remove active progress snapshot",
-  );
-}
-
 async function writeNextPreflightProgressSnapshot(
   workDir: string,
   args: LooseObject,
@@ -9629,6 +9598,8 @@ async function executeAutoresearchCli(
     );
     return;
   }
+  const migrationError = compatibilityErrorForCli(command);
+  if (migrationError) throw new CliUsageError(migrationError, command);
   await outsideWorkdirAuthorization.run(boolOption(args.allowOutsideWorkdir, false), async () => {
     const handlers = createCliCommandHandlers({
       benchmarkInspect,
@@ -9644,8 +9615,6 @@ async function executeAutoresearchCli(
       finalizePreview: buildFinalizePreview,
       gapCandidates: buildGapCandidates,
       guidedSetup,
-      initExperiment,
-      integrationsCommand: integrationsCommandLazy,
       interactiveSetup,
       logExperiment,
       ledgerDoctor,
@@ -9663,7 +9632,6 @@ async function executeAutoresearchCli(
       recipeCommand,
       researchFanout,
       laneRunner,
-      runExperiment: runStandaloneExperiment,
       serveDashboard,
       setupPlan,
       researchStart,
@@ -9673,7 +9641,7 @@ async function executeAutoresearchCli(
     const execute = async () => {
       try {
         const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
-        if (command !== "next" && command !== "run") {
+        if (command !== "next") {
           const evidence = terminationFailureEvidence(outcome.result);
           if (evidence) {
             const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
@@ -9716,8 +9684,6 @@ function requiresSessionMutationLock(command: string, args: LooseObject): boolea
   }
   if (command === "partial-results") return boolOption(args.record, false);
   if (command === "session-forensics") return boolOption(args.apply, false);
-  if (command === "integrations")
-    return !["list", "status", "doctor"].includes(String(args._[1] || "list"));
   return new Set([
     "setup",
     "research-setup",
@@ -9729,8 +9695,6 @@ function requiresSessionMutationLock(command: string, args: LooseObject): boolea
     "checks-inspect",
     "config",
     "finalize-current-tree",
-    "init",
-    "run",
     "next",
     "log",
     "new-segment",

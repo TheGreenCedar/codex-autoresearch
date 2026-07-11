@@ -4,11 +4,11 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("research-fanout records generic parallel lanes without creating a bespoke metric", async () => {
   await withTempDir("research-fanout", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "fanout", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "fanout", metricName: "quality_gap" });
     await runCli([
       "log",
       "--cwd",
@@ -59,7 +59,7 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
 
 test("lane-runner records scout advice without claiming worktree containment", async () => {
   await withTempDir("lane-runner-read-only", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
 
     const result = await runCli([
@@ -107,7 +107,7 @@ test("lane-runner records scout advice without claiming worktree containment", a
 
 test("lane-runner records big-idea lanes as approval-gated advice only", async () => {
   await withTempDir("lane-runner-big-idea", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "big idea", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "big idea", metricName: "quality_gap" });
 
     const blockedCommand = await runCli([
       "lane-runner",
@@ -160,17 +160,10 @@ test("lane-runner records big-idea lanes as approval-gated advice only", async (
 
 test("empty lane-runner records are planned breadcrumbs, not watchdog progress", async () => {
   await withTempDir("lane-runner-empty-planned", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "lane watchdog",
-      "--metric-name",
-      "quality_gap",
-      "--max-iterations",
-      "100",
-    ]);
+    await setupFixture(dir, {
+      name: "lane watchdog",
+      metricName: "quality_gap",
+    });
     const oldTimestamp = Date.now() - 10 * 60 * 60 * 1000;
     await writeFile(
       path.join(dir, "autoresearch.jsonl"),
@@ -241,7 +234,7 @@ test("empty lane-runner records are planned breadcrumbs, not watchdog progress",
 
 test("lane-runner blocks implementation lanes without a declared write boundary", async () => {
   await withTempDir("lane-runner-isolation", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
 
     const result = await runCli([
@@ -263,7 +256,7 @@ test("lane-runner blocks implementation lanes without a declared write boundary"
 
 test("lane-runner rejects missing and foreign implementation worktrees", async () => {
   await withTempDir("lane-runner-worktree-edges", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
@@ -322,7 +315,7 @@ test("lane-runner rejects missing and foreign implementation worktrees", async (
 
 test("lane-runner allows a sibling implementation worktree", async () => {
   await withTempDir("lane-runner-worktree-pass", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
@@ -358,7 +351,7 @@ test("lane-runner allows a sibling implementation worktree", async () => {
 
 test("lane-runner rejects the main checkout as an implementation worktree", async () => {
   await withTempDir("lane-runner-main-worktree", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
@@ -386,7 +379,7 @@ test("lane-runner rejects the main checkout as an implementation worktree", asyn
 
 test("lane-runner blocks implementation commands that escape write scope", async () => {
   await withTempDir("lane-runner-write-scope", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await mkdir(path.join(dir, "src"), { recursive: true });
     await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
     await git(dir, ["init"]);
@@ -418,7 +411,7 @@ test("lane-runner blocks implementation commands that escape write scope", async
 
 test("lane-runner blocks write-scope commands that hide changes in commits", async () => {
   await withTempDir("lane-runner-write-scope-commit", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await mkdir(path.join(dir, "src"), { recursive: true });
     await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
     await git(dir, ["init"]);
@@ -457,7 +450,7 @@ test("lane-runner blocks write-scope mutators before execution", async () => {
   ];
   for (const [command, pattern] of blockedCommands) {
     await withTempDir("lane-runner-write-scope-mutator", async (dir) => {
-      await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+      await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
       await mkdir(path.join(dir, "src"), { recursive: true });
       await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
       await git(dir, ["init"]);
@@ -493,7 +486,7 @@ test("lane-runner blocks write-scope mutators before execution", async () => {
 
 test("lane-runner blocks write-scope cleanup commands in the main checkout", async () => {
   await withTempDir("lane-runner-write-scope-cleanup", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await mkdir(path.join(dir, "src"), { recursive: true });
     await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
     await git(dir, ["init"]);
@@ -525,7 +518,7 @@ test("lane-runner blocks write-scope cleanup commands in the main checkout", asy
 
 test("lane-runner refuses write-scope when unrelated dirty files already exist", async () => {
   await withTempDir("lane-runner-write-scope-pre-dirty", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await mkdir(path.join(dir, "src"), { recursive: true });
     await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
     await writeFile(path.join(dir, "outside.txt"), "before\n", "utf8");
@@ -559,7 +552,7 @@ test("lane-runner refuses write-scope when unrelated dirty files already exist",
 
 test("lane-runner treats the source of a hostile rename as dirty outside write scope", async () => {
   await withTempDir("lane-runner-write-scope-hostile-rename", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await mkdir(path.join(dir, "src"), { recursive: true });
     await writeFile(path.join(dir, "src", "owned.txt"), "before\n", "utf8");
     const original = process.platform === "win32" ? "outside 雪.txt" : "outside -> 雪.txt";
@@ -596,7 +589,7 @@ test("lane-runner treats the source of a hostile rename as dirty outside write s
 
 test("lane-runner ignores completed lane results from older segments", async () => {
   await withTempDir("lane-runner-segment-results", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "first segment", metricName: "quality_gap" });
     await runCli([
       "log",
       "--cwd",
@@ -644,7 +637,7 @@ test("lane-runner ignores completed lane results from older segments", async () 
 
 test("lane-runner synthesizes completed lane results into one next action", async () => {
   await withTempDir("lane-runner-synthesis", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lane runner", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "lane runner", metricName: "quality_gap" });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
 
     const result = await runCli([
@@ -678,7 +671,7 @@ test("lane-runner synthesizes completed lane results into one next action", asyn
 
 test("fanout plans are scoped to the active segment", async () => {
   await withTempDir("fanout-segment-scope", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "fanout scope", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "fanout scope", metricName: "quality_gap" });
     const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
     assert.equal(fanout.code, 0, fanout.stderr);
     const plan = JSON.parse(fanout.stdout).fanoutPlan;
@@ -717,7 +710,7 @@ test("fanout plans are scoped to the active segment", async () => {
 
 test("read-only lane-runner refuses non-Git commands before execution", async () => {
   await withTempDir("lane-runner-non-git", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "non git lane", "--metric-name", "quality_gap"]);
+    await setupFixture(dir, { name: "non git lane", metricName: "quality_gap" });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
 
     const blocked = await runCli([
@@ -737,17 +730,7 @@ test("read-only lane-runner refuses non-Git commands before execution", async ()
 
 test("completed lane results count as watchdog progress signals", async () => {
   await withTempDir("watchdog-lane-result", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "lane watchdog",
-      "--metric-name",
-      "seconds",
-      "--max-iterations",
-      "100",
-    ]);
+    await setupFixture(dir, { name: "lane watchdog" });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
     const oldMs = Date.now() - 10 * 60 * 60 * 1000;
     await runCli([

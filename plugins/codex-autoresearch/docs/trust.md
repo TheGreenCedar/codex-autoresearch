@@ -44,7 +44,7 @@ A speed improvement without the required accuracy, recall, accessibility, safety
 
 ## Keep the evidence fresh
 
-`log --from-last` works only while the packet still matches the current segment, benchmark and checks commands, checks policy, protected paths, fixed control, secondary constraints, packet environment mode, commit scope, working directory, recipe provenance, and Git fingerprint. If any of those changed after `next`, run a fresh packet. A raw `run` probe should be logged explicitly as a measurement rather than dressed up as a reusable packet.
+`log --from-last` works only while the packet still matches the current segment, benchmark and checks commands, checks policy, protected paths, fixed control, secondary constraints, packet environment mode, commit scope, working directory, recipe provenance, and Git fingerprint. If any of those changed after `next`, run a fresh packet. Use `benchmark-inspect` for bounded diagnostic probes; the legacy `run` name fails fast with that migration.
 
 Source and installed plugin behavior can drift too. A change in the repository is not proof about the installed marketplace copy until the active version and built-entrypoint fingerprint match. It is fine to keep working from the source checkout; just describe the result as source-checkout evidence until the installed runtime has been refreshed.
 

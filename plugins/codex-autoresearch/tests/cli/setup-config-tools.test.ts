@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { pluginRoot, runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { pluginRoot, runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("setup does not append elapsed metrics to explicit metric-emitting benchmarks", async () => {
   await withTempDir("setup-explicit-metric", async (dir) => {
@@ -55,7 +55,7 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
 
 test("ledger appends use LF on Windows-facing sessions", async () => {
   await withTempDir("ledger-lf", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lf", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "lf" });
     await runCli([
       "log",
       "--cwd",
@@ -75,7 +75,7 @@ test("ledger appends use LF on Windows-facing sessions", async () => {
 
 test("benchmark-inspect warns before suspicious full benchmark probes", async () => {
   await withTempDir("benchmark-inspect", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "inspect", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "inspect", metricName: "score" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('case-a')"`;
     const result = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
@@ -118,7 +118,7 @@ test("checks-inspect catches malformed cargo checks and broad failures", async (
 
 test("promote-gate dry-runs and appends measurement gate metadata", async () => {
   await withTempDir("promote-gate", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "gate", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "gate", metricName: "score" });
     await runCli([
       "log",
       "--cwd",
@@ -197,7 +197,7 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
     assert.notEqual(fractionalSetup.code, 0);
     assert.match(fractionalSetup.stderr, /maxIterations must be a positive integer/);
 
-    await runCli(["init", "--cwd", dir, "--name", "config limit", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "config limit" });
     const config = await runCli(["config", "--cwd", dir, "--extend", "-1"]);
     assert.notEqual(config.code, 0);
     assert.match(config.stderr, /extend must be a non-negative integer/);
@@ -210,7 +210,7 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
 
 test("config updates and clears guardrails and budgets", async () => {
   await withTempDir("config-clears-guardrails-budgets", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "config clears", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "config clears" });
 
     const configured = await runCli([
       "config",
@@ -326,7 +326,7 @@ test("config updates and clears guardrails and budgets", async () => {
 
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "asi file", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "asi file" });
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify({
@@ -364,7 +364,7 @@ test("log accepts ASI from a JSON file", async () => {
 
 test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
   await withTempDir("asi-json-file", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "asi json file", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "asi json file" });
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify(
@@ -481,12 +481,7 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
 
 test("CLI parser accepts equals-form options", async () => {
   await withTempDir("equals-options", async (dir) => {
-    const init = await runCli([
-      "init",
-      `--cwd=${dir}`,
-      "--name=equals options",
-      "--metric-name=seconds",
-    ]);
+    const init = await setupFixture(dir, { name: "equals options" });
     assert.equal(init.code, 0, init.stderr);
     const state = await runCli(["state", `--cwd=${dir}`, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
@@ -984,7 +979,7 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
 
 test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
   await withTempDir("log-contract-edges", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "log contract", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "log contract" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const packet = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -1035,10 +1030,49 @@ test("plugin manifest does not declare an MCP server", async () => {
   await assert.rejects(access(path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs")));
 });
 
+test("compatibility commands fail before mutation with exact migrations", async () => {
+  await withTempDir("compatibility-migrations", async (dir) => {
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "compatibility",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 1, initialized.stderr);
+    assert.match(
+      initialized.stderr,
+      /init is a compatibility command scheduled for removal after 2026-10-01; migrate to setup/,
+    );
+    await assert.rejects(access(path.join(dir, "autoresearch.jsonl")));
+
+    const marker = path.join(dir, "legacy-run-executed.txt");
+    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`,
+    )}`;
+    const ran = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.equal(ran.code, 1, ran.stderr);
+    assert.match(
+      ran.stderr,
+      /run is a compatibility command scheduled for removal after 2026-10-01; migrate measured packets to next/,
+    );
+    await assert.rejects(access(marker));
+
+    const integrations = await runCli(["integrations", "list"]);
+    assert.equal(integrations.code, 1, integrations.stderr);
+    assert.match(
+      integrations.stderr,
+      /integrations is a compatibility command scheduled for removal after 2026-10-01; migrate catalog discovery and validation to recipes list\/show --catalog/,
+    );
+  });
+});
+
 test("metric names must match the METRIC parser grammar", async () => {
   await withTempDir("bad-metric-name", async (dir) => {
     const result = await runCli([
-      "init",
+      "setup",
       "--cwd",
       dir,
       "--name",

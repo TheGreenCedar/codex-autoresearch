@@ -7,7 +7,7 @@ import { writeDecisionCapsule } from "../helpers/git-fixtures.js";
 import { pathExists } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { pluginRoot, runCli, withTempDir } from "../helpers/cli-test-context.js";
+import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
 test("session-forensics supports dry-run and safe apply capsule writes", async () => {
   await withTempDir("session-forensics-cli", async (dir) => {
@@ -639,7 +639,7 @@ test("session-forensics keeps secondary overfit blockers visible in compact outp
 
 test("state and recommend-next surface active decision capsules as loop brakes", async () => {
   await withTempDir("active-decision-capsule-state", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "capsule state", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "capsule state" });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
@@ -713,7 +713,7 @@ test("state and recommend-next surface active decision capsules as loop brakes",
 
 test("recommend-next compact bounds noisy session evidence", async () => {
   await withTempDir("recommend-next-noisy-session", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "noisy compact", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "noisy compact" });
     const rawBody = [
       "RAW_TOOL_OUTPUT_BODY_SENTINEL",
       "Chunk ID: noisy",
@@ -742,7 +742,7 @@ test("recommend-next compact bounds noisy session evidence", async () => {
 
 test("next refuses hard decision capsules before running a packet", async () => {
   await withTempDir("next-hard-decision-capsule", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "hard capsule", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "hard capsule" });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -762,7 +762,7 @@ test("next refuses fixed-control rerun commands without override", async () => {
   await withTempDir("fixed-control-next", async (dir) => {
     const secret = "sk-fixed-control-next-secret-123";
     const sentinel = path.join(dir, "next-sentinel.txt");
-    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "fixed control", metricName: "score" });
     const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
@@ -797,46 +797,6 @@ test("next refuses fixed-control rerun commands without override", async () => {
       "--cwd",
       dir,
       "--compact",
-      "--allow-fixed-control-rerun",
-    ]);
-    assert.equal(allowed.code, 0, allowed.stderr);
-    assert.equal(await pathExists(sentinel), true);
-  });
-});
-
-test("run refuses fixed-control rerun commands without override", async () => {
-  await withTempDir("fixed-control-run", async (dir) => {
-    const sentinel = path.join(dir, "run-sentinel.txt");
-    await runCli(["init", "--cwd", dir, "--name", "fixed control", "--metric-name", "score"]);
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({
-        name: "fixed control",
-        goal: "preserve baseline",
-        metricName: "score",
-        metricUnit: "points",
-        bestDirection: "higher",
-        fixedControl: {
-          artifact: "target/control/no-codestory.json",
-          reason: "The no-CodeStory control is fixed for this round.",
-          forbiddenCommandPatterns: ["--mode no-codestory"],
-          reuseCommandHint: "node bench.mjs --reuse-control target/control/no-codestory.json",
-        },
-      }),
-    );
-
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory`;
-    const blocked = await runCli(["run", "--cwd", dir, "--command", command]);
-    assert.notEqual(blocked.code, 0);
-    assert.match(blocked.stderr + blocked.stdout, /fixed_control_rerun_blocked/);
-    assert.equal(await pathExists(sentinel), false);
-
-    const allowed = await runCli([
-      "run",
-      "--cwd",
-      dir,
-      "--command",
-      command,
       "--allow-fixed-control-rerun",
     ]);
     assert.equal(allowed.code, 0, allowed.stderr);
@@ -1033,7 +993,7 @@ test("state exposes fixed-control config", async () => {
 
 test("next allows explicitly bounded packet work for bounded-next capsules", async () => {
   await withTempDir("next-bounded-decision-capsule", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "bounded capsule", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "bounded capsule" });
     await writeDecisionCapsule(dir, "search-latency", {
       enforcement: {
         mode: "bounded-next",

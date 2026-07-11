@@ -8,11 +8,11 @@ import {
 } from "../helpers/git-fixtures.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("compact state, recommend-next, and onboarding-packet surface resolved decisions", async () => {
   await withTempDir("decision-envelope", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "envelope", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "envelope" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
 
     const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
@@ -67,15 +67,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
       blocked: true,
       absentBest: true,
       prepare: async (dir) => {
-        await runCli([
-          "init",
-          "--cwd",
-          dir,
-          "--name",
-          "active artifact",
-          "--metric-name",
-          "seconds",
-        ]);
+        await setupFixture(dir, { name: "active artifact" });
         const script = path.join(dir, "partial-packet.mjs");
         await writeFile(
           script,
@@ -104,7 +96,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
       blocked: true,
       absentBest: false,
       prepare: async (dir) => {
-        await runCli(["init", "--cwd", dir, "--name", "stale packet", "--metric-name", "seconds"]);
+        await setupFixture(dir, { name: "stale packet" });
         const packet = await runCli([
           "next",
           "--cwd",
@@ -150,7 +142,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
       blocked: true,
       absentBest: true,
       prepare: async (dir) => {
-        await runCli(["init", "--cwd", dir, "--name", "failed checks", "--metric-name", "seconds"]);
+        await setupFixture(dir, { name: "failed checks" });
         const packet = await runCli([
           "next",
           "--cwd",
@@ -293,7 +285,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
 
 test("recommend-next compact returns state-first handoff with shared finalization authority", async () => {
   await withTempDir("recommend-next-compact-state-first", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "compact recommend", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "compact recommend" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
 
     const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
@@ -417,7 +409,7 @@ test("recommend-next compact refuses stale next command for plateau pivot", asyn
 test("pending log receipts block state, doctor, and new log attempts", async () => {
   await withTempDir("pending-log-receipt", async (dir) => {
     await git(dir, ["init"]);
-    await runCli(["init", "--cwd", dir, "--name", "pending receipt", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "pending receipt" });
     const receiptDir = path.join(dir, ".git", "autoresearch");
     const receiptPath = path.join(receiptDir, "pending-log-transaction.json");
     await mkdir(receiptDir, { recursive: true });
@@ -612,7 +604,7 @@ test("codex goal complete audit blocks current-tree finalization blockers", asyn
 
 test("stale packet compact state recommends replacement next command", async () => {
   await withTempDir("state-stale-last-run-replacement", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "stale state", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "stale state" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
     const next = await runCli([
@@ -705,7 +697,7 @@ test("stale packet compact state recommends replacement next command", async () 
 
 test("state report returns a compact one-screen terminal report", async () => {
   await withTempDir("state-terminal-report", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "report loop", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "report loop" });
 
     const report = await runCli(["state", "--cwd", dir, "--report"]);
     assert.equal(report.code, 0, report.stderr);
@@ -740,7 +732,7 @@ test("state report returns a compact one-screen terminal report", async () => {
 
 test("state report uses canonical command for blocked decision capsules", async () => {
   await withTempDir("state-report-decision-capsule-command", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "report capsule", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "report capsule" });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
     const report = await runCli(["state", "--cwd", dir, "--compact", "--report"]);

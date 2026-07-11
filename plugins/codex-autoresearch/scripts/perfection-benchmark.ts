@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { commandTable } from "../lib/command-table.js";
 import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { parseJsonlRecords } from "../lib/session-records.js";
@@ -601,29 +602,27 @@ const checks = [
   },
   {
     id: "full-product-cli-surface",
-    file: "scripts/autoresearch.mjs, lib/cli-handlers.mjs, lib/tool-schemas.ts",
+    file: "lib/command-table.ts, lib/tool-schemas.ts",
     description:
       "CLI exposes guided setup, recipes, gap candidates, finalization preview, live mode, and integrations.",
     run: async () => {
-      const cli = await readText("scripts/autoresearch.ts");
-      const help = await readText("lib/cli/help.ts");
-      const cliHandlers = await readText("lib/cli-handlers.ts");
-      const contracts = await readText("lib/tool-schemas.ts");
-      return includesAll(cli + help + cliHandlers + contracts, [
-        "setup-plan --cwd <project>",
-        "prompt-plan --cwd <project>",
-        "onboarding-packet --cwd <project>",
-        "recommend-next --cwd <project>",
-        "codex-goal-brief --cwd <project>",
-        "recipes list|show|recommend",
-        "benchmark-lint --cwd <project>",
-        "checks-inspect --cwd <project>",
-        "new-segment --cwd <project>",
-        "gap-candidates --cwd <project>",
-        "finalize-preview --cwd <project>",
-        "state --cwd <project> [--compact] [--report]",
-        "serve --cwd <project>",
-        "integrations list|doctor|sync-recipes",
+      const requiredCli = [
+        "setup-plan",
+        "prompt-plan",
+        "onboarding-packet",
+        "recommend-next",
+        "codex-goal-brief",
+        "recipes",
+        "benchmark-lint",
+        "checks-inspect",
+        "new-segment",
+        "gap-candidates",
+        "finalize-preview",
+        "state",
+        "serve",
+        "integrations",
+      ];
+      const requiredTools = [
         "setup_plan",
         "prompt_plan",
         "onboarding_packet",
@@ -635,8 +634,13 @@ const checks = [
         "new_segment",
         "gap_candidates",
         "finalize_preview",
-        'report: { type: "boolean" }',
-      ])
+      ];
+      const cliNames = new Set(commandTable.map((command) => command.cliCommand));
+      const toolNames = new Set(commandTable.map((command) => command.name));
+      const state = commandTable.find((command) => command.cliCommand === "state");
+      return requiredCli.every((command) => cliNames.has(command)) &&
+        requiredTools.every((tool) => toolNames.has(tool)) &&
+        state?.inputSchema.properties?.report?.type === "boolean"
         ? pass()
         : fail("Missing one or more full-product CLI surfaces.");
     },
@@ -650,13 +654,13 @@ const checks = [
         "lib/session-core.ts",
         "lib/runner.ts",
         "lib/cli-handlers.ts",
+        "lib/command-table.ts",
         "lib/tool-schemas.ts",
         "lib/recipes.ts",
         "lib/dashboard-view-model.ts",
         "lib/research-gaps.ts",
         "lib/finalize-preview.ts",
         "lib/live-server.ts",
-        "lib/integrations.ts",
         "lib/session-decision-capsule.ts",
         "lib/gate-quality.ts",
         "lib/preflight-audit.ts",

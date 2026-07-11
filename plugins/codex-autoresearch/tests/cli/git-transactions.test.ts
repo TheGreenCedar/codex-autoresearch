@@ -3,7 +3,7 @@ import { access, chmod, mkdir, readFile, rm, symlink, unlink, writeFile } from "
 import path from "node:path";
 import test from "node:test";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("keep commits can be scoped to experiment paths", async () => {
   await withTempDir("scoped-commit", async (dir) => {
@@ -14,7 +14,7 @@ test("keep commits can be scoped to experiment paths", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "scoped commit", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "scoped commit" });
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
     await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
 
@@ -51,7 +51,7 @@ test("keep logs require scoped commit paths or explicit add-all in git repos", a
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "add all gate", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "add all gate" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
@@ -97,7 +97,7 @@ test("keep logs preflight missing commit paths before git add mutates the index"
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "missing path", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "missing path" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ commitPaths: ["docs/testing/research-data-catalog.md"] }, null, 2),
@@ -136,7 +136,7 @@ test("keep logs reject Git pathspec magic in commit paths", async () => {
     await git(dir, ["add", "a.txt", "b.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "pathspec commit", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "pathspec commit" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ commitPaths: [":(top)"] }, null, 2),
@@ -177,7 +177,7 @@ test("discard cleanup rejects Git pathspec magic in revert paths", async () => {
     await git(dir, ["add", "a.txt", "b.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "pathspec revert", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "pathspec revert" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
@@ -212,7 +212,7 @@ test("discard preservation rejects linked Autoresearch-owned directories", async
     await writeFile(path.join(dir, "tracked.txt"), "before\n");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
-    await runCli(["init", "--cwd", dir, "--name", "linked preserve", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "linked preserve" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
@@ -263,7 +263,7 @@ test("keep logs allow tracked deletions in commit paths", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "delete tracked", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "delete tracked" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await rm(path.join(dir, "tracked.txt"));
@@ -300,15 +300,7 @@ test("scoped keep commits preserve unrelated staged files", async () => {
     await writeFile(path.join(dir, "unrelated.txt"), "before\n");
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial"]);
-    const initialized = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "scoped keep",
-      "--metric-name",
-      "seconds",
-    ]);
+    const initialized = await setupFixture(dir, { name: "scoped keep" });
     assert.equal(initialized.code, 0, initialized.stderr);
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
@@ -343,7 +335,7 @@ test("Git scope options reject wildcard pathspec characters", async () => {
     await writeFile(path.join(dir, "file.txt"), "before\n");
     await git(dir, ["add", "file.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
-    await runCli(["init", "--cwd", dir, "--name", "wildcards", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "wildcards" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "file.txt"), "after\n");
@@ -380,7 +372,7 @@ test("keep logs report structured git index lock recovery", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "lock", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "lock" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
@@ -415,7 +407,7 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "runtime dir", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "runtime dir" });
     await writeFile(
       path.join(dir, "packet.command"),
       "node -e \"console.log('METRIC seconds=1')\"\n",
@@ -469,15 +461,7 @@ test("Git-private state accepts a repository reached through a canonicalized anc
     await git(aliasedRepo, ["add", "tracked.txt"]);
     await git(aliasedRepo, ["commit", "-m", "initial"]);
 
-    const initialized = await runCli([
-      "init",
-      "--cwd",
-      aliasedRepo,
-      "--name",
-      "aliased Git-private state",
-      "--metric-name",
-      "seconds",
-    ]);
+    const initialized = await setupFixture(aliasedRepo, { name: "aliased Git-private state" });
     assert.equal(initialized.code, 0, initialized.stderr);
     await writeFile(
       path.join(aliasedRepo, "packet.command"),
@@ -514,7 +498,7 @@ test("keep logs can record an existing commit without staging dirty work", async
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "existing commit", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "existing commit" });
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "manual experiment"]);
@@ -552,7 +536,7 @@ test("doctor and dashboard stay quiet about empty commit paths until keep loggin
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "warning", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "warning" });
     const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
@@ -591,7 +575,7 @@ test("dashboard export decision envelope carries dirty source drift", async () =
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "dirty dashboard", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "dirty dashboard" });
     await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
@@ -615,7 +599,7 @@ test("export treats missing keep commits as finalization backlog instead of trus
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "preview quiet", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "preview quiet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await git(dir, ["branch", "-M", "main"]);
@@ -670,7 +654,7 @@ test("keep logs fail instead of recording success when git add fails", async () 
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "git add failure", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "git add failure" });
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
 
     const result = await runCli([
@@ -708,7 +692,7 @@ test("keep logs fail instead of recording success when git commit fails", async 
     await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
     await chmod(hookPath, 0o755);
 
-    await runCli(["init", "--cwd", dir, "--name", "commit failure", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "commit failure" });
     await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
 
     const result = await runCli([
@@ -742,7 +726,7 @@ test("discard reverts scoped experiment paths without deleting unrelated dirty w
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "safe discard", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "safe discard" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ commitPaths: ["src"] }, null, 2),
@@ -782,15 +766,7 @@ test("crash and checks_failed logs clean configured experiment paths only", asyn
       await git(dir, ["add", "-A"]);
       await git(dir, ["commit", "-m", "initial"]);
 
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        `${status} cleanup`,
-        "--metric-name",
-        "seconds",
-      ]);
+      await setupFixture(dir, { name: `${status} cleanup` });
       await writeFile(
         path.join(dir, "autoresearch.config.json"),
         JSON.stringify({ commitPaths: ["src"] }, null, 2),
@@ -829,7 +805,7 @@ test("discard without scoped paths refuses to clean a dirty git tree", async () 
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "unsafe discard", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "unsafe discard" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "scratch.txt"), "unrelated\n", "utf8");

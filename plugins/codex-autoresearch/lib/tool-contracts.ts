@@ -10,7 +10,7 @@ type JsonSchema = {
   enum?: string[];
   items?: JsonSchema;
   required?: string[];
-  properties?: Record<string, JsonSchema>;
+  properties?: Record<string, JsonSchema | undefined>;
   additionalProperties?: boolean | JsonSchema;
 };
 

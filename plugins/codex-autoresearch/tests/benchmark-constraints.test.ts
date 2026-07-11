@@ -8,11 +8,12 @@ import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
 import { evaluateGateQuality } from "../lib/gate-quality.js";
 import { appendJsonl } from "../lib/session-core.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
-import { createCliRunner, withTempDir } from "./helpers/process.js";
+import { createCliRunner, withTempDir, createSetupFixture } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
+const setupFixture = createSetupFixture();
 
 test("secondary metric constraints compare packet metrics against baseline metrics", async () => {
   await withTempDir("autoresearch", "secondary-constraints-direct", async (dir) => {
@@ -217,7 +218,7 @@ test("retrieval performance goals warn when no quality gate is configured", () =
 });
 
 async function initConstraintLoop(dir, name) {
-  const init = await runCli(["init", "--cwd", dir, "--name", name, "--metric-name", "seconds"]);
+  const init = await setupFixture(dir, { name: name });
   assert.equal(init.code, 0, init.stderr);
 }
 

@@ -8,11 +8,11 @@ import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
 import { isolatedRuntimeEnv, writeInstalledRuntimeFixture } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { pluginRoot, runCli, withTempDir } from "../helpers/cli-test-context.js";
+import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
 test("next command suggests measure for a first baseline decision packet", async () => {
   await withTempDir("next-command", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "next command", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "next command" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
@@ -41,17 +41,7 @@ test("next command suggests measure for a first baseline decision packet", async
 
 test("dashboard renders an operator readout from ASI and failures", async () => {
   await withTempDir("dashboard-readout", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "dashboard readout",
-      "--metric-name",
-      "seconds",
-      "--metric-unit",
-      "s",
-    ]);
+    await setupFixture(dir, { name: "dashboard readout", metricUnit: "s" });
     await runCli([
       "log",
       "--cwd",
@@ -166,7 +156,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
 
 test("dashboard does not recommend next when manual metrics have no benchmark command", async () => {
   await withTempDir("dashboard-manual-no-command", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "manual metrics", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "manual metrics" });
     const log = await runCli([
       "log",
       "--cwd",
@@ -194,7 +184,7 @@ test("dashboard does not recommend next when manual metrics have no benchmark co
 
 test("dashboard surfaces stale last-run packets before normal next guidance", async () => {
   await withTempDir("dashboard-stale-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "stale dashboard", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "stale dashboard" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const next = await runCli([
       "next",
@@ -240,7 +230,7 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
 
 test("doctor summarizes readiness and detects missing benchmark metrics", async () => {
   await withTempDir("doctor", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "doctor", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "doctor" });
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('no metric')"`;
     const result = await runCli([
@@ -270,7 +260,7 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
 
 test("doctor and next report missing future benchmark commands for manual sessions", async () => {
   await withTempDir("manual-metric-missing-benchmark-command", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "manual doctor", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "manual doctor" });
     const log = await runCli([
       "log",
       "--cwd",
@@ -316,7 +306,7 @@ test("doctor and next report missing future benchmark commands for manual sessio
 
 test("doctor explain exposes runtime drift summary and next diagnostic command", async () => {
   await withTempDir("doctor-runtime-drift-summary", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "doctor drift", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "doctor drift" });
 
     const result = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(result.code, 0, result.stderr);
@@ -337,7 +327,7 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
 
 test("doctor --check-installed blocks non-fresh installed runtime before packet guidance", async () => {
   await withTempDir("doctor-check-installed-runtime-authority", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "installed doctor", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "installed doctor" });
 
     for (const status of ["stale", "missing", "unavailable"]) {
       await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
@@ -435,7 +425,7 @@ test("setup state and doctor expose gate quality and preflight readiness", async
     }
     assert.match(setupPlanPayload.preflight.nextCommand, /benchmark-lint|doctor/i);
 
-    await runCli(["init", "--cwd", dir, "--name", "gate preflight", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "gate preflight" });
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
@@ -467,15 +457,7 @@ test("setup state and doctor expose gate quality and preflight readiness", async
 
 test("guide, dashboard, and recommend-next share canonical preflight blocker", async () => {
   await withTempDir("canonical-preflight-guide", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "canonical preflight",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "canonical preflight" });
 
     const guide = await runCli(["guide", "--cwd", dir]);
     assert.equal(guide.code, 0, guide.stderr);
@@ -532,7 +514,7 @@ test("recommend-next compact operator checklist uses bounded recovery for empty 
 
 test("state and recommend-next suppress portfolio guidance while benchmark setup is blocked", async () => {
   await withTempDir("portfolio-guidance", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "portfolio", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "portfolio" });
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);

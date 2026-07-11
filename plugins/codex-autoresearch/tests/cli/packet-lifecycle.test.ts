@@ -5,11 +5,11 @@ import test from "node:test";
 import { redactCommandDisplay } from "../../lib/evidence-redaction.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("config persists operator settings and extends iteration limits", async () => {
   await withTempDir("operator-config", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "operator config", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "operator config" });
     await runCli([
       "log",
       "--cwd",
@@ -71,7 +71,7 @@ test("config persists operator settings and extends iteration limits", async () 
 
 test("next writes a reusable last-run packet and log can consume it", async () => {
   await withTempDir("last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "last run", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "last run" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('METRIC cache_hits=8')"`;
 
     const next = await runCli([
@@ -147,7 +147,7 @@ test("next writes a reusable last-run packet and log can consume it", async () =
 
 test("next refuses to overwrite an unlogged fresh last-run packet", async () => {
   await withTempDir("fresh-last-run-next-refusal", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "fresh last run", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "fresh last run" });
     const firstCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const first = await runCli([
       "next",
@@ -206,7 +206,7 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
 
 test("next parses metrics from the full benchmark output before display truncation", async () => {
   await withTempDir("full-output-metric", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "full output", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "full output" });
     const script = path.join(dir, "noisy-benchmark.mjs");
     await writeFile(
       script,
@@ -237,17 +237,7 @@ test("next parses metrics from the full benchmark output before display truncati
 
 test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
   await withTempDir("last-run-suggest-discard", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "suggest discard",
-      "--metric-name",
-      "seconds",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, { name: "suggest discard", direction: "lower" });
     await runCli([
       "log",
       "--cwd",
@@ -303,7 +293,7 @@ test("successful last-run packets require explicit status and suggest discard fo
 
 test("stale last-run packets are rejected when history advances", async () => {
   await withTempDir("stale-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "stale packet", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "stale packet" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const next = await runCli([
       "next",
@@ -355,7 +345,7 @@ test("stale last-run packets are rejected when scoped git evidence changes", asy
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "git stale packet", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "git stale packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
@@ -396,15 +386,7 @@ test("stale last-run packets are rejected when dirty file contents change withou
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "dirty content packet",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "dirty content packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "tracked.txt"), "dirty before packet\n", "utf8");
@@ -447,15 +429,7 @@ test("dirty fingerprints preserve hostile Git filenames", async () => {
     await writeFile(path.join(dir, file), "base\n", "utf8");
     await git(dir, ["add", file]);
     await git(dir, ["commit", "-m", "initial"]);
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "hostile dirty path",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "hostile dirty path" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, file), "dirty before packet\n", "utf8");
@@ -500,15 +474,7 @@ test("stale last-run packets are rejected when untracked directory contents chan
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "untracked dir packet",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "untracked dir packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await mkdir(path.join(dir, "scratch"), { recursive: true });
@@ -552,15 +518,7 @@ test("next refuses runs when dirty fingerprints would be truncated", async () =>
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "truncated dirty packet",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "truncated dirty packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
@@ -608,7 +566,7 @@ test("next allows clean repos with broad scoped commit paths", async () => {
     await git(dir, ["add", "src"]);
     await git(dir, ["commit", "-m", "initial src"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "large clean scope", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "large clean scope" });
     const configured = await runCli(["config", "--cwd", dir, "--commit-paths", "src"]);
     assert.equal(configured.code, 0, configured.stderr);
     await git(dir, ["add", "autoresearch.config.json", "autoresearch.jsonl"]);
@@ -659,15 +617,7 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
     await writeFile(path.join(dir, "tracked.txt"), "base\n");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
-    const initialized = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "oversized fingerprint",
-      "--metric-name",
-      "seconds",
-    ]);
+    const initialized = await setupFixture(dir, { name: "oversized fingerprint" });
     assert.equal(initialized.code, 0, initialized.stderr);
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
@@ -691,7 +641,7 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
 
 test("last-run packets are rejected when config changes before logging", async () => {
   await withTempDir("config-stale-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "first config", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "first config" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const next = await runCli([
       "next",
@@ -704,17 +654,11 @@ test("last-run packets are rejected when config changes before logging", async (
     ]);
     assert.equal(next.code, 0, next.stderr);
 
-    const secondConfig = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "second config",
-      "--metric-name",
-      "points",
-      "--direction",
-      "higher",
-    ]);
+    const secondConfig = await setupFixture(dir, {
+      name: "second config",
+      metricName: "points",
+      direction: "higher",
+    });
     assert.equal(secondConfig.code, 0, secondConfig.stderr);
 
     const stale = await runCli([
@@ -734,7 +678,7 @@ test("last-run packets are rejected when config changes before logging", async (
 
 test("last-run freshness hashes execution policy and commit scope", async () => {
   await withTempDir("trust-config-stale-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "trust config", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "trust config" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const next = await runCli([
       "next",
@@ -790,7 +734,7 @@ test("last-run freshness hashes execution policy and commit scope", async () => 
 
 test("packet command tampering is stale in dashboard and next preflight", async () => {
   await withTempDir("command-stale-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "command trust", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "command trust" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const first = await runCli([
       "next",
@@ -832,7 +776,7 @@ test("packet command tampering is stale in dashboard and next preflight", async 
 
 test("oversized benchmark contract files block packet freshness", async () => {
   await withTempDir("oversized-contract-last-run", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "contract budget", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "contract budget" });
     await writeFile(path.join(dir, "Cargo.toml"), Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const next = await runCli([
@@ -866,7 +810,7 @@ test("oversized benchmark contract files block packet freshness", async () => {
 
 test("owner-autonomous runs return continuation instead of handing control back", async () => {
   await withTempDir("continuation", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "continuation", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "continuation" });
     await runCli([
       "config",
       "--cwd",
@@ -909,7 +853,7 @@ test("owner-autonomous runs return continuation instead of handing control back"
 
 test("guarded sessions with active budgets keep continuation non-final", async () => {
   await withTempDir("guarded-active-budget", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "budget", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "budget" });
     await runCli(["config", "--cwd", dir, "--checks-policy", "manual", "--max-iterations", "3"]);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
 
@@ -961,15 +905,7 @@ test("guarded sessions with active budgets keep continuation non-final", async (
 
 test("continuation stops cleanly at the configured iteration limit", async () => {
   await withTempDir("continuation-limit", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "continuation limit",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "continuation limit" });
     await runCli([
       "config",
       "--cwd",
@@ -1006,7 +942,7 @@ test("continuation stops cleanly at the configured iteration limit", async () =>
 
 test("log from last packet rejects keep after failed checks", async () => {
   await withTempDir("last-run-check-failure", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "last run checks", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "last run checks" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const checks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
 
@@ -1043,15 +979,7 @@ test("log from last packet rejects keep after failed checks", async () => {
 
 test("metricless failure logs do not become baseline or best", async () => {
   await withTempDir("metricless-failures", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "metricless failures",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "metricless failures" });
 
     const crash = await runCli([
       "log",
@@ -1103,7 +1031,7 @@ test("measure logs metric evidence without keep/finalizer eligibility or git mut
     await git(dir, ["commit", "-m", "initial"]);
     const headBefore = await git(dir, ["rev-parse", "HEAD"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "measure", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "measure" });
     await writeFile(path.join(dir, "tracked.txt"), "after\n");
 
     const log = await runCli([
@@ -1161,7 +1089,7 @@ test("measure logs metric evidence without keep/finalizer eligibility or git mut
 
 test("from-last errors name next and manual measure recovery commands", async () => {
   await withTempDir("from-last-recovery", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "recovery", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "recovery" });
 
     const log = await runCli([
       "log",

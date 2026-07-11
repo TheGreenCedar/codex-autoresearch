@@ -1,7 +1,6 @@
 import { parseArgs } from "node:util";
 
-import { toolRegistry } from "../tool-registry.js";
-import { toolSchemas } from "../tool-schemas.js";
+import { commandDefinitionForCli, commandTable, type JsonSchema } from "../command-table.js";
 
 type ParsedValue = boolean | string | string[];
 
@@ -24,15 +23,7 @@ interface OptionSet {
   definitions: Map<string, OptionDefinition>;
 }
 
-interface CliSchema {
-  properties?: Record<
-    string,
-    {
-      items?: { type?: string | string[] };
-      type?: string | string[];
-    }
-  >;
-}
+type CliSchema = JsonSchema;
 
 const SHARED_OPTIONS: OptionDefinition[] = [
   option("help", "help", "boolean", ["h"]),
@@ -45,28 +36,6 @@ const SHARED_OPTIONS: OptionDefinition[] = [
   ]),
 ];
 
-const COMMAND_OPTIONS: Record<string, OptionDefinition[]> = {
-  "setup-plan": [option("shell", "shell", "string"), option("compact", "compact", "boolean")],
-  guide: [option("shell", "shell", "string"), option("compact", "compact", "boolean")],
-  "prompt-plan": [option("shell", "shell", "string"), option("compact", "compact", "boolean")],
-  setup: [option("interactive", "interactive", "boolean"), option("scope", "filesInScope", "list")],
-  recipes: [
-    option("id", "id", "string"),
-    option("recipe", "recipe", "string"),
-    option("recipe-id", "recipeId", "string", ["recipeId", "recipe_id"]),
-  ],
-  "quality-gap": [option("list", "list", "boolean")],
-  "new-segment": [
-    option("best-direction", "bestDirection", "string", ["bestDirection", "best_direction"]),
-  ],
-  export: [
-    option("showcase", "showcase", "boolean"),
-    option("showcase-mode", "showcaseMode", "string", ["showcaseMode", "showcase_mode"]),
-    option("verbose", "verbose", "boolean"),
-    option("progress-stderr", "progressStderr", "boolean", ["progressStderr", "progress_stderr"]),
-  ],
-};
-
 const FINALIZER_OPTIONS = optionSet([
   option("help", "help", "boolean", ["h"]),
   option("debug", "debug", "boolean"),
@@ -78,9 +47,8 @@ const FINALIZER_OPTIONS = optionSet([
 ]);
 const FINALIZER_LEADING_BOOLEAN_OPTIONS = new Set(["help", "debug"]);
 
-const COMMAND_NAMES = new Set(Object.values(toolRegistry).map((entry) => entry.cliCommand));
+const COMMAND_NAMES = new Set(commandTable.map((entry) => entry.cliCommand));
 const POSITIONAL_COMMAND_NAMES = new Set([...COMMAND_NAMES, "help"]);
-const SCHEMA_BY_TOOL = new Map(toolSchemas.map((schema) => [schema.name, schema.inputSchema]));
 const COMMAND_OPTION_SETS = new Map<string, OptionSet>();
 let aggregateOptionSet: OptionSet | null = null;
 
@@ -167,13 +135,14 @@ function optionsForCommand(command: string): OptionSet | null {
   const cached = COMMAND_OPTION_SETS.get(command);
   if (cached) return cached;
 
-  const registryEntry = Object.values(toolRegistry).find((entry) => entry.cliCommand === command);
-  if (!registryEntry) return null;
-  const schema = SCHEMA_BY_TOOL.get(registryEntry.name) as CliSchema | undefined;
+  const definition = commandDefinitionForCli(command);
+  if (!definition) return null;
   const definitions = [
     ...SHARED_OPTIONS,
-    ...definitionsFromSchema(schema),
-    ...(COMMAND_OPTIONS[command] || []),
+    ...definitionsFromSchema(definition.inputSchema),
+    ...(definition.cliOptions || []).map((entry) =>
+      option(entry.name, entry.key, entry.kind, [...(entry.aliases || [])]),
+    ),
   ];
   const result = optionSet(definitions);
   COMMAND_OPTION_SETS.set(command, result);
@@ -193,7 +162,8 @@ function allCommandOptions(): OptionSet {
 
 function definitionsFromSchema(schema: CliSchema | undefined): OptionDefinition[] {
   const properties = schema?.properties || {};
-  return Object.entries(properties).map(([property, definition]) => {
+  return Object.entries(properties).flatMap(([property, definition]) => {
+    if (!definition) return [];
     const kind: OptionKind =
       definition.type === "boolean"
         ? "boolean"
@@ -211,7 +181,7 @@ function definitionsFromSchema(schema: CliSchema | undefined): OptionDefinition[
     if (property === "research_slug") aliases.add("slug");
     if (property === "confirm") aliases.add("yes");
     if (property === "json_full") aliases.add("full");
-    return option(name, runtimeKey(property), kind, [...aliases]);
+    return [option(name, runtimeKey(property), kind, [...aliases])];
   });
 }
 

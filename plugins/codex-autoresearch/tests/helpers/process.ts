@@ -5,6 +5,32 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+export interface SetupFixtureOptions {
+  direction?: "higher" | "lower";
+  goal?: string;
+  metricName?: string;
+  metricUnit?: string;
+  name?: string;
+}
+
+let canonicalSessionModule: Promise<typeof import("../../scripts/autoresearch.js")> | undefined;
+
+export const createSetupFixture = () => {
+  return async (cwd: string, options: SetupFixtureOptions = {}) => {
+    canonicalSessionModule ??= import("../../scripts/autoresearch.js");
+    const { initExperiment } = await canonicalSessionModule;
+    const result = await initExperiment({
+      cwd,
+      name: options.name ?? "test session",
+      metricName: options.metricName ?? "seconds",
+      ...(options.goal ? { goal: options.goal } : {}),
+      ...(options.metricUnit ? { metricUnit: options.metricUnit } : {}),
+      ...(options.direction ? { direction: options.direction } : {}),
+    });
+    return processResult(0, `${JSON.stringify(result)}\n`, "");
+  };
+};
+
 export const quoteForShell = (value) => {
   return JSON.stringify(String(value));
 };

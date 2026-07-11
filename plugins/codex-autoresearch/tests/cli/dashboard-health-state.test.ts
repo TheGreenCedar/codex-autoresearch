@@ -10,11 +10,11 @@ import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { quoteForShell } from "../helpers/process.js";
 import { addressPort, closeServer, listenOnRandomPort } from "../helpers/server.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("state report marks registry-only dashboard health dead until HTTP responds", async () => {
   await withTempDir("state-report-dashboard-health", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "dashboard health", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "dashboard health" });
     await writeServeRegistry(dir, {
       pid: process.pid,
       port: 60241,
@@ -46,15 +46,7 @@ test("state report marks registry-only dashboard health dead until HTTP responds
 
 test("state report does not call a fake same-process registry a live dashboard", async () => {
   await withTempDir("state-report-dashboard-fake-same-process", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "fake dashboard health",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "fake dashboard health" });
     await writeServeRegistry(dir, {
       pid: process.pid,
       port: 60242,
@@ -79,15 +71,7 @@ test("state report does not call a fake same-process registry a live dashboard",
 
 test("static export does not call a same-process registry a live dashboard without HTTP health", async () => {
   await withTempDir("export-dashboard-fake-same-process", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "static fake dashboard health",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "static fake dashboard health" });
     await writeServeRegistry(dir, {
       pid: process.pid,
       port: 60243,
@@ -114,15 +98,7 @@ test("state health rejects an alive HTTP response for a different cwd", async ()
       resolveSessionPaths({ sessionCwd: dir, workDir: dir }),
     );
     await mkdir(otherDir, { recursive: true });
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "wrong cwd dashboard health",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "wrong cwd dashboard health" });
     const server = createServer((request, response) => {
       if (request.url === "/health") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -182,15 +158,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
     const expectedSessionIdentity = sessionPathIdentity(
       resolveSessionPaths({ sessionCwd: dir, workDir: dir }),
     );
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "alive dashboard health",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "alive dashboard health" });
     const server = createServer((request, response) => {
       if (request.url === "/health") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -245,7 +213,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
 
 test("legacy failed sentinel metrics do not suppress next-run baseline measure guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "legacy sentinel", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "legacy sentinel" });
 
     const legacyFailure = await runCli([
       "log",
@@ -283,15 +251,7 @@ test("legacy failed sentinel metrics do not suppress next-run baseline measure g
 
 test("metricless failed last-run packets log cleanly and preserve packet on invalid status", async () => {
   await withTempDir("metricless-last-run", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "metricless last run",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "metricless last run" });
     const command = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
 
     const next = await runCli([
@@ -345,7 +305,7 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
 
 test("keep, discard, and measure still require finite metrics", async () => {
   await withTempDir("metric-required", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "metric required", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "metric required" });
 
     for (const status of ["keep", "discard", "measure"]) {
       const result = await runCli([
@@ -426,7 +386,7 @@ test("last-run packet does not dirty git worktrees before discard logging", asyn
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "git last run", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "git last run" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
@@ -472,7 +432,7 @@ test("no-change keep records no fake kept commit", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await runCli(["init", "--cwd", dir, "--name", "no change keep", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "no change keep" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
@@ -509,7 +469,7 @@ test("no-change keep records no fake kept commit", async () => {
 
 test("config extend is based on the active segment run count", async () => {
   await withTempDir("segment-extend", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "first segment" });
     await runCli([
       "log",
       "--cwd",
@@ -521,7 +481,7 @@ test("config extend is based on the active segment run count", async () => {
       "--description",
       "Baseline",
     ]);
-    await runCli(["init", "--cwd", dir, "--name", "second segment", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "second segment" });
 
     const result = await runCli(["config", "--cwd", dir, "--extend", "4"]);
     assert.equal(result.code, 0, result.stderr);
@@ -538,17 +498,7 @@ test("config extend is based on the active segment run count", async () => {
 
 test("dashboard script renders zero and negative metric points", async () => {
   await withTempDir("dashboard-runtime", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "runtime dashboard",
-      "--metric-name",
-      "delta",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, { name: "runtime dashboard", metricName: "delta", direction: "lower" });
     await runCli([
       "log",
       "--cwd",

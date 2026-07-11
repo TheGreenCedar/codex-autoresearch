@@ -8,6 +8,7 @@ import {
   pluginRoot,
   repoRoot,
   runCli,
+  setupFixture,
   withLiveServer,
   withTempDir,
 } from "./helpers.js";
@@ -88,7 +89,7 @@ test("finalize-preview summarizes kept commits without creating branches", async
     await git(dir, ["branch", "develop"]);
 
     await git(dir, ["switch", "-c", "codex/autoresearch-preview"]);
-    await runCli(["init", "--cwd", dir, "--name", "preview", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "preview" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "src", "value.txt"), "kept\n");
@@ -133,7 +134,7 @@ test("finalize-preview summarizes kept commits without creating branches", async
 
 test("live server exposes health and view-model endpoints", async () => {
   await withTempDir("live-server", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "live", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "live" });
     await runCli([
       "log",
       "--cwd",
@@ -198,7 +199,7 @@ test("live server exposes health and view-model endpoints", async () => {
 
 test("dashboard export and live endpoints redact sensitive evidence", async () => {
   await withTempDir("dashboard-redaction", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "redacted live", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "redacted live" });
     const sensitiveEvidence = [
       "api_key=abcdefghijklmnop",
       "Bearer zyxwvutsrqponmlkjihgfedcba",
@@ -293,7 +294,7 @@ test("live server has no dashboard action routes because CLI owns mutations", as
 
 test("live server log actions stay disabled and leave last-run packets untouched", async () => {
   await withTempDir("live-log-action", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "live log", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "live log" });
     const benchmarkFile = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
     const benchmarkBody =
       process.platform === "win32"

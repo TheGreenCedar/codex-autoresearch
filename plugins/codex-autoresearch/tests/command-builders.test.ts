@@ -12,14 +12,22 @@ import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/dashboard.js";
 import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { renderCliHelp } from "../lib/cli/help.js";
 import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
+import { commandTable, compatibilityErrorForCli } from "../lib/command-table.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
 import {
   assertRunResourcePreflight,
   buildActiveRunPacketId,
   buildProcessLifecycleRecord,
 } from "../lib/process-governor.js";
-import { actionPolicyForTool, commandActionAliases, toolMetadata } from "../lib/tool-registry.js";
+import {
+  actionPolicyForTool,
+  commandActionAliases,
+  toolMetadata,
+  toolRegistry,
+} from "../lib/tool-registry.js";
+import { toolSchemas } from "../lib/tool-schemas.js";
 
 test("command rendering quotes hostile benchmark args for the selected shell", () => {
   const benchmark =
@@ -93,10 +101,52 @@ test("tool registry owns command aliases and static safety metadata", () => {
   assert.equal(commandActionAliases.liveDashboard, "serve dashboard");
   assert.equal(toolMetadata("doctor_session")?.conditionallyMutating, true);
   assert.equal(toolMetadata("doctor_session")?.openWorld, true);
-  assert.equal(
-    actionPolicyForTool("integrations", { subcommand: "sync-recipes" }),
-    "artifact_write",
+  assert.equal(actionPolicyForTool("integrations", { subcommand: "sync-recipes" }), "read");
+});
+
+test("command table derives schemas, registry, handlers, help, and compatibility migrations", async () => {
+  const dependencies = Object.fromEntries(
+    commandTable.map((command) => [command.handler, async (args: unknown) => args]),
   );
+  const handlers = createCliCommandHandlers({
+    ...dependencies,
+    doctorHooks: async (args: unknown) => args,
+    interactiveSetup: async (args: unknown) => args,
+    parseJsonOption,
+  } as any);
+  const tableCliNames = commandTable.map((command) => command.cliCommand).sort();
+  const tableToolNames = commandTable.map((command) => command.name).sort();
+
+  assert.equal(new Set(tableCliNames).size, commandTable.length);
+  assert.equal(new Set(tableToolNames).size, commandTable.length);
+  assert.deepEqual(Object.keys(handlers).sort(), tableCliNames);
+  assert.deepEqual(Object.keys(toolRegistry).sort(), tableToolNames);
+  assert.deepEqual(toolSchemas.map((schema) => schema.name).sort(), tableToolNames);
+  for (const command of commandTable) {
+    const help = renderCliHelp({ command: command.cliCommand });
+    assert.match(help, new RegExp(`Command: ${command.cliCommand}`));
+    assert.match(help, new RegExp(command.help[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+
+  assert.throws(
+    () => handlers.state({ _: ["state"], cwd: ".", typoOption: true }),
+    /Unknown argument for read_state: typoOption/,
+  );
+  const qualityGap = await handlers["quality-gap"]({
+    _: ["quality-gap"],
+    cwd: ".",
+    json: true,
+  });
+  assert.equal(qualityGap.result.json, true);
+  assert.deepEqual(
+    commandTable.filter((command) => command.compatibility).map((command) => command.cliCommand),
+    ["init", "run", "integrations"],
+  );
+  for (const command of ["init", "run", "integrations"]) {
+    const migrationError = compatibilityErrorForCli(command);
+    assert.match(migrationError || "", /scheduled for removal after 2026-10-01/);
+    assert.match(renderCliHelp({ command }), /Migration: .*migrate/i);
+  }
 });
 
 test("dashboard command helper builds read-only continuation commands", () => {
@@ -231,23 +281,12 @@ test("recommend-next response preserves stable fields and optional governance fi
   assert.deepEqual(response.packetDiagnostics, { unresolved: true });
 });
 
-test("integrations handler prefers normalized subcommand argument", async () => {
-  const calls: Array<{ subcommand: string | undefined; catalog?: string }> = [];
-  const handlers = createCliCommandHandlers({
-    integrationsCommand: async (subcommand: string | undefined, args: Record<string, unknown>) => {
-      calls.push({ subcommand, catalog: String(args.catalog || "") });
-      return { ok: true, subcommand };
-    },
-  });
-
-  const response = await handlers.integrations({
-    _: ["integrations"],
-    subcommand: "doctor",
-    catalog: "recipes.json",
-  });
-
-  assert.deepEqual(calls, [{ subcommand: "doctor", catalog: "recipes.json" }]);
-  assert.deepEqual(response.result, { ok: true, subcommand: "doctor" });
+test("compatibility handlers fail with their exact migration error", async () => {
+  const handlers = createCliCommandHandlers({} as any);
+  await assert.rejects(
+    handlers.integrations({ _: ["integrations"], subcommand: "doctor" }),
+    /integrations is a compatibility command scheduled for removal after 2026-10-01/,
+  );
 });
 
 test("recommend-next authority prefers dashboard runtime drift over compact source-only state", () => {

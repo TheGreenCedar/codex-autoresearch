@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runGit } from "./process.js";
+import { runGit, createSetupFixture } from "./process.js";
 
 export async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
@@ -41,6 +41,7 @@ export async function writeDecisionCapsule(dir, slug, overrides = {}) {
 }
 
 export async function prepareCurrentTreeFinalizationBlocker(dir, runCli) {
+  const setupFixture = createSetupFixture();
   await runGit(dir, ["init"]);
   await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
   await runGit(dir, ["add", "base.txt"]);
@@ -49,15 +50,7 @@ export async function prepareCurrentTreeFinalizationBlocker(dir, runCli) {
   await runGit(dir, ["checkout", "-b", "feature"]);
   await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC seconds=1'\n", "utf8");
   await writeFile(path.join(dir, "autoresearch.checks.ps1"), "Write-Output 'test ok'\n", "utf8");
-  await runCli([
-    "init",
-    "--cwd",
-    dir,
-    "--name",
-    "current tree finalization",
-    "--metric-name",
-    "seconds",
-  ]);
+  await setupFixture(dir, { name: "current tree finalization" });
   await runGit(dir, ["add", "autoresearch.jsonl", "autoresearch.ps1", "autoresearch.checks.ps1"]);
   await runGit(dir, ["commit", "-m", "init autoresearch"]);
 

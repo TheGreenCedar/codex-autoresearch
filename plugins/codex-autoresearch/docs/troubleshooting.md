@@ -31,7 +31,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Symptom | Failing layer | What to do |
 | --- | --- | --- |
 | Duplicate run numbers or edited ledger entries | Ledger integrity | Run `ledger-doctor --cwd <project> --json`. |
-| `log --from-last` refuses the packet | Stale packet or raw `run` probe | Run a fresh `next`, or log the raw number explicitly as `measure`. |
+| `log --from-last` refuses the packet | Stale packet or legacy `run` probe | Run a fresh `next`, or log the raw number explicitly as `measure`; use `benchmark-inspect` for future diagnostic probes. |
 | Successful work was committed outside Autoresearch | Keep receipt lacks commit evidence | Verify the hash, then log the keep with `--commit <hash>`. |
 | Keep refuses to commit | Missing Git scope | Configure `commitPaths`, pass `--commit-paths`, or deliberately use `--allow-add-all`. |
 | Failure cleanup refuses to run | Missing cleanup scope | Pass explicit `--revert-paths`; do not broaden cleanup in a dirty tree. |

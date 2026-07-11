@@ -14,17 +14,23 @@ import { parseLedger, writeLedger } from "../helpers/ledger.js";
 import { pathExists } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { cli, runCli, runSpawnedCli, withTempDir } from "../helpers/cli-test-context.js";
+import {
+  cli,
+  runCli,
+  runSpawnedCli,
+  withTempDir,
+  setupFixture,
+} from "../helpers/cli-test-context.js";
 
-test("run reports missing primary metric as a failed experiment", async () => {
+test("next reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "missing metric", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "missing metric" });
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('no metric here')"`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
 
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.ok, false);
     assert.equal(payload.parsedPrimary, null);
     assert.match(payload.metricError, /seconds/);
@@ -35,7 +41,7 @@ test("run reports missing primary metric as a failed experiment", async () => {
 
 test("partial-results records diagnostic measure evidence from a failed packet artifact", async () => {
   await withTempDir("partial-results-record", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "partial salvage", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "partial salvage" });
     const script = path.join(dir, "partial-packet.mjs");
     await writeFile(
       script,
@@ -116,7 +122,7 @@ test("partial-results records diagnostic measure evidence from a failed packet a
 
 test("partial-results bounds oversized malformed missing and truncated artifacts", async () => {
   await withTempDir("partial-results-bounds", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "partial bounds", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "partial bounds" });
     const rows = Array.from({ length: PARTIAL_RESULT_ARTIFACT_MAX_ROWS + 5 }, (_, index) => ({
       seconds: index + 1,
     }));
@@ -177,7 +183,7 @@ test("partial-results bounds oversized malformed missing and truncated artifacts
 
 test("partial-results rejects outside and linked artifact paths", async (t) => {
   await withTempDir("partial-results-outside", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "partial outside", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "partial outside" });
     const outsideDir = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
     await mkdir(outsideDir, { recursive: true });
     try {
@@ -228,7 +234,7 @@ test("partial-results rejects outside and linked artifact paths", async (t) => {
 
 test("state surfaces active runner progress while next is still executing", async () => {
   await withTempDir("active-progress", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "active progress", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "active progress" });
     const script = path.join(dir, "slow-packet.mjs");
     const releaseFile = path.join(dir, "release-packet");
     await writeFile(
@@ -352,9 +358,9 @@ test("active progress writer closes after rejection without replaying pending ge
   assert.throws(() => writer.queue({ exitState: "running" }), /closed/);
 });
 
-test("standalone run removes active progress after an exception before writer close", async () => {
+test("next reports command-file ENOENT without mutating existing progress", async () => {
   await withTempDir("standalone-progress-cleanup", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "cleanup", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "cleanup" });
     const progressPath = path.join(dir, "autoresearch.progress.json");
     await writeFile(
       progressPath,
@@ -362,27 +368,27 @@ test("standalone run removes active progress after an exception before writer cl
     );
 
     const result = await runCli([
-      "run",
+      "next",
       "--cwd",
       dir,
       "--command-file",
       "missing-command-file.txt",
     ]);
 
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /ENOENT/);
-    assert.equal(await pathExists(progressPath), false);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /ENOENT/);
+    assert.equal(await pathExists(progressPath), true);
   });
 });
 
 test("active progress deletion propagates wrong-entry-type failures", async () => {
   await withTempDir("progress-delete-failure", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "delete failure", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "delete failure" });
     const progressPath = path.join(dir, "autoresearch.progress.json");
     await mkdir(progressPath);
 
     const result = await runCli([
-      "run",
+      "next",
       "--cwd",
       dir,
       "--command",
@@ -398,7 +404,7 @@ test("active progress deletion propagates wrong-entry-type failures", async () =
 
 test("next removes active progress when terminal packet persistence fails", async () => {
   await withTempDir("terminal-packet-progress-cleanup", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "terminal cleanup", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "terminal cleanup" });
     await mkdir(path.join(dir, "autoresearch.last-run.json"));
 
     const result = await runCli([
@@ -421,7 +427,7 @@ test("chatty completion and failure cannot resurrect active progress", async () 
     ["failed", 7, "failed"],
   ] as const) {
     await withTempDir(`chatty-progress-${name}`, async (dir) => {
-      await runCli(["init", "--cwd", dir, "--name", name, "--metric-name", "seconds"]);
+      await setupFixture(dir, { name: name });
       const script = path.join(dir, "chatty.mjs");
       await writeFile(
         script,
@@ -450,7 +456,7 @@ test("chatty completion and failure cannot resurrect active progress", async () 
 
 test("checks-phase timeout flushes its newest generation before cleanup", async () => {
   await withTempDir("checks-progress-timeout", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "checks timeout", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "checks timeout" });
     const checks = path.join(dir, "checks.mjs");
     await writeFile(
       checks,
@@ -484,17 +490,9 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
   });
 });
 
-test("unproven process-tree termination blocks state, next, and standalone run", async () => {
+test("unproven process-tree termination blocks state and next", async () => {
   await withTempDir("termination-failed-blocker", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "termination blocker",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "termination blocker" });
     const progressPath = path.join(dir, "autoresearch.progress.json");
     await writeFile(
       progressPath,
@@ -545,9 +543,6 @@ test("unproven process-tree termination blocks state, next, and standalone run",
     assert.equal(nextPayload.loopContract.canRunNextPacket, false);
     assert.equal(nextPayload.progress.termination.pid, 4242);
 
-    const run = await runCli(["run", "--cwd", dir, "--command", command]);
-    assert.notEqual(run.code, 0);
-    assert.match(run.stderr, /termination_failed/i);
     assert.equal(await pathExists(progressPath), true);
     assert.equal(await pathExists(sideEffect), false);
   });
@@ -555,15 +550,7 @@ test("unproven process-tree termination blocks state, next, and standalone run",
 
 test("non-packet termination failure persists the same packet brake", async () => {
   await withTempDir("external-termination-failed-blocker", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "external termination blocker",
-      "--metric-name",
-      "seconds",
-    ]);
+    await setupFixture(dir, { name: "external termination blocker" });
     await persistTerminationFailure(dir, "benchmark-inspect", {
       terminationFailed: true,
       termination: {
@@ -601,7 +588,7 @@ test("non-packet termination failure persists the same packet brake", async () =
 
 test("benchmark inspection holds the session lock through process execution", async () => {
   await withTempDir("inspect-session-lock", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "inspect lock", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "inspect lock" });
     const ready = path.join(dir, "inspect-ready.txt");
     const release = path.join(dir, "inspect-release.txt");
     const sideEffect = path.join(dir, "overlap.txt");
@@ -648,7 +635,7 @@ test("benchmark inspection holds the session lock through process execution", as
 
 test("packet lifecycle records keep state doctor and dashboard process trust aligned", async () => {
   await withTempDir("typed-process-lifecycle", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "process lifecycle", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "process lifecycle" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const next = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(next.code, 0, next.stderr);
@@ -726,10 +713,10 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
 
 test("unknown packet runner rejection retains a termination-failed brake", async () => {
   await withTempDir("runner-rejection-process-brake", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "runner rejection", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "runner rejection" });
     await writeFile(path.join(dir, "hostile.command"), "node\0unexpected", "utf8");
 
-    const run = await runCli(["run", "--cwd", dir, "--command-file", "hostile.command"]);
+    const run = await runCli(["next", "--cwd", dir, "--command-file", "hostile.command"]);
     assert.notEqual(run.code, 0);
     const progress = JSON.parse(
       await readFile(path.join(dir, "autoresearch.progress.json"), "utf8"),
@@ -744,43 +731,5 @@ test("unknown packet runner rejection retains a termination-failed brake", async
     assert.equal(payload.resourcePreflight.canStart, false);
     assert.equal(payload.resourcePreflight.residue[0].status, "termination-failed");
     assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
-  });
-});
-
-test("a valid unclosed running process snapshot blocks and remains durable", async () => {
-  await withTempDir("unclosed-running-process", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "unclosed process", "--metric-name", "seconds"]);
-    const progressPath = path.join(dir, "autoresearch.progress.json");
-    await writeFile(
-      progressPath,
-      JSON.stringify({
-        generation: 3,
-        packetId: "packet-unclosed",
-        commandClass: "node script",
-        startedAt: "2026-07-10T12:00:00.000Z",
-        lastOutputAt: "2026-07-10T12:00:01.000Z",
-        timeoutSeconds: 60,
-        timeoutPhase: "none",
-        exitState: "running",
-        artifactRoot: ".",
-        latestArtifactRow: "",
-        elapsedSeconds: 1,
-        staleProgressReason: "",
-        finalArtifactSummary: "",
-        termination: null,
-        terminationFailed: false,
-      }),
-      "utf8",
-    );
-    const sideEffect = path.join(dir, "must-not-run.txt");
-    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
-      `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran')`,
-    )}`;
-
-    const run = await runCli(["run", "--cwd", dir, "--command", command]);
-    assert.notEqual(run.code, 0);
-    assert.match(run.stderr, /Typed process lifecycle state reports an active/);
-    assert.equal(await pathExists(progressPath), true);
-    assert.equal(await pathExists(sideEffect), false);
   });
 });

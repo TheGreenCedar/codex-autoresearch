@@ -45,10 +45,12 @@ When behavior, commands, dashboard wording, safety rules, finalization, packagin
 - CHANGELOG for shipped user impact and migration notes
 - SKILL for Codex behavior
 - nearest topic doc
-- CLI help and tool schemas for command contracts
+- `lib/command-table.ts` for command identity, schemas, safety, help, handler binding, and compatibility lifecycle; the CLI/tool/dashboard surfaces derive from it
 - tests and `scripts/perfection-benchmark.mjs` where drift should fail the product gate
 
 Rewrite stale guidance instead of appending a second version. Removed invocation paths need a migration note.
+
+Do not add a command independently to help, handlers, schemas, or dashboard safety. Add its typed definition and implementation, then extend the schema-driven command-surface test. `lib/tool-schemas.ts` and `lib/tool-registry.ts` are compatibility facades, not second registries. Retained compatibility commands require an exact migration error, replacement, and removal date.
 
 ## Verification
 

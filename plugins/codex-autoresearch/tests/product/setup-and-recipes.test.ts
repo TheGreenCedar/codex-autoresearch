@@ -173,7 +173,7 @@ test("interactive setup uses defaults from the recipe selected by the operator",
   });
 });
 
-test("integrations can load local recipe catalogs", async () => {
+test("recipes can load local catalogs", async () => {
   await withTempDir("integrations", async (dir) => {
     const catalog = path.join(dir, "recipes.json");
     await writeFile(
@@ -195,14 +195,13 @@ test("integrations can load local recipe catalogs", async () => {
       ),
     );
 
-    const synced = await runCli(["integrations", "sync-recipes", "--catalog", catalog]);
-    assert.equal(synced.code, 0, synced.stderr);
-    const payload = JSON.parse(synced.stdout);
-    assert.equal(payload.synced, false);
+    const listed = await runCli(["recipes", "list", "--catalog", catalog]);
+    assert.equal(listed.code, 0, listed.stderr);
+    const payload = JSON.parse(listed.stdout);
     assert.ok(payload.recipes.some((recipe) => recipe.id === "demo-recipe"));
 
-    const doctor = await runCli(["integrations", "doctor", "--catalog", catalog]);
-    assert.equal(doctor.code, 0, doctor.stderr);
-    assert.match(doctor.stdout, /Configured recipe catalog/);
+    const shown = await runCli(["recipes", "show", "demo-recipe", "--catalog", catalog]);
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /Demo Recipe/);
   });
 });

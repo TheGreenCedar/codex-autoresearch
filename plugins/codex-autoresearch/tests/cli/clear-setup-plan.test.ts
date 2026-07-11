@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("clear removes deep research scratchpads", async () => {
   await withTempDir("clear-research", async (dir) => {
@@ -146,7 +146,7 @@ test("setup-plan preserves explicit command, state inputs, and baseline measure 
     const logStep = payload.firstRunChecklist.find((step) => step.step === "log");
     assert.match(logStep.command, /--status measure --description ['"]Baseline measurement['"]/);
 
-    await runCli(["init", "--cwd", dir, "--name", "guide setup", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "guide setup" });
     const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
     assert.equal(guide.code, 0, guide.stderr);
     const guidePayload = JSON.parse(guide.stdout);
