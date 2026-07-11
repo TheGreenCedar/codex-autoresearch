@@ -1,10 +1,10 @@
+import { commandDefinitionForCli, commandTable } from "./command-table.js";
 import {
   COMMAND_ARGUMENT_FIELDS,
   actionPolicyForTool,
   actionPolicyMutates,
   commandActionAliases,
   toolNameForCliCommand,
-  toolRegistry,
 } from "./tool-registry.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
 import type { UnknownRecord } from "./types/json.js";
@@ -85,16 +85,14 @@ export const DASHBOARD_EXPORT_FIELD_NAMES: ReadonlySet<string> = new Set([
 export const DASHBOARD_COMMAND_CONTEXT_FIELD_NAMES: ReadonlySet<string> =
   DASHBOARD_COMMAND_FIELD_NAMES;
 
-const DASHBOARD_DRY_RUN_ONLY_AUTORESEARCH_COMMANDS = new Set([
-  "lane-runner",
-  "new-segment",
-  "promote-gate",
-  "research-fanout",
-  "session-forensics",
-]);
+const DASHBOARD_DRY_RUN_ONLY_AUTORESEARCH_COMMANDS = new Set(
+  commandTable
+    .filter((command) => command.dashboardRequiresDryRun)
+    .map((command) => command.cliCommand),
+);
 
 const DASHBOARD_KNOWN_AUTORESEARCH_COMMANDS = new Set([
-  ...Object.values(toolRegistry).map((tool) => tool.cliCommand),
+  ...commandTable.map((tool) => tool.cliCommand),
   "help",
 ]);
 
@@ -154,6 +152,9 @@ export function dashboardCommandSafety(command: unknown): DashboardCommandSafety
       commandName: "",
       reason: "not a node-launched autoresearch command",
     };
+  }
+  if (commandDefinitionForCli(commandName)?.compatibility) {
+    return { safe: false, commandName, reason: "compatibility command requires migration" };
   }
   if (tokens.includes("--")) {
     return {

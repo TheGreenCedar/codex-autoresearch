@@ -4,6 +4,7 @@ import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import {
   createCliRunner,
   createInteractiveCliRunner,
+  createSetupFixture,
   runGit,
   withProcess,
   withTempDir as withNamedTempDir,
@@ -13,6 +14,7 @@ export const pluginRoot = resolvePackageRoot(import.meta.url);
 export const repoRoot = path.resolve(pluginRoot, "..", "..");
 export const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 export const runCli = createCliRunner(cli, pluginRoot);
+export const setupFixture = createSetupFixture();
 export const runCliWithAnswers = createInteractiveCliRunner(cli, pluginRoot);
 
 export const git = async (cwd, args) => {

@@ -6,21 +6,11 @@ import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { cliPayload } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "truth layer",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "truth layer", metricName: "score", direction: "higher" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ commitPaths: ["src/missing.ts"] }, null, 2),
@@ -75,15 +65,7 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
 
 test("scaffold health catches direct PowerShell wrapper self-recursion", async () => {
   await withTempDir("powershell-direct-self-recursion", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "powershell recursion",
-      "--metric-name",
-      "score",
-    ]);
+    await setupFixture(dir, { name: "powershell recursion", metricName: "score" });
     await writeFile(path.join(dir, "autoresearch.ps1"), "& .\\autoresearch.ps1\n", "utf8");
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
@@ -98,17 +80,7 @@ test("scaffold health catches direct PowerShell wrapper self-recursion", async (
 
 test("benchmark-lint separates metric parsing from research integrity", async () => {
   await withTempDir("benchmark-lint-integrity", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "lint integrity",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "lint integrity", metricName: "score", direction: "higher" });
 
     const result = await runCli([
       "benchmark-lint",
@@ -129,17 +101,11 @@ test("benchmark-lint separates metric parsing from research integrity", async ()
 
 test("benchmark-lint uses config benchmark command without wrapper fallback", async () => {
   await withTempDir("benchmark-lint-config-command", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "lint config command",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, {
+      name: "lint config command",
+      metricName: "score",
+      direction: "higher",
+    });
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=7')"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
@@ -158,17 +124,11 @@ test("benchmark-lint uses config benchmark command without wrapper fallback", as
 
 test("benchmark-lint sample respects configured holdout guard", async () => {
   await withTempDir("benchmark-lint-configured-holdout", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "configured holdout",
-      "--metric-name",
-      "agent_value_gap",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, {
+      name: "configured holdout",
+      metricName: "agent_value_gap",
+      direction: "lower",
+    });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ holdoutCommand: "node holdout-benchmark.mjs" }, null, 2),
@@ -194,17 +154,7 @@ test("benchmark-lint sample respects configured holdout guard", async () => {
 
 test("doctor does not treat routine rollback wording as evidence invalidation", async () => {
   await withTempDir("doctor-routine-rollback", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "routine rollback",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "routine rollback", metricName: "score", direction: "higher" });
     if (process.platform === "win32") {
       await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC score=1'\n");
     } else {
@@ -322,7 +272,7 @@ test("prompt-plan flags retrieval speed work as needing a quality constraint", a
 
 test("run notes append inside the managed ledger block", async () => {
   await withTempDir("managed-ledger", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "ledger", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "ledger" });
     await writeFile(
       path.join(dir, "autoresearch.md"),
       "# Session\n\n## Guardrails\nKeep this section stable.\n",
@@ -352,17 +302,7 @@ test("run notes append inside the managed ledger block", async () => {
 
 test("benchmark contract changes block the next packet until a new segment", async () => {
   await withTempDir("contract-drift", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "contract",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "contract", metricName: "score", direction: "higher" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ maxIterations: 5 }, null, 2),
@@ -405,17 +345,11 @@ test("benchmark contract changes block the next packet until a new segment", asy
 test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
   await withTempDir("segment-contract-rebaseline", async (dir) => {
     const benchmarkCommand = `${quoteForShell(process.execPath)} benchmark.mjs`;
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "contract rebaseline",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, {
+      name: "contract rebaseline",
+      metricName: "score",
+      direction: "higher",
+    });
     await writeFile(path.join(dir, "bench-a.txt"), "protected A\n", "utf8");
     await writeFile(
       path.join(dir, "benchmark.mjs"),
@@ -476,19 +410,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
 
 test("new segment warns when metric semantics change across segments", async () => {
   await withTempDir("segment-metric-semantics", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "metric semantics",
-      "--metric-name",
-      "seconds",
-      "--metric-unit",
-      "s",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, { name: "metric semantics", metricUnit: "s", direction: "lower" });
     await runCli([
       "log",
       "--cwd",
@@ -534,17 +456,7 @@ test("new segment warns when metric semantics change across segments", async () 
 
 test("new segment honors explicit lower direction after a higher segment", async () => {
   await withTempDir("segment-direction-lower", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "direction flip",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "direction flip", metricName: "score", direction: "higher" });
     await runCli([
       "log",
       "--cwd",
@@ -582,7 +494,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
     await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await runCli(["init", "--cwd", dir, "--name", "segment", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "segment" });
     await runCli([
       "log",
       "--cwd",
@@ -662,7 +574,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
 
 test("state and recommend-next share watchdog canonical next-action parity", async () => {
   await withTempDir("watchdog-cli-parity", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "watchdog parity", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "watchdog parity" });
     await runCli([
       "log",
       "--cwd",
@@ -735,7 +647,7 @@ test("state and recommend-next share watchdog canonical next-action parity", asy
 
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "first segment", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "first segment" });
     await runCli([
       "log",
       "--cwd",
@@ -747,7 +659,7 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
       "--description",
       "Baseline",
     ]);
-    await runCli(["init", "--cwd", dir, "--name", "second segment", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "second segment" });
     await runCli([
       "log",
       "--cwd",

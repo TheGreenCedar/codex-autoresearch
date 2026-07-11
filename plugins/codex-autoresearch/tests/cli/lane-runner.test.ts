@@ -5,11 +5,18 @@ import test from "node:test";
 
 import { createLaneRunnerCommand } from "../../lib/commands/lane-runner.js";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
-import { createCliRunner, runGit, runProcess, withTempDir } from "../helpers/process.js";
+import {
+  createCliRunner,
+  runGit,
+  runProcess,
+  withTempDir,
+  createSetupFixture,
+} from "../helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
 const runCli = createCliRunner(cli, pluginRoot);
+const setupFixture = createSetupFixture();
 
 const longText = (label: string, length: number) =>
   `${label} ${"detail ".repeat(Math.ceil(length / 7))}`.slice(0, length);
@@ -90,15 +97,7 @@ test("lane-runner stops before post-run probes when termination is unproven", as
 
 test("lane-runner big_idea mode is read-only, approval-gated, and bounded", async () => {
   await withTempDir("autoresearch", "lane-runner-big-idea", async (dir) => {
-    const init = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "big idea lane",
-      "--metric-name",
-      "quality_gap",
-    ]);
+    const init = await setupFixture(dir, { name: "big idea lane", metricName: "quality_gap" });
     assert.equal(init.code, 0, init.stderr);
 
     const blockedCommand = await runCli([
@@ -281,15 +280,7 @@ test("lane-runner refuses non-allowlisted scout side effects before execution", 
       `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(externalDiffMarker)}, "ran");`,
     );
     await runGit(dir, ["config", "diff.external", `"${process.execPath}" "${externalDiff}"`]);
-    const init = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "strict scout argv",
-      "--metric-name",
-      "quality_gap",
-    ]);
+    const init = await setupFixture(dir, { name: "strict scout argv", metricName: "quality_gap" });
     assert.equal(init.code, 0, init.stderr);
 
     const outsidePath = path.join(path.dirname(dir), `${path.basename(dir)}-outside.txt`);
@@ -363,15 +354,10 @@ test("lane-runner hardens scout porcelain probes against configured fsmonitor ho
     await writeFile(path.join(dir, "README.md"), "tracked\n");
     await runGit(dir, ["add", ".gitignore", "README.md"]);
     await runGit(dir, ["commit", "-m", "base"]);
-    const init = await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "hardened scout porcelain",
-      "--metric-name",
-      "quality_gap",
-    ]);
+    const init = await setupFixture(dir, {
+      name: "hardened scout porcelain",
+      metricName: "quality_gap",
+    });
     assert.equal(init.code, 0, init.stderr);
 
     const ignoredMarker = path.join(dir, "ignored-fsmonitor.txt");

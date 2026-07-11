@@ -2,21 +2,15 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { readGoalBrief, runCli, withTempDir } from "./helpers.js";
+import { readGoalBrief, runCli, withTempDir, setupFixture } from "./helpers.js";
 
 test("delight commands provide compact state, onboarding, linting, hooks, and new segments", async () => {
   await withTempDir("delight-commands", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "Delight loop",
-      "--goal",
-      "Improve score with evidence",
-      "--metric-name",
-      "score",
-    ]);
+    await setupFixture(dir, {
+      name: "Delight loop",
+      goal: "Improve score with evidence",
+      metricName: "score",
+    });
     await runCli([
       "log",
       "--cwd",
@@ -64,17 +58,11 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
 
     const noEvidenceDir = path.join(dir, "no-evidence");
     await mkdir(noEvidenceDir, { recursive: true });
-    await runCli([
-      "init",
-      "--cwd",
-      noEvidenceDir,
-      "--name",
-      "No evidence loop",
-      "--goal",
-      "Do not complete without evidence",
-      "--metric-name",
-      "score",
-    ]);
+    await setupFixture(noEvidenceDir, {
+      name: "No evidence loop",
+      goal: "Do not complete without evidence",
+      metricName: "score",
+    });
     const prematurePayload = await readGoalBrief(noEvidenceDir, [
       "--codex-goal-status",
       "active",
@@ -87,19 +75,12 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
 
     const promotionDir = path.join(dir, "promotion-evidence");
     await mkdir(promotionDir, { recursive: true });
-    await runCli([
-      "init",
-      "--cwd",
-      promotionDir,
-      "--name",
-      "Promotion evidence loop",
-      "--goal",
-      "Complete only against an imported Codex Goal",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(promotionDir, {
+      name: "Promotion evidence loop",
+      goal: "Complete only against an imported Codex Goal",
+      metricName: "score",
+      direction: "higher",
+    });
     await writeFile(
       path.join(promotionDir, "autoresearch.config.json"),
       `${JSON.stringify({ holdoutCommand: "echo holdout" }, null, 2)}\n`,
@@ -392,7 +373,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
 
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
   await withTempDir("cli-delight-tools", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "cli delight", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "cli delight", metricName: "score" });
     await runCli([
       "log",
       "--cwd",

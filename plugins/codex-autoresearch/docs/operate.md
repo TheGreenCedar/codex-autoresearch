@@ -41,7 +41,7 @@ Then run one packet:
 node scripts/autoresearch.mjs next --cwd <project>
 ```
 
-`next` is the command that writes a reusable last-run packet. `run` is only a raw probe, so a later `log --from-last` cannot reuse it.
+`next` is the command that writes a reusable last-run packet. Use `benchmark-inspect` for a bounded diagnostic probe. The old `run` name now fails fast with that migration and is scheduled for removal after 2026-10-01.
 
 After the command finishes, inspect the metric, the checks, the diff, and `git status`. Then record the decision from the saved packet:
 

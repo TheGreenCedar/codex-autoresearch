@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { pluginRoot, runCli, withTempDir, git } from "../helpers/cli-test-context.js";
+import { pluginRoot, runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("setup does not append elapsed metrics to explicit metric-emitting benchmarks", async () => {
   await withTempDir("setup-explicit-metric", async (dir) => {
@@ -55,7 +55,7 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
 
 test("ledger appends use LF on Windows-facing sessions", async () => {
   await withTempDir("ledger-lf", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "lf", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "lf" });
     await runCli([
       "log",
       "--cwd",
@@ -75,7 +75,7 @@ test("ledger appends use LF on Windows-facing sessions", async () => {
 
 test("benchmark-inspect warns before suspicious full benchmark probes", async () => {
   await withTempDir("benchmark-inspect", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "inspect", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "inspect", metricName: "score" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('case-a')"`;
     const result = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
@@ -118,7 +118,7 @@ test("checks-inspect catches malformed cargo checks and broad failures", async (
 
 test("promote-gate dry-runs and appends measurement gate metadata", async () => {
   await withTempDir("promote-gate", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "gate", "--metric-name", "score"]);
+    await setupFixture(dir, { name: "gate", metricName: "score" });
     await runCli([
       "log",
       "--cwd",
@@ -197,7 +197,7 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
     assert.notEqual(fractionalSetup.code, 0);
     assert.match(fractionalSetup.stderr, /maxIterations must be a positive integer/);
 
-    await runCli(["init", "--cwd", dir, "--name", "config limit", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "config limit" });
     const config = await runCli(["config", "--cwd", dir, "--extend", "-1"]);
     assert.notEqual(config.code, 0);
     assert.match(config.stderr, /extend must be a non-negative integer/);
@@ -210,7 +210,7 @@ test("invalid iteration limits and negative extensions fail loudly", async () =>
 
 test("config updates and clears guardrails and budgets", async () => {
   await withTempDir("config-clears-guardrails-budgets", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "config clears", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "config clears" });
 
     const configured = await runCli([
       "config",
@@ -326,7 +326,7 @@ test("config updates and clears guardrails and budgets", async () => {
 
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "asi file", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "asi file" });
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify({
@@ -364,7 +364,7 @@ test("log accepts ASI from a JSON file", async () => {
 
 test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
   await withTempDir("asi-json-file", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "asi json file", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "asi json file" });
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify(
@@ -481,12 +481,7 @@ test("broad discard cleanup preserves deep research scratchpads", async () => {
 
 test("CLI parser accepts equals-form options", async () => {
   await withTempDir("equals-options", async (dir) => {
-    const init = await runCli([
-      "init",
-      `--cwd=${dir}`,
-      "--name=equals options",
-      "--metric-name=seconds",
-    ]);
+    const init = await setupFixture(dir, { name: "equals options" });
     assert.equal(init.code, 0, init.stderr);
     const state = await runCli(["state", `--cwd=${dir}`, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
@@ -527,6 +522,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const readState = toolSchemas.find((tool) => tool.name === "read_state");
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
+  const goalBridge = toolSchemas.find((tool) => tool.name === "codex_goal_bridge");
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
   const ledgerDoctor = toolSchemas.find((tool) => tool.name === "ledger_doctor");
   const startResearch = toolSchemas.find((tool) => tool.name === "start_research_loop");
@@ -541,21 +537,22 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(readState);
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
+  assert.ok(goalBridge);
   assert.ok(configureSession);
   assert.ok(ledgerDoctor);
   assert.ok(startResearch);
-  assert.match(guided.description, /first-run or resume action packet/);
+  assert.match(guided.description, /guided first-run or resume packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
-  assert.match(next.description, /normal measured loop iteration/);
-  assert.match(serve.description, /live local dashboard/);
+  assert.match(next.description, /preflight readout and benchmark/);
+  assert.match(serve.description, /local live dashboard/);
   assert.equal(
     doctor.annotations.safety,
-    "Read-only unless benchmark check runs configured commands.",
+    "Read-only by default; mutating or process-starting options are explicit and session-locked.",
   );
   assert.equal(
     guided.annotations.safety,
-    "Read-only by default; starts a local dashboard only when start_dashboard=true.",
+    "Read-only by default; process-starting options are explicit and do not mutate or lock session state.",
   );
   assert.equal(guided.annotations.readOnlyHint, false);
   assert.equal(researchFanout.annotations.readOnlyHint, false);
@@ -590,8 +587,10 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.deepEqual(recommendNext.outputSchema.properties.commands.type, ["array", "object"]);
   assert.equal(recommendNext.outputSchema.properties.laneLifecycle.type, "object");
   assert.equal(recommendNext.outputSchema.properties.packetDiagnostics.type, "object");
-  assert.equal(guided.outputSchema.properties.commands.type, "array");
-  assert.equal(guided.outputSchema.properties.commands.items.type, "string");
+  assert.equal(guided.outputSchema.properties.commands.type, "object");
+  assert.equal(goalBridge.outputSchema.properties.commands.type, "object");
+  assert.equal(configureSession.outputSchema.properties.updates.type, "object");
+  assert.equal(startResearch.outputSchema.properties.commands.type, "object");
   assert.equal(guided.outputSchema.properties.dashboard.type, "object");
   assert.equal(next.outputSchema.properties.parsedMetrics, undefined);
   assert.equal(next.outputSchema.properties.decision.type, "object");
@@ -642,7 +641,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   }
   assert.equal(
     richDoctor.annotations.safety,
-    "Read-only unless benchmark check runs configured commands.",
+    "Read-only by default; mutating or process-starting options are explicit and session-locked.",
   );
   assert.equal(richDoctor.annotations.readOnlyHint, false);
   assert.equal(richDoctor.annotations.openWorldHint, true);
@@ -680,6 +679,31 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(actionPolicyForTool("ledger_doctor"), "read");
   assert.equal(actionPolicyForTool("ledger_doctor", { repair: true, yes: true }), "artifact_write");
   assert.equal(toolMutates("read_state"), false);
+});
+
+test("table output types match representative runtime command maps", async () => {
+  await withTempDir("tool-output-types", async (dir) => {
+    await setupFixture(dir, { name: "tool output types" });
+    const { toolSchemas } = await import("../../lib/tool-schemas.js");
+    const guidedResult = await runCli(["guide", "--cwd", dir, "--compact"]);
+    const configuredResult = await runCli(["config", "--cwd", dir, "--packet-budget", "2"]);
+    assert.equal(guidedResult.code, 0, guidedResult.stderr);
+    assert.equal(configuredResult.code, 0, configuredResult.stderr);
+
+    const guidedPayload = JSON.parse(guidedResult.stdout);
+    const configuredPayload = JSON.parse(configuredResult.stdout);
+    const guidedSchema = toolSchemas.find((tool) => tool.name === "guided_setup");
+    const configuredSchema = toolSchemas.find((tool) => tool.name === "configure_session");
+    assert.ok(guidedSchema);
+    assert.ok(configuredSchema);
+    assert.equal(Array.isArray(guidedPayload.commands), false);
+    assert.equal(typeof guidedPayload.commands, guidedSchema.outputSchema.properties.commands.type);
+    assert.equal(Array.isArray(configuredPayload.updates), false);
+    assert.equal(
+      typeof configuredPayload.updates,
+      configuredSchema.outputSchema.properties.updates.type,
+    );
+  });
 });
 
 test("CLI and tool argument normalization share runtime contracts", async () => {
@@ -984,7 +1008,7 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
 
 test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
   await withTempDir("log-contract-edges", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "log contract", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "log contract" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const packet = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -1035,10 +1059,49 @@ test("plugin manifest does not declare an MCP server", async () => {
   await assert.rejects(access(path.join(pluginRoot, "scripts", "autoresearch-mcp.mjs")));
 });
 
+test("compatibility commands fail before mutation with exact migrations", async () => {
+  await withTempDir("compatibility-migrations", async (dir) => {
+    const initialized = await runCli([
+      "init",
+      "--cwd",
+      dir,
+      "--name",
+      "compatibility",
+      "--metric-name",
+      "seconds",
+    ]);
+    assert.equal(initialized.code, 1, initialized.stderr);
+    assert.match(
+      initialized.stderr,
+      /init is a compatibility command scheduled for removal after 2026-10-01; migrate to setup/,
+    );
+    await assert.rejects(access(path.join(dir, "autoresearch.jsonl")));
+
+    const marker = path.join(dir, "legacy-run-executed.txt");
+    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`,
+    )}`;
+    const ran = await runCli(["run", "--cwd", dir, "--command", command]);
+    assert.equal(ran.code, 1, ran.stderr);
+    assert.match(
+      ran.stderr,
+      /run is a compatibility command scheduled for removal after 2026-10-01; migrate measured packets to next/,
+    );
+    await assert.rejects(access(marker));
+
+    const integrations = await runCli(["integrations", "list"]);
+    assert.equal(integrations.code, 1, integrations.stderr);
+    assert.match(
+      integrations.stderr,
+      /integrations is a compatibility command scheduled for removal after 2026-10-01; migrate catalog discovery and validation to recipes list\/show --catalog/,
+    );
+  });
+});
+
 test("metric names must match the METRIC parser grammar", async () => {
   await withTempDir("bad-metric-name", async (dir) => {
     const result = await runCli([
-      "init",
+      "setup",
       "--cwd",
       dir,
       "--name",

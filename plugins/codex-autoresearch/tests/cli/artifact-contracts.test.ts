@@ -4,21 +4,11 @@ import path from "node:path";
 import test from "node:test";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
 test("next supports command-file, env-file, and ARTIFACT output contracts", async () => {
   await withTempDir("command-env-artifact", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "artifact packet",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "artifact packet", metricName: "score", direction: "higher" });
     await mkdir(path.join(dir, "out"), { recursive: true });
     await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
     await writeFile(
@@ -80,17 +70,7 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
 
 test("malformed task manifests are quarantined without invalidating primary metrics", async () => {
   await withTempDir("task-manifest-malformed", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "task manifest",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "task manifest", metricName: "score", direction: "higher" });
     await writeFile(path.join(dir, "task-manifest.json"), "{not json}\n", "utf8");
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
@@ -123,17 +103,11 @@ test("symlinked task manifests outside the workdir are quarantined", async (t) =
         return;
       }
 
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        "task manifest symlink",
-        "--metric-name",
-        "score",
-        "--direction",
-        "higher",
-      ]);
+      await setupFixture(dir, {
+        name: "task manifest symlink",
+        metricName: "score",
+        direction: "higher",
+      });
 
       const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
       const packet = await runCli(["next", "--cwd", dir, "--command", command]);
@@ -250,7 +224,7 @@ test("external catalog recipes require trust and record provenance", async () =>
 
 test("doctor skips remote catalog requests unless revalidation is explicit", async () => {
   await withTempDir("catalog-doctor-opt-in", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "catalog doctor", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "catalog doctor" });
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -287,17 +261,11 @@ test("doctor skips remote catalog requests unless revalidation is explicit", asy
 
 test("external ARTIFACT paths are quarantined instead of stored as usable paths", async () => {
   await withTempDir("external-artifact", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "external artifact packet",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, {
+      name: "external artifact packet",
+      metricName: "score",
+      direction: "higher",
+    });
     const outside = path.join(path.dirname(dir), "outside-manifest.json");
     await writeFile(
       path.join(dir, "packet-runner.mjs"),
@@ -358,17 +326,11 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
         return;
       }
 
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        "linked external artifact",
-        "--metric-name",
-        "score",
-        "--direction",
-        "higher",
-      ]);
+      await setupFixture(dir, {
+        name: "linked external artifact",
+        metricName: "score",
+        direction: "higher",
+      });
       await writeFile(
         path.join(dir, "packet-runner.mjs"),
         [
@@ -418,17 +380,11 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
 
 test("accepted logged artifacts become current evidence in state registry", async () => {
   await withTempDir("accepted-artifact-registry", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "accepted artifact registry",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, {
+      name: "accepted artifact registry",
+      metricName: "score",
+      direction: "higher",
+    });
     await mkdir(path.join(dir, "out"), { recursive: true });
     await writeFile(path.join(dir, "out", "manifest.json"), '{"ok":true}\n', "utf8");
     await writeFile(
@@ -470,7 +426,7 @@ test("accepted logged artifacts become current evidence in state registry", asyn
 
 test("last-run packet storage redacts raw benchmark evidence and still logs from last", async () => {
   await withTempDir("last-run-redaction", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "redacted packet", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "redacted packet" });
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -536,15 +492,7 @@ test("last-run packet storage redacts run benchmark contract command and option-
         "utf8",
       );
       await writeFile(envFile, "PACKET_TOKEN=env-secret-qwertyuiop\n", "utf8");
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        "redacted contract",
-        "--metric-name",
-        "seconds",
-      ]);
+      await setupFixture(dir, { name: "redacted contract" });
 
       const packet = await runCli([
         "next",
@@ -609,15 +557,7 @@ test("last-run packet storage does not corrupt common option-file basenames", as
         "utf8",
       );
       await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        "common basename contract",
-        "--metric-name",
-        "seconds",
-      ]);
+      await setupFixture(dir, { name: "common basename contract" });
 
       const packet = await runCli([
         "next",
@@ -647,9 +587,9 @@ test("last-run packet storage does not corrupt common option-file basenames", as
   });
 });
 
-test("run command response redacts raw benchmark evidence", async () => {
+test("next command response redacts raw benchmark evidence", async () => {
   await withTempDir("run-response-redaction", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "redacted run", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "redacted run" });
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -667,7 +607,7 @@ test("run command response redacts raw benchmark evidence", async () => {
     await writeFile(path.join(dir, ".env.secret"), "SAMPLE_SECRET=from-env-secret-value\n", "utf8");
 
     const result = await runCli([
-      "run",
+      "next",
       "--cwd",
       dir,
       "--command",
@@ -687,7 +627,7 @@ test("run command response redacts raw benchmark evidence", async () => {
     assert.match(result.stdout, /Bearer <redacted>/);
     assert.match(result.stdout, /secret_from_env=<redacted>/);
     assert.match(result.stdout, /<network-path>/);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.envFile, "<env-file>");
     assert.equal(payload.tailOutput.includes("abcdefghijklmnop"), false);
     assert.doesNotMatch(JSON.stringify(payload.progressSnapshot), /zyxwvutsrqponmlkjihgfedcba/);
@@ -696,17 +636,7 @@ test("run command response redacts raw benchmark evidence", async () => {
 
 test("command and env files are included in benchmark contract drift", async () => {
   await withTempDir("command-env-contract-drift", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "contract files",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "contract files", metricName: "score", direction: "higher" });
     await writeFile(
       path.join(dir, "packet-runner.mjs"),
       "console.log(`METRIC score=${process.env.SCORE}`);\n",
@@ -758,17 +688,11 @@ test("command and env files are included in benchmark contract drift", async () 
 
 test("packet env defaults to minimal and is part of benchmark contract and doctor recheck", async () => {
   await withTempDir("packet-env-mode-contract", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "env mode contract",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, {
+      name: "env mode contract",
+      metricName: "score",
+      direction: "higher",
+    });
     const scriptPath = path.join(dir, "env-mode-runner.mjs");
     await writeFile(
       scriptPath,
@@ -861,7 +785,7 @@ test("working directories outside cwd require per-command authorization", async 
     assert.match(blocked.stderr, /--allow-outside-workdir/);
 
     const initialized = await runCli([
-      "init",
+      "setup",
       "--cwd",
       session,
       "--allow-outside-workdir",
@@ -877,17 +801,7 @@ test("working directories outside cwd require per-command authorization", async 
 
 test("state separates development best from promotion-grade best", async () => {
   await withTempDir("promotion-tracks", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "promotion",
-      "--metric-name",
-      "score",
-      "--direction",
-      "higher",
-    ]);
+    await setupFixture(dir, { name: "promotion", metricName: "score", direction: "higher" });
     for (const [metric, promotionGrade] of [
       [0.6, 0],
       [0.8, 1],

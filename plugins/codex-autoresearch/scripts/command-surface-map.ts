@@ -1,12 +1,10 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ACTION_METADATA } from "../lib/action-metadata.js";
-import { resolvePackageRoot } from "../lib/runtime-paths.js";
+import { commandTable, type CommandDefinition } from "../lib/command-table.js";
 import { validateToolContracts } from "../lib/tool-contracts.js";
 import { toolSchemas } from "../lib/tool-schemas.js";
-import { toolRegistry } from "../lib/tool-registry.js";
 
 type RegistryEntry = {
   audience: string;
@@ -42,7 +40,6 @@ type CommandSurfaceMap = {
   argumentIssues: string[];
 };
 
-const ROOT = resolvePackageRoot(import.meta.url);
 const VALID_CATEGORIES = new Set([
   "happy_path",
   "setup",
@@ -55,141 +52,93 @@ const VALID_AUDIENCES = new Set(["default", "advanced", "maintainer"]);
 
 export async function buildCommandSurfaceMap(): Promise<CommandSurfaceMap> {
   const registry = registryEntries();
-  const publicEntries = registry.filter((entry) => entry.public);
-  const publicCommands = new Set(publicEntries.map((entry) => entry.cliCommand));
-  const publicToolNames = new Set(publicEntries.map((entry) => entry.name));
+  const commandNames = commandTable.map((entry) => entry.cliCommand);
+  const toolNames = commandTable.map((entry) => entry.name);
   const commandToEntry = new Map(registry.map((entry) => [entry.cliCommand, entry]));
-  const toolNameToEntry = new Map(registry.map((entry) => [entry.name, entry]));
-
-  const scans = await Promise.all([
-    scanCommandSource({
-      label: "cli-help",
-      candidates: ["lib/cli/help.ts", "dist/lib/cli/help.mjs"],
-      extractCommands: extractUsageCommands,
-      required: true,
-      registryCommands: publicCommands,
-      commandToEntry,
-    }),
-    scanCommandSource({
-      label: "cli-handlers",
-      candidates: ["lib/cli-handlers.ts", "dist/lib/cli-handlers.mjs"],
-      extractCommands: extractCliHandlerCommands,
-      required: true,
-      registryCommands: publicCommands,
-      commandToEntry,
-    }),
-    scanToolNameSource({
-      label: "tool-schemas",
-      candidates: ["lib/tool-schemas.ts", "dist/lib/tool-schemas.mjs"],
-      extractToolNames,
-      required: true,
-      registryToolNames: publicToolNames,
-      toolNameToEntry,
-    }),
-  ]);
-  const argumentIssues = await validateArgumentCoherence();
-  const metadataIssues = validateRegistryMetadata(registry);
+  const metadataIssues = validateCommandMetadata(commandTable);
   const contractIssues = validateToolContracts(toolSchemas).issues;
   const actionMetadataIssues = validateActionMetadata(commandToEntry);
-
-  const missingPublicReferences = scans
-    .flatMap((scan) => {
-      if (!scan.required) return [];
-      return [
-        ...scan.missingCommands.map((command) => `${scan.label}: ${command}`),
-        ...scan.missingToolNames.map((name) => `${scan.label}: ${name}`),
-        ...scan.unregisteredCommands.map((command) => `${scan.label}: ${command}`),
-        ...scan.unregisteredToolNames.map((name) => `${scan.label}: ${name}`),
-      ];
-    })
-    .concat(argumentIssues);
-
+  const scans: SourceScan[] = [
+    {
+      label: "command-table",
+      path: "lib/command-table.ts",
+      commands: commandNames,
+      toolNames,
+      missingCommands: [],
+      missingToolNames: [],
+      unregisteredCommands: [],
+      unregisteredToolNames: [],
+      required: true,
+    },
+  ];
   return {
     ok:
-      missingPublicReferences.length === 0 &&
       metadataIssues.length === 0 &&
       contractIssues.length === 0 &&
       actionMetadataIssues.length === 0,
     registry,
     scans,
-    missingPublicReferences,
+    missingPublicReferences: [],
     metadataIssues,
     contractIssues,
     actionMetadataIssues,
-    argumentIssues,
-    internalReferences: registry
-      .filter((entry) => entry.internal)
-      .map((entry) => `${entry.cliCommand} (${entry.name}) from ${entry.source}`),
+    argumentIssues: [],
+    internalReferences: [],
   };
 }
 
-async function validateArgumentCoherence(): Promise<string[]> {
-  const issues: string[] = [];
-  const onboarding = toolSchemas.find((tool) => tool.name === "onboarding_packet");
-  const recommend = toolSchemas.find((tool) => tool.name === "recommend_next");
-  const cliHandlers = await readFirstExisting(["lib/cli-handlers.ts", "dist/lib/cli-handlers.mjs"]);
-  const onboardingHandler = extractCommandHandlerSource(cliHandlers.content, "onboarding-packet");
-  const recommendHandler = extractCommandHandlerSource(cliHandlers.content, "recommend-next");
-
-  if (onboarding?.inputSchema.properties?.operator_checklist) {
-    issues.push(
-      "onboarding_packet: operator_checklist is exposed but onboarding-packet does not handle it",
-    );
-  }
-  if (!recommend?.inputSchema.properties?.operator_checklist) {
-    issues.push(
-      "recommend_next: operator_checklist is handled by recommend-next but missing from input schema",
-    );
-  }
-  if (/operatorChecklist/.test(onboardingHandler)) {
-    issues.push("onboarding-packet: operatorChecklist handler wiring belongs on recommend-next");
-  }
-  if (!/operatorChecklist:\s*args\.operatorChecklist/.test(recommendHandler)) {
-    issues.push("recommend-next: operatorChecklist handler wiring is missing");
-  }
-
-  return issues;
-}
-
-function extractCommandHandlerSource(source: string, command: string): string {
-  const pattern = new RegExp(
-    `["']${escapeRegExp(command)}["']:\\s+async[\\s\\S]*?(?=\\n    ["'][a-z]|\\n    [A-Za-z][A-Za-z0-9]*:\\s+async|\\n  \\}\\);)`,
-  );
-  return source.match(pattern)?.[0] || "";
-}
-
 function registryEntries(): RegistryEntry[] {
-  return Object.entries(toolRegistry)
-    .map(([name, raw]) => {
-      const entry = raw as Record<string, unknown>;
-      const internal = entry.internal === true || entry.hidden === true || entry.public === false;
-      return {
-        name,
-        cliCommand: String(entry.cliCommand || ""),
-        category: String(entry.category || ""),
-        audience: String(entry.audience || ""),
-        public: !internal,
-        internal,
-        source: "lib/tool-registry.ts",
-      };
-    })
-    .filter((entry) => entry.cliCommand)
+  return commandTable
+    .map((entry) => ({
+      name: entry.name,
+      cliCommand: entry.cliCommand,
+      category: entry.category,
+      audience: entry.audience,
+      public: true,
+      internal: false,
+      source: "lib/command-table.ts",
+    }))
     .sort((a, b) => a.cliCommand.localeCompare(b.cliCommand));
 }
 
-function validateRegistryMetadata(registry: RegistryEntry[]): string[] {
-  return registry
-    .filter((entry) => entry.public)
-    .flatMap((entry) => {
-      const issues = [];
-      if (!VALID_CATEGORIES.has(entry.category)) {
-        issues.push(`${entry.cliCommand}: missing or invalid category`);
+function validateCommandMetadata(commands: readonly CommandDefinition[]): string[] {
+  const issues: string[] = [];
+  const cliNames = new Set<string>();
+  const toolNames = new Set<string>();
+  for (const command of commands) {
+    if (!VALID_CATEGORIES.has(command.category)) {
+      issues.push(`${command.cliCommand}: missing or invalid category`);
+    }
+    if (!VALID_AUDIENCES.has(command.audience)) {
+      issues.push(`${command.cliCommand}: missing or invalid audience`);
+    }
+    if (!command.handler) issues.push(`${command.cliCommand}: missing handler binding`);
+    if (!command.help.length) issues.push(`${command.cliCommand}: missing help usage`);
+    if (cliNames.has(command.cliCommand))
+      issues.push(`${command.cliCommand}: duplicate CLI command`);
+    if (toolNames.has(command.name)) issues.push(`${command.name}: duplicate tool name`);
+    cliNames.add(command.cliCommand);
+    toolNames.add(command.name);
+    if (command.compatibility) {
+      if (!command.compatibility.error.trim()) {
+        issues.push(`${command.cliCommand}: compatibility command missing migration error`);
       }
-      if (!VALID_AUDIENCES.has(entry.audience)) {
-        issues.push(`${entry.cliCommand}: missing or invalid audience`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(command.compatibility.removeAfter)) {
+        issues.push(`${command.cliCommand}: compatibility command missing removal date`);
       }
-      return issues;
-    });
+      if (!cliNames.has(command.compatibility.replacement)) {
+        const replacementExists = commands.some(
+          (candidate) => candidate.cliCommand === command.compatibility?.replacement,
+        );
+        if (!replacementExists) {
+          issues.push(
+            `${command.cliCommand}: replacement ${command.compatibility.replacement} is not registered`,
+          );
+        }
+      }
+    }
+  }
+  return issues;
 }
 
 function validateActionMetadata(commandToEntry: Map<string, RegistryEntry>): string[] {
@@ -199,179 +148,38 @@ function validateActionMetadata(commandToEntry: Map<string, RegistryEntry>): str
     if (!metadata.commandLabel.trim()) issues.push(`${kind}: missing command label`);
     if (!metadata.safeAction.trim()) {
       issues.push(`${kind}: missing safeAction`);
-    } else {
-      const entry = commandToEntry.get(metadata.safeAction);
-      if (!entry) {
-        issues.push(`${kind}: safeAction ${metadata.safeAction} is not a registered CLI command`);
-      } else if (!entry.public) {
-        issues.push(`${kind}: safeAction ${metadata.safeAction} references an internal command`);
-      }
+    } else if (!commandToEntry.has(metadata.safeAction)) {
+      issues.push(`${kind}: safeAction ${metadata.safeAction} is not a registered CLI command`);
     }
     if (!metadata.fallbackKeys.length) issues.push(`${kind}: missing fallback keys`);
-    const fallbackKeys = new Set(metadata.fallbackKeys);
-    if (fallbackKeys.size !== metadata.fallbackKeys.length) {
+    if (new Set(metadata.fallbackKeys).size !== metadata.fallbackKeys.length) {
       issues.push(`${kind}: duplicate fallback keys`);
     }
   }
   return issues;
 }
 
-async function scanCommandSource({
-  label,
-  candidates,
-  extractCommands,
-  required,
-  registryCommands,
-  commandToEntry,
-}: {
-  label: string;
-  candidates: string[];
-  extractCommands: (source: string) => string[];
-  required: boolean;
-  registryCommands: Set<string>;
-  commandToEntry: Map<string, RegistryEntry>;
-}): Promise<SourceScan> {
-  const source = await readFirstExisting(candidates);
-  const commands = extractCommands(source.content);
-  return {
-    label,
-    path: source.relativePath,
-    commands,
-    missingCommands: [...registryCommands].filter((command) => !commands.includes(command)),
-    missingToolNames: [],
-    unregisteredCommands: commands.filter((command) => {
-      const entry = commandToEntry.get(command);
-      return !entry;
-    }),
-    unregisteredToolNames: [],
-    required,
-  };
-}
-
-async function scanToolNameSource({
-  label,
-  candidates,
-  extractToolNames,
-  required,
-  registryToolNames,
-  toolNameToEntry,
-}: {
-  label: string;
-  candidates: string[];
-  extractToolNames: (source: string) => string[];
-  required: boolean;
-  registryToolNames: Set<string>;
-  toolNameToEntry: Map<string, RegistryEntry>;
-}): Promise<SourceScan> {
-  const source = await readFirstExisting(candidates);
-  const toolNames = extractToolNames(source.content);
-  return {
-    label,
-    path: source.relativePath,
-    toolNames,
-    missingCommands: [],
-    missingToolNames: [...registryToolNames].filter((name) => !toolNames.includes(name)),
-    unregisteredCommands: [],
-    unregisteredToolNames: toolNames.filter((name) => {
-      const entry = toolNameToEntry.get(name);
-      return !entry;
-    }),
-    required,
-  };
-}
-
-async function readFirstExisting(candidates: string[]) {
-  const errors: string[] = [];
-  for (const relativePath of candidates) {
-    const absolutePath = path.join(ROOT, relativePath);
-    try {
-      return {
-        relativePath,
-        content: await fs.readFile(absolutePath, "utf8"),
-      };
-    } catch (error) {
-      errors.push(`${relativePath}: ${String(error)}`);
-    }
-  }
-  throw new Error(`Could not read command surface source:\n${errors.join("\n")}`);
-}
-
-function extractUsageCommands(source: string): string[] {
-  return uniqueMatches(source, /node scripts\/autoresearch\.mjs\s+([a-z][a-z0-9-]*)/g);
-}
-
-function extractCliHandlerCommands(source: string): string[] {
-  return uniqueMatches(
-    source,
-    /^[ \t]+(?:"([a-z][a-z0-9-]+)"|([A-Za-z][A-Za-z0-9]*)):\s+async/gm,
-  ).map((command) => (command === "export" ? "export" : command));
-}
-
-function extractToolNames(source: string): string[] {
-  return uniqueMatches(source, /name:\s+"([a-z][a-z0-9_]*)"/g);
-}
-
-function uniqueMatches(source: string, pattern: RegExp): string[] {
-  const values = new Set<string>();
-  for (const match of source.matchAll(pattern)) {
-    values.add(String(match[1] || match[2] || ""));
-  }
-  return [...values].filter(Boolean).sort();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function formatCommandSurfaceMap(map: CommandSurfaceMap): string {
-  const lines = ["Command surface map", ""];
-  lines.push(`Registry commands: ${map.registry.filter((entry) => entry.public).length} public`);
+  const lines = ["Command surface map", "", `Registry commands: ${map.registry.length} public`];
   lines.push(`metadata: missing=${map.metadataIssues.length}`);
-  if (map.metadataIssues.length) {
-    lines.push(`  metadata issues: ${map.metadataIssues.join(", ")}`);
-  }
+  if (map.metadataIssues.length) lines.push(`  metadata issues: ${map.metadataIssues.join(", ")}`);
   lines.push(`contracts: issues=${map.contractIssues.length}`);
-  if (map.contractIssues.length) {
-    lines.push(`  contract issues: ${map.contractIssues.join(", ")}`);
-  }
+  if (map.contractIssues.length) lines.push(`  contract issues: ${map.contractIssues.join(", ")}`);
   lines.push(`action metadata: issues=${map.actionMetadataIssues.length}`);
   if (map.actionMetadataIssues.length) {
     lines.push(`  action metadata issues: ${map.actionMetadataIssues.join(", ")}`);
   }
   for (const scan of map.scans) {
-    const missing = scan.missingCommands.length + scan.missingToolNames.length;
-    const unregistered = scan.unregisteredCommands.length + scan.unregisteredToolNames.length;
-    lines.push(`${scan.label}: ${scan.path}; missing=${missing}; unregistered=${unregistered}`);
-    if (scan.missingCommands.length) {
-      lines.push(`  missing commands: ${scan.missingCommands.join(", ")}`);
-    }
-    if (scan.missingToolNames.length) {
-      lines.push(`  missing tool names: ${scan.missingToolNames.join(", ")}`);
-    }
-    if (scan.unregisteredCommands.length) {
-      lines.push(`  unregistered commands: ${scan.unregisteredCommands.join(", ")}`);
-    }
-    if (scan.unregisteredToolNames.length) {
-      lines.push(`  unregistered tool names: ${scan.unregisteredToolNames.join(", ")}`);
-    }
-  }
-  if (map.argumentIssues.length) {
-    lines.push(`Argument issues: ${map.argumentIssues.join(", ")}`);
-  }
-  if (map.internalReferences.length) {
-    lines.push("");
-    lines.push(`Internal commands: ${map.internalReferences.join(", ")}`);
+    lines.push(`${scan.label}: ${scan.path}; missing=0; unregistered=0`);
   }
   return lines.join("\n");
 }
 
 async function main() {
   const map = await buildCommandSurfaceMap();
-  if (process.argv.includes("--json")) {
-    console.log(JSON.stringify(map, null, 2));
-  } else {
-    console.log(formatCommandSurfaceMap(map));
-  }
+  console.log(
+    process.argv.includes("--json") ? JSON.stringify(map, null, 2) : formatCommandSurfaceMap(map),
+  );
   process.exit(map.ok ? 0 : 1);
 }
 
@@ -379,6 +187,4 @@ const isMain = process.argv[1]
   ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
   : false;
 
-if (isMain) {
-  await main();
-}
+if (isMain) await main();

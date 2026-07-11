@@ -5,17 +5,17 @@ import test from "node:test";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir } from "../helpers/cli-test-context.js";
+import { runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
-test("run returns explicit keep/discard decision options instead of a fake status", async () => {
+test("next returns explicit keep/discard decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "decision hint", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "decision hint" });
 
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.25')"`;
-    const result = await runCli(["run", "--cwd", dir, "--command", command]);
+    const result = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
 
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.ok, true);
     assert.equal(payload.logHint.status, null);
     assert.equal(payload.logHint.needsDecision, true);
@@ -25,7 +25,7 @@ test("run returns explicit keep/discard decision options instead of a fake statu
 
 test("state and dashboard math keep zero-valued metrics visible", async () => {
   await withTempDir("zero-metric", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "zero metric", "--metric-name", "failures"]);
+    await setupFixture(dir, { name: "zero metric", metricName: "failures" });
     const log = await runCli([
       "log",
       "--cwd",
@@ -54,7 +54,7 @@ test("state and dashboard math keep zero-valued metrics visible", async () => {
 
 test("showcase export scrubs local paths from embedded ledger entries", async () => {
   await withTempDir("showcase-public-entry-scrub", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "public scrub", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "public scrub" });
     const localPath = "D:\\Sensitive\\client\\file.txt";
     const logged = await runCli([
       "log",
@@ -156,7 +156,7 @@ test("offline exports bound embedded ledger entries for long sessions", async ()
 
 test("log accepts metrics from a JSON file for PowerShell-safe logging", async () => {
   await withTempDir("metrics-file", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "metrics file", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "metrics file" });
     await writeFile(
       path.join(dir, "metrics.json"),
       JSON.stringify(
@@ -199,7 +199,7 @@ test("log accepts metrics from a JSON file for PowerShell-safe logging", async (
 
 test("log succeeds with recovery warning when session note update fails", async () => {
   await withTempDir("log-note-warning", async (dir) => {
-    await runCli(["init", "--cwd", dir, "--name", "note warning", "--metric-name", "seconds"]);
+    await setupFixture(dir, { name: "note warning" });
     const notePath = path.join(dir, "autoresearch.md");
     await rm(notePath, { recursive: true, force: true });
     await mkdir(notePath);
@@ -228,17 +228,7 @@ test("log succeeds with recovery warning when session note update fails", async 
 
 test("state supports negative metrics when lower is better", async () => {
   await withTempDir("negative-metric", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "negative metric",
-      "--metric-name",
-      "delta",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, { name: "negative metric", metricName: "delta", direction: "lower" });
     await runCli([
       "log",
       "--cwd",
@@ -373,17 +363,11 @@ test("new config segment preserves previous durable goal when omitted", async ()
 
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "discarded best",
-      "--metric-name",
-      "seconds",
-      "--direction",
-      "lower",
-    ]);
+    await setupFixture(dir, { name: "discarded best", direction: "lower" });
+    const checksFile =
+      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+    const checksBody = process.platform === "win32" ? "exit 1\n" : "#!/bin/sh\nexit 1\n";
+    await writeFile(path.join(dir, checksFile), checksBody, "utf8");
     await runCli([
       "log",
       "--cwd",
@@ -411,14 +395,9 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).best, 10);
 
-    const checksFile =
-      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
-    const checksBody = process.platform === "win32" ? "exit 1\n" : "#!/bin/sh\nexit 1\n";
-    await writeFile(path.join(dir, checksFile), checksBody, "utf8");
-
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
     const result = await runCli([
-      "run",
+      "next",
       "--cwd",
       dir,
       "--command",
@@ -427,7 +406,7 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
       "on-improvement",
     ]);
     assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.improvesPrimary, true);
     assert.equal(payload.checks?.passed, false);
     assert.equal(payload.ok, false);

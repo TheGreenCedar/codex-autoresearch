@@ -65,7 +65,7 @@ The ASI file must contain the real hypothesis, evidence, rollback reason when re
 
 ## Run one packet at a time
 
-Use `next` for a reusable packet. Treat `run` as a raw probe that `log --from-last` cannot reuse.
+Use `next` for a reusable packet. Use `benchmark-inspect` for a bounded diagnostic probe; the old `run` name fails fast with that migration and is scheduled for removal after 2026-10-01.
 
 After `next`:
 
@@ -87,7 +87,7 @@ When accepted work was committed outside Autoresearch, verify the commit and log
 Obey these brakes:
 
 - Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
-- Treat `termination_failed` as a hard stop. Preserve partial packet evidence, verify the reported PID and descendants are absent, then remove only the retained progress marker before another `run` or `next`.
+- Treat `termination_failed` as a hard stop. Preserve partial packet evidence, verify the reported PID and descendants are absent, then remove only the retained progress marker before another `next`.
 - Treat typed `process_lifecycle` blockers as process truth: verify absence before recording a later terminal row. Never infer active residue from historical prose, and never repair a malformed lifecycle row by weakening validation.
 - Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
 - Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.

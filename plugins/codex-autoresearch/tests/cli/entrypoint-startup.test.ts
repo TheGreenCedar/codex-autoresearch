@@ -5,7 +5,13 @@ import path from "node:path";
 import test from "node:test";
 import { escapeRegExp } from "../helpers/runtime-release-fixtures.js";
 
-import { pluginRoot, runCli, runSpawnedCli, withTempDir } from "../helpers/cli-test-context.js";
+import {
+  pluginRoot,
+  runCli,
+  runSpawnedCli,
+  withTempDir,
+  setupFixture,
+} from "../helpers/cli-test-context.js";
 
 test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
   await withTempDir("spawned-contract", async (dir) => {
@@ -14,7 +20,7 @@ test("spawned CLI contract covers source launcher startup and env workdir resolu
     assert.match(help.stdout, /Usage:/);
 
     const env = { ...process.env, CODEX_AUTORESEARCH_WORKDIR: dir };
-    const init = await runSpawnedCli(["init", "--name", "spawned", "--metric-name", "seconds"], {
+    const init = await runSpawnedCli(["setup", "--name", "spawned", "--metric-name", "seconds"], {
       cwd: pluginRoot,
       env,
     });
@@ -91,17 +97,11 @@ test("spawned CLI returns scoped help and human-safe usage errors", async () => 
 
 test("compact state exposes authoritative goal frame and operator handoff", async () => {
   await withTempDir("compact-goal-frame", async (dir) => {
-    await runCli([
-      "init",
-      "--cwd",
-      dir,
-      "--name",
-      "goal frame",
-      "--metric-name",
-      "agent_value_gap",
-      "--goal",
-      "Use cheap local evidence before live A/B.",
-    ]);
+    await setupFixture(dir, {
+      name: "goal frame",
+      metricName: "agent_value_gap",
+      goal: "Use cheap local evidence before live A/B.",
+    });
 
     const result = await runCli([
       "state",
@@ -179,17 +179,10 @@ test(
   },
   async () => {
     await withTempDir("compact-read-budget", async (dir) => {
-      await runCli([
-        "init",
-        "--cwd",
-        dir,
-        "--name",
-        "compact read budget",
-        "--metric-name",
-        "seconds",
-        "--goal",
-        "Keep compact read commands fast.",
-      ]);
+      await setupFixture(dir, {
+        name: "compact read budget",
+        goal: "Keep compact read commands fast.",
+      });
 
       const commands = [
         ["state", "--cwd", dir, "--compact"],
