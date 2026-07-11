@@ -95,12 +95,6 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/au
 
 `npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures current desktop and mobile screenshots under `tmp/`, and checks decision-first viewport bounds, operate/audit agreement, refresh focus and failure state, static-share safety, keyboard disclosures, ledger geometry, modal focus restoration, chart keyboard navigation, mobile layout, reduced motion, pagination, accessible names, dialog semantics, and ARIA references. Its long-history fixture also enforces at most 1,200 mobile DOM elements, 20 buttons, 10 mobile or 48 desktop plotted points, one chart range control, 20 ledger rows per page, at most 10 nodes of DOM growth from 100 to 5,000 runs, a 2.5 MB response, 2-second readiness, 200 ms interactions, and 12 px operational text. It is not a manual screen-reader validation.
 
-The checked-in `examples/demo-session/autoresearch-dashboard.html` is a legacy fixture, not the normal review target. Routine checks use ignored exports under `tmp/`. Refresh the legacy file only when the fixture itself intentionally changes:
-
-```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
-```
-
 ## Package shape and runtime hydration
 
 `dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.

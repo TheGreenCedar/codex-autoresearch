@@ -3,7 +3,7 @@ import { redactEvidenceObject } from "./evidence-redaction.js";
 import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
 import { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 import { buildMissionControl } from "./dashboard-view-model/mission-control.js";
-import { buildWatchdogSummary } from "./dashboard-view-model/watchdog-summary.js";
+import { buildWatchdogSummary } from "./watchdog-summary.js";
 import {
   actionMetadataForKind,
   fallbackCommandForKind,
@@ -18,7 +18,7 @@ import { parseDashboardContext, type DashboardContext } from "./types/dashboard-
 
 export { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 export { buildMissionControl } from "./dashboard-view-model/mission-control.js";
-export { buildWatchdogSummary } from "./dashboard-view-model/watchdog-summary.js";
+export { buildWatchdogSummary } from "./watchdog-summary.js";
 
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher" | string;

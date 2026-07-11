@@ -48,9 +48,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/au
 
 `npm run check` writes its own ignored trust export at `examples/demo-session/tmp/autoresearch-dashboard.check.html`. That generated export is the parity target for current dashboard source, bundled assets, showcase metadata, redaction, and read-only behavior.
 
-The committed `autoresearch-dashboard.html` is a legacy fixture. Do not use it as the current runboard, and do not refresh it for routine dashboard changes.
-
-If you want a raw portable export of the example session evidence, write it under `tmp/` instead of overwriting the legacy fixture:
+If you want a raw portable export of the example session evidence, write it under `tmp/`:
 
 ```bash
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.session.html

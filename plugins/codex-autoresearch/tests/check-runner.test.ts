@@ -246,10 +246,6 @@ test("demo trust generates its dashboard export in ignored demo tmp", () => {
     dashboardGeneratedDemoExport,
     "examples/demo-session/tmp/autoresearch-dashboard.check.html",
   );
-  assert.notEqual(
-    dashboardGeneratedDemoExport,
-    "examples/demo-session/autoresearch-dashboard.html",
-  );
 });
 
 test("demo export asset parity accepts documented closing-tag escaping", () => {
