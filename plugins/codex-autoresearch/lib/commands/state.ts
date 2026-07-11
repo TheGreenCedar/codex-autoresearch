@@ -18,7 +18,6 @@ import { boolOption } from "../cli/args.js";
 import {
   buildDecisionEnvelope,
   createSessionReadCache,
-  finiteMetric,
   iterationLimitInfo,
   loadSessionRecords,
   loadSessionState,
@@ -79,7 +78,6 @@ function decisionSetupState(state: CommandRecord): CommandRecord | null {
 type CommandRecord = UnknownRecord;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 type FinalizePreviewModule = typeof import("../finalize-preview.js");
-type PartialResultsModule = typeof import("../partial-results.js");
 
 async function buildFinalizePreviewLazy(
   ...args: Parameters<FinalizePreviewModule["finalizePreview"]>
@@ -87,42 +85,18 @@ async function buildFinalizePreviewLazy(
   return (await import("../finalize-preview.js")).finalizePreview(...args);
 }
 
-async function discoverLastRunPartialResults(
+async function discoverLastRunPartialResultsLazy(
   workDir: string,
   state: CommandRecord,
   lastRun: CommandRecord | null,
 ) {
-  if (!lastRun || !partialResultEligiblePacket(lastRun)) {
-    return { candidates: [], skippedArtifacts: [] };
-  }
-  return await discoverPartialResultCandidatesLazy({
+  return await (
+    await import("../partial-results.js")
+  ).discoverLastRunPartialResults({
     workDir,
     primaryMetricName: String(recordOrEmpty(state.config).metricName || "metric"),
     lastRunPacket: lastRun,
-  }).catch((error: unknown) => ({
-    candidates: [],
-    skippedArtifacts: [
-      {
-        artifactName: "last-run",
-        artifactPath: lastRun.lastRunPath || "",
-        reason: errorMessage(error),
-      },
-    ],
-  }));
-}
-
-async function discoverPartialResultCandidatesLazy(
-  ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
-): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
-  return (await import("../partial-results.js")).discoverPartialResultCandidates(...args);
-}
-
-function partialResultEligiblePacket(packet: CommandRecord): boolean {
-  const run = recordOrEmpty(packet.run);
-  const packetEvidence = recordOrEmpty(packet.packetEvidence);
-  if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
-  const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
-  return exitCode != null && exitCode !== 0;
+  });
 }
 
 export async function publicState(args: CommandRecord): Promise<CommandRecord> {
@@ -255,7 +229,7 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     title: recipe.title,
     tags: recipe.tags || [],
   }));
-  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const partialResults = await discoverLastRunPartialResultsLazy(workDir, state, lastRun);
   const workflowFriction = analyzeWorkflowFriction({
     state: stateWithQualityGap,
     lastRun,
@@ -592,7 +566,7 @@ async function publicCompactState({
     runtimeAuthority: guidance.runtimeAuthority,
     ledgerHealth,
   };
-  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const partialResults = await discoverLastRunPartialResultsLazy(workDir, state, lastRun);
   const recipeSummaries = listBuiltInRecipes().map((recipe) => ({
     id: recipe.id,
     title: recipe.title,

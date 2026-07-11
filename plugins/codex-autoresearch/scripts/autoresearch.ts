@@ -173,6 +173,7 @@ import {
   promotionGradeValue,
   readConfig as readSessionConfig,
 } from "../lib/session-core.js";
+import { validateMetricName } from "../lib/runner.js";
 import { buildResearchIntegrity, buildScaffoldHealth } from "../lib/truth-signals.js";
 import {
   analyzeLedgerHealth,
@@ -216,12 +217,9 @@ const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
 const KEEP_POLICIES = new Set(["primary-only", "primary-or-risk-reduction"]);
 const SECONDARY_METRIC_CONSTRAINT_MODES = new Set(["advisory", "blocking"]);
-const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
-const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
-type PartialResultsModule = typeof import("../lib/partial-results.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
 
 async function buildDashboardViewModelLazy(
@@ -240,12 +238,6 @@ async function buildFinalizeCurrentTree(
   ...args: Parameters<FinalizePreviewModule["finalizeCurrentTree"]>
 ): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizeCurrentTree"]>>> {
   return (await import("../lib/finalize-preview.js")).finalizeCurrentTree(...args);
-}
-
-async function discoverPartialResultCandidatesLazy(
-  ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
-): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
-  return (await import("../lib/partial-results.js")).discoverPartialResultCandidates(...args);
 }
 
 async function serveAutoresearchLazy(
@@ -348,15 +340,6 @@ function slashPath(value: unknown): string {
   return String(value || "")
     .replace(/\\/g, "/")
     .replace(/\/+$/g, "");
-}
-
-function validateMetricName(name: string) {
-  if (!METRIC_NAME_PATTERN.test(String(name || "")) || DENIED_METRIC_NAMES.has(String(name))) {
-    throw new Error(
-      `Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${name}`,
-    );
-  }
-  return String(name);
 }
 
 function errorMessage(error: unknown): string {
@@ -4119,7 +4102,7 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     title: recipe.title,
     tags: recipe.tags || [],
   }));
-  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const partialResults = await discoverLastRunPartialResultsLazy(workDir, state, lastRun);
   const workflowFriction = analyzeWorkflowFriction({
     state: stateWithQualityGap,
     lastRun,
@@ -4691,37 +4674,18 @@ function looksLikeProcessEvidence(value: LooseObject): boolean {
   );
 }
 
-async function discoverLastRunPartialResults(
+async function discoverLastRunPartialResultsLazy(
   workDir: string,
   state: LooseObject,
   lastRun: LooseObject | null,
 ) {
-  if (!lastRun || !partialResultEligiblePacket(lastRun)) {
-    return { candidates: [], skippedArtifacts: [] };
-  }
-  return await discoverPartialResultCandidatesLazy({
+  return await (
+    await import("../lib/partial-results.js")
+  ).discoverLastRunPartialResults({
     workDir,
     primaryMetricName: state.config?.metricName || "metric",
     lastRunPacket: lastRun,
-  }).catch((error: any) => ({
-    candidates: [],
-    skippedArtifacts: [
-      {
-        artifactName: "last-run",
-        artifactPath: lastRun?.lastRunPath || "",
-        reason: error.message || String(error),
-      },
-    ],
-  }));
-}
-
-function partialResultEligiblePacket(packet: LooseObject | null): boolean {
-  if (!packet) return false;
-  const run = packet.run || {};
-  const packetEvidence = packet.packetEvidence || {};
-  if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
-  const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
-  return exitCode != null && exitCode !== 0;
+  });
 }
 
 async function ledgerDoctor(args: LooseObject): Promise<LooseObject> {

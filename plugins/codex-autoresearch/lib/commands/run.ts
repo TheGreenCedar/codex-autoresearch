@@ -37,7 +37,13 @@ import {
   staleProgressReason,
   updateProgressSnapshot,
 } from "../runner-progress.js";
-import { parseMetricLines, runShell, tailText, type ShellRunResult } from "../runner.js";
+import {
+  metricParseSource,
+  parseMetricLines,
+  runShell,
+  tailText,
+  type ShellRunResult,
+} from "../runner.js";
 import { commandDiagnostics } from "../truth-signals.js";
 import type { UnknownRecord } from "../types/json.js";
 import { runWithRequiredCleanup } from "../required-cleanup.js";
@@ -506,18 +512,4 @@ function parseArtifactLines(output: string, workDir: string) {
     }
   }
   return { artifacts, artifactWarnings };
-}
-
-function metricParseSource(result: ShellRunResult): string {
-  const retained = result.retainedMetricOutput || "";
-  if (result.metricOutput) {
-    return [
-      result.metricOutput,
-      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
-      retained,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
 }

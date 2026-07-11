@@ -1,6 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
-import type { ShellRunResult } from "../runner.js";
-import { runShell } from "../runner.js";
+import { metricParseSource, runShell, validateMetricName, type ShellRunResult } from "../runner.js";
 import { resolveBenchmarkCommandSource } from "../benchmark/command-input.js";
 import { fixedControlBlockForCommand, type FixedControlBlock } from "../fixed-control.js";
 import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
@@ -10,8 +9,6 @@ import { currentState, finiteMetric } from "../session-core.js";
 import { parseMetricLines } from "../runner.js";
 
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
-const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
-const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 
 export async function benchmarkLint(args: UnknownRecord): Promise<UnknownRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
@@ -272,31 +269,6 @@ export async function checksInspect(args: UnknownRecord): Promise<UnknownRecord>
         ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed."
         : "Checks command completed cleanly; include it as verification evidence before logging or finalizing.",
   };
-}
-
-function validateMetricName(name: unknown): string {
-  const value = String(name || "");
-  if (!METRIC_NAME_PATTERN.test(value) || DENIED_METRIC_NAMES.has(value)) {
-    throw new Error(
-      `Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${value}`,
-    );
-  }
-  return value;
-}
-
-function metricParseSource(result: InspectShellRunResult | null): string {
-  if (!result) return "";
-  const retained = result.retainedMetricOutput || "";
-  if (result.metricOutput) {
-    return [
-      result.metricOutput,
-      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
-      retained,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
 }
 
 function headText(text: string, maxLines: number, maxBytes: number): string {

@@ -1,8 +1,12 @@
 import type { UnknownRecord } from "../types/json.js";
 import { withCanonicalActionCommand } from "../action-metadata.js";
-import { resolveBenchmarkCommandSource } from "../benchmark/command-input.js";
+import {
+  missingBenchmarkCommandMessage,
+  packetEnvModeFromArgs,
+  resolveBenchmarkCommandSource,
+} from "../benchmark/command-input.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
-import { boolOption, enumOption, numberOption } from "../cli/args.js";
+import { boolOption, numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import { decisionGuidance } from "../decision-guidance.js";
 import { buildDriftReport, runtimeProvenance } from "../drift-doctor.js";
@@ -15,7 +19,7 @@ import { resolvePackageRoot } from "../runtime-paths.js";
 import { buildDecisionEnvelope, currentState, finiteMetric, listOption } from "../session-core.js";
 import { continuationCommands, loopContinuation } from "./continuation.js";
 import { inspectRuntimeDrift } from "../runtime-drift-doctor.js";
-import { parseMetricLines, runShell } from "../runner.js";
+import { metricParseSource, parseMetricLines, runShell } from "../runner.js";
 import { projectDoctorReadModel } from "../session-read-model.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
@@ -391,41 +395,6 @@ function doctorExplanation(result: CommandRecord): CommandRecord {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function metricParseSource(result: unknown): string {
-  if (!result || typeof result !== "object") return "";
-  const record = result as CommandRecord;
-  const retained = String(record.retainedMetricOutput || "");
-  if (record.metricOutput) {
-    return [
-      record.metricOutput,
-      record.metricOutputTruncated && record.fullOutput ? record.fullOutput : "",
-      retained,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-  return [record.fullOutput || record.output || "", retained].filter(Boolean).join("\n");
-}
-
-function packetEnvModeFromArgs(args: CommandRecord): "inherit" | "minimal" {
-  return (
-    enumOption(
-      args.packet_env_mode ?? args.packetEnvMode,
-      new Set(["inherit", "minimal"]),
-      "minimal",
-      "packetEnvMode",
-    ) || "minimal"
-  );
-}
-
-function missingBenchmarkCommandMessage(error: unknown = null): string {
-  const detail = error ? errorMessage(error) : "";
-  if (/No command provided/i.test(detail)) {
-    return "No benchmark command was provided and no autoresearch script was found.";
-  }
-  return detail || "No benchmark command was provided and no autoresearch script was found.";
 }
 
 function uniqueStrings(items: unknown[]): string[] {

@@ -217,7 +217,7 @@ function unquoteEnvValue(value: unknown): string {
   return text;
 }
 
-function missingBenchmarkCommandMessage(error: unknown = null): string {
+export function missingBenchmarkCommandMessage(error: unknown = null): string {
   const detail = error ? errorMessage(error) : "";
   if (/No command provided/i.test(detail)) {
     return "No benchmark command was provided and no autoresearch script was found.";
