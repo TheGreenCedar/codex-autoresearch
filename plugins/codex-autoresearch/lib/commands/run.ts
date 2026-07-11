@@ -36,7 +36,6 @@ import {
   finishProgressSnapshot,
   staleProgressReason,
   updateProgressSnapshot,
-  type RunnerProgressSnapshot,
 } from "../runner-progress.js";
 import { parseMetricLines, runShell, tailText, type ShellRunResult } from "../runner.js";
 import { commandDiagnostics } from "../truth-signals.js";
@@ -521,8 +520,4 @@ function metricParseSource(result: ShellRunResult): string {
       .join("\n");
   }
   return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

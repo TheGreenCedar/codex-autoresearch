@@ -17,12 +17,14 @@ import {
   sessionPathIdentity,
 } from "../session-paths.js";
 import { boolOption } from "../cli/args.js";
+import { defaultCommandShell, quoteShellArg } from "../command-rendering.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import { buildDriftReport } from "../drift-doctor.js";
 import { foldDashboardLedger } from "../dashboard-ledger.js";
 import { resolvePathInsideRootSync } from "../path-containment.js";
 import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
+import { activeQualityGapSlugCandidatesSync } from "../research-gaps.js";
 import { createSessionReadCache } from "../session-core.js";
 
 type DashboardCommandListOptions = {
@@ -34,7 +36,7 @@ type DashboardCommandListOptions = {
 
 export interface DashboardRuntime {
   buildDriftReport?: typeof buildDriftReport;
-  dashboardCommands: (workDir: string, ...extra: unknown[]) => UnknownRecord[];
+  dashboardCommands: (workDir: string, qualityGap?: UnknownRecord | null) => UnknownRecord[];
   dashboardViewModel: (
     workDir: string,
     config: UnknownRecord,
@@ -56,6 +58,21 @@ export interface DashboardRuntime {
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const liveDashboardServers = new Set<unknown>();
+
+export function dashboardCommands(
+  workDir: string,
+  qualityGap: UnknownRecord | null = null,
+): UnknownRecord[] {
+  return buildDashboardCommands({
+    researchSlug:
+      String(qualityGap?.slug || "") ||
+      activeQualityGapSlugCandidatesSync(workDir)[0]?.slug ||
+      "research",
+    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    shellQuote: (value) => quoteShellArg(value, defaultCommandShell()),
+    workDir,
+  });
+}
 
 export function buildDashboardSettings(
   config: UnknownRecord,

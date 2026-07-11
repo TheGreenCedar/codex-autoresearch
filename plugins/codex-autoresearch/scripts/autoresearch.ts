@@ -6,14 +6,13 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
-import { buildWatchdogSummary } from "../lib/watchdog-summary.js";
-import { buildDecisionGuidanceContext } from "../lib/decision-guidance.js";
+import { decisionGuidance } from "../lib/decision-guidance.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES, type DashboardLedgerFold } from "../lib/dashboard-ledger.js";
 import {
-  buildDashboardCommands,
   buildDashboardSettings as dashboardSettings,
+  dashboardCommands,
 } from "../lib/commands/dashboard.js";
 import {
   buildContinuationCommands,
@@ -31,13 +30,8 @@ import {
   compactPublicState as compactStateResponse,
   finalizationPressureForWorkDir as buildFinalizationPressureForWorkDir,
   publicState as readPublicState,
-  type StateRuntime,
 } from "../lib/commands/state.js";
-import {
-  deleteLastRunPacket,
-  logExperiment,
-  pendingLogTransactionWarnings,
-} from "../lib/commands/log.js";
+import { deleteLastRunPacket, logExperiment } from "../lib/commands/log.js";
 import {
   defaultCommandShell,
   normalizeCommandShell,
@@ -47,8 +41,10 @@ import {
 } from "../lib/command-rendering.js";
 import {
   actionSafeActionForKind,
+  actionToolNameForKind,
   actionTitleForKind,
   resolveActionCommand,
+  withCanonicalActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
 import {
@@ -74,11 +70,10 @@ import {
   withOutsideWorkdirAuthorization,
 } from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
-import { buildDriftReport } from "../lib/drift-doctor.js";
+import { buildDriftReport, runtimeProvenance } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import {
   createActiveProgressWriter,
-  deleteActiveProgressSnapshot,
   deleteActiveProgressSnapshotIfSafe,
   readActiveProgressSnapshot,
   resolveProgressPath,
@@ -93,12 +88,7 @@ import {
   resolveSessionDecision,
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
-import {
-  normalizeProtectedBenchmarkPaths,
-  protectedBenchmarkGuardForWorkDir,
-  protectedBenchmarkPathsFromConfig,
-  protectedBenchmarkWarningFromGuard,
-} from "../lib/benchmark/contract-guards.js";
+import { normalizeProtectedBenchmarkPaths } from "../lib/benchmark/contract-guards.js";
 import {
   defaultBenchmarkCommand,
   defaultBenchmarkCommandExists,
@@ -121,16 +111,11 @@ import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { displayGitPath } from "../lib/git-paths.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
-import {
-  fixedControlBlockForCommand,
-  fixedControlViolationForCommand,
-  normalizeFixedControlConfig,
-} from "../lib/fixed-control.js";
+import { fixedControlBlockForCommand } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
 import { normalizeRelativePaths } from "../lib/literal-paths.js";
 import {
   assertFreshLastRunPacket,
-  fingerprintsContainReason,
   gitSnapshotContainsDirtyFingerprintTruncation,
   lastRunConfigSnapshot,
   lastRunGitSnapshot,
@@ -138,22 +123,32 @@ import {
   lastRunPacketFreshness,
   lastRunTrustConfigSnapshot,
   readLastRunPacket,
+  replacementNextCommandForLastRun,
   resolveLastRunPath,
 } from "../lib/last-run-store.js";
 import {
   gitDirtyPathDetails,
   gitOutput,
-  gitPrivatePath,
   insideGitRepo,
   privateStateWriteRoot,
   runGit as git,
 } from "../lib/git-private-state.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
-import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
+import { summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
 import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
-  activeQualityGapSlugCandidatesSync,
+  buildParallelLanes,
+  buildParallelOrchestrationContext,
+  latestLaneResults,
+  normalizeParallelLane,
+} from "../lib/parallel-orchestration.js";
+import {
+  benchmarkIntegrityPreflight,
+  latestBenchmarkContractEntry,
+  operatorWarningsForWorkDir,
+} from "../lib/operator-warnings.js";
+import {
   currentQualityGapSummary,
   gapCandidates as buildGapCandidates,
   resolveResearchSlugForQualityGapSync,
@@ -167,7 +162,6 @@ import {
   loadRecipeCatalog,
   recommendRecipe,
 } from "../lib/recipes.js";
-import { runProcess as runBoundedProcess } from "../lib/runner.js";
 import {
   createProgressSnapshot,
   finishProgressSnapshot,
@@ -185,7 +179,6 @@ import {
   pathExists,
   parseQualityGapItems,
   parseQualityGaps,
-  readJsonl,
   stateFromSessionRecords,
   safeSlug,
   iterationLimitInfo,
@@ -199,13 +192,11 @@ import {
   repairLedgerRecords,
 } from "../lib/ledger-health.js";
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
-import { resolvePackageRoot, resolveRepoRoot } from "../lib/runtime-paths.js";
+import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
 import {
-  AUTORESEARCH_DASHBOARD_FILE,
   AUTORESEARCH_RESEARCH_DIR,
-  AUTORESEARCH_SESSION_FILES,
   researchDirPathForSession,
   resolveSessionPaths,
   type SessionPaths,
@@ -224,15 +215,7 @@ type WorkDirResolution = {
   sessionCwd: string;
   workDir: string;
 };
-interface LocalProcessResult {
-  code: number | null;
-  stderr: string;
-  stderrTruncated?: boolean;
-  stdout: string;
-  stdoutTruncated?: boolean;
-}
 
-const SESSION_FILES: readonly string[] = AUTORESEARCH_SESSION_FILES;
 const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
   "# Codex Autoresearch ledger files",
   "autoresearch.jsonl text eol=lf",
@@ -240,8 +223,6 @@ const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
   "autoresearch.ideas.md text eol=lf",
 ].join("\n");
 const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
-const AUTORESEARCH_OWNED_FILES = [AUTORESEARCH_DASHBOARD_FILE];
-const AUTORESEARCH_OWNED_DIRS = [RESEARCH_DIR, "target/autoresearch", ".autoresearch-cache"];
 
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
 const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
@@ -285,10 +266,9 @@ async function serveAutoresearchLazy(
   return (await import("../lib/live-server.js")).serveAutoresearch(...args);
 }
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
-const REPO_ROOT = resolveRepoRoot(import.meta.url);
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
-  return await readPublicState(args, stateRuntime());
+  return await readPublicState(args);
 }
 
 function compactPublicState(state: LooseObject): LooseObject {
@@ -301,26 +281,7 @@ async function finalizationPressureForWorkDir(args: {
   qualityGap: LooseObject | null;
   warningDetails: LooseObject[];
 }): Promise<LooseObject> {
-  return await buildFinalizationPressureForWorkDir(args, stateRuntime());
-}
-
-function stateRuntime(): StateRuntime {
-  return {
-    buildFinalizePreview,
-    buildParallelOrchestrationContext,
-    dashboardCommands,
-    decisionGuidance,
-    discoverLastRunPartialResults,
-    lastRunPacketFreshness,
-    operatorWarningsForWorkDir,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
-    readActiveProgressSnapshot,
-    readLastRunPacket,
-    replacementNextCommandForLastRun,
-    runtimeProvenance,
-    withCanonicalActionCommand,
-  };
+  return await buildFinalizationPressureForWorkDir(args);
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
@@ -457,14 +418,6 @@ function validateMetricName(name: string) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function errorCodeOrMessage(error: unknown): string {
-  if (error && typeof error === "object") {
-    const payload = error as { code?: unknown; message?: unknown };
-    return String(payload.code || payload.message || error);
-  }
-  return String(error);
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -1086,13 +1039,7 @@ function guidedStageForCanonicalKind(kind: string): string {
 }
 
 function guidedToolNameForCanonicalKind(kind: string): string {
-  if (kind === "setup" || kind === "benchmark-command") return "setup_session";
-  if (kind === "decision-capsule") return "recommend_next";
-  if (kind === "partial-salvage" || kind === "packet-diagnostic") return "partial_results";
-  if (kind === "segment-transition") return "new_segment";
-  if (kind === "finalization" || kind === "finalize-preview") return "finalize_preview";
-  if (kind === "context-distillation") return "session_forensics";
-  return actionSafeActionForKind(kind, kind).replace(/-/g, "_");
+  return actionToolNameForKind(kind);
 }
 
 function guidedSafetyForCanonicalKind(kind: string): string {
@@ -2821,48 +2768,6 @@ function agentReportTemplates(config: LooseObject = {}) {
   };
 }
 
-function replacementNextCommandFromLastRun(
-  workDir: string,
-  packet: any,
-  defaultBenchmarkCommandReady: boolean,
-) {
-  const argv = [
-    "node",
-    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-    "next",
-    "--cwd",
-    workDir,
-  ];
-  const command = packet?.history?.replayCommand || packet?.run?.command;
-  if (command) {
-    argv.push("--command", command);
-  } else if (!defaultBenchmarkCommandReady) {
-    return "";
-  }
-  const checksPolicy = packet?.run?.checksPolicy;
-  if (CHECKS_POLICIES.has(checksPolicy)) {
-    argv.push("--checks-policy", checksPolicy);
-  }
-  const checksCommand = packet?.history?.replayChecksCommand || packet?.run?.checks?.command;
-  if (checksCommand) {
-    argv.push("--checks-command", checksCommand);
-  }
-  return commandLine(argv);
-}
-
-async function replacementNextCommandForLastRun(
-  workDir: string,
-  packet: any,
-  defaultBenchmarkCommandReady?: boolean,
-) {
-  if (!packet) return "";
-  const defaultReady =
-    typeof defaultBenchmarkCommandReady === "boolean"
-      ? defaultBenchmarkCommandReady
-      : await defaultBenchmarkCommandExists(workDir);
-  return replacementNextCommandFromLastRun(workDir, packet, defaultReady);
-}
-
 function replaySafeCommand(value: unknown, context: LooseObject): string {
   const portable = portableNodeCommand(String(value || "").trim());
   if (!portable) return "";
@@ -3291,117 +3196,6 @@ function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
     warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 10) : [],
     nextAction: typeof doctor.nextAction === "string" ? doctor.nextAction : "",
   }) as LooseObject;
-}
-
-async function runProcess(
-  command: string,
-  args: any,
-  cwd: string,
-  options: LooseObject = {},
-): Promise<LocalProcessResult> {
-  const result = await runBoundedProcess(command, args, {
-    cwd,
-    maxOutputBytes: options.maxOutputBytes,
-    timeoutSeconds: options.timeoutMs ? Math.max(1, Number(options.timeoutMs) / 1000) : 600,
-  });
-  return {
-    code: result.code,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    stdoutTruncated: result.stdoutTruncated,
-    stderrTruncated: result.stderrTruncated,
-  };
-}
-
-function isAutoresearchOwnedDirtyPath(relativePath: string) {
-  const normalized = relativePath;
-  return (
-    SESSION_FILES.includes(normalized) ||
-    AUTORESEARCH_OWNED_FILES.includes(normalized) ||
-    AUTORESEARCH_OWNED_DIRS.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`))
-  );
-}
-
-function latestBenchmarkContractEntry(
-  workDir: string,
-  state: LooseObject | null | undefined,
-): LooseObject | null {
-  const fromState = latestBenchmarkContractEntryFromState(state);
-  if (fromState) return fromState;
-  try {
-    const fromCurrentState = latestBenchmarkContractEntryFromState(currentState(workDir));
-    if (fromCurrentState) return fromCurrentState;
-  } catch {
-    // Fall back to the raw ledger below if state reconstruction is unavailable.
-  }
-  return (
-    [...readJsonl(workDir)].reverse().find((entry: LooseObject) => {
-      return entry?.benchmarkContract?.surfaceHash;
-    }) || null
-  );
-}
-
-function latestBenchmarkContractEntryFromState(
-  state: LooseObject | null | undefined,
-): LooseObject | null {
-  const activeConfigEntry =
-    state?.activeConfigEntry && typeof state.activeConfigEntry === "object"
-      ? (state.activeConfigEntry as LooseObject)
-      : null;
-  if (
-    activeConfigEntry?.benchmarkContractAccepted === true &&
-    activeConfigEntry?.benchmarkContractScope === "segment" &&
-    activeConfigEntry?.benchmarkContract?.surfaceHash
-  ) {
-    return activeConfigEntry;
-  }
-  const current = Array.isArray(state?.current) ? state.current : [];
-  return (
-    [...current].reverse().find((run: LooseObject) => run?.benchmarkContract?.surfaceHash) || null
-  );
-}
-
-async function benchmarkContractDrift(workDir: string, state: any) {
-  const latest = latestBenchmarkContractEntry(workDir, state);
-  if (!latest) return null;
-  const current = await benchmarkContractSnapshot(workDir, {
-    command: latest.benchmarkContract.command,
-    checksCommand: latest.benchmarkContract.checksCommand,
-    commandFile: latest.benchmarkContract.commandFile,
-    envFile: latest.benchmarkContract.envFile,
-    ...(Object.hasOwn(latest.benchmarkContract, "packetEnvMode")
-      ? { packetEnvMode: latest.benchmarkContract.packetEnvMode }
-      : {}),
-  });
-  if (
-    fingerprintsContainReason(latest.benchmarkContract.files, "fingerprint_byte_budget") ||
-    fingerprintsContainReason(current.files, "fingerprint_byte_budget")
-  ) {
-    return {
-      code: "benchmark_contract_fingerprint_budget_exceeded",
-      severity: "error",
-      run: latest.run ?? null,
-      message:
-        "Benchmark/check/config contract files exceed the shared fingerprint byte budget, so freshness cannot be proven.",
-      action: "Reduce or remove oversized contract files, then run next again.",
-    };
-  }
-  if (current.surfaceHash === latest.benchmarkContract.surfaceHash) return null;
-  const driftReference =
-    latest.run != null
-      ? `logged run #${latest.run}`
-      : latest.segment != null
-        ? `segment ${latest.segment} contract`
-        : "the active benchmark contract";
-  return {
-    code: "benchmark_contract_changed",
-    severity: "error",
-    run: latest.run ?? null,
-    message: `Benchmark/check/config contract changed since ${driftReference}. Start a new segment or explicitly invalidate old evidence before running more packets or finalizing.`,
-    action: "Run new-segment --dry-run, then --yes after reviewing the changed benchmark contract.",
-    previousHash: latest.benchmarkContract.surfaceHash,
-    currentHash: current.surfaceHash,
-  };
 }
 
 function mergeRuntimeConfig(sessionCwd: any, updates: any) {
@@ -4102,48 +3896,6 @@ async function measureQualityGap(args: any) {
   };
 }
 
-async function decisionGuidance({
-  workDir,
-  config,
-  state,
-  scaffoldHealth = null,
-  warningDetails = [],
-  setupMissing = [],
-  qualityConstraints: explicitQualityConstraints = null,
-  runtimeDriftSummary = null,
-  runtimeTrustScope = "source-checkout",
-  benchmarkCommand = "",
-  checksCommand = "",
-}: LooseObject) {
-  const constraintList = (value: unknown) =>
-    Array.isArray(value) && value.length > 0 ? value : null;
-  // Persisted constraints live in the runtime config (autoresearch.config.json),
-  // not the ledger-derived state.config, so the runtime config must win.
-  const qualityConstraints =
-    constraintList(explicitQualityConstraints) ||
-    constraintList(config?.qualityConstraints) ||
-    constraintList(state?.config?.qualityConstraints);
-  return buildDecisionGuidanceContext({
-    workDir,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
-    config,
-    state,
-    scaffoldHealth,
-    warningDetails,
-    setupMissing,
-    qualityConstraints,
-    runtimeDriftSummary,
-    runtimeTrustScope,
-    benchmarkCommand,
-    checksCommand,
-    defaultBenchmarkCommand,
-    defaultChecksCommand,
-    renderCommand: commandLine,
-    errorMessage,
-  });
-}
-
 function decisionSetupState(guided: any, plan: any) {
   const blockers = [...listOption(plan?.missing), ...listOption(plan?.missingEssentials)];
   if (!guided?.stage && blockers.length === 0) return null;
@@ -4561,121 +4313,6 @@ function stripDashboardCommandGuidance(value: any): any {
   return stripDashboardGuidanceCommandFields(value, {
     extraFieldNames: DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS,
   });
-}
-
-async function operatorWarningsForWorkDir(
-  workDir: string,
-  stateOverride: LooseObject | null = null,
-) {
-  const inGit = await insideGitRepo(workDir);
-  const config = readConfig(workDir);
-  const state = stateOverride || currentState(workDir);
-  const warnings = [];
-  warnings.push(...(await pendingLogTransactionWarnings(workDir, inGit)));
-  if (inGit) {
-    const dirtyPaths = await gitDirtyPathDetails(workDir);
-    const sourceDirtyPaths = dirtyPaths.filter(
-      (entry: any) => !isAutoresearchOwnedDirtyPath(entry.path),
-    );
-    if (sourceDirtyPaths.length > 0) {
-      warnings.push({
-        code: "git_dirty",
-        severity: "warning",
-        message: "Git worktree is dirty; review unrelated changes before logging a keep result.",
-        action:
-          "Inspect git status and configure commitPaths or revertPaths before trusting keep/discard automation.",
-        paths: sourceDirtyPaths.map((entry: any) => entry.path).slice(0, 12),
-      });
-    } else if (dirtyPaths.length > 0) {
-      warnings.push({
-        code: "autoresearch_session_dirty",
-        severity: "info",
-        message:
-          "Only Autoresearch session artifacts are dirty; source drift checks will not block the next action.",
-        action: "Continue the loop, then include or exclude session artifacts during finalization.",
-        paths: dirtyPaths.map((entry: any) => entry.path).slice(0, 12),
-      });
-    }
-  }
-  const missingCommitPaths = [];
-  for (const item of listOption(config.commitPaths || config.commit_paths)) {
-    if (!(await pathExists(path.resolve(workDir, item)))) missingCommitPaths.push(item);
-  }
-  if (missingCommitPaths.length) {
-    warnings.push({
-      code: "missing_commit_paths",
-      severity: "warning",
-      message: `Configured commitPaths do not exist: ${missingCommitPaths.slice(0, 5).join(", ")}.`,
-      action:
-        "Update commitPaths before relying on keep commits or use explicit --commit-paths for the next log.",
-    });
-  }
-  const contractDrift = await benchmarkContractDrift(workDir, state);
-  if (contractDrift) warnings.push(contractDrift);
-  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
-  const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
-  if (protectedBenchmarkWarning) warnings.push(protectedBenchmarkWarning);
-  warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state, { inGit })));
-  return warnings;
-}
-
-async function benchmarkIntegrityPreflight(
-  workDir: string,
-  config: any,
-  state: any,
-  options: { inGit?: boolean } = {},
-) {
-  const warnings = [];
-  const hasIntegrityGuard = Boolean(
-    config.benchmarkIntegrityCommand ||
-    config.benchmark_integrity_command ||
-    config.contaminationCheckCommand ||
-    config.contamination_check_command ||
-    config.promotionBenchmarkCommand ||
-    config.promotion_benchmark_command ||
-    config.holdoutCommand ||
-    config.holdout_command ||
-    config.devHoldoutSplit ||
-    config.dev_holdout_split,
-  );
-  if (state.current.length === 0 && !hasIntegrityGuard) {
-    warnings.push({
-      code: "benchmark_integrity_preflight_missing",
-      severity: "warning",
-      message:
-        "No evaluator-contamination guard is configured for the first packet: benchmark leakage, stale artifacts, cache reuse, and dev/holdout split are unproven.",
-      action:
-        "Add a benchmarkIntegrityCommand/holdout or run benchmark-inspect plus benchmark-lint before trusting the baseline.",
-    });
-  }
-  const staleArtifactRoots = [];
-  for (const relative of ["target/autoresearch", ".autoresearch-cache"]) {
-    if (await pathExists(path.join(workDir, relative))) staleArtifactRoots.push(relative);
-  }
-  const inGit = options.inGit ?? (await insideGitRepo(workDir).catch(() => false));
-  if (inGit && (await gitPrivateDirectoryHasBenchmarkArtifacts(workDir, "autoresearch"))) {
-    staleArtifactRoots.push(".git/autoresearch");
-  }
-  if (staleArtifactRoots.length && !boolOption(config.allowStaleArtifacts, false)) {
-    warnings.push({
-      code: "stale_benchmark_artifacts",
-      severity: "warning",
-      message: `Previous benchmark/autoresearch artifacts exist: ${staleArtifactRoots.join(", ")}.`,
-      action:
-        "Clear or namespace benchmark artifacts before the first packet, or set an explicit freshness guard in the benchmark contract.",
-    });
-  }
-  return warnings;
-}
-
-async function gitPrivateDirectoryHasBenchmarkArtifacts(workDir: string, relativePath: string) {
-  try {
-    const directory = await gitPrivatePath(workDir, relativePath);
-    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch((): [] => []);
-    return entries.some((entry: any) => entry.name !== "last-run.json");
-  } catch {
-    return false;
-  }
 }
 
 function suppressEnvironmentWarningsFromPreview(preview: any) {
@@ -5235,342 +4872,6 @@ function ledgerBackupTimestamp(date = new Date()): string {
   return date.toISOString().replace(/[:.]/g, "-");
 }
 
-function dashboardCommands(workDir: string, qualityGap: any = null) {
-  return buildDashboardCommands({
-    researchSlug: qualityGap?.slug || currentQualityGapSlug(workDir) || "research",
-    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-    shellQuote,
-    workDir,
-  });
-}
-
-function runtimeProvenance(drift: LooseObject | null = null) {
-  const unavailable = runtimeDriftUnavailable(drift);
-  const drifted = confirmedRuntimeDrift(drift);
-  return {
-    pluginVersion: PLUGIN_VERSION,
-    sourceRoot: PLUGIN_ROOT,
-    repoRoot: REPO_ROOT,
-    localVersion: PLUGIN_VERSION,
-    installedVersion:
-      drift?.installed?.version || drift?.installed?.pluginVersion || drift?.routing?.version || "",
-    installedCachePath:
-      drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
-    drifted,
-    status: drift
-      ? unavailable
-        ? "unavailable"
-        : drifted
-          ? "drift-detected"
-          : "checked"
-      : "unavailable",
-    driftConfidence: drift
-      ? unavailable
-        ? "unavailable"
-        : drifted
-          ? "drift-detected"
-          : "checked"
-      : "source-only",
-    reason: drifted
-      ? "Source and installed runtime drift needs inspection before public claims."
-      : "",
-    inspectCommand: "",
-  };
-}
-
-function runtimeDriftUnavailable(drift: LooseObject | null): boolean {
-  if (!drift) return true;
-  if (drift.probeFailed === true || drift.unavailable === true) return true;
-  const status = String(drift.status || drift.driftStatus || "").toLowerCase();
-  return ["unavailable", "probe-failed", "probe_failed", "error", "unknown"].includes(status);
-}
-
-function confirmedRuntimeDrift(drift: LooseObject | null): boolean {
-  if (!drift || runtimeDriftUnavailable(drift)) return false;
-  if (
-    drift.drifted === true ||
-    drift.mismatched === true ||
-    drift.stale === true ||
-    drift.needsInspection === true
-  ) {
-    return true;
-  }
-  const warnings = Array.isArray(drift.warnings) ? drift.warnings.map(String) : [];
-  if (
-    warnings.some((warning) =>
-      /version_surface_mismatch|runtime.*drift|source.*differs/i.test(warning),
-    )
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function resolveFanoutForSegment(workDir: string, segment: number, records?: LooseObject[] | null) {
-  const entry = [...recordsOrReadJsonl(workDir, records)]
-    .reverse()
-    .find(
-      (item: any) =>
-        item?.type === "research_fanout" &&
-        item.fanoutPlan &&
-        Number(item.segment) === Number(segment),
-    );
-  if (!entry) {
-    return {
-      fanoutPlan: null,
-      fanoutProvenance: {
-        source: "memory_or_defaults",
-        segment,
-        matchedSegment: false,
-      },
-    };
-  }
-  return {
-    fanoutPlan: entry.fanoutPlan,
-    fanoutProvenance: {
-      source: "segment_plan",
-      segment,
-      matchedSegment: true,
-      planId: entry.fanoutPlan.id || null,
-      createdAt: entry.fanoutPlan.createdAt || null,
-    },
-  };
-}
-
-function enrichParallelLanesWithLaneResults(lanes: LooseObject[], laneResults: LooseObject[]) {
-  const latestByLane = new Map<string, LooseObject>();
-  for (const entry of laneResults) {
-    const laneId = entry?.lane?.id;
-    if (!laneId) continue;
-    const existing = latestByLane.get(laneId);
-    if (!existing || Number(entry.timestamp || 0) >= Number(existing.timestamp || 0)) {
-      latestByLane.set(laneId, entry);
-    }
-  }
-  return lanes.map((lane) => {
-    const entry = latestByLane.get(lane.id);
-    if (!entry?.result) return lane;
-    const resultStatus = String(entry.result.status || "").toLowerCase();
-    const completed = resultStatus === "completed" || resultStatus === "approved";
-    const accepted = completed && laneResultHasAcceptedEvidence(entry.result);
-    return {
-      ...lane,
-      status: completed ? "completed" : entry.result.status || lane.status,
-      evidenceStatus: accepted ? "accepted" : entry.result.evidenceStatus || lane.evidenceStatus,
-      completedAt:
-        accepted && entry.timestamp ? new Date(entry.timestamp).toISOString() : lane.completedAt,
-      lastLaneResult: {
-        status: entry.result.status,
-        summary: entry.result.summary || "",
-        recommendation: entry.result.recommendation || "",
-      },
-    };
-  });
-}
-
-function laneResultHasAcceptedEvidence(result: LooseObject) {
-  return result?.evidenceAccepted === true;
-}
-
-function buildParallelOrchestrationContext({
-  workDir,
-  state,
-  config,
-  settings = {},
-  memory = null,
-  records = null,
-}: {
-  workDir: string;
-  state: LooseObject;
-  config: LooseObject;
-  settings?: LooseObject;
-  memory?: LooseObject | null;
-  records?: LooseObject[] | null;
-}) {
-  const resolvedMemory =
-    memory ||
-    buildExperimentMemory({
-      runs: state.current,
-      direction: state.config.bestDirection,
-      settings: Object.keys(settings).length ? settings : dashboardSettings(config),
-    });
-  const { fanoutPlan, fanoutProvenance } = resolveFanoutForSegment(workDir, state.segment, records);
-  const laneResults = latestLaneResults(workDir, state.segment, records);
-  const baseLanes = buildParallelLanes({
-    memory: resolvedMemory,
-    fanoutPlan,
-    config,
-  });
-  const parallelLanes = enrichParallelLanesWithLaneResults(baseLanes, laneResults);
-  const watchdogSummary = buildWatchdogSummary({
-    state,
-    settings,
-    current: state.current,
-    parallelLanes,
-    fanoutPlan,
-  });
-  return {
-    memory: resolvedMemory,
-    fanoutPlan,
-    fanoutProvenance,
-    parallelLanes,
-    laneResults,
-    watchdogSummary,
-  };
-}
-
-function buildParallelLanes({
-  memory,
-  fanoutPlan = null,
-  config = {},
-}: {
-  memory: LooseObject;
-  fanoutPlan?: LooseObject | null;
-  config?: LooseObject;
-}) {
-  const planned = Array.isArray(fanoutPlan?.lanes) ? fanoutPlan.lanes : [];
-  if (planned.length > 0) {
-    return planned.map((lane: LooseObject, index: number) =>
-      normalizeParallelLane(lane, index, config),
-    );
-  }
-  const memoryLanes = Array.isArray(memory?.lanePortfolio) ? memory.lanePortfolio : [];
-  const lanes = memoryLanes.map((lane: LooseObject, index: number) =>
-    normalizeParallelLane(lane, index, config),
-  );
-  const existingIds = new Set(lanes.map((lane) => lane.id));
-  for (const seed of defaultParallelLaneSeeds(config)) {
-    const normalized = normalizeParallelLane(seed, lanes.length, config);
-    if (existingIds.has(normalized.id)) continue;
-    lanes.push(normalized);
-    existingIds.add(normalized.id);
-  }
-  return lanes;
-}
-
-function defaultParallelLaneSeeds(config: LooseObject) {
-  const metricName = config.metricName || "primary metric";
-  return [
-    {
-      id: "read-only-scout",
-      label: "Read-only scout",
-      priority: "high",
-      nextActionHint: `Find one evidence-backed hypothesis that could move ${metricName}.`,
-      brief: {
-        objective: `Find one evidence-backed hypothesis that could move ${metricName}.`,
-        evidencePoint: "Current ledger, ASI memory, and recent packet evidence.",
-        boundaries: ["read-only", "do not edit files", "return one candidate next action"],
-        pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
-        expectedDecisionOutput: "one scout recommendation with evidence and a next measured action",
-      },
-    },
-    {
-      id: "benchmark-contract",
-      label: "Benchmark contract",
-      priority: "high",
-      nextActionHint:
-        "Check whether the benchmark, parsed metric, and checks still measure the intended outcome.",
-      brief: {
-        objective:
-          "Check that benchmark, parsed metric, and checks still measure the intended outcome.",
-        evidencePoint:
-          "Benchmark contract, METRIC parser output, checks command, and doctor warnings.",
-        boundaries: ["read-only", "do not change benchmark code in this lane"],
-        pointers: ["autoresearch.config.json", "autoresearch.last-run.json"],
-        expectedDecisionOutput: "one benchmark-trust recommendation or repair candidate",
-      },
-    },
-    {
-      id: "implementation-candidate",
-      label: "Implementation candidate",
-      priority: "medium",
-      nextActionHint:
-        "Prepare one isolated edit lane only after a scout produces a concrete hypothesis.",
-      brief: {
-        objective:
-          "Prepare one isolated edit candidate after a scout produces a concrete hypothesis.",
-        evidencePoint: "Accepted scout recommendation and current commit path boundaries.",
-        boundaries: ["use a separate worktree or owned write scope", "keep edits scoped"],
-        pointers: ["autoresearch.ideas.md", "autoresearch.config.json"],
-        expectedDecisionOutput: "one implementation plan with files, risks, and verification",
-      },
-    },
-    {
-      id: "promotion-readiness",
-      label: "Promotion readiness",
-      priority: "medium",
-      nextActionHint:
-        "Identify repeat, holdout, or finalization evidence still needed before a keep can promote.",
-      brief: {
-        objective:
-          "Identify repeat, holdout, or finalization evidence still needed before promotion.",
-        evidencePoint:
-          "Kept runs, promotion-grade measurements, finalization preview, and gate quality.",
-        boundaries: ["read-only", "do not promote evidence from this lane"],
-        pointers: ["autoresearch.jsonl", "autoresearch.research"],
-        expectedDecisionOutput: "one promotion-readiness gap or finalization recommendation",
-      },
-    },
-  ];
-}
-
-function normalizeParallelLane(lane: LooseObject, index: number, config: LooseObject) {
-  const rawId = lane.id || lane.label || lane.title || `lane-${index + 1}`;
-  const id = safeSlug(String(rawId)) || `lane-${index + 1}`;
-  const label = lane.label || lane.title || `Lane ${index + 1}`;
-  const readOnly =
-    !/implementation|edit|candidate|worktree/i.test(String(id)) &&
-    !/implementation|edit|candidate|worktree/i.test(String(label));
-  const executionBoundary = readOnly
-    ? "strict Git read-only argv allowlist before execution; Git porcelain is best-effort detection only"
-    : "use a separate worktree or declared write scope; no filesystem or process containment is provided";
-  const nextActionHint =
-    lane.nextActionHint ||
-    lane.recommendation ||
-    "Return a concise hypothesis, evidence, and next measured action.";
-  const brief = normalizeLaneBrief(lane.brief || lane, {
-    objective: lane.objective || nextActionHint,
-    evidencePoint:
-      lane.evidencePoint ||
-      lane.evidence ||
-      `Current ${config.metricName || "primary metric"} evidence and session memory.`,
-    boundaries: [executionBoundary],
-    pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
-    expectedDecisionOutput: "one recommendation, supporting evidence, and the next measured action",
-    lessonsToAvoid: [],
-  });
-  return {
-    id,
-    title: label,
-    label,
-    status: lane.status || "planned",
-    priority: lane.priority || (index === 0 ? "high" : "medium"),
-    mode: readOnly ? "read_only_scout" : "implementation",
-    executionBoundary,
-    evidenceStatus: lane.evidenceStatus || "provisional",
-    owner: lane.owner || "subagent",
-    writeScope: readOnly ? [] : listOption(config.commitPaths || config.commit_paths),
-    reason: lane.reason || lane.evidence || "Parallel lane planned from current session memory.",
-    nextActionHint,
-    brief,
-  };
-}
-
-function latestLaneResults(
-  workDir: string,
-  segment: number | null = null,
-  records?: LooseObject[] | null,
-) {
-  return recordsOrReadJsonl(workDir, records).filter(
-    (entry: any) =>
-      entry?.type === "lane_result" && (segment == null || Number(entry.segment) === segment),
-  );
-}
-
-function recordsOrReadJsonl(workDir: string, records?: LooseObject[] | null): LooseObject[] {
-  return Array.isArray(records) ? records : readJsonl(workDir);
-}
-
 function normalizeLaneMode(value: unknown, fallback: string) {
   const raw = String(value || fallback || "read_only_scout")
     .toLowerCase()
@@ -5810,24 +5111,6 @@ async function researchFanout(args: LooseObject) {
   };
 }
 
-function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
-  const action = envelope?.canonicalNextAction;
-  if (!action) return envelope;
-  const command = resolveActionCommand(action.kind, commands, {
-    explicitCommand: action.command,
-  });
-  return {
-    ...envelope,
-    canonicalNextAction: {
-      ...action,
-      command,
-      safeAction:
-        action.safeAction || actionSafeActionForKind(action.kind, String(action.kind || "")),
-      toolName: action.toolName || guidedToolNameForCanonicalKind(String(action.kind || "")),
-    },
-  };
-}
-
 function commandLookupObject(commands: unknown): LooseObject {
   if (Array.isArray(commands)) {
     const result: LooseObject = {};
@@ -5840,10 +5123,6 @@ function commandLookupObject(commands: unknown): LooseObject {
     return result;
   }
   return commands && typeof commands === "object" ? (commands as LooseObject) : {};
-}
-
-function currentQualityGapSlug(workDir: string) {
-  return activeQualityGapSlugCandidatesSync(workDir)[0]?.slug || null;
 }
 
 function actionMessage(value: unknown): string {
@@ -6281,8 +5560,11 @@ async function nextExperimentWithActiveProgress(args: any) {
       }),
       continuationCommands(workDir),
     );
-    const loopContract = decisionEnvelope.loopContract || {};
-    const blockingAction = blockingLoopAction(loopContract, decisionEnvelope.canonicalNextAction);
+    const loopContract = compactRecord(decisionEnvelope.loopContract) || {};
+    const blockingAction = blockingLoopAction(
+      loopContract,
+      compactRecord(decisionEnvelope.canonicalNextAction),
+    );
     return {
       ok: false,
       workDir,
@@ -6391,8 +5673,11 @@ async function nextExperimentWithActiveProgress(args: any) {
     }),
     continuationCommands(workDir),
   );
-  const loopContract = preflightEnvelope.loopContract || {};
-  const blockingAction = blockingLoopAction(loopContract, preflightEnvelope.canonicalNextAction);
+  const loopContract = compactRecord(preflightEnvelope.loopContract) || {};
+  const blockingAction = blockingLoopAction(
+    loopContract,
+    compactRecord(preflightEnvelope.canonicalNextAction),
+  );
   const capsule = stateBeforeRun.sessionDecisionCapsule || null;
   const boundedNextAllowed =
     blockingAction?.kind === "decision-capsule" && isBoundedNextAllowedByCapsule(capsule, args);

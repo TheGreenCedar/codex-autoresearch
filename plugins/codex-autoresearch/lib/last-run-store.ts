@@ -3,7 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { defaultCommandShell, quoteShellArg } from "./command-rendering.js";
+import { defaultCommandShell, quoteShellArg, renderShellCommand } from "./command-rendering.js";
+import { defaultBenchmarkCommandExists } from "./benchmark/command-input.js";
 import {
   gitStatusShort,
   insideGitRepo,
@@ -23,6 +24,39 @@ const DIRECTORY_FINGERPRINT_ENTRY_LIMIT = 500;
 const DIRECTORY_FINGERPRINT_DEPTH_LIMIT = 6;
 const FINGERPRINT_TOTAL_BYTE_LIMIT = 16 * 1024 * 1024;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const CHECKS_POLICIES = new Set(["always", "on-improvement", "manual"]);
+
+export async function replacementNextCommandForLastRun(
+  workDir: string,
+  packet: LastRunPacket | null,
+  defaultBenchmarkCommandReady?: boolean,
+): Promise<string> {
+  if (!packet) return "";
+  const defaultReady =
+    typeof defaultBenchmarkCommandReady === "boolean"
+      ? defaultBenchmarkCommandReady
+      : await defaultBenchmarkCommandExists(workDir);
+  const packetRecord = packet as UnknownRecord;
+  const history = record(packetRecord.history);
+  const run = record(packetRecord.run);
+  const checks = record(run.checks);
+  const argv: unknown[] = [
+    "node",
+    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    "next",
+    "--cwd",
+    workDir,
+  ];
+  const command = history.replayCommand || run.command;
+  if (command) argv.push("--command", command);
+  else if (!defaultReady) return "";
+  if (CHECKS_POLICIES.has(String(run.checksPolicy || ""))) {
+    argv.push("--checks-policy", run.checksPolicy);
+  }
+  const checksCommand = history.replayChecksCommand || checks.command;
+  if (checksCommand) argv.push("--checks-command", checksCommand);
+  return renderShellCommand(argv);
+}
 
 export async function resolveLastRunPath(workDir: string): Promise<string> {
   if (await insideGitRepo(workDir)) {

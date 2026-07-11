@@ -67,11 +67,7 @@ import {
   promotionGradeValue,
 } from "../session-core.js";
 import { isMetricEligibleStatus } from "../run-status.js";
-import {
-  buildProcessLifecycleRecord,
-  rekeyProcessLifecycleRecords,
-  type ProcessLifecycleEvent,
-} from "../process-governor.js";
+import { buildProcessLifecycleRecord, rekeyProcessLifecycleRecords } from "../process-governor.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
   AUTORESEARCH_RESEARCH_DIR,

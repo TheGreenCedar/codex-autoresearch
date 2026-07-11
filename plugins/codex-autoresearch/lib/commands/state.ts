@@ -1,4 +1,6 @@
 import type { UnknownRecord } from "../types/json.js";
+import { withCanonicalActionCommand } from "../action-metadata.js";
+import { readActiveProgressSnapshot } from "../active-progress-store.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import {
   buildCheapFinalizationPressure,
@@ -16,6 +18,7 @@ import { boolOption } from "../cli/args.js";
 import {
   buildDecisionEnvelope,
   createSessionReadCache,
+  finiteMetric,
   iterationLimitInfo,
   loadSessionRecords,
   loadSessionState,
@@ -28,7 +31,8 @@ import { buildSourceCleanliness } from "../source-cleanliness.js";
 import { buildTerminalReport } from "../terminal-report.js";
 import { classifyPacketDiagnostics } from "../packet-diagnostics.js";
 import { currentQualityGapSummary } from "../research-gaps.js";
-import { buildDashboardSettings } from "./dashboard.js";
+import { buildDashboardSettings, dashboardCommands } from "./dashboard.js";
+import { decisionGuidance } from "../decision-guidance.js";
 import { continuationCommands, loopContinuation } from "./continuation.js";
 import { fixedControlStateSummary } from "../fixed-control.js";
 import { listBuiltInRecipes } from "../recipes.js";
@@ -37,6 +41,16 @@ import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redactio
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import type { SessionReadCache } from "../session-records.js";
+import {
+  lastRunPacketFreshness,
+  readLastRunPacket,
+  replacementNextCommandForLastRun,
+} from "../last-run-store.js";
+import { operatorWarningsForWorkDir } from "../operator-warnings.js";
+import { buildParallelOrchestrationContext } from "../parallel-orchestration.js";
+import { PLUGIN_VERSION } from "../plugin-version.js";
+import { runtimeProvenance } from "../drift-doctor.js";
+import { resolvePackageRoot } from "../runtime-paths.js";
 
 export interface CompactStateBuilderInput extends UnknownRecord {
   workDir: string;
@@ -63,67 +77,55 @@ function decisionSetupState(state: CommandRecord): CommandRecord | null {
 }
 
 type CommandRecord = UnknownRecord;
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+type FinalizePreviewModule = typeof import("../finalize-preview.js");
+type PartialResultsModule = typeof import("../partial-results.js");
 
-export interface StateRuntime {
-  buildFinalizePreview: (args: CommandRecord) => Promise<CommandRecord>;
-  buildParallelOrchestrationContext: (args: {
-    config: UnknownRecord;
-    records?: ReturnType<typeof loadSessionRecords>;
-    settings?: UnknownRecord;
-    state: ReturnType<typeof loadSessionState>;
-    workDir: string;
-  }) => UnknownRecord & {
-    fanoutPlan: UnknownRecord | null;
-    fanoutProvenance: UnknownRecord | null;
-    laneResults: UnknownRecord[];
-    memory: UnknownRecord;
-    parallelLanes: UnknownRecord[];
-    watchdogSummary: UnknownRecord;
-  };
-  dashboardCommands: (workDir: string) => CommandRecord[];
-  decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
-  discoverLastRunPartialResults: (
-    workDir: string,
-    state: UnknownRecord,
-    lastRun: UnknownRecord | null,
-  ) => Promise<{ candidates: unknown[]; skippedArtifacts?: unknown[] }>;
-  lastRunPacketFreshness: (workDir: string, lastRun: CommandRecord) => Promise<CommandRecord>;
-  operatorWarningsForWorkDir: (workDir: string, state: CommandRecord) => Promise<CommandRecord[]>;
-  pluginRoot: string;
-  pluginVersion: string;
-  readActiveProgressSnapshot: (
-    workDir: string,
-    config?: CommandRecord,
-  ) => Promise<CommandRecord | null>;
-  readLastRunPacket: (workDir: string) => Promise<CommandRecord | null>;
-  replacementNextCommandForLastRun: (
-    workDir: string,
-    lastRun: CommandRecord | null,
-  ) => Promise<string>;
-  runtimeProvenance: () => CommandRecord;
-  withCanonicalActionCommand: (envelope: CommandRecord, commands: unknown) => CommandRecord;
+async function buildFinalizePreviewLazy(
+  ...args: Parameters<FinalizePreviewModule["finalizePreview"]>
+): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizePreview"]>>> {
+  return (await import("../finalize-preview.js")).finalizePreview(...args);
 }
 
-export async function publicState(
-  args: CommandRecord,
-  runtime: StateRuntime,
-): Promise<CommandRecord> {
-  const {
-    buildParallelOrchestrationContext,
-    dashboardCommands,
-    decisionGuidance,
-    discoverLastRunPartialResults,
-    lastRunPacketFreshness,
-    operatorWarningsForWorkDir,
-    readActiveProgressSnapshot,
-    readLastRunPacket,
-    replacementNextCommandForLastRun,
-    runtimeProvenance,
-    withCanonicalActionCommand,
-  } = runtime;
-  const PLUGIN_ROOT = runtime.pluginRoot;
-  const PLUGIN_VERSION = runtime.pluginVersion;
+async function discoverLastRunPartialResults(
+  workDir: string,
+  state: CommandRecord,
+  lastRun: CommandRecord | null,
+) {
+  if (!lastRun || !partialResultEligiblePacket(lastRun)) {
+    return { candidates: [], skippedArtifacts: [] };
+  }
+  return await discoverPartialResultCandidatesLazy({
+    workDir,
+    primaryMetricName: String(recordOrEmpty(state.config).metricName || "metric"),
+    lastRunPacket: lastRun,
+  }).catch((error: unknown) => ({
+    candidates: [],
+    skippedArtifacts: [
+      {
+        artifactName: "last-run",
+        artifactPath: lastRun.lastRunPath || "",
+        reason: errorMessage(error),
+      },
+    ],
+  }));
+}
 
+async function discoverPartialResultCandidatesLazy(
+  ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
+): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
+  return (await import("../partial-results.js")).discoverPartialResultCandidates(...args);
+}
+
+function partialResultEligiblePacket(packet: CommandRecord): boolean {
+  const run = recordOrEmpty(packet.run);
+  const packetEvidence = recordOrEmpty(packet.packetEvidence);
+  if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
+  const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
+  return exitCode != null && exitCode !== 0;
+}
+
+export async function publicState(args: CommandRecord): Promise<CommandRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const compact = boolOption(args.compact, false);
   const report = boolOption(args.report, false);
@@ -134,16 +136,16 @@ export async function publicState(
   if (compact || report) {
     let compactState: CommandRecord;
     try {
-      compactState = await publicCompactState(
-        { workDir, config, codexGoalObjective, readCache },
-        runtime,
-      );
+      compactState = await publicCompactState({ workDir, config, codexGoalObjective, readCache });
     } catch (error) {
       if (!isStrictLedgerParseError(error)) throw error;
-      compactState = repairFirstStateForInvalidLedger(
-        { workDir, config, codexGoalObjective, error, compact: true },
-        runtime,
-      );
+      compactState = repairFirstStateForInvalidLedger({
+        workDir,
+        config,
+        codexGoalObjective,
+        error,
+        compact: true,
+      });
     }
     if (!report) return compactState;
     const response: CommandRecord = {
@@ -162,10 +164,13 @@ export async function publicState(
     records = loadSessionRecords(workDir, readCache);
   } catch (error) {
     if (!isStrictLedgerParseError(error)) throw error;
-    const repairState = repairFirstStateForInvalidLedger(
-      { workDir, config, codexGoalObjective, error, compact: false },
-      runtime,
-    );
+    const repairState = repairFirstStateForInvalidLedger({
+      workDir,
+      config,
+      codexGoalObjective,
+      error,
+      compact: false,
+    });
     return jsonFull || !bounded
       ? projectFullState(repairState)
       : projectStateReadModel(repairState, "default");
@@ -179,10 +184,12 @@ export async function publicState(
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const qualityGap = await currentQualityGapSummary(workDir);
-  const finalization = await finalizationPressureForWorkDir(
-    { workDir, state, qualityGap, warningDetails },
-    runtime,
-  );
+  const finalization = await finalizationPressureForWorkDir({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails,
+  });
   const settings = buildDashboardSettings(config);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
@@ -425,23 +432,19 @@ function isStrictLedgerParseError(error: unknown): boolean {
   return /^Corrupt autoresearch\.jsonl at line \d+\b/i.test(errorMessage(error));
 }
 
-function repairFirstStateForInvalidLedger(
-  {
-    workDir,
-    config,
-    codexGoalObjective,
-    error,
-    compact,
-  }: {
-    workDir: string;
-    config: CommandRecord;
-    codexGoalObjective?: unknown;
-    error: unknown;
-    compact: boolean;
-  },
-  runtime: StateRuntime,
-): CommandRecord {
-  const { runtimeProvenance, withCanonicalActionCommand } = runtime;
+function repairFirstStateForInvalidLedger({
+  workDir,
+  config,
+  codexGoalObjective,
+  error,
+  compact,
+}: {
+  workDir: string;
+  config: CommandRecord;
+  codexGoalObjective?: unknown;
+  error: unknown;
+  compact: boolean;
+}): CommandRecord {
   const ledger = readLedgerRecordsTolerant(workDir);
   const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
     parseErrors: ledger.parseErrors,
@@ -507,34 +510,17 @@ function repairFirstStateForInvalidLedger(
   return compact ? compactPublicState(response) : projectFullState(response);
 }
 
-async function publicCompactState(
-  {
-    workDir,
-    config,
-    codexGoalObjective,
-    readCache,
-  }: {
-    workDir: string;
-    config: CommandRecord;
-    codexGoalObjective?: unknown;
-    readCache?: unknown;
-  },
-  runtime: StateRuntime,
-): Promise<CommandRecord> {
-  const {
-    buildParallelOrchestrationContext,
-    decisionGuidance,
-    discoverLastRunPartialResults,
-    lastRunPacketFreshness,
-    operatorWarningsForWorkDir,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
-    readActiveProgressSnapshot,
-    readLastRunPacket,
-    replacementNextCommandForLastRun,
-    runtimeProvenance,
-    withCanonicalActionCommand,
-  } = runtime;
+async function publicCompactState({
+  workDir,
+  config,
+  codexGoalObjective,
+  readCache,
+}: {
+  workDir: string;
+  config: CommandRecord;
+  codexGoalObjective?: unknown;
+  readCache?: unknown;
+}): Promise<CommandRecord> {
   const effectiveReadCache = (readCache || createSessionReadCache()) as SessionReadCache;
   const state = loadSessionState(workDir, effectiveReadCache);
   const records = loadSessionRecords(workDir, effectiveReadCache);
@@ -629,10 +615,12 @@ async function publicCompactState(
     ...continuation.commands,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
-  const finalization = await finalizationPressureForWorkDir(
-    { workDir, state, qualityGap, warningDetails },
-    runtime,
-  );
+  const finalization = await finalizationPressureForWorkDir({
+    workDir,
+    state,
+    qualityGap,
+    warningDetails,
+  });
   const readModel = buildSessionReadModel({
     workDir,
     config,
@@ -767,24 +755,20 @@ async function publicCompactState(
   });
 }
 
-export async function finalizationPressureForWorkDir(
-  {
-    workDir,
-    state,
-    qualityGap,
-    warningDetails,
-  }: {
-    workDir: string;
-    state: CommandRecord;
-    qualityGap: CommandRecord | null;
-    warningDetails: CommandRecord[];
-  },
-  runtime: StateRuntime,
-): Promise<CommandRecord> {
-  const { buildFinalizePreview } = runtime;
+export async function finalizationPressureForWorkDir({
+  workDir,
+  state,
+  qualityGap,
+  warningDetails,
+}: {
+  workDir: string;
+  state: CommandRecord;
+  qualityGap: CommandRecord | null;
+  warningDetails: CommandRecord[];
+}): Promise<CommandRecord> {
   const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
   if (!hasFinalizationEvidence(state)) return cheap;
-  return await buildFinalizePreview({ cwd: workDir }).catch((error: unknown) => ({
+  return await buildFinalizePreviewLazy({ cwd: workDir }).catch((error: unknown) => ({
     ...cheap,
     ok: false,
     ready: false,
