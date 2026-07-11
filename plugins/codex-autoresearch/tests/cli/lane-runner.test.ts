@@ -185,7 +185,7 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(laneEntries[0].lane.mode, "big_idea");
     assert.equal(laneEntries[0].result.approvalGate.required, true);
 
-    const stateAfterUnapproved = await runCli(["state", "--cwd", dir, "--compact"]);
+    const stateAfterUnapproved = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(stateAfterUnapproved.code, 0, stateAfterUnapproved.stderr);
     const unapprovedStatePayload = JSON.parse(stateAfterUnapproved.stdout);
     assert.equal(unapprovedStatePayload.approvalLedger.status, "blocked");
@@ -255,7 +255,7 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(replayedPayload.result.approvalRequired, false);
     assert.equal(replayedPayload.result.approvalGate.matchedApproval.scope, "architecture-scout");
 
-    const stateAfterApproval = await runCli(["state", "--cwd", dir, "--compact"]);
+    const stateAfterApproval = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(stateAfterApproval.code, 0, stateAfterApproval.stderr);
     const approvedStatePayload = JSON.parse(stateAfterApproval.stdout);
     assert.equal(approvedStatePayload.approvalLedger.status, "approved");

@@ -5,7 +5,9 @@ import {
   dedupeApprovalRequirements,
 } from "./approval-ledger.js";
 import { resolveActionCommand } from "./action-metadata.js";
+import { renderedPowerShellCommandBody } from "./command-rendering.js";
 import { hasUnsafeShellOperator } from "./dashboard-command-safety.js";
+import { selectDecisionAuthority } from "./decision-authority.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { classifyEvidenceMaturity, runsFromState } from "./evidence-maturity.js";
 import { buildGoalContract } from "./goal-frame.js";
@@ -381,24 +383,33 @@ export function resolveSessionDecision({
         }
       : stateAction;
   const strongestAction = recordOrNull(loopContract?.strongestAction);
+  const structuredBlocker = Array.isArray(loopContract?.blockers)
+    ? recordOrNull(loopContract.blockers[0])
+    : null;
   const blockers = uniqueMessages([
     stringValue(existing?.strongestBlocker),
     ...messageList(loopContract?.blockers),
     ...messageList(state.blockers),
   ]);
   const strongestBlocker = blockers[0] || stringValue(existing?.strongestBlocker) || null;
+  const blockerAction = strongestAction || structuredBlocker;
+  const mergedBlockerAction = blockerAction
+    ? canonical && blockerAction.kind === canonical.kind
+      ? {
+          ...canonical,
+          ...blockerAction,
+          command: safeDecisionCommand(blockerAction.command)
+            ? stringValue(blockerAction.command)
+            : stringValue(canonical.command),
+        }
+      : blockerAction
+    : null;
   const authoritativeAction = strongestBlocker
-    ? strongestAction
-      ? canonical && strongestAction.kind === canonical.kind
-        ? {
-            ...canonical,
-            ...strongestAction,
-            command: stringValue(strongestAction.command) || stringValue(canonical.command),
-          }
-        : strongestAction
-      : canonical && canonical.kind !== "next-packet"
-        ? canonical
-        : { kind: "blocked", reason: strongestBlocker, command: "" }
+    ? selectDecisionAuthority(
+        canonical && canonical.kind !== "next-packet" ? canonical : null,
+        mergedBlockerAction || { kind: "blocked", reason: strongestBlocker, command: "" },
+        true,
+      )
     : canonical;
   const commands = unknownRecordOrEmpty(commandsInput ?? state.commands);
   const resolvedCommand = resolveActionCommand(authoritativeAction?.kind, commands, {
@@ -424,9 +435,8 @@ export function resolveSessionDecision({
           ? "ready"
           : "unknown";
   const nextAction =
-    (strongestBlocker
-      ? stringValue(strongestAction?.reason) || strongestBlocker
-      : stringValue(authoritativeAction?.reason)) ||
+    stringValue(authoritativeAction?.reason) ||
+    strongestBlocker ||
     stringValue(existing?.nextAction) ||
     stringValue(state.nextAction) ||
     "Read state and choose the next safe Autoresearch action.";
@@ -496,6 +506,15 @@ export function projectStateReadModel(
     runtimeProvenance: state.runtimeProvenance,
     finalization: state.finalizationPressure,
   });
+  const goalContract = recordOrNull(state.goalContract);
+  const envelope = recordOrNull(state.decisionEnvelope);
+  const goalAdvice = compactGoalAdvice(envelope?.goalAdvice || state.goalAdvice);
+  const continuation = compactContinuation(state.continuation);
+  const continuationSource = recordOrNull(state.continuation);
+  const watchdogSummary = compactWatchdogSummary(state.watchdogSummary);
+  const workflowFriction = compactWorkflowFriction(state.workflowFriction);
+  const sourceCleanliness = compactSourceCleanliness(state.sourceCleanliness);
+  const metricSemanticsWarning = compactMetricSemanticsWarning(state.metricSemanticsWarning);
   const projection: ReadModelRecord = {
     ok: state.ok !== false,
     code: boundedText(state.code),
@@ -506,6 +525,21 @@ export function projectStateReadModel(
     parseErrors: boundedValue(state.parseErrors),
     name: boundedText(state.name || config.name || "Autoresearch"),
     goal: boundedText(state.goal || config.goal),
+    goalFrame: goalContract
+      ? pickFields(goalContract, [
+          "authoritativeGoal",
+          "codexGoalObjective",
+          "codexObjectiveRole",
+          "mismatch",
+          "warning",
+          "operatorLine",
+        ])
+      : null,
+    operatorHandoff: {
+      goal: boundedText(goalContract?.authoritativeGoal || state.goal || config.goal),
+      next: boundedText(decision.nextAction),
+    },
+    ...(goalAdvice ? { goalAdvice } : {}),
     config: boundedValue(config),
     metric: boundedText(state.metric || config.metricName || state.metricName),
     direction: boundedText(state.direction || config.bestDirection || "lower"),
@@ -521,15 +555,27 @@ export function projectStateReadModel(
     historicalBest: boundedValue(state.historicalBest),
     developmentBest: boundedValue(state.developmentBest ?? recordOrNull(state.development)?.best),
     promotionBest: boundedValue(state.promotionBest ?? recordOrNull(state.promotion)?.best),
-    resolvedDecision: compactResolvedDecision(decision),
+    resolvedDecision: compactResolvedDecision(decision, sourceCleanliness),
     warnings: boundedMessages(state.warnings),
     warningDetails: boundedValue(state.warningDetails),
     commands: compactCommands(state.commands, decision.command, mode === "compact"),
+    settings: boundedValue(state.settings),
+    ...(continuation ? { continuation } : {}),
+    report: { next: boundedText(decision.nextAction) },
+    nextAction: boundedText(decision.nextAction),
+    activeBudget: continuationSource?.activeBudget === true,
+    shouldContinue: continuationSource?.shouldContinue === true,
+    canRunNextPacket:
+      recordOrNull(decision.loopContract)?.canRunNextPacket === true &&
+      decision.status !== "blocked",
+    forbidFinalAnswer: continuationSource?.forbidFinalAnswer === true,
+    limitReached: recordOrNull(state.limit)?.limitReached === true,
+    ...(watchdogSummary ? { watchdogSummary } : {}),
     scaffoldHealth: boundedValue(state.scaffoldHealth),
     researchIntegrity: boundedValue(state.researchIntegrity),
     runtimeDriftSummary: boundedValue(state.runtimeDriftSummary),
     dashboardHealth: compactDashboardHealth(state.dashboardHealth),
-    sourceCleanliness: boundedValue(state.sourceCleanliness),
+    ...(sourceCleanliness ? { sourceCleanliness } : {}),
     ledgerHealth: boundedValue(state.ledgerHealth),
     gateQuality: boundedValue(state.gateQuality),
     preflight: boundedValue(state.preflight),
@@ -542,19 +588,10 @@ export function projectStateReadModel(
     packetDiagnostics: boundedValue(state.packetDiagnostics),
     laneLifecycle: boundedValue(state.laneLifecycle),
     portfolioRecommendation: boundedValue(state.portfolioRecommendation),
-    workflowFriction: boundedValue(state.workflowFriction),
+    ...(workflowFriction.length > 0 ? { workflowFriction } : {}),
+    ...(metricSemanticsWarning ? { metricSemanticsWarning } : {}),
     parallelLanes: boundedValue(state.parallelLanes),
     limit: boundedValue(state.limit),
-    compatibility: {
-      reads: ["decisionEnvelope", "resumeAudit"],
-      emits: "resolvedDecision",
-      removedOutputAliases: [
-        "decisionEnvelope",
-        "resumeAudit",
-        "canonicalNextAction",
-        "loopContract",
-      ],
-    },
   };
   const budget =
     mode === "compact"
@@ -584,7 +621,6 @@ export function projectStateReadModel(
     }
   }
   return fitProjection(projection, budget, [
-    "workflowFriction",
     "warningDetails",
     "parseErrors",
     "parallelLanes",
@@ -593,11 +629,16 @@ export function projectStateReadModel(
     "packetDiagnostics",
     "productClaimCoverage",
     "config",
+    "settings",
+    "limit",
+    "fixedControl",
+    "preflight",
+    "gateQuality",
+    "dashboardHealth",
     "operatorReadout",
     "goalContract",
     "qualityGap",
     "ledgerHealth",
-    "sourceCleanliness",
     "runtimeDriftSummary",
     "researchIntegrity",
     "scaffoldHealth",
@@ -709,6 +750,58 @@ function compactDecisionCapsule(value: unknown): ReadModelRecord | null {
   };
 }
 
+function compactWorkflowFriction(value: unknown): ReadModelRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 1).flatMap((item) => {
+    const record = recordOrNull(item);
+    return record ? [pickFields(record, ["kind", "severity", "reason", "count"])] : [];
+  });
+}
+
+function compactGoalAdvice(value: unknown): ReadModelRecord | null {
+  const advice = recordOrNull(value);
+  return advice ? pickFields(advice, ["advice", "reason"]) : null;
+}
+
+function compactContinuation(value: unknown): ReadModelRecord | null {
+  const continuation = recordOrNull(value);
+  if (!continuation) return null;
+  return {
+    mode: boundedText(continuation.mode, 80),
+    stage: boundedText(continuation.stage, 80),
+    activeBudget: continuation.activeBudget === true,
+    shouldContinue: continuation.shouldContinue === true,
+    forbidFinalAnswer: continuation.forbidFinalAnswer === true,
+    finalAnswerPolicy: boundedText(continuation.finalAnswerPolicy, 320),
+  };
+}
+
+function compactWatchdogSummary(value: unknown): ReadModelRecord | null {
+  const watchdog = recordOrNull(value);
+  return watchdog ? pickFields(watchdog, ["status", "stale", "latestProgressAt"]) : null;
+}
+
+function compactSourceCleanliness(value: unknown): ReadModelRecord | null {
+  const cleanliness = recordOrNull(value);
+  return cleanliness
+    ? {
+        ...pickFields(cleanliness, [
+          "status",
+          "sourceDirty",
+          "sessionArtifactDirty",
+          "cleanupCommand",
+        ]),
+        message: boundedText(cleanliness.message, 240),
+        nextAction: boundedText(cleanliness.nextAction, 240),
+      }
+    : null;
+}
+
+function compactMetricSemanticsWarning(value: unknown): ReadModelRecord | null {
+  const warning = recordOrNull(value);
+  return warning ? pickFields(warning, ["code", "message"]) : null;
+}
+
 export function projectDashboardDecision(stateInput: unknown): ResolvedDecision {
   const state = unknownRecordOrEmpty(stateInput);
   return resolveSessionDecision({
@@ -797,12 +890,24 @@ export function assertProjectionBudget(
   }
 }
 
-function compactResolvedDecision(decision: ResolvedDecision): ResolvedDecision {
+function compactResolvedDecision(
+  decision: ResolvedDecision,
+  sourceCleanliness: ReadModelRecord | null = null,
+): ResolvedDecision {
   const action = recordOrNull(decision.canonicalNextAction);
   const loop = recordOrNull(decision.loopContract);
+  const loopStrongestAction = recordOrNull(loop?.strongestAction);
   const runtime = recordOrNull(decision.runtimeProvenance);
   const authority = recordOrNull(decision.runtimeAuthority);
   const finalization = recordOrNull(decision.finalizationPressure);
+  const cleanlinessBlocker =
+    sourceCleanliness?.sourceDirty === true
+      ? "Git worktree is dirty; review unrelated changes before continuing."
+      : "";
+  const loopBlockers = uniqueMessages([
+    cleanlinessBlocker,
+    ...boundedMessages(loop?.blockers),
+  ]).slice(0, 3);
   return {
     version: SESSION_READ_MODEL_VERSION,
     status: decision.status,
@@ -823,11 +928,14 @@ function compactResolvedDecision(decision: ResolvedDecision): ResolvedDecision {
     loopContract: loop
       ? {
           ...pickFields(loop, ["ok", "canRunNextPacket"]),
-          ...(boundedMessages(loop.blockers).length > 0
-            ? { blockers: boundedMessages(loop.blockers).slice(0, 3) }
-            : {}),
+          ...(loopBlockers.length > 0 ? { blockers: loopBlockers } : {}),
           ...(boundedMessages(loop.warnings).length > 0
             ? { warnings: boundedMessages(loop.warnings).slice(0, 3) }
+            : {}),
+          ...(loopStrongestAction
+            ? {
+                strongestAction: pickFields(loopStrongestAction, ["kind", "reason", "command"]),
+              }
             : {}),
         }
       : null,
@@ -973,10 +1081,47 @@ function decisionStatus(value: unknown): ResolvedDecision["status"] | null {
 
 function safeDecisionCommand(value: unknown): boolean {
   const command = stringValue(value).trim();
-  if (!command || /<[^>]+>/.test(command) || hasUnsafeShellOperator(command)) return false;
-  return !/(?:^|\s)(?:node|python(?:3)?|powershell|pwsh|cmd|sh|bash)\s+(?:-e|--eval|-c|\/c|-command)\b/i.test(
-    command,
+  const commandBody = renderedPowerShellCommandBody(command) ?? command;
+  if (!commandBody || /<[^>]+>/.test(commandBody) || hasUnsafeShellOperator(commandBody))
+    return false;
+  return !usesInterpreterEvaluationMode(commandBody);
+}
+
+function usesInterpreterEvaluationMode(command: string): boolean {
+  const invocation = firstCommandInvocation(command);
+  if (!invocation) return false;
+  const executable = invocation.executable.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  const firstArgument = firstCommandArgument(invocation.args);
+  if (/^(?:node|python(?:3)?|powershell|pwsh|(?:ba|z|k)?sh)(?:\.exe)?$/.test(executable || "")) {
+    return firstArgument.startsWith("-");
+  }
+  return (
+    (executable === "cmd" || executable === "cmd.exe") &&
+    (firstArgument.startsWith("/") || firstArgument.startsWith("-"))
   );
+}
+
+function firstCommandArgument(args: string): string {
+  const token = args.match(/^(?:"(?:\\.|[^"])*"|'(?:''|[^'])*'|\S+)/)?.[0] || "";
+  const quote = token[0];
+  return quote && quote === token[token.length - 1] && (quote === "'" || quote === '"')
+    ? token.slice(1, -1)
+    : token;
+}
+
+function firstCommandInvocation(command: string): { executable: string; args: string } | null {
+  const text = command.trim().replace(/^&\s+/, "");
+  if (!text) return null;
+  const quote = text[0];
+  if (quote === "'" || quote === '"') {
+    const end = text.indexOf(quote, 1);
+    if (end < 0) return null;
+    return { executable: text.slice(1, end), args: text.slice(end + 1).trimStart() };
+  }
+  const separator = text.search(/\s/);
+  return separator < 0
+    ? { executable: text, args: "" }
+    : { executable: text.slice(0, separator), args: text.slice(separator).trimStart() };
 }
 
 function messageList(value: unknown): string[] {

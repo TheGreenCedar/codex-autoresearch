@@ -42,7 +42,7 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     assert.match(benchmark, /quality-gap/);
     assert.match(benchmark, /project-study/);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).config.metricName, "quality_gap");
 

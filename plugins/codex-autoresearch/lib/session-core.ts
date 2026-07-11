@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
+import { selectDecisionAuthority } from "./decision-authority.js";
 import { buildBudgetStatus } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import { buildOperatorReadout } from "./operator-readout.js";
@@ -646,9 +647,11 @@ export function buildDecisionEnvelope({
   const loopContract = buildLoopContractStatus(envelope);
   const supplementalAction = supplementalNextActionForEnvelope(envelope);
   const governanceAction = canonicalNextActionForLoop(envelope);
-  const canonicalNextAction = loopContractShouldOverrideSupplemental(loopContract)
-    ? governanceAction
-    : supplementalAction;
+  const canonicalNextAction = selectDecisionAuthority(
+    supplementalAction,
+    governanceAction,
+    loopContractShouldOverrideSupplemental(loopContract),
+  );
   const operatorReadout = buildOperatorReadout({
     canonicalNextAction,
     loopContract,
@@ -702,11 +705,11 @@ const SUPPLEMENTAL_NEXT_ACTION_RULES: SupplementalActionRule[] = [
   setupAction,
   benchmarkCommandAction,
   logDecisionAction,
+  watchdogAction,
   trustBlockerAction,
   workflowWarningAction,
   segmentTransitionAction,
   plateauAction,
-  watchdogAction,
   finalizationAction,
   baselineAction,
   nextPacketAction,

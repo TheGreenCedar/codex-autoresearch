@@ -49,7 +49,7 @@ test("config persists operator settings and extends iteration limits", async () 
     assert.equal(payload.config.maxIterations, 5);
     assert.deepEqual(payload.config.commitPaths, ["src", "tests"]);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.settings.autonomyMode, "owner-autonomous");
@@ -1083,7 +1083,7 @@ test("metricless failure logs do not become baseline or best", async () => {
     assert.equal(checksFailedPayload.experiment.metricEligible, false);
     assert.equal(checksFailedPayload.experiment.promotion.label, "blocked");
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.baseline, null);
@@ -1129,7 +1129,7 @@ test("measure logs metric evidence without keep/finalizer eligibility or git mut
     assert.equal(await git(dir, ["rev-parse", "HEAD"]), headBefore);
     assert.match(await git(dir, ["status", "--short"]), /M tracked\.txt/);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.kept, 0);

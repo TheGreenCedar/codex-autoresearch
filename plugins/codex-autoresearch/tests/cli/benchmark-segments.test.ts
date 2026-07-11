@@ -47,7 +47,7 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
       JSON.stringify({ repeatRequired: 1 }),
     ]);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.scaffoldHealth.ok, false);
@@ -59,7 +59,7 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     assert.ok(payload.researchIntegrity.evidenceLabels.includes("pending_repeat"));
     assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect/i);
 
-    const doctor = await runCli(["doctor", "--cwd", dir]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.scaffoldHealth.ok, false);
@@ -68,7 +68,6 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
-    assert.equal(compactPayload.scaffoldHealth.ok, false);
     assert.equal(compactPayload.resolvedDecision.canonicalNextAction.kind, "safety-blocker");
     assert.ok(compactPayload.resolvedDecision.loopContract.blockers.length > 0);
   });
@@ -87,7 +86,7 @@ test("scaffold health catches direct PowerShell wrapper self-recursion", async (
     ]);
     await writeFile(path.join(dir, "autoresearch.ps1"), "& .\\autoresearch.ps1\n", "utf8");
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.scaffoldHealth.ok, false);
@@ -236,7 +235,7 @@ test("doctor does not treat routine rollback wording as evidence invalidation", 
       JSON.stringify({ rollback_reason: "reverted scoped experiment changes" }),
     ]);
 
-    const doctor = await runCli(["doctor", "--cwd", dir]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const payload = JSON.parse(doctor.stdout);
     assert.equal(payload.ok, true);
@@ -463,7 +462,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
     ]);
     assert.equal(segment.code, 0, segment.stderr);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const payload = JSON.parse(doctor.stdout);
     assert.equal(payload.benchmarkContract.ok, true);
@@ -520,7 +519,7 @@ test("new segment warns when metric semantics change across segments", async () 
     const segmentPayload = cliPayload(JSON.parse(segment.stdout));
     assert.equal(segmentPayload.metricSemanticsWarning?.code, "metric_semantics_changed");
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = cliPayload(JSON.parse(state.stdout));
     assert.equal(statePayload.metricSemanticsWarning?.code, "metric_semantics_changed");
@@ -608,7 +607,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     ]);
     assert.equal(segment.code, 0, segment.stderr);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.segment, 1);
@@ -628,7 +627,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     assert.equal(reportPayload.report.json.cleanliness.cleanupCommand, "");
     assert.match(reportPayload.report.text, /Only Autoresearch session artifacts are dirty/);
     assert.doesNotMatch(reportPayload.report.text, /git stash push --include-untracked/);
-    const doctor = await runCli(["doctor", "--cwd", dir]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.doesNotMatch(doctorPayload.warnings.join("\n"), /Git worktree is dirty/);
@@ -638,7 +637,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     );
 
     await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
-    const dirty = await runCli(["state", "--cwd", dir]);
+    const dirty = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(dirty.code, 0, dirty.stderr);
     const dirtyPayload = JSON.parse(dirty.stdout);
     assert.equal(dirtyPayload.sourceCleanliness.sourceDirty, true);
@@ -655,6 +654,9 @@ test("new segment does not treat its own ledger append as dirty source drift", a
         JSON.stringify(blocker).includes("Git worktree is dirty"),
       ),
     );
+    const dirtyDoctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
+    assert.equal(dirtyDoctor.code, 0, dirtyDoctor.stderr);
+    assert.equal(JSON.parse(dirtyDoctor.stdout).git.clean, false);
   });
 });
 

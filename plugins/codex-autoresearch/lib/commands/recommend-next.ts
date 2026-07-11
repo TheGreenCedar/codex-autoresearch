@@ -221,7 +221,8 @@ export function selectRecommendNextRuntimeAuthority({
     viewRuntimeBlocker || viewLoopBlocker ? viewEnvelope : compactEnvelope || viewEnvelope;
   const resolvedDecision = resolveSessionDecision({
     state: {
-      resolvedDecision: viewRuntimeBlocker ? undefined : compact?.resolvedDecision,
+      resolvedDecision:
+        viewRuntimeBlocker || viewLoopBlocker ? undefined : compact?.resolvedDecision,
       decisionEnvelope,
       blockers: compact?.blockers,
       nextAction: compact?.nextAction,

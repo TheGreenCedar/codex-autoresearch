@@ -40,13 +40,13 @@ test("research-fanout records generic parallel lanes without creating a bespoke 
     assert.ok(Array.isArray(plan.parallelLanes[0].brief.boundaries));
     assert.equal(typeof plan.parallelLanes[0].brief.expectedDecisionOutput, "string");
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.ok(payload.parallelLanes.length > 0);
     assert.equal(typeof payload.parallelLanes[0].brief.objective, "string");
     assert.equal(payload.fanoutPlan.status, "planned");
-    assert.equal(payload.metric, "quality_gap");
+    assert.equal(payload.config.metricName, "quality_gap");
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
@@ -95,7 +95,7 @@ test("lane-runner records scout advice without claiming worktree containment", a
       .find((entry) => entry.type === "lane_result");
     assert.equal(typeof laneEntry.lane.brief.objective, "string");
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     const lane = statePayload.parallelLanes.find((item) => item.id === "read-only-scout");
@@ -206,7 +206,7 @@ test("empty lane-runner records are planned breadcrumbs, not watchdog progress",
     assert.equal(emptyPayload.result.status, "planned");
     assert.equal(emptyPayload.result.evidenceAccepted, false);
 
-    const staleState = await runCli(["state", "--cwd", dir, "--compact"]);
+    const staleState = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(staleState.code, 0, staleState.stderr);
     const stalePayload = JSON.parse(staleState.stdout);
     const plannedLane = stalePayload.parallelLanes.find((item) => item.id === "read-only-scout");
@@ -229,7 +229,7 @@ test("empty lane-runner records are planned breadcrumbs, not watchdog progress",
     assert.equal(commandPayload.result.status, "completed");
     assert.equal(commandPayload.result.evidenceAccepted, true);
 
-    const freshState = await runCli(["state", "--cwd", dir, "--compact"]);
+    const freshState = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(freshState.code, 0, freshState.stderr);
     const freshPayload = JSON.parse(freshState.stdout);
     const completedLane = freshPayload.parallelLanes.find((item) => item.id === "read-only-scout");
@@ -669,7 +669,7 @@ test("lane-runner synthesizes completed lane results into one next action", asyn
     assert.equal(typeof payload.coordinatorRecommendation.nextAction, "string");
     assert.ok(payload.coordinatorRecommendation.lessonsToAvoid.length >= 1);
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.ok(statePayload.laneLifecycle.lessonsToAvoid.length >= 1);
@@ -704,7 +704,7 @@ test("fanout plans are scoped to the active segment", async () => {
       "--yes",
     ]);
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.segment, 1);
@@ -775,7 +775,7 @@ test("completed lane results count as watchdog progress signals", async () => {
       "utf8",
     );
 
-    const before = await runCli(["state", "--cwd", dir, "--compact"]);
+    const before = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(JSON.parse(before.stdout).watchdogSummary?.stale, true);
 
     await runCli([
@@ -791,7 +791,7 @@ test("completed lane results count as watchdog progress signals", async () => {
       "--yes",
     ]);
 
-    const after = await runCli(["state", "--cwd", dir, "--compact"]);
+    const after = await runCli(["state", "--cwd", dir, "--json-full"]);
     const afterPayload = JSON.parse(after.stdout);
     assert.equal(afterPayload.watchdogSummary?.stale, false);
     assert.ok(

@@ -650,7 +650,14 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     assert.equal(statePayload.resolvedDecision.canonicalNextAction.toolName, "recommend_next");
     assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
     const stateActionCommand = statePayload.resolvedDecision.canonicalNextAction.command || "";
-    assert.match(stateActionCommand, /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/);
+    assert.match(
+      stateActionCommand,
+      /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
+      JSON.stringify({
+        resolvedDecision: statePayload.resolvedDecision,
+        commands: statePayload.commands,
+      }),
+    );
     assert.doesNotMatch(stateActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
@@ -667,6 +674,10 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     assert.match(
       recommendActionCommand,
       /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
+      JSON.stringify({
+        resolvedDecision: recommendPayload.resolvedDecision,
+        commands: recommendPayload.commands,
+      }),
     );
     assert.doesNotMatch(recommendActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
     assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);

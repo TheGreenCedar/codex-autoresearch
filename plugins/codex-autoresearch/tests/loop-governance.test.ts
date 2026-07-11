@@ -167,6 +167,29 @@ test("fresh packet logging outranks generic preflight repair", () => {
   assert.equal(status.strongestAction?.kind, "log-decision");
 });
 
+test("stale watchdog intervention is the shared authority over generic preflight repair", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      config: { bestDirection: "lower", metricName: "seconds" },
+      current: [{ run: 1, metric: 10, status: "keep" }],
+      results: [{ run: 1, metric: 10, status: "keep" }],
+      preflight: {
+        status: "blocked",
+        blockers: ["No benchmark command is configured."],
+        nextCommand: "node scripts/autoresearch.mjs setup-plan --cwd .",
+      },
+    },
+    watchdog: {
+      stale: true,
+      recommendation: "Intervene after the stale progress window.",
+    },
+  });
+
+  assert.equal(envelope.loopContract.strongestAction.kind, "preflight");
+  assert.equal(envelope.canonicalNextAction.kind, "watchdog");
+  assert.match(envelope.nextAction, /Intervene/);
+});
+
 test("probe-failed runtime provenance remains non-blocking", () => {
   const status = buildLoopContractStatus({
     runtimeProvenance: {

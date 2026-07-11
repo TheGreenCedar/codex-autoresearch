@@ -70,7 +70,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(resumeGuidePayload.setup.recommendedRecipe.id, "memory-usage");
     assert.equal(resumeGuidePayload.doctor.ok, true);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, true);
@@ -167,7 +167,7 @@ test("interactive setup uses defaults from the recipe selected by the operator",
     const interactive = await runCliWithAnswers(["setup", "--cwd", dir, "--interactive"], answers);
     assert.equal(interactive.code, 0, interactive.stderr);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).config.metricName, "rss_mb");
   });

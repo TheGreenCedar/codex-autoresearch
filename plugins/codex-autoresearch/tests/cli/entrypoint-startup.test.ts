@@ -20,7 +20,7 @@ test("spawned CLI contract covers source launcher startup and env workdir resolu
     });
     assert.equal(init.code, 0, init.stderr);
 
-    const state = await runSpawnedCli(["state"], { cwd: pluginRoot, env });
+    const state = await runSpawnedCli(["state", "--json-full"], { cwd: pluginRoot, env });
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.config.name, "spawned");

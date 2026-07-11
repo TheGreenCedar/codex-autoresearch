@@ -11,6 +11,8 @@ import {
 } from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
 import { registryPathForWorkDir } from "../lib/dashboard-server-registry.js";
+import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -1065,6 +1067,190 @@ test("resolved operational commands reject nested shell operators", () => {
   }
 });
 
+test("resolved operational commands reject interpreter evaluation modes", () => {
+  for (const command of [
+    'node -e "process.exit(1)"',
+    'node --eval="process.exit(1)"',
+    'node -p "process.version"',
+    'node --print "process.version"',
+    'node --no-warnings -pe "process.version"',
+    'node --require ./hook.mjs -e "process.exit(1)"',
+    'node "-e" "process.exit(1)"',
+    "python3 -c \"print('payload')\"",
+    "python -I -c \"print('payload')\"",
+    "python -W ignore -c \"print('payload')\"",
+    'powershell -Command "Get-Process"',
+    "pwsh -EncodedCommand ZQB4AGkAdAA=",
+    "pwsh -NoProfile -EncodedCommand ZQB4AGkAdAA=",
+    "pwsh -ExecutionPolicy Bypass -EncodedCommand ZQB4AGkAdAA=",
+    "cmd /k whoami",
+    "cmd /d /c whoami",
+    "bash -lc whoami",
+    "bash --noprofile -lc whoami",
+  ]) {
+    const resolved = resolveSessionDecision({
+      state: {
+        decisionEnvelope: {
+          canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
+          loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
+        },
+      },
+    });
+    assert.equal(resolved.command, "", command);
+    assert.equal(resolved.canonicalNextAction?.command, "", command);
+  }
+});
+
+test("resolved operational commands allow evaluator text as a trusted CLI argument", () => {
+  const command =
+    "node scripts/autoresearch.mjs next --cwd . --command 'node -e \"console.log(1)\"'";
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.command, command);
+});
+
+test("resolved operational commands accept only the trusted generated PowerShell wrapper", () => {
+  const command = renderShellCommand(
+    ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "next", "--cwd", "."],
+    "powershell",
+  );
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.command, command);
+
+  for (const unsafeBody of [
+    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
+    "'C:\\Program Files\\nodejs\\node.exe' -e 'process.exit(1)'",
+    "'C:\\Program Files\\nodejs\\node.exe' --print 'process.version'",
+    "pwsh.exe -EncodedCommand ZQB4AGkAdAA=",
+  ]) {
+    const unsafe = `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${unsafeBody} }`;
+    assert.equal(
+      resolveSessionDecision({
+        state: {
+          decisionEnvelope: {
+            canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command: unsafe },
+            loopContract: { canRunNextPacket: true, blockers: [] },
+          },
+        },
+      }).command,
+      "",
+    );
+  }
+});
+
+test("resolved watchdog authority stays canonical over a generic preflight blocker", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "watchdog",
+          reason: "Intervene after the stale progress window.",
+        },
+        loopContract: {
+          canRunNextPacket: false,
+          blockers: ["No benchmark command is configured."],
+          strongestAction: {
+            kind: "preflight",
+            reason: "No benchmark command is configured.",
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(resolved.canonicalNextAction?.kind, "watchdog");
+  assert.match(resolved.nextAction, /Intervene/);
+  assert.equal(resolved.status, "blocked");
+});
+
+test("decision capsules replace placeholder hints with a safe canonical fallback command", () => {
+  const commands = buildContinuationCommands({
+    scriptPath: path.join(process.cwd(), "scripts", "autoresearch.mjs"),
+    shellQuote: (value) => quoteShellArg(value, "powershell"),
+    workDir: "C:\\work",
+  });
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "decision-capsule",
+          reason: "Repair the benchmark contract.",
+          command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+        },
+        loopContract: {
+          canRunNextPacket: false,
+          blockers: ["Repair the benchmark contract."],
+          strongestAction: {
+            kind: "decision-capsule",
+            reason: "Repair the benchmark contract.",
+            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          },
+        },
+      },
+    },
+    commands,
+  });
+
+  assert.equal(resolved.command, commands.recommendNext);
+  assert.equal(resolved.canonicalNextAction?.command, commands.recommendNext);
+
+  const reread = resolveSessionDecision({
+    state: {
+      resolvedDecision: resolved,
+      decisionEnvelope: {
+        canonicalNextAction: resolved.canonicalNextAction,
+        loopContract: {
+          ...resolved.loopContract,
+          strongestAction: {
+            kind: "decision-capsule",
+            reason: "Repair the benchmark contract.",
+            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          },
+        },
+      },
+    },
+    commands: { primary: resolved.command },
+  });
+  assert.equal(reread.command, commands.recommendNext);
+  assert.equal(reread.canonicalNextAction?.command, commands.recommendNext);
+});
+
+test("bounded projection preserves enough blocker provenance to re-resolve watchdog authority", () => {
+  const source = readModelFixture(2);
+  source.decisionEnvelope = {
+    canonicalNextAction: {
+      kind: "watchdog",
+      reason: "Intervene after the stale progress window.",
+    },
+    loopContract: {
+      canRunNextPacket: false,
+      blockers: ["No benchmark command is configured."],
+      strongestAction: {
+        kind: "preflight",
+        reason: "No benchmark command is configured.",
+      },
+    },
+  };
+
+  const compact = projectStateReadModel(source, "compact");
+  const reread = resolveSessionDecision({ state: compact });
+  assert.equal(reread.canonicalNextAction?.kind, "watchdog");
+  assert.equal(reread.nextAction, "Intervene after the stale progress window.");
+});
+
 test("finalization results resolve blocked and ready status explicitly", () => {
   const blocked = resolveFinalizationDecision({
     ready: false,
@@ -1148,6 +1334,32 @@ test("100-run state and doctor projections enforce reviewed byte and line budget
   assert.deepEqual(exactDuplicateSubtrees(compactState), []);
   assert.equal(Object.hasOwn(compactState, "resumeAudit"), false);
   assert.equal(Object.hasOwn(compactState, "decisionEnvelope"), false);
+});
+
+test("bounded continuation keeps only operator authority within its own byte and line budget", () => {
+  const source = readModelFixture(100);
+  source.continuation = {
+    mode: "owner-autonomous",
+    stage: "needs-log-decision",
+    activeBudget: true,
+    shouldContinue: true,
+    forbidFinalAnswer: true,
+    requiresLogDecision: true,
+    stopReason: "s".repeat(4_000),
+    finalAnswerPolicy: "p".repeat(4_000),
+    plateau: { history: Array.from({ length: 100 }, (_, index) => ({ index })) },
+    commands: Object.fromEntries(
+      Array.from({ length: 100 }, (_, index) => [`command${index}`, "x".repeat(500)]),
+    ),
+  };
+
+  const compact = projectStateReadModel(source, "compact");
+  const continuation = compact.continuation as Record<string, unknown>;
+  const budget = projectionBudget(continuation);
+  assert.ok(budget.bytes <= 1_200, JSON.stringify(budget));
+  assert.ok(budget.lines <= 20, JSON.stringify(budget));
+  assert.equal(Object.hasOwn(continuation, "commands"), false);
+  assert.equal(Object.hasOwn(continuation, "plateau"), false);
 });
 
 test("mandatory Unicode state fields truncate deterministically within every reviewed budget", () => {

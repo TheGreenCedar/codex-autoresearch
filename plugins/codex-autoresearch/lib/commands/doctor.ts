@@ -309,7 +309,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
       state,
       git: {
         inside: inGit,
-        clean: state.sourceCleanliness?.dirty === true ? false : true,
+        clean: state.sourceCleanliness?.sourceDirty !== true,
       },
       benchmarkContract: {
         ok: benchmarkContractChanged === false,

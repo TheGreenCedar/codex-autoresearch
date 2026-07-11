@@ -361,6 +361,26 @@ test("recommend-next authority uses full envelope when dashboard-only blockers e
       },
     },
     compact: {
+      resolvedDecision: {
+        version: 1,
+        status: "ready",
+        strongestBlocker: null,
+        nextAction: "Run the next packet.",
+        command: "node scripts/autoresearch.mjs next --cwd . --compact",
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+        },
+        loopContract: {
+          ok: true,
+          canRunNextPacket: true,
+          blockers: [],
+          warnings: [],
+        },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
       decisionEnvelope: {
         canonicalNextAction: {
           kind: "next-packet",
