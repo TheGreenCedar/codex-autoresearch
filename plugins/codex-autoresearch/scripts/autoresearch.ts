@@ -31,7 +31,7 @@ import {
   finalizationPressureForWorkDir as buildFinalizationPressureForWorkDir,
   publicState as readPublicState,
 } from "../lib/commands/state.js";
-import { deleteLastRunPacket, logExperiment } from "../lib/commands/log.js";
+import { logExperiment } from "../lib/commands/log.js";
 import {
   defaultCommandShell,
   normalizeCommandShell,
@@ -115,7 +115,6 @@ import { fixedControlBlockForCommand } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
 import { normalizeRelativePaths } from "../lib/literal-paths.js";
 import {
-  assertFreshLastRunPacket,
   gitSnapshotContainsDirtyFingerprintTruncation,
   lastRunConfigSnapshot,
   lastRunGitSnapshot,
@@ -312,12 +311,12 @@ function dashboardRuntime() {
 
 async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
   const { benchmarkLint: runBenchmarkLint } = await import("../lib/commands/inspect.js");
-  return await runBenchmarkLint(args, inspectRuntime());
+  return await runBenchmarkLint(args);
 }
 
 async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
   const { benchmarkInspect: runBenchmarkInspect } = await import("../lib/commands/inspect.js");
-  return await runBenchmarkInspect(args, inspectRuntime());
+  return await runBenchmarkInspect(args);
 }
 
 async function checksInspect(args: LooseObject): Promise<LooseObject> {
@@ -325,26 +324,10 @@ async function checksInspect(args: LooseObject): Promise<LooseObject> {
   return await runChecksInspect(args);
 }
 
-function inspectRuntime() {
-  return {
-    fixedControlBlockForCommand,
-    resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
-      await resolveBenchmarkCommandSource(args, workDir, {
-        fallbackToDefault: true,
-        requireCommand: false,
-        config,
-      }),
-  };
-}
-
 async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
   const { partialResultsCommand: runPartialResultsCommand } =
     await import("../lib/commands/partial-results.js");
-  return await runPartialResultsCommand(args, {
-    assertFreshLastRunPacket,
-    deleteLastRunPacket,
-    readLastRunPacket,
-  });
+  return await runPartialResultsCommand(args);
 }
 
 async function sessionForensics(args: LooseObject): Promise<LooseObject> {

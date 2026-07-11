@@ -1,6 +1,8 @@
 import type { UnknownRecord } from "../types/json.js";
 import type { ShellRunResult } from "../runner.js";
 import { runShell } from "../runner.js";
+import { resolveBenchmarkCommandSource } from "../benchmark/command-input.js";
+import { fixedControlBlockForCommand, type FixedControlBlock } from "../fixed-control.js";
 import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
 import { numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
@@ -8,38 +10,10 @@ import { currentState, finiteMetric } from "../session-core.js";
 import { parseMetricLines } from "../runner.js";
 
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
-type BenchmarkCommandSource = {
-  command: string;
-  missingReason?: string;
-  separatorCommand?: boolean;
-  source?: string;
-};
-type FixedControlBlock = {
-  code?: string;
-  fixedControlViolation?: unknown;
-  issue?: string;
-  message?: string;
-};
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 
-export interface InspectRuntime {
-  fixedControlBlockForCommand?: (
-    command: unknown,
-    config: UnknownRecord,
-    args?: UnknownRecord,
-  ) => FixedControlBlock | null;
-  resolveBenchmarkCommand: (
-    args: UnknownRecord,
-    workDir: string,
-    config: UnknownRecord,
-  ) => Promise<BenchmarkCommandSource>;
-}
-
-export async function benchmarkLint(
-  args: UnknownRecord,
-  runtime: InspectRuntime,
-): Promise<UnknownRecord> {
+export async function benchmarkLint(args: UnknownRecord): Promise<UnknownRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const metricName = validateMetricName(
@@ -49,11 +23,15 @@ export async function benchmarkLint(
   let commandResult: InspectShellRunResult | null = null;
   const timeoutSeconds = numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
   if (!sample) {
-    const commandSource = await benchmarkCommandSource(args, workDir, config, runtime);
+    const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
+      fallbackToDefault: true,
+      requireCommand: false,
+      config,
+    });
     const separatorCommand = commandSource.separatorCommand === true;
     const command = commandSource.command;
     if (command) {
-      const fixedControlBlock = runtime.fixedControlBlockForCommand?.(command, config, args);
+      const fixedControlBlock = fixedControlBlockForCommand(command, config, args);
       if (fixedControlBlock) {
         return blockedBenchmarkLint({
           block: fixedControlBlock,
@@ -147,19 +125,7 @@ export async function benchmarkLint(
   };
 }
 
-async function benchmarkCommandSource(
-  args: UnknownRecord,
-  workDir: string,
-  config: UnknownRecord,
-  runtime: InspectRuntime,
-): Promise<BenchmarkCommandSource> {
-  return await runtime.resolveBenchmarkCommand(args, workDir, config);
-}
-
-export async function benchmarkInspect(
-  args: UnknownRecord,
-  runtime: InspectRuntime,
-): Promise<UnknownRecord> {
+export async function benchmarkInspect(args: UnknownRecord): Promise<UnknownRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const command = String(args.command || "").trim();
@@ -185,7 +151,7 @@ export async function benchmarkInspect(
         "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet.",
     };
   }
-  const fixedControlBlock = runtime.fixedControlBlockForCommand?.(command, config, args);
+  const fixedControlBlock = fixedControlBlockForCommand(command, config, args);
   if (fixedControlBlock) {
     const warning = fixedControlBlock.issue || fixedControlBlock.message || "Blocked.";
     return {

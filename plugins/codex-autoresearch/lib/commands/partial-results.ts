@@ -17,25 +17,21 @@ import {
   researchSlugFromArgs,
 } from "../session-core.js";
 import { appendJsonl } from "../session-records.js";
+import { assertFreshLastRunPacket, readLastRunPacket } from "../last-run-store.js";
+import { deleteLastRunPacket } from "./log.js";
 import type { UnknownRecord } from "../types/json.js";
+import type { LastRunPacket } from "../types/packet.js";
 
-type LastRunPacket = UnknownRecord & { packetEvidence?: UnknownRecord };
 type SessionState = ReturnType<typeof currentState>;
 
-export interface PartialResultsIo {
-  assertFreshLastRunPacket: (workDir: string, packet: UnknownRecord) => Promise<void>;
-  deleteLastRunPacket: (workDir: string) => Promise<unknown>;
-  readLastRunPacket: (workDir: string) => Promise<LastRunPacket | null>;
-}
-
-export async function partialResultsCommand(args: UnknownRecord, io: PartialResultsIo) {
+export async function partialResultsCommand(args: UnknownRecord) {
   const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const artifact = args.artifact ? String(args.artifact) : "";
   const recordId = args.record ? String(args.record).trim() : "";
   const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
-  const lastRun = fromLast || recordId ? await io.readLastRunPacket(workDir) : null;
-  if (lastRun) await io.assertFreshLastRunPacket(workDir, lastRun);
+  const lastRun = fromLast || recordId ? await readLastRunPacket(workDir) : null;
+  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun);
   const lastRunPacket =
     lastRun ||
     partialResultPacketFromArtifact({
@@ -68,7 +64,7 @@ export async function partialResultsCommand(args: UnknownRecord, io: PartialResu
   }
   const candidate = discovery.candidates.find((item) => item.id === recordId);
   if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
-  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args }, io);
+  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args });
 }
 
 function partialResultPacketFromArtifact({
@@ -119,22 +115,19 @@ function lastRunConfigSnapshot(config: UnknownRecord = {}) {
   };
 }
 
-async function recordPartialResultCandidate(
-  {
-    workDir,
-    state,
-    lastRun,
-    candidate,
-    args,
-  }: {
-    workDir: string;
-    state: SessionState;
-    lastRun: LastRunPacket;
-    candidate: PartialResultCandidate;
-    args: UnknownRecord;
-  },
-  io: PartialResultsIo,
-) {
+async function recordPartialResultCandidate({
+  workDir,
+  state,
+  lastRun,
+  candidate,
+  args,
+}: {
+  workDir: string;
+  state: SessionState;
+  lastRun: LastRunPacket;
+  candidate: PartialResultCandidate;
+  args: UnknownRecord;
+}) {
   const metricName = candidate.metricName || state.config?.metricName || "metric";
   const metric = finiteMetric(candidate.metricValue);
   if (metric == null) {
@@ -204,7 +197,7 @@ async function recordPartialResultCandidate(
     state.config?.bestDirection || "lower",
   );
   appendJsonl(workDir, experiment);
-  await io.deleteLastRunPacket(workDir);
+  await deleteLastRunPacket(workDir);
   const stateAfter = currentState(workDir);
   return {
     ok: true,
