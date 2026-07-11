@@ -102,11 +102,15 @@ test("compact read command paths use loadSessionState cache-aware loading", asyn
 
 test("dashboard orchestration reuses the shared streaming ledger fold", async () => {
   const source = await readFile(path.join(pluginRoot, "scripts", "autoresearch.ts"), "utf8");
+  const orchestration = await readFile(
+    path.join(pluginRoot, "lib", "parallel-orchestration.ts"),
+    "utf8",
+  );
   const commands = await readFile(path.join(pluginRoot, "lib", "commands", "dashboard.ts"), "utf8");
   const liveServer = await readFile(path.join(pluginRoot, "lib", "live-server.ts"), "utf8");
   const ledgerFold = await readFile(path.join(pluginRoot, "lib", "dashboard-ledger.ts"), "utf8");
   const dashboardBody = extractFunctionBody(source, "dashboardViewModel");
-  const orchestrationBody = extractFunctionBody(source, "buildParallelOrchestrationContext");
+  const orchestrationBody = extractFunctionBody(orchestration, "buildParallelOrchestrationContext");
 
   assert.match(
     dashboardBody,
@@ -114,10 +118,13 @@ test("dashboard orchestration reuses the shared streaming ledger fold", async ()
   );
   assert.match(dashboardBody, /buildParallelOrchestrationContext\(\{[\s\S]*\brecords,/);
   assert.doesNotMatch(orchestrationBody, /\breadJsonl\(/);
-  assert.match(orchestrationBody, /latestLaneResults\(workDir,\s*state\.segment,\s*records\)/);
+  assert.match(
+    orchestrationBody,
+    /latestLaneResults\(workDir,\s*Number\(state\.segment\),\s*records\)/,
+  );
   assert.match(orchestrationBody, /resolveFanoutForSegment\([\s\S]*records[\s\S]*\)/);
-  assert.match(commands, /readDashboardLedger:\s*\(workDir:\s*string\)\s*=>\s*Promise/);
-  assert.doesNotMatch(commands, /deps\.readJsonl\(/);
+  assert.match(commands, /const ledgerFold = foldDashboardLedger\(workDir\)/);
+  assert.doesNotMatch(commands, /readDashboardLedger|deps\.readJsonl\(/);
   assert.match(liveServer, /foldDashboardLedgerFile\(/);
   assert.doesNotMatch(liveServer, /\.shift\(\)|readBoundedLedgerLines/);
   assert.match(ledgerFold, /parseJsonlRecord\(text,\s*filePath,\s*sourceLine\)/);

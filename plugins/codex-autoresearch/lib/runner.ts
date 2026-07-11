@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const OUTPUT_MAX_LINES = 20;
 const OUTPUT_MAX_BYTES = 8192;
 const OUTPUT_CAPTURE_BYTES = 16384;
@@ -97,6 +98,31 @@ export interface ShellRunResult {
   termination: ProcessTreeTermination | null;
   terminationFailed: boolean;
   timedOut: boolean;
+}
+
+export function validateMetricName(name: unknown): string {
+  const value = String(name || "");
+  if (!METRIC_NAME_PATTERN.test(value) || DENIED_METRIC_NAMES.has(value)) {
+    throw new Error(
+      `Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${value}`,
+    );
+  }
+  return value;
+}
+
+export function metricParseSource(result: Partial<ShellRunResult> | null | undefined): string {
+  if (!result) return "";
+  const retained = result.retainedMetricOutput || "";
+  if (result.metricOutput) {
+    return [
+      result.metricOutput,
+      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
+      retained,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
 }
 
 export interface ProcessRunResult {

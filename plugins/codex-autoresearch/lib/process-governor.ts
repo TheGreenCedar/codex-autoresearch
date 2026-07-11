@@ -359,6 +359,24 @@ export function buildProcessLifecycleRecord({
   return record;
 }
 
+export function rekeyProcessLifecycleRecords(
+  value: unknown,
+  packetId: string,
+): ProcessLifecycleRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const source = isUnknownRecord(item) ? item : {};
+    const identity = isUnknownRecord(source.identity) ? source.identity : {};
+    return buildProcessLifecycleRecord({
+      packetId,
+      processId: String(identity.processId || ""),
+      event: String(source.event || "") as ProcessLifecycleEvent,
+      at: String(source.at || ""),
+      ...(source.termination ? { termination: source.termination } : {}),
+    });
+  });
+}
+
 interface ParsedProcessLifecycleRecord {
   event: ProcessLifecycleEvent;
   identityKey: string;

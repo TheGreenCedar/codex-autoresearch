@@ -22,6 +22,12 @@ export interface RunnerProgressSnapshot {
   terminationFailed: boolean;
 }
 
+export interface ProgressStalenessInput {
+  exitState?: unknown;
+  lastOutputAt?: unknown;
+  startedAt?: unknown;
+}
+
 export function commandClassFor(command: unknown): string {
   const rawParts = String(command || "")
     .trim()
@@ -127,7 +133,7 @@ export function finishProgressSnapshot(
 }
 
 export function staleProgressReason(
-  snapshot: RunnerProgressSnapshot,
+  snapshot: ProgressStalenessInput,
   { now = new Date().toISOString(), staleAfterSeconds = 300 }: LooseObject = {},
 ): string {
   const last = snapshot.lastOutputAt || snapshot.startedAt;

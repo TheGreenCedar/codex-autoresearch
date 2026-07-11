@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
-import { createDashboardCommands } from "../lib/commands/dashboard.js";
+import { serveDashboard } from "../lib/commands/dashboard.js";
 import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
 import {
   LIVE_LEDGER_MAX_ENTRIES,
@@ -69,30 +69,19 @@ test("serve dashboard command reuses a healthy registry instead of starting anot
       });
 
       let serveAttempts = 0;
-      const { serveDashboard } = createDashboardCommands({
-        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+      const runtime = {
         buildDriftReport: async () => {
           throw new Error("registry reuse should not build drift before returning");
         },
-        dashboardCommands: () => [],
-        dashboardHtml: () => "",
-        dashboardSettings: () => ({}),
         dashboardViewModel: async () => ({}),
-        operationProgress: (options) => options,
-        pluginRoot: process.cwd(),
-        pluginVersion: PLUGIN_VERSION,
-        readJsonl: () => [],
-        resolveOutputInside: () => "",
         resolveWorkDir: () => ({ workDir: dir, config: {}, sessionPaths }),
         serveAutoresearch: async () => {
           serveAttempts += 1;
           throw new Error("healthy registry should be reused");
         },
-        shellQuote: JSON.stringify,
-        writeFile: async () => {},
-      });
+      };
 
-      const result = await serveDashboard({ cwd: dir });
+      const result = await serveDashboard({ cwd: dir }, runtime);
 
       assert.equal(serveAttempts, 0);
       assert.equal(result.ok, true);
@@ -149,18 +138,9 @@ test("serve dashboard command does not reuse target-cwd registry for wrapper ses
       });
 
       let serveAttempts = 0;
-      const { serveDashboard } = createDashboardCommands({
-        boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+      const runtime = {
         buildDriftReport: async () => ({ ok: true }),
-        dashboardCommands: () => [],
-        dashboardHtml: () => "",
-        dashboardSettings: () => ({}),
         dashboardViewModel: async () => ({}),
-        operationProgress: (options) => options,
-        pluginRoot: process.cwd(),
-        pluginVersion: PLUGIN_VERSION,
-        readJsonl: () => [],
-        resolveOutputInside: () => "",
         resolveWorkDir: () => ({ workDir: target, config: {}, sessionPaths: wrapperSessionPaths }),
         serveAutoresearch: async () => {
           serveAttempts += 1;
@@ -172,11 +152,9 @@ test("serve dashboard command does not reuse target-cwd registry for wrapper ses
             workDir: target,
           };
         },
-        shellQuote: JSON.stringify,
-        writeFile: async () => {},
-      });
+      };
 
-      const result = await serveDashboard({ cwd: wrapper });
+      const result = await serveDashboard({ cwd: wrapper }, runtime);
 
       assert.equal(serveAttempts, 1);
       assert.equal(result.registryReused, false);
@@ -201,18 +179,9 @@ test("serve dashboard resolves config fresh for deferred live view model", async
         return fakeServer;
       },
     };
-    const { serveDashboard } = createDashboardCommands({
-      boolOption: (value, fallback) => (typeof value === "boolean" ? value : fallback),
+    const runtime = {
       buildDriftReport: async () => ({ ok: true, status: "fresh" }),
-      dashboardCommands: () => [],
-      dashboardHtml: () => "",
-      dashboardSettings: (config) => ({ version: config.version }),
       dashboardViewModel: async (_workDir, config) => ({ summary: { runs: config.version } }),
-      operationProgress: (options) => options,
-      pluginRoot: process.cwd(),
-      pluginVersion: PLUGIN_VERSION,
-      readJsonl: () => [],
-      resolveOutputInside: () => "",
       resolveWorkDir: () => ({
         workDir: dir,
         config: { dashboardRefreshSeconds: 1, version: configVersion },
@@ -228,11 +197,9 @@ test("serve dashboard resolves config fresh for deferred live view model", async
           workDir: dir,
         };
       },
-      shellQuote: JSON.stringify,
-      writeFile: async () => {},
-    });
+    };
 
-    await serveDashboard({ cwd: dir, port: 0 });
+    await serveDashboard({ cwd: dir, port: 0 }, runtime);
     assert.ok(capturedViewModel);
     const first = await capturedViewModel();
     configVersion = 2;

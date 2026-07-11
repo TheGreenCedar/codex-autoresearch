@@ -1,14 +1,62 @@
 import path from "node:path";
+import { defaultBenchmarkCommand } from "./benchmark/command-input.js";
+import { defaultChecksCommand } from "./check-policy.js";
+import { renderShellCommand } from "./command-rendering.js";
 import { evaluateGateQuality } from "./gate-quality.js";
+import { PLUGIN_VERSION } from "./plugin-version.js";
 import { buildPreflightAudit } from "./preflight-audit.js";
 import {
   inspectRuntimeDrift,
   summarizeRuntimeAuthority,
   type RuntimeTrustScope,
 } from "./runtime-drift-doctor.js";
+import { resolvePackageRoot } from "./runtime-paths.js";
 import { unknownRecordOrEmpty, unknownRecordOrNull, type UnknownRecord } from "./types/json.js";
 
 type LooseObject = UnknownRecord;
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+
+export async function decisionGuidance({
+  workDir,
+  config,
+  state,
+  scaffoldHealth = null,
+  warningDetails = [],
+  setupMissing = [],
+  qualityConstraints: explicitQualityConstraints = null,
+  runtimeDriftSummary = null,
+  runtimeTrustScope = "source-checkout",
+  benchmarkCommand = "",
+  checksCommand = "",
+}: LooseObject) {
+  const constraintList = (value: unknown) =>
+    Array.isArray(value) && value.length > 0 ? value : null;
+  const stateConfig = unknownRecordOrEmpty(unknownRecordOrEmpty(state).config);
+  const configRecord = unknownRecordOrEmpty(config);
+  const qualityConstraints =
+    constraintList(explicitQualityConstraints) ||
+    constraintList(configRecord.qualityConstraints) ||
+    constraintList(stateConfig.qualityConstraints);
+  return buildDecisionGuidanceContext({
+    workDir: String(workDir || ""),
+    pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
+    config: configRecord,
+    state: unknownRecordOrEmpty(state),
+    scaffoldHealth,
+    warningDetails: Array.isArray(warningDetails) ? warningDetails : [],
+    setupMissing: Array.isArray(setupMissing) ? setupMissing : [],
+    qualityConstraints,
+    runtimeDriftSummary: unknownRecordOrNull(runtimeDriftSummary),
+    runtimeTrustScope: runtimeTrustScope as RuntimeTrustScope,
+    benchmarkCommand,
+    checksCommand,
+    defaultBenchmarkCommand,
+    defaultChecksCommand,
+    renderCommand: renderShellCommand,
+    errorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  });
+}
 
 export interface DecisionGuidanceInput {
   workDir: string;
