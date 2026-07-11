@@ -17,6 +17,10 @@ const FOCUSABLE_DIALOG_SELECTOR =
 
 export function chartPointAriaLabel(point: ChartPointLabelInput | number): string {
   if (typeof point === "number") return `Open details for run ${point}`;
+  return `Open details for ${chartPointSelectionText(point)}`;
+}
+
+export function chartPointSelectionText(point: ChartPointLabelInput): string {
   const markers = [
     point.latest ? "latest plotted run" : "",
     point.best ? "best kept run" : "",
@@ -28,7 +32,7 @@ export function chartPointAriaLabel(point: ChartPointLabelInput | number): strin
       : point.metricDisplay || "metric unavailable";
   const suffix = markers.length ? ` ${markers.join(", ")}.` : "";
   return [
-    `Open details for run ${point.runNumber}.`,
+    `run ${point.runNumber}.`,
     point.statusLabel ? `Status: ${point.statusLabel}.` : "",
     `Metric: ${metric}.`,
     point.timestampLabel ? `Time: ${point.timestampLabel}.` : "",
@@ -70,7 +74,7 @@ function focusFallbackCandidates(selector: string) {
   } catch {
     // Fall back to stable chart targets when a selector was empty or stale.
   }
-  for (const fallbackSelector of [".chart-point-button", "#trend-panel"]) {
+  for (const fallbackSelector of ["#trend-chart-range", "#trend-panel"]) {
     const target = document.querySelector<HTMLElement>(fallbackSelector);
     if (target && !candidates.includes(target)) candidates.push(target);
   }

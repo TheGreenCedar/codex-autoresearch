@@ -15,19 +15,34 @@ interface LedgerProps {
   ledgerBounds?: LedgerBounds;
 }
 
+export const LEDGER_PAGE_SIZE = 20;
+
 export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
   const newest = useMemo(() => [...session.runs].reverse(), [session.runs]);
-  const [visibleCount, setVisibleCount] = useState(100);
-  useEffect(() => setVisibleCount(100), [session.segment]);
-  const visibleRuns = newest.slice(0, visibleCount);
-  const locallyHidden = Math.max(0, newest.length - visibleRuns.length);
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(newest.length / LEDGER_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  useEffect(() => setPage(0), [session.segment]);
+  useEffect(() => setPage((stored) => Math.min(stored, pageCount - 1)), [pageCount]);
+  const visibleRuns = newest.slice(
+    currentPage * LEDGER_PAGE_SIZE,
+    (currentPage + 1) * LEDGER_PAGE_SIZE,
+  );
   const ledgerNote = ledgerNoteFor(
     visibleRuns.length,
-    locallyHidden,
+    currentPage,
+    pageCount,
+    newest.length,
     ledgerBounds,
     readout.invalidLedgerEntryCount,
   );
-  const tableLabel = tableLabelFor(visibleRuns.length, locallyHidden, ledgerBounds);
+  const tableLabel = tableLabelFor(
+    visibleRuns.length,
+    currentPage,
+    pageCount,
+    newest.length,
+    ledgerBounds,
+  );
   return (
     <section className="panel ledger-panel" id="ledger" aria-label="Run log" tabIndex={-1}>
       <div className="panel-head">
@@ -68,17 +83,32 @@ export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
           No ledger yet. First safe move: capture a baseline measurement.
         </div>
       )}
-      {locallyHidden > 0 ? (
-        <div className="ledger-load-more">
+      {newest.length > LEDGER_PAGE_SIZE ? (
+        <nav className="ledger-pagination" aria-label="Run ledger pages">
           <button
             type="button"
             className="tool-button subtle"
+            aria-controls="ledger-body"
+            disabled={currentPage === 0}
             aria-describedby="ledger-note"
-            onClick={() => setVisibleCount((count) => count + 100)}
+            onClick={() => setPage((current) => Math.max(0, current - 1))}
           >
-            Load {Math.min(100, locallyHidden)} older
+            Newer runs
           </button>
-        </div>
+          <span aria-current="page">
+            Page {currentPage + 1} of {pageCount}
+          </span>
+          <button
+            type="button"
+            className="tool-button subtle"
+            aria-controls="ledger-body"
+            disabled={currentPage >= pageCount - 1}
+            aria-describedby="ledger-note"
+            onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+          >
+            Older runs
+          </button>
+        </nav>
       ) : null}
     </section>
   );
@@ -86,14 +116,19 @@ export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
 
 function ledgerNoteFor(
   visibleCount: number,
-  locallyHidden: number,
+  page: number,
+  pageCount: number,
+  totalRuns: number,
   ledgerBounds?: LedgerBounds,
   invalidCount = 0,
 ): string {
   if (!visibleCount) return invalidSuffix("No runs logged yet", invalidCount);
   const omittedEntries = omittedLedgerEntries(ledgerBounds);
-  const parts = [`${visibleCount} ${locallyHidden ? "shown" : "runs"}`, "newest first"];
-  if (locallyHidden > 0) parts.push(`${locallyHidden} older ${runLabel(locallyHidden)} available`);
+  const parts = [
+    `${visibleCount} shown of ${totalRuns} ${runLabel(totalRuns)}`,
+    `page ${page + 1} of ${pageCount}`,
+    "newest first",
+  ];
   if (ledgerBounds?.truncated === true && omittedEntries > 0) {
     parts.push(
       `${omittedEntries} older ledger ${entryLabel(omittedEntries)} omitted from snapshot`,
@@ -107,12 +142,16 @@ function ledgerNoteFor(
 
 function tableLabelFor(
   visibleCount: number,
-  locallyHidden: number,
+  page: number,
+  pageCount: number,
+  totalRuns: number,
   ledgerBounds?: LedgerBounds,
 ): string {
   const omittedEntries = omittedLedgerEntries(ledgerBounds);
-  const parts = [`Run ledger, newest first, ${visibleCount} shown`];
-  if (locallyHidden > 0) parts.push(`${locallyHidden} older ${runLabel(locallyHidden)} available`);
+  const parts = [
+    `Run ledger, newest first, page ${page + 1} of ${pageCount}`,
+    `${visibleCount} shown of ${totalRuns} ${runLabel(totalRuns)}`,
+  ];
   if (ledgerBounds?.truncated === true && omittedEntries > 0) {
     parts.push(
       `${omittedEntries} older ledger ${entryLabel(omittedEntries)} omitted from snapshot`,
@@ -145,12 +184,14 @@ function LedgerRow({ run, readout }: { run: SessionRun; readout: DashboardReadou
   const breakdown = breakdownForRun(run, readout.metricDefinition);
   return (
     <tr className={`ledger-row ${best ? "best-row" : ""}`}>
-      <td className="ledger-cell run-index">#{run.run}</td>
-      <td className="ledger-cell">
+      <td className="ledger-cell run-index" data-label="Run">
+        #{run.run}
+      </td>
+      <td className="ledger-cell" data-label="Status">
         <StatusPill status={run.status} />
         {best ? <span className="best-label">Best kept</span> : null}
       </td>
-      <td className="ledger-cell metric-cell">
+      <td className="ledger-cell metric-cell" data-label="Metric">
         <div className="metric-stack">
           <strong>
             {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
@@ -164,7 +205,7 @@ function LedgerRow({ run, readout }: { run: SessionRun; readout: DashboardReadou
           </span>
         </div>
       </td>
-      <td className="ledger-cell run-desc">
+      <td className="ledger-cell run-desc" data-label="Description and ASI">
         <strong>{run.description || "No description"}</strong>
         <span>{asiPreview(run)}</span>
       </td>

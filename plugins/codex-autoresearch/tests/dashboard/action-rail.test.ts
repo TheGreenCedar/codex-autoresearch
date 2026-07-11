@@ -190,7 +190,7 @@ test("dashboard renders proof signals below the chart", async () => {
   );
 });
 
-test("dashboard exposes one chart Tab stop and arrow keys move it", async () => {
+test("dashboard exposes one native chart range instead of per-point Tab stops", async () => {
   const { dom, getById } = await runDashboard(
     [
       dashboardConfigEntry({ name: "chart focus", metricName: "seconds", metricUnit: "s" }),
@@ -203,23 +203,27 @@ test("dashboard exposes one chart Tab stop and arrow keys move it", async () => 
   );
   const chart = getById("trend-chart");
   await waitFor(
-    () => chart.querySelectorAll(".chart-point-button").length === 3,
-    "Chart points did not render.",
+    () => chart.querySelector("#trend-chart-range") != null,
+    "Chart range did not render.",
   );
-  const points = [...chart.querySelectorAll<HTMLButtonElement>(".chart-point-button")];
-  const tabbable = points.filter((point) => point.tabIndex === 0);
+  const range = chart.querySelector<HTMLInputElement>("#trend-chart-range");
 
-  assert.equal(tabbable.length, 1);
-  assert.equal(tabbable[0]?.dataset.chartRun, "3");
-  tabbable[0]?.dispatchEvent(
-    new dom.window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
-  );
+  assert.ok(range);
+  assert.equal(chart.querySelectorAll('.chart-point-button, [role="slider"]').length, 0);
+  assert.equal(chart.querySelectorAll('input[type="range"]').length, 1);
+  assert.equal(range.dataset.chartRun, "3");
+  const setNativeValue = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  assert.ok(setNativeValue);
+  setNativeValue.call(range, "1");
+  range.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await waitFor(
-    () => dom.window.document.activeElement?.getAttribute("data-chart-run") === "2",
-    "ArrowLeft did not move chart focus to the previous point.",
+    () => range.dataset.chartRun === "2",
+    "Range input did not select the previous sampled point.",
   );
-  assert.equal(points.filter((point) => point.tabIndex === 0).length, 1);
-  assert.equal(points.find((point) => point.tabIndex === 0)?.dataset.chartRun, "2");
+  assert.match(range.getAttribute("aria-valuetext") || "", /run 2/i);
 });
 
 test("dashboard ledger uses native table semantics", async () => {
