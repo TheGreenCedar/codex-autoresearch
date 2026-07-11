@@ -9,6 +9,9 @@ import {
   PARTIAL_RESULT_ARTIFACT_MAX_ROWS,
 } from "../../lib/partial-results.js";
 import { createCoalescingProgressWriter } from "../../lib/active-progress-writer.js";
+import { createActiveProgressWriter } from "../../lib/active-progress-store.js";
+import { createProgressSnapshot } from "../../lib/runner-progress.js";
+import { runWithRequiredCleanup } from "../../lib/required-cleanup.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES } from "../../lib/dashboard-ledger-bounds.js";
 import { parseLedger, writeLedger } from "../helpers/ledger.js";
 import { pathExists } from "../helpers/cli-session.js";
@@ -356,6 +359,50 @@ test("active progress writer closes after rejection without replaying pending ge
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.deepEqual(writes, [1]);
   assert.throws(() => writer.queue({ exitState: "running" }), /closed/);
+});
+
+test("active progress store preserves legacy partial generation safety", async () => {
+  await withTempDir("legacy-partial-progress", async (dir) => {
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    await writeFile(
+      progressPath,
+      JSON.stringify({ exitState: "running", generation: 7, packetId: "legacy-partial" }),
+    );
+
+    const writer = await createActiveProgressWriter(dir);
+    writer.queue(
+      createProgressSnapshot({
+        packetId: "current-packet",
+        command: "benchmark",
+        startedAt: new Date().toISOString(),
+      }),
+    );
+    await writer.close();
+
+    const persisted = JSON.parse(await readFile(progressPath, "utf8"));
+    assert.equal(persisted.generation, 8);
+    assert.equal(persisted.packetId, "current-packet");
+  });
+});
+
+test("required cleanup preserves falsy failures and both aggregate identities", async () => {
+  let caught: unknown = Symbol("not-caught");
+  try {
+    await runWithRequiredCleanup(
+      async () => {
+        throw 0;
+      },
+      async () => {
+        throw "";
+      },
+      "cleanup failed",
+    );
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.ok(caught instanceof AggregateError);
+  assert.deepEqual(caught.errors, [0, ""]);
 });
 
 test("next reports command-file ENOENT without mutating existing progress", async () => {

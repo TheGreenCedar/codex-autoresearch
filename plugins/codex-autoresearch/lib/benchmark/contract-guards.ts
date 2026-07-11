@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { isPathInside } from "../path-containment.js";
+import { gitDirtyPathDetails } from "../git-private-state.js";
 import { isUnknownRecord, type UnknownRecord } from "../types/json.js";
 
 export interface ProtectedBenchmarkSnapshot {
@@ -37,6 +38,19 @@ export interface ProtectedBenchmarkGuard {
   dirtyPaths: string[];
   message: string;
   action: string;
+}
+
+export async function protectedBenchmarkGuardForWorkDir(
+  workDir: string,
+  config: UnknownRecord,
+  state: UnknownRecord,
+): Promise<ProtectedBenchmarkGuard> {
+  const dirtyPaths = (await gitDirtyPathDetails(workDir)).map((entry) => entry.path);
+  return await buildProtectedBenchmarkGuard({ workDir, config, state, dirtyPaths });
+}
+
+export function protectedBenchmarkGuardError(guard: ProtectedBenchmarkGuard): string {
+  return [guard.message, guard.action].filter(Boolean).join(" ");
 }
 
 const FAILURE_STATUSES = new Set(["crash", "checks_failed"]);

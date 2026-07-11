@@ -1,4 +1,6 @@
 import { redactCommandDisplay } from "./evidence-redaction.js";
+import { boolOption } from "./cli/args.js";
+import type { UnknownRecord } from "./types/json.js";
 
 type LooseObject = Record<string, unknown>;
 const STATE_STRING_LIMIT = 240;
@@ -42,6 +44,47 @@ export interface FixedControlViolationSummary extends FixedControlViolation {
     patternChars: number;
     reuseCommandHintChars: number;
   };
+}
+
+export interface FixedControlBlock {
+  code: FixedControlViolation["code"];
+  commandHint: string;
+  fixedControlViolation: FixedControlViolationSummary | null;
+  issue: string;
+  message: string;
+}
+
+export function fixedControlBlockForCommand(
+  command: unknown,
+  config: UnknownRecord,
+  args: UnknownRecord = {},
+): FixedControlBlock | null {
+  const violation = fixedControlViolationForCommand(
+    command,
+    normalizeFixedControlConfig(config.fixedControl),
+  );
+  const allowRerun = boolOption(
+    args.allow_fixed_control_rerun ?? args.allowFixedControlRerun,
+    false,
+  );
+  if (!violation || allowRerun) return null;
+  const summary = fixedControlViolationSummary(violation);
+  const message = summary?.message || violation.message;
+  return {
+    code: violation.code,
+    commandHint: summary?.reuseCommandHint || "",
+    fixedControlViolation: summary,
+    issue: `${violation.code}: ${message}`,
+    message,
+  };
+}
+
+export function fixedControlRerunError(block: FixedControlBlock): Error {
+  const error = new Error(block.message);
+  (error as Error & { code?: string; fixedControlViolation?: unknown }).code = block.code;
+  (error as Error & { fixedControlViolation?: unknown }).fixedControlViolation =
+    block.fixedControlViolation;
+  return error;
 }
 
 export function normalizeFixedControlConfig(value: unknown): FixedControlConfig | null {

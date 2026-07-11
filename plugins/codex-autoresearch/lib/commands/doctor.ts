@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
+import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import { boolOption, enumOption, numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import { benchmarkContractDiagnostics } from "../packet-diagnostics.js";
@@ -11,23 +12,18 @@ import { projectDoctorReadModel } from "../session-read-model.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../loop-governance.js";
+import type { FixedControlBlock } from "../fixed-control.js";
+import { buildRunProgress } from "./run.js";
 
 type CommandRecord = UnknownRecord;
 
 export interface DoctorRuntime {
-  buildRunProgress: (args: {
-    benchmark: UnknownRecord;
-    checks: UnknownRecord | null;
-    checksCommand: string | null;
-    passed: boolean;
-  }) => UnknownRecord;
-  commandExecutionBoundary: CommandRecord;
   decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
   fixedControlBlockForCommand: (
     command: unknown,
     config: CommandRecord,
     args?: CommandRecord,
-  ) => CommandRecord | null;
+  ) => FixedControlBlock | null;
   insideGitRepo: (workDir: string) => Promise<boolean>;
   latestBenchmarkContractEntry: (workDir: string, state: CommandRecord) => CommandRecord | null;
   pluginRoot: string;
@@ -47,7 +43,6 @@ export async function doctorSession(
   runtime: DoctorRuntime,
 ): Promise<CommandRecord> {
   const {
-    buildRunProgress,
     decisionGuidance,
     fixedControlBlockForCommand,
     insideGitRepo,
@@ -57,7 +52,6 @@ export async function doctorSession(
     runtimeProvenance,
     withCanonicalActionCommand,
   } = runtime;
-  const COMMAND_EXECUTION_BOUNDARY = runtime.commandExecutionBoundary;
   const PLUGIN_ROOT = runtime.pluginRoot;
   const PLUGIN_VERSION = runtime.pluginVersion;
 

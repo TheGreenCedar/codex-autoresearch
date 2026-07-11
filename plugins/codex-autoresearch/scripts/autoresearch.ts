@@ -27,6 +27,7 @@ import {
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { doctorSession as runDoctorSession, type DoctorRuntime } from "../lib/commands/doctor.js";
+import { runExperiment } from "../lib/commands/run.js";
 import {
   compactPublicState as compactStateResponse,
   finalizationPressureForWorkDir as buildFinalizationPressureForWorkDir,
@@ -76,7 +77,15 @@ import {
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
-import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
+import {
+  createActiveProgressWriter,
+  deleteActiveProgressSnapshot,
+  deleteActiveProgressSnapshotIfSafe,
+  readActiveProgressSnapshot,
+  resolveProgressPath,
+} from "../lib/active-progress-store.js";
+import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
+import { defaultChecksCommand } from "../lib/check-policy.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import {
   buildSessionReadModel,
@@ -85,13 +94,20 @@ import {
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
 import {
-  buildProtectedBenchmarkGuard,
   buildProtectedBenchmarkSnapshot,
   normalizeProtectedBenchmarkPaths,
   protectedBenchmarkGuardBlocksKeep,
+  protectedBenchmarkGuardError,
+  protectedBenchmarkGuardForWorkDir,
   protectedBenchmarkPathsFromConfig,
   protectedBenchmarkWarningFromGuard,
 } from "../lib/benchmark/contract-guards.js";
+import {
+  defaultBenchmarkCommand,
+  defaultBenchmarkCommandExists,
+  resolveBenchmarkCommandSource,
+} from "../lib/benchmark/command-input.js";
+import { benchmarkContractSnapshot } from "../lib/benchmark/contract-snapshot.js";
 import {
   evaluateSecondaryMetricConstraints,
   normalizeSecondaryMetricConstraintMode,
@@ -115,11 +131,19 @@ import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { displayGitPath, parseNulPathList, parsePorcelainV1Z } from "../lib/git-paths.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
 import {
+  fixedControlBlockForCommand,
+  fixedControlRerunError,
   fixedControlViolationForCommand,
-  fixedControlViolationSummary,
   normalizeFixedControlConfig,
-  type FixedControlViolation,
 } from "../lib/fixed-control.js";
+import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
+import {
+  gitDirtyPathDetails,
+  gitPrivatePath,
+  gitPrivateRoot,
+  insideGitRepo,
+  privateStateWriteRoot,
+} from "../lib/git-private-state.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
@@ -132,8 +156,6 @@ import {
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
 import {
-  assertRunResourcePreflight,
-  buildActiveRunPacketId,
   buildProcessLifecycleRecord,
   type ProcessLifecycleEvent,
 } from "../lib/process-governor.js";
@@ -145,19 +167,11 @@ import {
   loadRecipeCatalog,
   recommendRecipe,
 } from "../lib/recipes.js";
-import {
-  parseMetricLines,
-  runProcess as runBoundedProcess,
-  runShell,
-  tailText,
-} from "../lib/runner.js";
+import { runProcess as runBoundedProcess } from "../lib/runner.js";
 import {
   createProgressSnapshot,
   finishProgressSnapshot,
   progressSnapshotFromRun,
-  staleProgressReason,
-  type RunnerProgressSnapshot,
-  updateProgressSnapshot,
 } from "../lib/runner-progress.js";
 import {
   STATUS_VALUES,
@@ -168,7 +182,6 @@ import {
   createSessionReadCache,
   finiteMetric,
   currentState,
-  isBetter,
   loadSessionRecords,
   loadSessionState,
   listOption,
@@ -184,11 +197,7 @@ import {
   promotionGradeValue,
   readConfig as readSessionConfig,
 } from "../lib/session-core.js";
-import {
-  buildResearchIntegrity,
-  buildScaffoldHealth,
-  commandDiagnostics,
-} from "../lib/truth-signals.js";
+import { buildResearchIntegrity, buildScaffoldHealth } from "../lib/truth-signals.js";
 import {
   analyzeLedgerHealth,
   readLedgerRecordsTolerant,
@@ -225,25 +234,6 @@ type WorkDirResolution = {
   sessionCwd: string;
   workDir: string;
 };
-type ProcessRunResult = LooseObject & {
-  durationSeconds?: number;
-  exitCode?: number | null;
-  output?: string;
-  terminationFailed?: boolean;
-  timedOut?: boolean;
-};
-type ProgressStageResult = {
-  durationSeconds: number;
-  exitCode: number | null;
-  label: string;
-  outputTail: string;
-  stage: string;
-  status: string;
-  termination?: LooseObject | null;
-  terminationFailed?: boolean;
-  timedOut: boolean;
-};
-
 interface LocalProcessResult {
   code: number | null;
   stderr: string;
@@ -270,17 +260,9 @@ const SECONDARY_METRIC_CONSTRAINT_MODES = new Set(["advisory", "blocking"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
-const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
 const DIRECTORY_FINGERPRINT_ENTRY_LIMIT = 500;
 const DIRECTORY_FINGERPRINT_DEPTH_LIMIT = 6;
 const FINGERPRINT_TOTAL_BYTE_LIMIT = 16 * 1024 * 1024;
-const COMMAND_EXECUTION_BOUNDARY = {
-  mode: "not_sandboxed",
-  note: "Benchmark and checks commands run as local shell commands with the current user's permissions.",
-  recommendation:
-    "Prefer project-local scripts or --command-file for reviewable command text and safer quoting.",
-};
-
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
@@ -315,7 +297,6 @@ async function serveAutoresearchLazy(
 ): Promise<Awaited<ReturnType<LiveServerModule["serveAutoresearch"]>>> {
   return (await import("../lib/live-server.js")).serveAutoresearch(...args);
 }
-const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
@@ -342,7 +323,6 @@ function stateRuntime(): StateRuntime {
   return {
     buildFinalizePreview,
     buildParallelOrchestrationContext,
-    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
     dashboardCommands,
     decisionGuidance,
     discoverLastRunPartialResults,
@@ -364,8 +344,6 @@ async function doctorSession(args: LooseObject): Promise<LooseObject> {
 
 function doctorRuntime(): DoctorRuntime {
   return {
-    buildRunProgress,
-    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
     decisionGuidance,
     fixedControlBlockForCommand,
     insideGitRepo,
@@ -527,40 +505,6 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function runWithRequiredCleanup<T>(
-  action: () => Promise<T>,
-  cleanup: () => Promise<void>,
-  cleanupLabel: string,
-): Promise<T> {
-  let value!: T;
-  let actionFailed = false;
-  let primaryError: unknown;
-  let cleanupFailed = false;
-  let cleanupError: unknown;
-  try {
-    value = await action();
-  } catch (error) {
-    actionFailed = true;
-    primaryError = error;
-  } finally {
-    try {
-      await cleanup();
-    } catch (error) {
-      cleanupFailed = true;
-      cleanupError = error;
-    }
-  }
-  if (cleanupFailed) {
-    if (!actionFailed) throw cleanupError;
-    throw new AggregateError(
-      [primaryError, cleanupError],
-      `${errorMessage(primaryError)}\n${cleanupLabel}: ${errorMessage(cleanupError)}`,
-    );
-  }
-  if (actionFailed) throw primaryError;
-  return value;
 }
 
 function errorCodeOrMessage(error: unknown): string {
@@ -3387,233 +3331,6 @@ async function writeSessionFile(filePath: string, content: any, options: LooseOb
   return { path: filePath, action: exists ? "overwritten" : "created" };
 }
 
-function metricParseSource(result: any) {
-  if (!result) return "";
-  const retained = result.retainedMetricOutput || "";
-  if (result.metricOutput) {
-    return [
-      result.metricOutput,
-      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
-      retained,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
-}
-
-function parseArtifactLines(output: string, workDir: string) {
-  const artifacts: Record<string, string> = {};
-  const artifactWarnings: string[] = [];
-  for (const line of String(output || "").split(/\r?\n/)) {
-    const match = line.match(/^ARTIFACT\s+([A-Za-z_][A-Za-z0-9_.:-]*)=(.+)$/);
-    if (!match) continue;
-    const name = match[1];
-    const value = match[2].trim();
-    if (!value) continue;
-    const resolved = resolvePathInsideRootSync(workDir, value);
-    if (resolved.inside && resolved.relativePath) {
-      artifacts[name] = resolved.relativePath;
-    } else {
-      artifacts[name] = "<outside-workdir>";
-      artifactWarnings.push(
-        `ARTIFACT ${name} points outside the working directory and was quarantined: ${redactPathDisplay(value, workDir)}.`,
-      );
-    }
-  }
-  return { artifacts, artifactWarnings };
-}
-
-async function defaultBenchmarkCommand(workDir: string) {
-  const powershellScript = await pathExists(path.join(workDir, "autoresearch.ps1"));
-  const bashScript = await pathExists(path.join(workDir, "autoresearch.sh"));
-  if (process.platform !== "win32" && bashScript) {
-    return "bash ./autoresearch.sh";
-  }
-  if (powershellScript) {
-    return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
-  }
-  if (bashScript) {
-    return "bash ./autoresearch.sh";
-  }
-  throw new Error(
-    "No command provided; expected autoresearch.ps1 or autoresearch.sh in the work directory.",
-  );
-}
-
-async function defaultBenchmarkCommandExists(workDir: string) {
-  return (
-    (await pathExists(path.join(workDir, "autoresearch.ps1"))) ||
-    (await pathExists(path.join(workDir, "autoresearch.sh")))
-  );
-}
-
-async function benchmarkCommandFromArgs(
-  args: LooseObject,
-  workDir: string,
-  config: LooseObject = readConfig(workDir),
-) {
-  const commandSource = await resolveBenchmarkCommandSource(args, workDir, {
-    fallbackToDefault: true,
-    requireCommand: true,
-    config,
-  });
-  const envFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
-  const env = envFile ? await readEnvFile(envFile, workDir) : null;
-  const packetEnvMode = packetEnvModeFromArgs(args);
-  return {
-    command: commandSource.command,
-    env: env?.values || undefined,
-    packetEnvMode,
-    commandFile: commandSource.commandFile,
-    envFile: env?.path || "",
-    explicitEnvKeys: env
-      ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b))
-      : [],
-    envKeys: env ? Object.keys(env.values).sort((a: any, b: any) => a.localeCompare(b)) : [],
-    separatorCommand: commandSource.separatorCommand,
-  };
-}
-
-function packetEnvModeFromArgs(args: LooseObject): "inherit" | "minimal" {
-  return (
-    enumOption(
-      args.packet_env_mode ?? args.packetEnvMode,
-      new Set(["inherit", "minimal"]),
-      "minimal",
-      "packetEnvMode",
-    ) || "minimal"
-  );
-}
-
-async function resolveBenchmarkCommandSource(
-  args: LooseObject,
-  workDir: string,
-  options: { fallbackToDefault?: boolean; requireCommand?: boolean; config?: LooseObject } = {},
-) {
-  const commandFile = args.command_file ?? args.commandFile;
-  if (args.command && commandFile) {
-    throw new Error("Use either --command or --command-file, not both.");
-  }
-  const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
-  if (args.command) {
-    return {
-      command: normalizePowerShellEscapedCommandArg(args.command),
-      commandFile: "",
-      separatorCommand: false,
-      source: "command",
-      missingReason: "",
-    };
-  }
-  if (separatorCommand) {
-    return {
-      command: args._.slice(1).join(" "),
-      commandFile: "",
-      separatorCommand: true,
-      source: "separator",
-      missingReason: "",
-    };
-  }
-  if (commandFile) {
-    return {
-      command: await readCommandFile(commandFile, workDir),
-      commandFile: resolveOptionPath(commandFile, workDir),
-      separatorCommand: false,
-      source: "command-file",
-      missingReason: "",
-    };
-  }
-  const configuredCommand =
-    typeof options.config?.benchmarkCommand === "string"
-      ? options.config.benchmarkCommand.trim()
-      : "";
-  if (configuredCommand) {
-    return {
-      command: normalizePowerShellEscapedCommandArg(configuredCommand),
-      commandFile: "",
-      separatorCommand: false,
-      source: "config",
-      missingReason: "",
-    };
-  }
-  if (options.fallbackToDefault) {
-    try {
-      return {
-        command: await defaultBenchmarkCommand(workDir),
-        commandFile: "",
-        separatorCommand: false,
-        source: "default",
-        missingReason: "",
-      };
-    } catch (error: unknown) {
-      if (options.requireCommand) throw error;
-      return {
-        command: "",
-        commandFile: "",
-        separatorCommand: false,
-        source: "missing",
-        missingReason: missingBenchmarkCommandMessage(error),
-      };
-    }
-  }
-  return {
-    command: "",
-    commandFile: "",
-    separatorCommand: false,
-    source: "missing",
-    missingReason: "",
-  };
-}
-
-function missingBenchmarkCommandMessage(error: unknown = null): string {
-  const detail = error ? errorMessage(error) : "";
-  if (/No command provided/i.test(detail)) {
-    return "No benchmark command was provided and no autoresearch script was found.";
-  }
-  return detail || "No benchmark command was provided and no autoresearch script was found.";
-}
-
-function allowFixedControlRerun(args: LooseObject): boolean {
-  return boolOption(args.allow_fixed_control_rerun ?? args.allowFixedControlRerun, false);
-}
-
-type FixedControlBlock = {
-  code: FixedControlViolation["code"];
-  commandHint: string;
-  fixedControlViolation: ReturnType<typeof fixedControlViolationSummary>;
-  issue: string;
-  message: string;
-};
-
-function fixedControlBlockForCommand(
-  command: unknown,
-  config: LooseObject,
-  args: LooseObject = {},
-): FixedControlBlock | null {
-  const violation = fixedControlViolationForCommand(
-    command,
-    normalizeFixedControlConfig(config.fixedControl),
-  );
-  if (!violation || allowFixedControlRerun(args)) return null;
-  const summary = fixedControlViolationSummary(violation);
-  const message = summary?.message || violation.message;
-  return {
-    code: violation.code,
-    commandHint: summary?.reuseCommandHint || "",
-    fixedControlViolation: summary,
-    issue: `${violation.code}: ${message}`,
-    message,
-  };
-}
-
-function fixedControlRerunError(block: FixedControlBlock): Error {
-  const error = new Error(block.message);
-  (error as Error & { code?: string; fixedControlViolation?: unknown }).code = block.code;
-  (error as Error & { fixedControlViolation?: unknown }).fixedControlViolation =
-    block.fixedControlViolation;
-  return error;
-}
-
 function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
   return redactEvidenceObject({
     ok: doctor.ok === true,
@@ -3622,93 +3339,6 @@ function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
     warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 10) : [],
     nextAction: typeof doctor.nextAction === "string" ? doctor.nextAction : "",
   }) as LooseObject;
-}
-
-function resolveOptionPath(filePath: string, workDir: string) {
-  const input = String(filePath || "").trim();
-  return path.isAbsolute(input) ? input : path.resolve(workDir, input);
-}
-
-async function readCommandFile(filePath: string, workDir: string) {
-  const resolved = resolveOptionPath(filePath, workDir);
-  const text = (await fsp.readFile(resolved, "utf8")).trim();
-  if (!text) throw new Error(`--command-file is empty: ${resolved}`);
-  return text;
-}
-
-async function readEnvFile(filePath: string, workDir: string) {
-  const resolved = resolveOptionPath(filePath, workDir);
-  const text = await fsp.readFile(resolved, "utf8");
-  const trimmed = text.trim();
-  if (!trimmed) return { path: resolved, values: {} };
-  if (trimmed.startsWith("{")) {
-    const parsed = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`--env-file JSON must be an object: ${resolved}`);
-    }
-    return {
-      path: resolved,
-      values: Object.fromEntries(
-        Object.entries(parsed).map(([key, value]: [string, unknown]) => [
-          validateEnvName(key),
-          String(value ?? ""),
-        ]),
-      ),
-    };
-  }
-  const values: Record<string, string> = {};
-  for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) throw new Error(`Invalid --env-file line ${index + 1}: expected NAME=value.`);
-    values[validateEnvName(match[1])] = unquoteEnvValue(match[2].trim());
-  }
-  return { path: resolved, values };
-}
-
-function validateEnvName(name: string) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || ""))) {
-    throw new Error(`Invalid environment variable name in --env-file: ${name}`);
-  }
-  return String(name);
-}
-
-function unquoteEnvValue(value: any) {
-  const text = String(value ?? "");
-  if (
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-  ) {
-    return text.slice(1, -1);
-  }
-  return text;
-}
-
-async function defaultChecksCommand(workDir: string) {
-  if (await pathExists(path.join(workDir, "autoresearch.checks.ps1"))) {
-    return "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.checks.ps1";
-  }
-  if (await pathExists(path.join(workDir, "autoresearch.checks.sh"))) {
-    return "bash ./autoresearch.checks.sh";
-  }
-  return null;
-}
-
-function checksPolicyFromArgs(args: any, config: any) {
-  return enumOption(
-    args.checks_policy ?? args.checksPolicy ?? config.checksPolicy,
-    CHECKS_POLICIES,
-    "always",
-    "checksPolicy",
-  );
-}
-
-function shouldRunChecks(policy: any, context: any) {
-  if (!context.benchmarkPassed || !context.primaryPresent || !context.checksCommand) return false;
-  if (policy === "always") return true;
-  if (policy === "on-improvement") return context.improvesPrimary || context.explicitChecksCommand;
-  return context.explicitChecksCommand;
 }
 
 async function runProcess(
@@ -3737,48 +3367,6 @@ async function git(args: any, cwd: string): Promise<LocalProcessResult> {
 
 function gitOutput(result: any, fallback: any) {
   return (result.stderr || result.stdout || fallback || "").trim();
-}
-
-async function insideGitRepo(cwd: string) {
-  if (!hasGitMarker(cwd)) return false;
-  const result = await git(["rev-parse", "--is-inside-work-tree"], cwd);
-  return result.code === 0 && result.stdout.trim() === "true";
-}
-
-function hasGitMarker(cwd: string): boolean {
-  let current = path.resolve(cwd);
-  for (;;) {
-    if (fs.existsSync(path.join(current, ".git"))) return true;
-    const parent = path.dirname(current);
-    if (parent === current) return false;
-    current = parent;
-  }
-}
-
-async function gitPrivatePath(cwd: string, relativePath: string) {
-  const result = await git(["rev-parse", "--git-path", relativePath], cwd);
-  if (result.code !== 0)
-    throw new Error(`Git path lookup failed: ${gitOutput(result, "unknown error")}`);
-  const filePath = result.stdout.trim();
-  return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
-}
-
-async function gitPrivateRoot(cwd: string): Promise<string> {
-  const result = await git(["rev-parse", "--git-dir"], cwd);
-  if (result.code !== 0) {
-    throw new Error(`Git directory lookup failed: ${gitOutput(result, "unknown error")}`);
-  }
-  const gitDir = result.stdout.trim();
-  return path.isAbsolute(gitDir) ? path.resolve(gitDir) : path.resolve(cwd, gitDir);
-}
-
-async function privateStateWriteRoot(workDir: string, target: string): Promise<string> {
-  if (!(await insideGitRepo(workDir).catch(() => false))) return workDir;
-  const gitRoot = await gitPrivateRoot(workDir);
-  if (!isPathInside(gitRoot, target)) {
-    throw new Error(`Git-private state path escapes the Git directory: ${target}`);
-  }
-  return gitRoot;
 }
 
 function fallbackPendingLogTransactionPath(workDir: string) {
@@ -3896,12 +3484,6 @@ async function liveGitProcessSummary(workDir: string) {
   }
 }
 
-function normalizePowerShellEscapedCommandArg(command: unknown): string {
-  const text = String(command);
-  if (process.platform !== "win32" || !/^\\".+?\\"(?:\s|$)/.test(text)) return text;
-  return text.replace(/\\"/g, '"');
-}
-
 async function shortHead(cwd: string) {
   const result = await git(["rev-parse", "--short=7", "HEAD"], cwd);
   return result.code === 0 ? result.stdout.trim() : "";
@@ -3927,21 +3509,6 @@ async function hasStagedChangesInPaths(cwd: string, paths: string[]) {
     cwd,
   );
   return result.code === 1;
-}
-
-async function gitDirtyPathDetails(cwd: string) {
-  if (!(await insideGitRepo(cwd))) return [];
-  const result = await git(["status", "--porcelain=v1", "-z", "-uall"], cwd);
-  if (result.code !== 0)
-    throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
-  assertCompleteGitPathOutput(result);
-  return parsePorcelainV1Z(result.stdout).flatMap((entry) =>
-    entry.paths.map((gitPath) => ({
-      status: entry.status,
-      path: gitPath,
-      raw: `${entry.status} ${displayGitPath(gitPath)}`,
-    })),
-  );
 }
 
 function isAutoresearchOwnedDirtyPath(relativePath: string) {
@@ -4224,102 +3791,6 @@ async function hashFileWithBudget(
   return { hash: hash.digest("hex"), size: bytes };
 }
 
-async function benchmarkContractSnapshot(workDir: string, context: LooseObject = {}) {
-  const fixedFiles = [
-    "autoresearch.sh",
-    "autoresearch.ps1",
-    "autoresearch.checks.sh",
-    "autoresearch.checks.ps1",
-    "autoresearch.config.json",
-    "package.json",
-    "Cargo.toml",
-  ];
-  const fingerprintBudget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT };
-  const fileFingerprints = [];
-  for (const relative of fixedFiles) {
-    const filePath = path.join(workDir, relative);
-    if (!(await pathExists(filePath))) continue;
-    fileFingerprints.push(
-      await contractFileFingerprint(workDir, filePath, relative, fingerprintBudget),
-    );
-  }
-  const command = String(context.command || "").trim();
-  const checksCommand = String(context.checksCommand || "").trim();
-  const normalizedCommand = command.replace(/\s+/g, " ");
-  const normalizedChecksCommand = checksCommand.replace(/\s+/g, " ");
-  const commandFile = contractPathLabel(workDir, context.commandFile);
-  const envFile = contractPathLabel(workDir, context.envFile);
-  const hasPacketEnvMode = Object.hasOwn(context, "packetEnvMode");
-  const packetEnvMode = hasPacketEnvMode ? packetEnvModeFromArgs(context) : "";
-  for (const [label, filePath] of [
-    [commandFile, context.commandFile],
-    [envFile, context.envFile],
-  ]) {
-    if (filePath) {
-      fileFingerprints.push(
-        await contractFileFingerprint(workDir, filePath, label, fingerprintBudget),
-      );
-    }
-  }
-  const contractSurface: LooseObject = {
-    command: normalizedCommand,
-    checksCommand: normalizedChecksCommand,
-    commandFile,
-    envFile,
-    files: fileFingerprints,
-  };
-  if (hasPacketEnvMode) contractSurface.packetEnvMode = packetEnvMode;
-  const surfaceHash = hashText(JSON.stringify(contractSurface));
-  const snapshot: LooseObject = {
-    command,
-    checksCommand,
-    commandFile,
-    envFile,
-    surfaceHash,
-    files: fileFingerprints,
-    fingerprintByteBudgetExceeded: fingerprintsContainReason(
-      fileFingerprints,
-      "fingerprint_byte_budget",
-    ),
-    capturedAt: new Date().toISOString(),
-  };
-  if (hasPacketEnvMode) snapshot.packetEnvMode = packetEnvMode;
-  return snapshot;
-}
-
-async function contractFileFingerprint(
-  workDir: string,
-  filePath: string,
-  label: any = "",
-  budget: { remaining: number } = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
-) {
-  const resolved = resolveOptionPath(filePath, workDir);
-  const display = label || contractPathLabel(workDir, resolved);
-  try {
-    const fingerprint = await hashFileWithBudget(resolved, budget);
-    return {
-      path: display,
-      ...fingerprint,
-    };
-  } catch (error) {
-    return {
-      path: display,
-      missing: true,
-      error: errorCodeOrMessage(error),
-    };
-  }
-}
-
-function contractPathLabel(workDir: string, filePath: string) {
-  const input = String(filePath || "").trim();
-  if (!input) return "";
-  const resolved = resolveOptionPath(input, workDir);
-  const relative = path.relative(workDir, resolved);
-  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-    ? relative.replace(/\\/g, "/")
-    : resolved;
-}
-
 function latestBenchmarkContractEntry(
   workDir: string,
   state: LooseObject | null | undefined,
@@ -4400,19 +3871,6 @@ async function benchmarkContractDrift(workDir: string, state: any) {
     previousHash: latest.benchmarkContract.surfaceHash,
     currentHash: current.surfaceHash,
   };
-}
-
-async function protectedBenchmarkGuardForWorkDir(
-  workDir: string,
-  config: LooseObject,
-  state: LooseObject,
-) {
-  const dirtyPaths = (await gitDirtyPathDetails(workDir)).map((entry: LooseObject) => entry.path);
-  return await buildProtectedBenchmarkGuard({ workDir, config, state, dirtyPaths });
-}
-
-function protectedBenchmarkGuardError(guard: LooseObject) {
-  return [guard.message, guard.action].filter(Boolean).join(" ");
 }
 
 async function preserveSessionFiles(workDir: string) {
@@ -5943,439 +5401,6 @@ export async function initExperiment(args: LooseObject) {
   };
 }
 
-async function runExperiment(args: LooseObject) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
-  const progressWriter = await createActiveProgressWriter(workDir);
-  return await runWithRequiredCleanup(
-    () => runExperimentWithProgressWriter(args, progressWriter),
-    () => progressWriter.close(),
-    "Failed to close active progress writer",
-  );
-}
-
-async function runExperimentWithProgressWriter(
-  args: LooseObject,
-  progressWriter: Awaited<ReturnType<typeof createActiveProgressWriter>>,
-) {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const state = currentState(workDir);
-  const limit = iterationLimitInfo(state, config);
-  if (limit.limitReached) {
-    throw new Error(
-      limit.stopReason ||
-        `maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`,
-    );
-  }
-  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
-  if (protectedBenchmarkGuard.configured && !protectedBenchmarkGuard.ok) {
-    throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
-  }
-  const commandInput = await benchmarkCommandFromArgs(args, workDir, config);
-  const { command } = commandInput;
-  const fixedControlBlock = fixedControlBlockForCommand(command, config, args);
-  if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
-  const timeoutSeconds = numberOption(
-    args.timeout_seconds ?? args.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS,
-  );
-  const retainedProcessProgress = await readActiveProgressSnapshot(workDir, config);
-  const resourcePreflight = assertRunResourcePreflight({
-    command,
-    config,
-    entries: [
-      ...readJsonl(workDir),
-      ...(retainedProcessProgress
-        ? [{ packetEvidence: { progressSnapshot: retainedProcessProgress } }]
-        : []),
-    ],
-  });
-  const packetId = buildActiveRunPacketId(state.results.length + 1);
-  let progressSnapshot = createProgressSnapshot({
-    packetId,
-    command,
-    startedAt: new Date().toISOString(),
-    timeoutSeconds,
-    artifactRoot: ".",
-  });
-  progressSnapshot = progressWriter.queue(progressSnapshot);
-  await progressWriter.flush();
-  const updateProgress = ({ observedAt, output }: { observedAt: string; output: string }) => {
-    progressSnapshot = updateProgressSnapshot(progressSnapshot, { output, observedAt });
-    progressSnapshot = {
-      ...progressSnapshot,
-      staleProgressReason: staleProgressReason(progressSnapshot, {
-        now: observedAt,
-        staleAfterSeconds: numberOption(
-          config.staleProgressSeconds ?? config.progressStaleSeconds,
-          300,
-        ),
-      }),
-    };
-    progressSnapshot = progressWriter.queue(progressSnapshot);
-  };
-  const runPacketStage = async (
-    stageCommand: string,
-    stageTimeoutSeconds: number,
-    options: Parameters<typeof runShell>[3],
-    timeoutPhase: "benchmark" | "checks",
-  ) => {
-    try {
-      return await runShell(stageCommand, workDir, stageTimeoutSeconds, options);
-    } catch (error) {
-      progressSnapshot = finishProgressSnapshot(progressSnapshot, {
-        exitCode: null,
-        timedOut: true,
-        terminationFailed: true,
-        termination: {
-          attempted: false,
-          escalated: false,
-          method: "none",
-          pid: null,
-          platform: process.platform,
-          proven: false,
-          reason: "runner_rejected_before_outcome",
-          remainingPids: [],
-          trackedPids: [],
-        },
-        timeoutPhase,
-        completedAt: new Date().toISOString(),
-      });
-      progressSnapshot = progressWriter.queue(progressSnapshot);
-      await progressWriter.flush();
-      throw error;
-    }
-  };
-  const benchmark = await runPacketStage(
-    command,
-    timeoutSeconds,
-    {
-      env: commandInput.env,
-      envMode: commandInput.packetEnvMode,
-      onProgress: updateProgress,
-      retainMetricNames: [state.config.metricName],
-    },
-    "benchmark",
-  );
-  const benchmarkPassed = benchmark.exitCode === 0 && !benchmark.timedOut;
-  const parseSource = metricParseSource(benchmark);
-  const parsedMetricResult = parseMetricLines(parseSource, {
-    primaryMetricName: state.config.metricName,
-    maxMetrics: MAX_PARSED_METRICS,
-    withTruncation: true,
-  });
-  const { artifacts, artifactWarnings } = parseArtifactLines(
-    benchmark.fullOutput || benchmark.output || parseSource,
-    workDir,
-  );
-  const parsedMetrics = parsedMetricResult.metrics;
-  const primary = parsedMetrics[state.config.metricName] ?? null;
-  const primaryPresent = finiteMetric(primary) != null;
-  const primaryMetric = finiteMetric(primary);
-  const improvesPrimary =
-    primaryMetric != null &&
-    (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
-  const isBaseline = state.current.filter(isBaselineEligibleMetricRun).length === 0;
-  let checks = null;
-  const rawChecksCommand =
-    args.checks_command || args.checksCommand || (await defaultChecksCommand(workDir));
-  const checksCommand = rawChecksCommand
-    ? normalizePowerShellEscapedCommandArg(rawChecksCommand)
-    : "";
-  const checksPolicy = checksPolicyFromArgs(args, config);
-  const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
-  if (
-    checksCommand &&
-    shouldRunChecks(checksPolicy, {
-      benchmarkPassed,
-      primaryPresent,
-      checksCommand,
-      improvesPrimary,
-      explicitChecksCommand,
-    })
-  ) {
-    checks = await runPacketStage(
-      checksCommand,
-      numberOption(
-        args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
-        DEFAULT_CHECKS_TIMEOUT_SECONDS,
-      ),
-      {
-        env: commandInput.env,
-        envMode: commandInput.packetEnvMode,
-        onProgress: updateProgress,
-      },
-      "checks",
-    );
-  }
-  const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
-  const terminationFailed = Boolean(benchmark.terminationFailed || checks?.terminationFailed);
-  const termination = checks?.termination ?? benchmark.termination;
-  const metricError =
-    benchmarkPassed && !primaryPresent
-      ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
-      : null;
-  const checksPassedOrSkipped = checksPassed === null || checksPassed;
-  const passed = benchmarkPassed && primaryPresent && checksPassedOrSkipped;
-  const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
-  const allowedStatuses = passed ? ["keep", "discard", "measure"] : [failedStatus];
-  const suggestedStatus = passed
-    ? isBaseline
-      ? "measure"
-      : improvesPrimary
-        ? "keep"
-        : "discard"
-    : failedStatus;
-  const checksWereVerified = checksPassed === true;
-  const safeSuggestedStatus = passed
-    ? suggestedStatus === "keep" && !isBaseline && !checksWereVerified
-      ? "discard"
-      : suggestedStatus
-    : failedStatus;
-  const statusGuidance = passed
-    ? safeSuggestedStatus === "keep"
-      ? "Safe to consider keep because this is a checked improvement; still review ASI before logging."
-      : safeSuggestedStatus === "measure"
-        ? "Log this as measure because it is a baseline or diagnostic packet without a prior improvement comparison; use keep only when real improvement evidence exists."
-        : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
-    : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
-  const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
-  if (terminationFailed) {
-    progressSnapshot = finishProgressSnapshot(progressSnapshot, {
-      exitCode: null,
-      timedOut: true,
-      terminationFailed: true,
-      termination,
-      timeoutPhase: benchmark.terminationFailed ? "benchmark" : "checks",
-      completedAt: checks?.finishedAt || benchmark.finishedAt,
-      artifacts,
-    });
-    progressSnapshot = progressWriter.queue(progressSnapshot);
-    await progressWriter.flush();
-  } else {
-    progressSnapshot = finishProgressSnapshot(progressSnapshot, {
-      exitCode: checks?.exitCode ?? benchmark.exitCode,
-      timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
-      termination,
-      timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
-      completedAt: checks?.finishedAt || benchmark.finishedAt,
-      artifacts,
-    });
-    progressSnapshot = progressWriter.queue(progressSnapshot);
-    await progressWriter.flush();
-  }
-  return {
-    ok: passed,
-    workDir,
-    command,
-    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY.mode,
-    commandExecutionBoundaryNote: COMMAND_EXECUTION_BOUNDARY.note,
-    timeoutSeconds,
-    commandFile: commandInput.commandFile,
-    envFile: commandInput.envFile,
-    envKeys: commandInput.envKeys,
-    explicitEnvKeys: commandInput.explicitEnvKeys,
-    packetEnvMode: commandInput.packetEnvMode,
-    commandDiagnostics: commandDiagnostics({
-      command,
-      commandFile: commandInput.commandFile,
-      envFile: commandInput.envFile,
-      separatorCommand: commandInput.separatorCommand,
-      result: benchmark,
-    }),
-    startedAt: benchmark.startedAt,
-    finishedAt: checks?.finishedAt || benchmark.finishedAt,
-    lastOutputAt: checks?.lastOutputAt || benchmark.lastOutputAt,
-    processLifecycle: processLifecycleRecordsForRun(packetId, benchmark, checks),
-    progressSnapshot,
-    exitCode: benchmark.exitCode,
-    timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
-    termination,
-    terminationFailed,
-    timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
-    durationSeconds: benchmark.durationSeconds,
-    parsedMetrics,
-    artifacts,
-    artifactWarnings,
-    parsedPrimary: primary,
-    metricError,
-    checksPolicy,
-    improvesPrimary,
-    outputTruncated: Boolean(
-      benchmark.outputTruncated ||
-      benchmark.fullOutputTruncated ||
-      benchmark.metricOutputTruncated ||
-      checks?.outputTruncated ||
-      checks?.fullOutputTruncated ||
-      checks?.metricOutputTruncated,
-    ),
-    metricsTruncated: Boolean(parsedMetricResult.truncated || benchmark.metricOutputTruncated),
-    metricName: state.config.metricName,
-    metricUnit: state.config.metricUnit,
-    progress,
-    protectedBenchmarkGuard,
-    resourcePreflight,
-    checks: checks
-      ? {
-          command: checksCommand,
-          exitCode: checks.exitCode,
-          timedOut: checks.timedOut,
-          termination: checks.termination,
-          terminationFailed: checks.terminationFailed,
-          durationSeconds: checks.durationSeconds,
-          passed: checksPassed,
-          tailOutput: tailText(checks.output, 80, 16000),
-        }
-      : null,
-    tailOutput: tailText(benchmark.output),
-    logHint: {
-      metric: primary,
-      metrics: Object.fromEntries(
-        Object.entries(parsedMetrics).filter(
-          ([key]: [string, unknown]) => key !== state.config.metricName,
-        ),
-      ),
-      status: passed ? null : failedStatus,
-      suggestedStatus,
-      safeSuggestedStatus,
-      statusGuidance,
-      needsDecision: passed,
-      allowedStatuses,
-    },
-    limit,
-    benchmarkContract: await benchmarkContractSnapshot(workDir, {
-      command,
-      checksCommand,
-      commandFile: commandInput.commandFile,
-      envFile: commandInput.envFile,
-      packetEnvMode: commandInput.packetEnvMode,
-    }),
-  };
-}
-
-function processLifecycleRecordsForRun(
-  packetId: string,
-  benchmark: ProcessRunResult,
-  checks: ProcessRunResult | null,
-) {
-  return [
-    ...processLifecycleRecordsForStage(packetId, "benchmark", benchmark),
-    ...(checks ? processLifecycleRecordsForStage(packetId, "checks", checks) : []),
-  ];
-}
-
-function processLifecycleRecordsForStage(
-  packetId: string,
-  processId: string,
-  result: ProcessRunResult,
-) {
-  const records = [
-    buildProcessLifecycleRecord({
-      packetId,
-      processId,
-      event: "started",
-      at: String(result.startedAt),
-    }),
-  ];
-  if (result.lastOutputAt) {
-    records.push(
-      buildProcessLifecycleRecord({
-        packetId,
-        processId,
-        event: "observed-live",
-        at: String(result.lastOutputAt),
-      }),
-    );
-  }
-  records.push(
-    buildProcessLifecycleRecord({
-      packetId,
-      processId,
-      event: result.terminationFailed ? "termination-failed" : "terminated",
-      at: String(result.finishedAt),
-      ...(result.termination ? { termination: result.termination } : {}),
-    }),
-  );
-  return records;
-}
-
-function buildRunProgress({
-  benchmark,
-  checks,
-  checksCommand,
-  passed,
-}: {
-  benchmark: ProcessRunResult;
-  checks: ProcessRunResult | null;
-  checksCommand: string | null;
-  passed: boolean;
-}) {
-  const stages: ProgressStageResult[] = [
-    progressStage("benchmark", "Run benchmark command", benchmark),
-  ];
-  if (checksCommand) {
-    stages.push(
-      checks
-        ? progressStage("checks", "Run correctness checks", checks)
-        : {
-            stage: "checks",
-            label: "Run correctness checks",
-            status: "skipped",
-            durationSeconds: 0,
-            exitCode: null,
-            timedOut: false,
-            outputTail: "",
-          },
-    );
-  }
-  const timedOut = stages.some((stage) => stage.timedOut);
-  const terminationFailed = stages.some((stage) => stage.terminationFailed);
-  return {
-    mode: "synchronous",
-    status: terminationFailed
-      ? "termination_failed"
-      : timedOut
-        ? "timed_out"
-        : passed
-          ? "completed"
-          : "failed",
-    cancellable: false,
-    cancelStatus: terminationFailed
-      ? "termination-failed"
-      : timedOut
-        ? "timeout-terminated"
-        : "not_requested",
-    elapsedSeconds: Number(
-      stages.reduce((total, stage) => total + Number(stage.durationSeconds || 0), 0).toFixed(3),
-    ),
-    stages,
-    latestOutputTail: [...stages].reverse().find((stage) => stage.outputTail)?.outputTail || "",
-  };
-}
-
-function progressStage(
-  stage: string,
-  label: string,
-  result: ProcessRunResult,
-): ProgressStageResult {
-  return {
-    stage,
-    label,
-    status: result.terminationFailed
-      ? "termination_failed"
-      : result.timedOut
-        ? "timed_out"
-        : result.exitCode === 0
-          ? "completed"
-          : "failed",
-    durationSeconds: Number(result.durationSeconds || 0),
-    exitCode: result.exitCode ?? null,
-    timedOut: Boolean(result.timedOut),
-    termination: result.termination || null,
-    terminationFailed: Boolean(result.terminationFailed),
-    outputTail: tailText(result.output || ""),
-  };
-}
-
 async function logExperiment(args: any) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const existingPendingReceipts = await pendingLogTransactionWarnings(workDir);
@@ -6774,13 +5799,6 @@ async function resolveLastRunPath(workDir: string) {
   return resolveSessionPaths({ workDir }).lastRunFallbackPath;
 }
 
-async function resolveProgressPath(workDir: string) {
-  if (await insideGitRepo(workDir)) {
-    return await gitPrivatePath(workDir, "autoresearch/progress.json");
-  }
-  return resolveSessionPaths({ workDir }).progressFallbackPath;
-}
-
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
   const target = filePath || (await resolveLastRunPath(workDir));
   await checkedAtomicWriteFile(
@@ -6790,82 +5808,6 @@ async function writeLastRunPacket(workDir: string, packet: any, filePath: string
     { mode: 0o600 },
   );
   return target;
-}
-
-async function writeActiveProgressSnapshot(workDir: string, snapshot: LooseObject) {
-  const target = await resolveProgressPath(workDir);
-  const generation = activeProgressGeneration(snapshot);
-  if (generation <= activeProgressGeneration(readProgressSnapshot(target))) return target;
-  await checkedAtomicWriteFile(
-    await privateStateWriteRoot(workDir, target),
-    target,
-    `${JSON.stringify(snapshot, null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
-  );
-  return target;
-}
-
-async function readActiveProgressSnapshot(workDir: string, config: LooseObject = {}) {
-  const target = await resolveProgressPath(workDir);
-  const snapshot = readProgressSnapshot(target);
-  if (!snapshot || snapshot.exitState !== "running") return snapshot;
-  return {
-    ...snapshot,
-    staleProgressReason: staleProgressReason(snapshot as RunnerProgressSnapshot, {
-      staleAfterSeconds: numberOption(
-        config.staleProgressSeconds ?? config.progressStaleSeconds,
-        300,
-      ),
-    }),
-  };
-}
-
-async function createActiveProgressWriter(workDir: string) {
-  const current = await readActiveProgressSnapshot(workDir);
-  return createCoalescingProgressWriter<RunnerProgressSnapshot>({
-    initialGeneration: activeProgressGeneration(current),
-    write: async (snapshot) => {
-      await writeActiveProgressSnapshot(workDir, snapshot);
-    },
-  });
-}
-
-function readProgressSnapshot(target: string): LooseObject | null {
-  if (!fs.existsSync(target)) return null;
-  try {
-    const snapshot = JSON.parse(fs.readFileSync(target, "utf8"));
-    return snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : null;
-  } catch {
-    return null;
-  }
-}
-
-function activeProgressGeneration(snapshot: LooseObject | null): number {
-  const generation = Number(snapshot?.generation);
-  return Number.isSafeInteger(generation) && generation >= 0 ? generation : 0;
-}
-
-async function deleteActiveProgressSnapshot(workDir: string) {
-  try {
-    await fsp.rm(await resolveProgressPath(workDir));
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
-  }
-}
-
-async function deleteActiveProgressSnapshotIfSafe(workDir: string) {
-  const snapshot = await readActiveProgressSnapshot(workDir);
-  if (snapshot?.exitState === "termination_failed") return;
-  if (
-    snapshot?.exitState === "running" &&
-    typeof snapshot.startedAt === "string" &&
-    typeof snapshot.commandClass === "string"
-  ) {
-    return;
-  }
-  await deleteActiveProgressSnapshot(workDir);
 }
 
 function terminationFailureEvidence(value: LooseObject | null | undefined): LooseObject | null {

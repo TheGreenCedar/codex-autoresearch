@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
+import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import {
   buildCheapFinalizationPressure,
   buildSessionReadModel,
@@ -79,7 +80,6 @@ export interface StateRuntime {
     parallelLanes: UnknownRecord[];
     watchdogSummary: UnknownRecord;
   };
-  commandExecutionBoundary: CommandRecord;
   dashboardCommands: (workDir: string) => CommandRecord[];
   decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
   discoverLastRunPartialResults: (
@@ -121,7 +121,6 @@ export async function publicState(
     runtimeProvenance,
     withCanonicalActionCommand,
   } = runtime;
-  const COMMAND_EXECUTION_BOUNDARY = runtime.commandExecutionBoundary;
   const PLUGIN_ROOT = runtime.pluginRoot;
   const PLUGIN_VERSION = runtime.pluginVersion;
 
@@ -754,7 +753,7 @@ async function publicCompactState(
     metricSemanticsWarning: state.metricSemanticsWarning || null,
     commandExecutionBoundary: commandExecutionBoundaryForState(
       { state, lastRun },
-      runtime.commandExecutionBoundary,
+      COMMAND_EXECUTION_BOUNDARY,
     ),
     portfolioRecommendation,
     experimentEconomics,
