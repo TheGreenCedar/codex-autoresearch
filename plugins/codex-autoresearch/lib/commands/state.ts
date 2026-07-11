@@ -35,6 +35,7 @@ import { recommendPortfolioDirection } from "../portfolio-advisor.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import type { SessionReadCache } from "../session-records.js";
 
 export interface CompactStateBuilderInput extends UnknownRecord {
   workDir: string;
@@ -47,7 +48,12 @@ export function buildCompactStateResponse(input: CompactStateBuilderInput): Comp
 }
 
 function decisionSetupState(state: CommandRecord): CommandRecord | null {
-  if (state.current?.length > 0 || String(state.config?.name || "").trim()) return null;
+  if (
+    (Array.isArray(state.current) && state.current.length > 0) ||
+    String(recordOrEmpty(state.config).name || "").trim()
+  ) {
+    return null;
+  }
   return {
     stage: "needs-setup",
     blockers: [],
@@ -55,15 +61,32 @@ function decisionSetupState(state: CommandRecord): CommandRecord | null {
   };
 }
 
-type CommandRecord = UnknownRecord & Record<string, any>;
+type CommandRecord = UnknownRecord;
 
 export interface StateRuntime {
   buildFinalizePreview: (args: CommandRecord) => Promise<CommandRecord>;
-  buildParallelOrchestrationContext: (args: any) => any;
+  buildParallelOrchestrationContext: (args: {
+    config: UnknownRecord;
+    records?: ReturnType<typeof loadSessionRecords>;
+    settings?: UnknownRecord;
+    state: ReturnType<typeof loadSessionState>;
+    workDir: string;
+  }) => UnknownRecord & {
+    fanoutPlan: UnknownRecord | null;
+    fanoutProvenance: UnknownRecord | null;
+    laneResults: UnknownRecord[];
+    memory: UnknownRecord;
+    parallelLanes: UnknownRecord[];
+    watchdogSummary: UnknownRecord;
+  };
   commandExecutionBoundary: CommandRecord;
   dashboardCommands: (workDir: string) => CommandRecord[];
   decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
-  discoverLastRunPartialResults: (workDir: string, state: any, lastRun: any) => Promise<any>;
+  discoverLastRunPartialResults: (
+    workDir: string,
+    state: UnknownRecord,
+    lastRun: UnknownRecord | null,
+  ) => Promise<{ candidates: unknown[]; skippedArtifacts?: unknown[] }>;
   lastRunPacketFreshness: (workDir: string, lastRun: CommandRecord) => Promise<CommandRecord>;
   operatorWarningsForWorkDir: (workDir: string, state: CommandRecord) => Promise<CommandRecord[]>;
   pluginRoot: string;
@@ -108,7 +131,7 @@ export async function publicState(
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
   const bounded = boolOption(args.bounded, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
-  const readCache = args.readCache || createSessionReadCache();
+  const readCache = (args.readCache || createSessionReadCache()) as SessionReadCache;
   if (compact || report) {
     let compactState: CommandRecord;
     try {
@@ -179,12 +202,16 @@ export async function publicState(
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
+  const lastRunDecision = recordOrEmpty(lastRun?.decision);
+  const lastRunRecord = recordOrEmpty(lastRun?.run);
+  const lastRunEvidence = recordOrEmpty(lastRun?.packetEvidence);
   const packetDiagnostics = lastRun
     ? classifyPacketDiagnostics({
-        packetEvidence: lastRun.packetEvidence || {},
-        run: lastRun.run || {},
-        decision: lastRun.decision || {},
-        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        packetEvidence: lastRunEvidence,
+        run: lastRunRecord,
+        decision: lastRunDecision,
+        metrics:
+          recordOrNull(lastRunDecision.metrics) || recordOrEmpty(lastRunRecord.parsedMetrics),
         metricName: state.config.metricName,
         command: continuationCommands(workDir).partialResults,
       })
@@ -217,7 +244,7 @@ export async function publicState(
     runtimeAuthority: guidance.runtimeAuthority,
     ledgerHealth,
   };
-  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+  const recipeSummaries = listBuiltInRecipes().map((recipe) => ({
     id: recipe.id,
     title: recipe.title,
     tags: recipe.tags || [],
@@ -235,7 +262,7 @@ export async function publicState(
     progress:
       activeProgress ||
       (await readActiveProgressSnapshot(workDir, config)) ||
-      lastRun?.packetEvidence?.progressSnapshot ||
+      lastRunEvidence.progressSnapshot ||
       null,
   });
   const readModel = buildSessionReadModel({
@@ -310,10 +337,11 @@ export async function publicState(
       : preliminaryDecisionEnvelope,
     stateCommands,
   );
+  const loopContract = recordOrEmpty(decisionEnvelope.loopContract);
   const resolvedReadModel = withResolvedSessionDecision(readModel, {
     state: {
       decisionEnvelope,
-      blockers: decisionEnvelope.loopContract?.blockers || [],
+      blockers: Array.isArray(loopContract.blockers) ? loopContract.blockers : [],
     },
     decisionEnvelope,
     commands: stateCommands,
@@ -362,7 +390,7 @@ export async function publicState(
       commitPaths: config.commitPaths || [],
     },
     commands: dashboardCommands(workDir),
-    warnings: warningDetails.map((warning: any) => warning.message),
+    warnings: warningDetails.map((warning) => warning.message),
     warningDetails,
     fanoutPlan,
     fanoutProvenance,
@@ -508,7 +536,7 @@ async function publicCompactState(
     runtimeProvenance,
     withCanonicalActionCommand,
   } = runtime;
-  const effectiveReadCache = (readCache || createSessionReadCache()) as any;
+  const effectiveReadCache = (readCache || createSessionReadCache()) as SessionReadCache;
   const state = loadSessionState(workDir, effectiveReadCache);
   const records = loadSessionRecords(workDir, effectiveReadCache);
   const ledgerHealth = analyzeLedgerHealth(records);
@@ -538,12 +566,16 @@ async function publicCompactState(
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
+  const lastRunDecision = recordOrEmpty(lastRun?.decision);
+  const lastRunRecord = recordOrEmpty(lastRun?.run);
+  const lastRunEvidence = recordOrEmpty(lastRun?.packetEvidence);
   const packetDiagnostics = lastRun
     ? classifyPacketDiagnostics({
-        packetEvidence: lastRun.packetEvidence || {},
-        run: lastRun.run || {},
-        decision: lastRun.decision || {},
-        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        packetEvidence: lastRunEvidence,
+        run: lastRunRecord,
+        decision: lastRunDecision,
+        metrics:
+          recordOrNull(lastRunDecision.metrics) || recordOrEmpty(lastRunRecord.parsedMetrics),
         metricName: state.config.metricName,
         command: continuationCommands(workDir).partialResults,
       })
@@ -576,7 +608,7 @@ async function publicCompactState(
     ledgerHealth,
   };
   const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
-  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+  const recipeSummaries = listBuiltInRecipes().map((recipe) => ({
     id: recipe.id,
     title: recipe.title,
     tags: recipe.tags || [],
@@ -590,7 +622,7 @@ async function publicCompactState(
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+    progress: activeProgress || lastRunEvidence.progressSnapshot || null,
   });
   const statusCounts = statusCountsFromState(state);
   const continuation = loopContinuation(workDir, state, config, "state");
@@ -709,7 +741,7 @@ async function publicCompactState(
       commitPaths: config.commitPaths || [],
     },
     commands: compactCommands,
-    warnings: warningDetails.map((warning: any) => warning.message),
+    warnings: warningDetails.map((warning) => warning.message),
     warningDetails,
     qualityGap,
     memory,
@@ -753,11 +785,11 @@ export async function finalizationPressureForWorkDir(
   const { buildFinalizePreview } = runtime;
   const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
   if (!hasFinalizationEvidence(state)) return cheap;
-  return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+  return await buildFinalizePreview({ cwd: workDir }).catch((error: unknown) => ({
     ...cheap,
     ok: false,
     ready: false,
-    warnings: [...(Array.isArray(cheap.warnings) ? cheap.warnings : []), error.message],
+    warnings: [...(Array.isArray(cheap.warnings) ? cheap.warnings : []), errorMessage(error)],
     nextAction:
       cheap.nextAction || "Fix finalization preview errors before relying on review readiness.",
   }));
@@ -810,7 +842,7 @@ function commandExecutionBoundaryForState(
   commandExecutionBoundary: CommandRecord,
 ): CommandRecord | null {
   const boundary =
-    lastRun?.packetEvidence?.commandExecutionBoundary ||
+    recordOrEmpty(lastRun?.packetEvidence).commandExecutionBoundary ||
     [...(Array.isArray(state.current) ? state.current : [])]
       .reverse()
       .map((run: CommandRecord) => run.commandExecutionBoundary)
@@ -838,4 +870,14 @@ async function dashboardHealthForWorkDir(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function recordOrNull(value: unknown): UnknownRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : null;
+}
+
+function recordOrEmpty(value: unknown): UnknownRecord {
+  return recordOrNull(value) || {};
 }

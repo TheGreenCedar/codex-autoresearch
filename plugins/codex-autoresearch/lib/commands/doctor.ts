@@ -12,10 +12,15 @@ import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redactio
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../loop-governance.js";
 
-type CommandRecord = UnknownRecord & Record<string, any>;
+type CommandRecord = UnknownRecord;
 
 export interface DoctorRuntime {
-  buildRunProgress: (args: any) => any;
+  buildRunProgress: (args: {
+    benchmark: UnknownRecord;
+    checks: UnknownRecord | null;
+    checksCommand: string | null;
+    passed: boolean;
+  }) => UnknownRecord;
   commandExecutionBoundary: CommandRecord;
   decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
   fixedControlBlockForCommand: (
@@ -61,48 +66,54 @@ export async function doctorSession(
   );
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
   const state: CommandRecord = await publicState({ ...args, compact: false, jsonFull: true });
-  const primaryMetricName =
-    args.metric_name || args.metricName || config.metricName || state.config.metricName || "metric";
-  const issues = [];
-  const warnings = [];
-  const warningDetails = [];
+  const stateConfig = recordOrEmpty(state.config);
+  const stateMemory = recordOrEmpty(state.memory);
+  const scaffoldHealth = recordOrEmpty(state.scaffoldHealth);
+  const researchIntegrity = recordOrEmpty(state.researchIntegrity);
+  const resolvedDecision = recordOrEmpty(state.resolvedDecision);
+  const stateLimit = recordOrEmpty(state.limit);
+  const sourceCleanliness = recordOrEmpty(state.sourceCleanliness);
+  const primaryMetricName = String(
+    args.metric_name || args.metricName || config.metricName || stateConfig.metricName || "metric",
+  );
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const warningDetails: UnknownRecord[] = [];
   const inGit = await insideGitRepo(workDir);
 
-  if (!state.config.metricName) issues.push("No primary metric is configured.");
+  if (!stateConfig.metricName) issues.push("No primary metric is configured.");
   if (state.runs === 0)
     warnings.push("No runs are logged yet. Run a baseline before experimenting.");
-  warnings.push(...(state.memory?.warnings || []));
+  warnings.push(...stringArray(stateMemory.warnings));
   if (!inGit)
     warnings.push(
       "Working directory is not a Git repository; keep commits and discard reverts are unavailable.",
     );
   const operatorDetails = Array.isArray(state.warningDetails) ? state.warningDetails : [];
-  for (const detail of operatorDetails) {
-    if (!detail?.message) continue;
+  for (const item of operatorDetails) {
+    const detail = recordOrEmpty(item);
+    if (!detail.message) continue;
     warningDetails.push(detail);
     if (
       detail.code === "benchmark_contract_changed" ||
       String(detail.code || "").startsWith("protected_benchmark_")
     ) {
       if (detail.severity === "error" || detail.code === "benchmark_contract_changed") {
-        issues.push(detail.message);
+        issues.push(String(detail.message));
       } else {
-        warnings.push(detail.message);
+        warnings.push(String(detail.message));
       }
-    } else warnings.push(detail.message);
+    } else warnings.push(String(detail.message));
   }
-  for (const check of state.scaffoldHealth?.checks || []) {
-    if (!check?.message) continue;
+  for (const item of arrayValue(scaffoldHealth.checks)) {
+    const check = recordOrEmpty(item);
+    if (!check.message) continue;
     warningDetails.push(check);
-    warnings.push(check.message);
-    if (check.severity === "blocker") issues.push(check.message);
+    warnings.push(String(check.message));
+    if (check.severity === "blocker") issues.push(String(check.message));
   }
-  for (const warning of state.researchIntegrity?.warnings || []) {
-    warnings.push(warning);
-  }
-  for (const blocker of state.researchIntegrity?.blockers || []) {
-    issues.push(blocker);
-  }
+  warnings.push(...stringArray(researchIntegrity.warnings));
+  issues.push(...stringArray(researchIntegrity.blockers));
   const revalidateCatalog = boolOption(args.revalidate_catalog ?? args.revalidateCatalog, false);
   const catalogTrust = revalidateCatalog
     ? await catalogTrustCheck(config, sessionCwd).catch((error: unknown) => ({
@@ -128,7 +139,7 @@ export async function doctorSession(
       fallbackToDefault: true,
       config,
     });
-    benchmarkCommandHint = benchmarkCommandSource.command;
+    benchmarkCommandHint = String(benchmarkCommandSource.command || "");
   } catch (error: unknown) {
     pushUniqueMessage(issues, errorMessage(error));
   }
@@ -137,7 +148,7 @@ export async function doctorSession(
     workDir,
     config,
     state,
-    scaffoldHealth: state.scaffoldHealth,
+    scaffoldHealth,
     warningDetails,
     runtimeDriftSummary,
     runtimeTrustScope: checkInstalledRuntime ? "installed-plugin" : "source-checkout",
@@ -165,10 +176,10 @@ export async function doctorSession(
           portfolioRecommendation: null,
           runtimeDriftSummary,
           runtimeAuthority: guidance.runtimeAuthority,
-          scaffoldHealth: state.scaffoldHealth,
+          scaffoldHealth,
         },
         nextAction: "Run the next experiment, then log keep or discard with ASI.",
-        finalization: state.resolvedDecision?.finalizationPressure || null,
+        finalization: resolvedDecision.finalizationPressure || null,
       }),
       continuationCommands(workDir),
     ),
@@ -177,7 +188,7 @@ export async function doctorSession(
 
   const benchmark: CommandRecord = {
     checked: false,
-    command: args.command || "",
+    command: String(args.command || ""),
     packetEnvMode: null,
     emitsPrimary: null,
     parsedMetrics: {},
@@ -200,15 +211,17 @@ export async function doctorSession(
     if (!benchmark.command) {
       benchmark.metricError =
         benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
-      issues.push(benchmark.metricError);
+      issues.push(String(benchmark.metricError));
     } else {
       const fixedControlBlock = fixedControlBlockForCommand(benchmark.command, config, args);
       if (fixedControlBlock) {
         benchmark.fixedControlViolation = fixedControlBlock.fixedControlViolation;
         benchmark.metricError = fixedControlBlock.issue;
-        issues.push(fixedControlBlock.issue);
+        issues.push(String(fixedControlBlock.issue));
       } else {
-        const latestContract = latestBenchmarkContractEntry(workDir, state)?.benchmarkContract;
+        const latestContract = recordOrNull(
+          latestBenchmarkContractEntry(workDir, state)?.benchmarkContract,
+        );
         const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
         const doctorPacketEnvMode = explicitPacketEnvMode
           ? packetEnvModeFromArgs(args)
@@ -217,7 +230,7 @@ export async function doctorSession(
             : "minimal";
         benchmark.packetEnvMode = doctorPacketEnvMode;
         const run = await runShell(
-          benchmark.command,
+          String(benchmark.command || ""),
           workDir,
           numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
           {
@@ -229,13 +242,14 @@ export async function doctorSession(
         benchmark.timedOut = run.timedOut;
         benchmark.termination = run.termination;
         benchmark.terminationFailed = run.terminationFailed;
-        benchmark.parsedMetrics = parseMetricLines(metricParseSource(run));
-        benchmark.emitsPrimary = finiteMetric(benchmark.parsedMetrics[primaryMetricName]) != null;
+        const parsedMetrics = parseMetricLines(metricParseSource(run));
+        benchmark.parsedMetrics = parsedMetrics;
+        benchmark.emitsPrimary = finiteMetric(parsedMetrics[primaryMetricName]) != null;
         benchmark.progress = buildRunProgress({
-          benchmark: run,
+          benchmark: { ...run },
           checks: null,
           checksCommand: null,
-          passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary,
+          passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary === true,
         });
         if (run.exitCode !== 0 || run.timedOut) {
           issues.push(
@@ -248,12 +262,12 @@ export async function doctorSession(
           }
         } else if (!benchmark.emitsPrimary) {
           benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
-          issues.push(benchmark.metricError);
+          issues.push(String(benchmark.metricError));
         }
         const driftWarning = benchmarkDriftWarning({
-          currentMetric: benchmark.parsedMetrics[primaryMetricName],
+          currentMetric: parsedMetrics[primaryMetricName],
           bestMetric: state.best,
-          direction: state.config.bestDirection,
+          direction: stateConfig.bestDirection,
           metricName: primaryMetricName,
         });
         if (driftWarning) warnings.push(driftWarning);
@@ -266,23 +280,23 @@ export async function doctorSession(
     nextAction =
       String(runtimeAuthority.blocker || "").trim() ||
       "Inspect or refresh the installed plugin runtime before claiming installed behavior.";
-  } else if (loopAuthority.canonicalNextAction?.safeAction === "ledger-doctor") {
+  } else if (recordOrEmpty(loopAuthority.canonicalNextAction).safeAction === "ledger-doctor") {
     nextAction = "Run ledger-doctor before another packet.";
   } else if (loopAuthority.nextAction) {
     nextAction = loopAuthority.nextAction;
-  } else if (issues.some((issue: any) => /contract changed/i.test(issue))) {
+  } else if (issues.some((issue) => /contract changed/i.test(issue))) {
     nextAction =
       "Start a new segment or explicitly invalidate the old evidence before running another packet.";
-  } else if (issues.some((issue: any) => /primary metric|benchmark/i.test(issue))) {
+  } else if (issues.some((issue) => /primary metric|benchmark/i.test(issue))) {
     nextAction =
       "Fix the benchmark command so it emits the configured primary metric before continuing.";
-  } else if (issues.some((issue: any) => /fixed_control_rerun_blocked/i.test(String(issue)))) {
+  } else if (issues.some((issue) => /fixed_control_rerun_blocked/i.test(issue))) {
     nextAction = "Reuse the fixed control artifact instead of running the benchmark check.";
   } else if (state.runs === 0) {
     nextAction = "Run and log a baseline before trying optimizations.";
-  } else if (state.limit.limitReached) {
+  } else if (stateLimit.limitReached) {
     nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
-  } else if (warnings.some((warning: any) => /dirty/.test(String(warning)))) {
+  } else if (warnings.some((warning) => /dirty/.test(warning))) {
     nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
@@ -303,7 +317,7 @@ export async function doctorSession(
       ? { current: [], allRecords: [], ...state }
       : currentState(workDir);
   const benchmarkContractChanged = warningDetails.some(
-    (detail: any) => detail?.code === "benchmark_contract_changed",
+    (detail) => detail.code === "benchmark_contract_changed",
   );
   const publicBenchmark = {
     ...benchmark,
@@ -317,7 +331,7 @@ export async function doctorSession(
     state,
     git: {
       inside: inGit,
-      clean: state.sourceCleanliness?.sourceDirty !== true,
+      clean: sourceCleanliness.sourceDirty !== true,
     },
     benchmarkContract: {
       ok: benchmarkContractChanged === false,
@@ -380,14 +394,14 @@ function benchmarkDriftWarning({
 }
 
 function doctorExplanation(result: CommandRecord): CommandRecord {
-  const runtimeSummary = result.runtimeDriftSummary || null;
+  const runtimeSummary = recordOrNull(result.runtimeDriftSummary);
   return {
     verdict: result.ok
       ? "Doctor found no blocking issues."
       : "Doctor found issues that must be fixed before trusting the loop.",
     priorityFixes: [
-      ...(result.issues || []),
-      ...(result.warnings || []).filter((warning: any) =>
+      ...stringArray(result.issues),
+      ...stringArray(result.warnings).filter((warning) =>
         /dirty|drift|benchmark|missing|stale|commitPaths/i.test(String(warning)),
       ),
     ].slice(0, 5),
@@ -462,29 +476,30 @@ function actionMessage(value: unknown): string {
 }
 
 function guidanceBlockers(guidance: CommandRecord): string[] {
+  const gateQuality = recordOrEmpty(guidance.gateQuality);
+  const preflight = recordOrEmpty(guidance.preflight);
   const blockers = [
-    ...listOption(guidance.gateQuality?.blockers),
-    ...(guidance.preflight?.status === "blocked" ? listOption(guidance.preflight?.blockers) : []),
+    ...listOption(gateQuality.blockers),
+    ...(preflight.status === "blocked" ? listOption(preflight.blockers) : []),
   ]
-    .map((blocker: any) => String(blocker || "").trim())
+    .map((blocker) => String(blocker || "").trim())
     .filter(Boolean);
-  if (guidance.preflight?.status === "blocked" && blockers.length === 0) {
+  if (preflight.status === "blocked" && blockers.length === 0) {
     blockers.push("Preflight readiness is blocked.");
   }
   return uniqueStrings(blockers);
 }
 
 function guidanceWarnings(guidance: CommandRecord): string[] {
-  return uniqueStrings([
-    ...listOption(guidance.gateQuality?.warnings),
-    ...listOption(guidance.preflight?.warnings),
-  ]);
+  const gateQuality = recordOrEmpty(guidance.gateQuality);
+  const preflight = recordOrEmpty(guidance.preflight);
+  return uniqueStrings([...listOption(gateQuality.warnings), ...listOption(preflight.warnings)]);
 }
 
 function doctorLoopContractAuthority(decisionEnvelope: CommandRecord | null | undefined) {
   const envelope = decisionEnvelope || {};
-  const loopContract = envelope.loopContract || null;
-  const canonicalNextAction = envelope.canonicalNextAction || null;
+  const loopContract = recordOrNull(envelope.loopContract);
+  const canonicalNextAction = recordOrNull(envelope.canonicalNextAction);
   const blockers = Array.isArray(loopContract?.blockers)
     ? loopContract.blockers.map(actionMessage).filter(Boolean)
     : [];
@@ -504,7 +519,7 @@ function doctorLoopContractAuthority(decisionEnvelope: CommandRecord | null | un
   };
 }
 
-function pushUniqueMessage(target: any[], message: unknown) {
+function pushUniqueMessage(target: string[], message: unknown) {
   const text = String(message || "").trim();
   if (text && !target.includes(text)) target.push(text);
 }
@@ -524,8 +539,25 @@ function hasSharperDoctorBlocker(state: CommandRecord, blocker: unknown = ""): b
 }
 
 function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
-  const checks = Array.isArray((scaffoldHealth as CommandRecord | null)?.checks)
-    ? (scaffoldHealth as CommandRecord).checks
-    : [];
-  return checks.some((check: any) => check?.severity === "blocker");
+  return arrayValue(recordOrEmpty(scaffoldHealth).checks).some(
+    (check) => recordOrEmpty(check).severity === "blocker",
+  );
+}
+
+function recordOrNull(value: unknown): UnknownRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : null;
+}
+
+function recordOrEmpty(value: unknown): UnknownRecord {
+  return recordOrNull(value) || {};
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return arrayValue(value).map(String);
 }
