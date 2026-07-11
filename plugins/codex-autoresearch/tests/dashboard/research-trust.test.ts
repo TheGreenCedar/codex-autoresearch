@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildDashboardViewModel } from "../../lib/dashboard-view-model.js";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
-import { createDashboardHarness, emptyCommandMeta, waitFor } from ".././helpers/dashboard.js";
+import {
+  createDashboardHarness,
+  dashboardConfigEntry,
+  emptyCommandMeta,
+  waitFor,
+} from ".././helpers/dashboard.js";
 
 const dashboard = createDashboardHarness();
 const { runDashboard } = dashboard;
@@ -133,6 +138,23 @@ test("dashboard copy buttons expose the current URL and next CLI command", async
   dom.window.close();
 });
 
+test("static exports never present file URLs as shareable readout URLs", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "static handoff", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+  ];
+  const { dom, getById, queryById } = await runDashboard(entries, emptyCommandMeta(), {
+    url: "file:///private/autoresearch-dashboard.html",
+  });
+
+  assert.equal((getById("copy-dashboard-url") as HTMLButtonElement).hidden, true);
+  assert.equal(queryById("live-handoff-receipt") === null, true);
+  assert.match(getById("static-share-guidance").textContent || "", /Share this HTML file/);
+  assert.match(getById("static-share-guidance").textContent || "", /serve --cwd <project>/);
+  assert.doesNotMatch(dom.window.document.body.textContent || "", /file:\/\/\/private/);
+  dom.window.close();
+});
+
 test("dashboard promotes Codex brief and session memory instead of command controls", async () => {
   const viewModel = {
     aiSummary: {
@@ -178,10 +200,10 @@ test("dashboard promotes Codex brief and session memory instead of command contr
 
   assert.match(getById("codex-brief").textContent, /Run #1 created the baseline/);
   assert.match(getById("strategy-memory").textContent, /Test manifest cache reuse/);
-  assert.equal(queryById("mission-control-grid"), null);
-  assert.equal(queryById("log-decision-panel"), null);
-  assert.equal(queryById("action-receipt"), null);
-  assert.equal(queryById("live-actions-panel"), null);
+  assert.equal(queryById("mission-control-grid") === null, true);
+  assert.equal(queryById("log-decision-panel") === null, true);
+  assert.equal(queryById("action-receipt") === null, true);
+  assert.equal(queryById("live-actions-panel") === null, true);
 });
 
 test("dashboard explains that zero quality gaps still need a fresh research round", async () => {
@@ -385,8 +407,8 @@ test("dashboard renders actual trust reasons with friendly mode labels", async (
     commands: [],
   });
 
-  assert.equal(queryById("trust-strip"), null);
-  assert.equal(dom.window.document.getElementById("trust-warnings"), null);
+  assert.equal(queryById("trust-strip") === null, true);
+  assert.equal(dom.window.document.getElementById("trust-warnings") === null, true);
   assert.match(viewModel.trustState.reasons.join("\n"), /Working tree is dirty/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Corrupt autoresearch\.jsonl/);
   assert.match(viewModel.trustState.reasons.join("\n"), /Last-run packet is stale/);

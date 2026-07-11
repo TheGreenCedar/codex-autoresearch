@@ -544,8 +544,8 @@ test("dashboard does not label raw score metrics as baseline time", async () => 
 
   const { queryById, getById } = await runDashboard(entries, emptyCommandMeta());
 
-  assert.equal(queryById("metric-detail-baseline-time"), null);
-  assert.equal(queryById("metric-detail-baseline-value"), null);
+  assert.equal(queryById("metric-detail-baseline-time") === null, true);
+  assert.equal(queryById("metric-detail-baseline-value") === null, true);
   assert.match(getById("metric-construction-inputs").textContent, /primary: pipeline_score/);
   assert.match(getById("metric-detail-primary").textContent || "", /873608.88points/);
 });

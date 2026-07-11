@@ -7,13 +7,17 @@ export function DecisionRail({
   readout,
   viewModel,
   mode,
+  auditView,
 }: {
   readout: DashboardReadout;
   viewModel: DashboardViewModel;
   mode: DashboardMode;
+  auditView: boolean;
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
-  const envelope = recordFrom(viewModel.decisionEnvelopeSummary);
+  const summary = recordFrom(viewModel.decisionEnvelopeSummary);
+  const envelope = recordFrom(viewModel.decisionEnvelope);
+  const operatorDecision = operatorDecisionFor({ action, envelope, readout, summary });
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
@@ -41,60 +45,87 @@ export function DecisionRail({
       <div className="decision-copy">
         <p className="eyebrow">Safe next step</p>
         <h2 id="next-action-title">Do this first</h2>
-        <div className="decision-envelope-card" id="decision-envelope-summary">
-          <span>Decision basis</span>
-          <strong>{String(envelope.title || action.title || "Next action")}</strong>
-          <em>
-            {[
-              envelope.kind ? `source: ${envelope.kind}` : "",
-              envelope.fresh === false
-                ? "stale packet"
-                : envelope.fresh === true
-                  ? "fresh packet"
-                  : "",
-              typeof envelope.measurementRuns === "number"
-                ? `${envelope.measurementRuns} measurement${envelope.measurementRuns === 1 ? "" : "s"}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" / ")}
-          </em>
+        <div id="decision-envelope-summary">
+          <p className="decision-title" id="decision-title">
+            {operatorDecision.title}
+          </p>
+          <dl className="operator-decision-summary">
+            <div data-decision-field="status">
+              <dt>Status</dt>
+              <dd id="decision-status">{operatorDecision.status}</dd>
+            </div>
+            <div data-decision-field="blocker">
+              <dt>Blocker</dt>
+              <dd id="decision-blocker">{operatorDecision.blocker}</dd>
+            </div>
+            <div data-decision-field="action">
+              <dt>Next action</dt>
+              <dd id="next-action-detail">{operatorDecision.action}</dd>
+            </div>
+            <div data-decision-field="command">
+              <dt>Command</dt>
+              <dd id="decision-next-command">
+                {operatorDecision.command ? (
+                  <code translate="no">{operatorDecision.command}</code>
+                ) : (
+                  "Continue in the CLI; this readout exposes no safe command."
+                )}
+              </dd>
+            </div>
+          </dl>
         </div>
-        <p id="next-action-detail" className="next-action-text">
-          {readout.nextAction ||
-            action.detail ||
-            "No next step recorded yet. Run a packet to generate one."}
-        </p>
-        <div className="evidence-chips" id="decision-evidence-chips" aria-label="Decision evidence">
-          {chips.map((chip) => (
-            <span
-              className={`evidence-chip ${chip.tone || "neutral"} evidence-${chip.status}`}
-              data-evidence-status={chip.status}
-              key={`${chip.label}-${chip.value}`}
-            >
-              <strong>{chip.label}</strong>
-              <em>{chip.value}</em>
-            </span>
-          ))}
-        </div>
-        <div className="readout-facts">
-          <span className="readout-label">Best result so far</span>
-          <strong id="best-kept-detail">
-            {readout.bestRun?.description || "No kept result yet."}
-          </strong>
-          <span className="readout-label">Most recent setback</span>
-          <strong id="recent-failure-detail">
-            {readout.latestFailure?.description || "No recent failure."}
-          </strong>
-        </div>
-        <DecisionCopyActions
-          reportCopied={reportCopy.copied}
-          handoffCopied={handoffCopy.copied}
-          copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
-          copyHandoff={() =>
-            handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
-          }
-        />
+        <details className="decision-details" open={auditView}>
+          <summary>{auditView ? "Canonical decision details" : "Why this action"}</summary>
+          <div className="decision-envelope-card">
+            <span>Canonical decision</span>
+            <strong>{String(summary.title || action.title || "Next action")}</strong>
+            <em>{canonicalDecisionMeta(summary)}</em>
+          </div>
+          <div
+            className="evidence-chips"
+            id="decision-evidence-chips"
+            aria-label="Decision evidence"
+          >
+            {chips.map((chip) => (
+              <span
+                className={`evidence-chip ${chip.tone || "neutral"} evidence-${chip.status}`}
+                data-evidence-status={chip.status}
+                key={`${chip.label}-${chip.value}`}
+              >
+                <strong>{chip.label}</strong>
+                <em>{chip.value}</em>
+              </span>
+            ))}
+          </div>
+          <div className="readout-facts">
+            <span className="readout-label">Best result so far</span>
+            <strong id="best-kept-detail">
+              {readout.bestRun?.description || "No kept result yet."}
+            </strong>
+            <span className="readout-label">Most recent setback</span>
+            <strong id="recent-failure-detail">
+              {readout.latestFailure?.description || "No recent failure."}
+            </strong>
+          </div>
+          <div className="decision-list" aria-label="Recent decision history">
+            {railItems.map((item) => (
+              <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
+                <span>{item.id}</span>
+                <strong>{item.title}</strong>
+                {item.id === "Start" ? <span aria-hidden="true">. </span> : null}
+                <em>{item.detail}</em>
+              </div>
+            ))}
+          </div>
+          <DecisionCopyActions
+            reportCopied={reportCopy.copied}
+            handoffCopied={handoffCopy.copied}
+            copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
+            copyHandoff={() =>
+              handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
+            }
+          />
+        </details>
         <div className="decision-meta">
           <span>{action.utilityCopy || readout.confidenceText}</span>
           <span
@@ -108,18 +139,66 @@ export function DecisionRail({
           </span>
         </div>
       </div>
-      <div className="decision-list" aria-label="Recent decision history">
-        {railItems.map((item) => (
-          <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
-            <span>{item.id}</span>
-            <strong>{item.title}</strong>
-            {item.id === "Start" ? <span aria-hidden="true">. </span> : null}
-            <em>{item.detail}</em>
-          </div>
-        ))}
-      </div>
     </section>
   );
+}
+
+function operatorDecisionFor({
+  action,
+  envelope,
+  readout,
+  summary,
+}: {
+  action: NextBestAction;
+  envelope: Record<string, unknown>;
+  readout: DashboardReadout;
+  summary: Record<string, unknown>;
+}) {
+  const actionRecord = action as Record<string, unknown>;
+  const primaryCommand = recordFrom(actionRecord.primaryCommand);
+  return {
+    title: String(summary.title || action.title || "Review the next safe step"),
+    status: operatorStatus(envelope.resolvedStatus, summary.kind),
+    blocker:
+      cleanText(envelope.strongestBlocker) ||
+      (String(envelope.resolvedStatus || "").toLowerCase() === "blocked"
+        ? "Review the blocking evidence before continuing."
+        : "No blocker reported."),
+    action:
+      cleanText(summary.detail) ||
+      cleanText(action.detail) ||
+      cleanText(readout.nextAction) ||
+      "Run a packet to generate the next measured step.",
+    command:
+      cleanText(summary.command) ||
+      cleanText(actionRecord.command) ||
+      cleanText(primaryCommand.command),
+  };
+}
+
+function operatorStatus(value: unknown, kind: unknown) {
+  const status = cleanText(value).toLowerCase();
+  if (status === "blocked") return "Blocked";
+  if (status === "ready") return "Ready to continue";
+  if (status === "complete") return "Ready for review";
+  if (!["", "continue", "baseline"].includes(cleanText(kind).toLowerCase())) return "Blocked";
+  return "Needs review";
+}
+
+function canonicalDecisionMeta(summary: Record<string, unknown>) {
+  return [
+    summary.kind ? `kind: ${summary.kind}` : "",
+    summary.fresh === false ? "stale packet" : summary.fresh === true ? "fresh packet" : "",
+    typeof summary.measurementRuns === "number"
+      ? `${summary.measurementRuns} measurement${summary.measurementRuns === 1 ? "" : "s"}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function cleanText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function DecisionCopyActions({

@@ -115,7 +115,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     liveActionsAvailable: false,
   });
   assert.ok(staticDashboard.dom.window.document.querySelector(".side-status .status-dot"));
-  assert.equal(staticDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.equal(
+    staticDashboard.dom.window.document.querySelector(".side-status .live-dot") === null,
+    true,
+  );
   assert.match(
     staticDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Static/,
@@ -128,7 +131,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     showcaseMode: true,
   });
   assert.ok(demoDashboard.dom.window.document.querySelector(".side-status .status-dot"));
-  assert.equal(demoDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.equal(
+    demoDashboard.dom.window.document.querySelector(".side-status .live-dot") === null,
+    true,
+  );
   assert.match(
     demoDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Demo/,
@@ -141,7 +147,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     liveActionsAvailable: false,
   });
   assert.ok(liveDashboard.dom.window.document.querySelector(".side-status .live-dot"));
-  assert.equal(liveDashboard.dom.window.document.querySelector(".side-status .status-dot"), null);
+  assert.equal(
+    liveDashboard.dom.window.document.querySelector(".side-status .status-dot") === null,
+    true,
+  );
   assert.match(
     liveDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Live/,
@@ -243,8 +252,8 @@ test("dashboard surfaces generated suspicious research reasons", async () => {
     viewModel,
   });
 
-  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
-  assert.equal(dom.window.document.getElementById("decision-suspicious-perfect"), null);
+  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning") === null, true);
+  assert.equal(dom.window.document.getElementById("decision-suspicious-perfect") === null, true);
   assert.match(String(viewModel.researchTruth.suspiciousReasons[0]), /no breadth evidence/);
 });
 
@@ -276,23 +285,17 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  assert.deepEqual(hrefs, [
-    "#trend-panel",
-    "#decision-rail",
-    "#codex-brief",
-    "#strategy-memory",
-    "#ledger",
-  ]);
+  assert.deepEqual(hrefs, ["#decision-rail", "#trend-panel", "#codex-brief", "#ledger"]);
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
-  assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  assert.deepEqual(sideLabels, ["1Move", "2Metric", "3Brief", "4Ledger"]);
   const sideAriaLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.getAttribute("aria-label"),
   );
   assert.deepEqual(sideAriaLabels, [
-    "Dashboard section: Metric",
     "Dashboard section: Move",
+    "Dashboard section: Metric",
     "Dashboard section: Brief",
     "Dashboard section: Ledger",
   ]);
@@ -303,7 +306,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     true,
   );
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
-  assert.equal(dom.window.document.querySelector(".masthead"), null);
+  assert.equal(dom.window.document.querySelector(".masthead") === null, true);
   const decisionRail = dom.window.document.getElementById("decision-rail");
   const trendPanel = dom.window.document.getElementById("trend-panel");
   const scoreStrip = dom.window.document.querySelector(".score-strip");
@@ -312,16 +315,16 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     dom.window.document.getElementById("next-action-title")?.textContent,
     "Do this first",
   );
-  assert.equal(dom.window.document.getElementById("decision-next-command"), null);
+  assert.ok(dom.window.document.getElementById("decision-next-command"));
   assert.ok(trendPanel);
   assert.ok(scoreStrip);
   assert.equal(
     Boolean(
-      trendPanel.compareDocumentPosition(decisionRail) &
+      decisionRail.compareDocumentPosition(trendPanel) &
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the Packet trend before the next action.",
+    "Operate view should show the next action before the Packet trend.",
   );
   assert.equal(
     Boolean(
@@ -446,7 +449,7 @@ test("dashboard keeps navigation targets visible when the ledger is empty", asyn
     dom.window.document.querySelector(".ledger-empty")?.textContent?.trim(),
     "No ledger yet. First safe move: capture a baseline measurement.",
   );
-  assert.equal(dom.window.document.getElementById("ledger-scroll"), null);
+  assert.equal(dom.window.document.getElementById("ledger-scroll") === null, true);
 
   const links = [
     ...dom.window.document.querySelectorAll(".skip-links a, .side-nav a"),
@@ -483,7 +486,7 @@ test("dashboard uses calm read-only and empty-ledger copy", async () => {
     ledgerEmpty?.textContent?.trim(),
     "No ledger yet. First safe move: capture a baseline measurement.",
   );
-  assert.equal(skipLabels[0], "Packet trend");
+  assert.equal(skipLabels[0], "Next action");
   assert.equal(skipLabels.includes("Run chart"), false);
   dom.window.close();
 });

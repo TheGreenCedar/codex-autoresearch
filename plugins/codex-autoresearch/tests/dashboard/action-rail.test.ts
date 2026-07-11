@@ -236,7 +236,9 @@ test("dashboard ledger uses native table semantics", async () => {
   assert.equal(table?.querySelector("thead")?.tagName, "THEAD");
   assert.equal(getById("ledger-body").tagName, "TBODY");
   assert.equal(table?.querySelector("tr.ledger-row")?.tagName, "TR");
-  assert.equal(table?.querySelector("[role=table],[role=row],[role=cell]"), null);
+  assert.equal(table?.querySelector("[role=table],[role=row],[role=cell]") == null, true);
+  assert.equal(table?.querySelectorAll("colgroup col").length, 4);
+  assert.ok(table?.querySelector(".metric-stack"));
 });
 
 test("dashboard segment transition command matches its safe action metadata", () => {
@@ -503,7 +505,6 @@ test("dashboard view model and rail expose the authoritative decision envelope",
   assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
   assert.match(getById("decision-rail").textContent, /Last-run packet is stale/);
   assert.doesNotMatch(getById("v2-release-signals").textContent || "", /Last-run packet is stale/);
-  assert.match(getById("decision-envelope-summary").textContent, /1 measurement/);
   assert.match(getById("ledger-body").textContent, /Measurement/);
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
 });

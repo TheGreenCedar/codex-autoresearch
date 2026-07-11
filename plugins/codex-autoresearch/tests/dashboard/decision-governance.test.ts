@@ -537,13 +537,13 @@ test("dashboard distinguishes static snapshots from served readouts", async () =
   });
 
   assert.ok(getById("dashboard-toolbar"));
-  assert.equal(queryById("live-region"), null);
-  assert.equal(queryById("trust-strip"), null);
+  assert.equal(queryById("live-region") === null, true);
+  assert.equal(queryById("trust-strip") === null, true);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
-  assert.equal(queryById("mission-control-grid"), null);
-  assert.equal(queryById("live-actions-panel"), null);
-  assert.equal(queryById("log-decision-panel"), null);
+  assert.equal(queryById("mission-control-grid") === null, true);
+  assert.equal(queryById("live-actions-panel") === null, true);
+  assert.equal(queryById("log-decision-panel") === null, true);
 });
 
 test("dashboard keeps static exports read-only when served over HTTP", async () => {
@@ -582,13 +582,16 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   );
 
   assert.ok(getById("dashboard-toolbar"));
-  assert.equal(queryById("live-region"), null);
+  assert.equal(queryById("live-region") === null, true);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
-  assert.equal(queryById("live-actions-panel"), null);
-  assert.equal(queryById("next-command-copy"), null);
-  assert.equal(queryById("decision-next-command"), null);
-  assert.equal(dom.window.document.querySelector(".mission-command"), null);
+  assert.equal(queryById("live-actions-panel") === null, true);
+  assert.equal(queryById("next-command-copy") === null, true);
+  assert.equal(
+    queryById("decision-next-command")?.textContent?.trim(),
+    "node scripts/autoresearch.mjs finalize-preview --cwd .",
+  );
+  assert.equal(dom.window.document.querySelector(".mission-command") === null, true);
   dom.window.close();
 });
 
@@ -644,14 +647,14 @@ test("showcase dashboard labels explicit demo provenance while keeping diagnosti
   assert.match(getById("live-detail").textContent || "", /Showcase provenance: explicit demo data/);
   assert.equal(getById("refresh-now").hidden, true);
   assert.equal(getById("live-toggle").hidden, true);
-  assert.equal(queryById("trust-strip"), null);
+  assert.equal(queryById("trust-strip") === null, true);
   assert.equal(getById("side-mode-detail").textContent, "Showcase Data");
   assert.equal(
     getById("next-action-detail").textContent,
     "Check memory footprint before keeping the path.",
   );
   assert.equal(getById("decision-evidence-chips").textContent.includes("Needs attention"), false);
-  assert.equal(queryById("live-actions-panel"), null);
+  assert.equal(queryById("live-actions-panel") === null, true);
 });
 
 test("served dashboard exposes live refresh but no command-center controls", async () => {
@@ -707,17 +710,18 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.ok(getById("dashboard-toolbar"));
   assert.equal(getById("live-title").textContent, "Live Readout");
   assert.match(getById("live-detail").textContent || "", /refresh the view model/);
-  assert.equal(queryById("trust-strip"), null);
+  assert.equal(queryById("trust-strip") === null, true);
   assert.equal(getById("refresh-now").textContent, "Refresh Readout");
   assert.equal(getById("live-toggle").textContent, "Pause Refresh");
   assert.equal(getById("live-toggle").getAttribute("aria-pressed"), "true");
   assert.equal(getById("refresh-now").hidden, false);
   assert.equal(getById("live-toggle").hidden, false);
-  assert.equal(queryById("action-note"), null);
-  assert.equal(queryById("live-actions-panel"), null);
-  assert.equal(queryById("mission-control-grid"), null);
-  assert.equal(queryById("action-grid"), null);
-  assert.equal(getById("mission-control").querySelector(".mission-command"), null);
+  assert.equal(queryById("action-note") === null, true);
+  assert.equal(queryById("live-actions-panel") === null, true);
+  assert.equal(queryById("mission-control-grid") === null, true);
+  assert.equal(queryById("action-grid") === null, true);
+  assert.equal(queryById("mission-control") === null, true);
+  assert.match(getById("decision-next-command").textContent || "", /finalize-preview/);
 });
 
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
@@ -814,11 +818,11 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
     { url: "http://127.0.0.1/?view=audit" },
   );
 
-  assert.equal(queryById("trust-strip"), null);
-  assert.equal(dom.window.document.getElementById("trust-warnings"), null);
+  assert.equal(queryById("trust-strip") === null, true);
+  assert.equal(dom.window.document.getElementById("trust-warnings") === null, true);
   assert.equal(getById("research-truth-title").textContent, "Truth pass complete");
   assert.equal(getById("research-truth-bar").getAttribute("aria-valuenow"), "100");
-  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
+  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning") === null, true);
   assert.match(getById("decision-evidence-chips").textContent, /Exploratory/);
   assert.match(getById("decision-evidence-chips").textContent, /Repeat is missing/);
   assert.match(getById("decision-evidence-chips").textContent, /4\.2s beats baseline/);
@@ -838,8 +842,18 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
   assert.match(provenance.textContent || "", /C:\/repo\/with\/a\/very\/long\/path/);
 });
 
-test("dashboard keeps the chart first while rendering v2 readiness signals", async () => {
+test("dashboard keeps one canonical decision first in operate and audit views", async () => {
   const viewModel = {
+    decisionEnvelope: {
+      resolvedStatus: "blocked",
+      strongestBlocker: "Promotion proof is missing.",
+    },
+    decisionEnvelopeSummary: {
+      kind: "gate-quality",
+      title: "Repeat the best packet",
+      detail: "Confirm the kept path before promotion.",
+      command: "node scripts/autoresearch.mjs state --cwd . --compact",
+    },
     nextBestAction: {
       priority: "Next move",
       title: "Repeat the best packet",
@@ -877,6 +891,7 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
+  const primaryReadouts = [];
 
   for (const view of ["audit", "operate"]) {
     const { dom, getById, queryById } = await runDashboard(
@@ -900,29 +915,43 @@ test("dashboard keeps the chart first while rendering v2 readiness signals", asy
     assert.match(decision.textContent || "", /Repeat the best packet/);
     assert.match(signalStrip.textContent, /2 current \/ 1 provisional \/ 1 audit-only/);
     assert.match(signalStrip.textContent, /1 active \/ 0 done/);
-    assert.equal(signalStrip.querySelector("button"), null);
+    assert.equal(signalStrip.querySelector("button") === null, true);
+    assert.equal(signalStrip.querySelectorAll("details.signal-item").length, 4);
+    assert.equal(signalStrip.querySelector(".signal-item[title]") === null, true);
     assert.ok(
-      chart.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "decision rail should render after the chart",
+      decision.compareDocumentPosition(chart) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "decision rail should render before the chart",
     );
     assert.ok(
-      details.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "decision rail should render after metric details, outside the chart panel",
+      decision.compareDocumentPosition(details) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "decision rail should render before metric details, outside the chart panel",
     );
     assert.ok(
-      decision.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "readiness signals should render after the decision rail",
+      chart.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      "readiness signals should render after the chart",
+    );
+    primaryReadouts.push(
+      ["decision-status", "decision-blocker", "next-action-detail", "decision-next-command"].map(
+        (id) => getById(id).textContent?.trim(),
+      ),
     );
     if (view === "operate") {
-      assert.equal(queryById("workspace-grid"), null);
-      assert.equal(queryById("strategy-memory"), null);
+      assert.equal(queryById("workspace-grid") === null, true);
+      assert.equal(queryById("strategy-memory") === null, true);
     } else {
       assert.ok(getById("strategy-memory"));
     }
   }
+  assert.deepEqual(primaryReadouts[0], primaryReadouts[1]);
+  assert.deepEqual(primaryReadouts[0], [
+    "Blocked",
+    "Promotion proof is missing.",
+    "Confirm the kept path before promotion.",
+    "node scripts/autoresearch.mjs state --cwd . --compact",
+  ]);
 });
 
-test("mobile audit dashboard keeps next action below chart content", async () => {
+test("mobile audit dashboard keeps the canonical next action before chart content", async () => {
   const viewModel = {
     nextBestAction: {
       title: "Preview finalization",
@@ -951,19 +980,19 @@ test("mobile audit dashboard keeps next action below chart content", async () =>
     "utf8",
   );
 
-  assert.equal(dom.window.document.getElementById("mobile-next-action"), null);
-  assert.equal(signalStrip.querySelector("button"), null);
+  assert.equal(dom.window.document.getElementById("mobile-next-action") === null, true);
+  assert.equal(signalStrip.querySelector("button") === null, true);
   assert.match(decision.textContent || "", /Preview finalization/);
   assert.match(decision.textContent || "", /Do not run another packet/);
   assert.doesNotMatch(signalStrip.textContent || "", /Preview finalization/);
   assert.doesNotMatch(signalStrip.textContent || "", /Do not run another packet/);
   assert.ok(
-    chart.compareDocumentPosition(decision) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-    "decision rail should appear after chart content in audit DOM order",
+    decision.compareDocumentPosition(chart) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "decision rail should appear before chart content in audit DOM order",
   );
   assert.ok(
-    decision.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-    "readiness signals should stay below the decision rail",
+    chart.compareDocumentPosition(signalStrip) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    "readiness signals should stay below the chart",
   );
   assert.doesNotMatch(css, /\.mobile-next-action\b/);
   dom.window.close();

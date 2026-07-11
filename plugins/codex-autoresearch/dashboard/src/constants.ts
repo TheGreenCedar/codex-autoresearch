@@ -22,4 +22,4 @@ export const LEDGER_VISIBLE_ROWS = 16;
 
 export const DASHBOARD_VIEWS = ["operate", "audit"] as const;
 export type DashboardView = (typeof DASHBOARD_VIEWS)[number];
-export const DEFAULT_DASHBOARD_VIEW: DashboardView = "audit";
+export const DEFAULT_DASHBOARD_VIEW: DashboardView = "operate";

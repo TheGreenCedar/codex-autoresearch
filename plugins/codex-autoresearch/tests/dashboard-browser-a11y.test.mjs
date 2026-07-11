@@ -6,7 +6,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const screenshotPath = path.join(pluginRoot, "tmp", "dashboard-browser-a11y-modal.png");
@@ -15,6 +15,12 @@ const payloadFailureScreenshotPath = path.join(
   "tmp",
   "dashboard-browser-payload-failure.png",
 );
+const decisionDesktopScreenshotPath = path.join(
+  pluginRoot,
+  "tmp",
+  "dashboard-decision-desktop.png",
+);
+const decisionMobileScreenshotPath = path.join(pluginRoot, "tmp", "dashboard-decision-mobile.png");
 
 test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
   const browserExecutable = resolveBrowserExecutable();
@@ -25,6 +31,9 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
 
   const fixture = await dashboardHtml();
   const server = await serveHtml(fixture.html, fixture.failureHtml, fixture.livePayload);
+  const staticFixtureDir = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-static-"));
+  const staticFixturePath = path.join(staticFixtureDir, "autoresearch-dashboard.html");
+  await writeFile(staticFixturePath, fixture.staticHtml);
   let browser;
 
   try {
@@ -45,6 +54,114 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         "() => document.querySelector('#ledger-body')?.textContent?.includes('#5001')",
         "Live refresh did not render run #5001.",
       );
+      const canonicalOperateDecision = await decisionViewportState(client, page.sessionId);
+      assert.equal(canonicalOperateDecision.audit, false);
+      assert.equal(canonicalOperateDecision.visible, true);
+      assert.equal(canonicalOperateDecision.status, "Blocked");
+      assert.equal(canonicalOperateDecision.blocker, "Promotion proof is missing.");
+      await captureScreenshot(client, page.sessionId, decisionDesktopScreenshotPath);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
+        page.sessionId,
+      );
+      const initialMobileDecision = await decisionViewportState(client, page.sessionId);
+      assert.equal(initialMobileDecision.visible, true);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await captureScreenshot(client, page.sessionId, decisionMobileScreenshotPath);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false },
+        page.sessionId,
+      );
+
+      await evaluate(client, page.sessionId, "document.querySelector('#view-toggle').click()");
+      await waitForSelector(client, page.sessionId, "#workspace-grid");
+      const canonicalAuditDecision = await decisionViewportState(client, page.sessionId);
+      assert.deepEqual(
+        canonicalAuditDecision.fields,
+        canonicalOperateDecision.fields,
+        "Operate and audit views diverged from the canonical decision.",
+      );
+      await evaluate(
+        client,
+        page.sessionId,
+        "document.querySelector('details.signal-item summary').focus()",
+      );
+      await pressKey(client, page.sessionId, "Enter");
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('details.signal-item')?.open === true",
+        "Signal details did not open from the keyboard.",
+      );
+      const signalDetails = await evaluate(
+        client,
+        page.sessionId,
+        "document.querySelector('details.signal-item p')?.textContent?.trim() || ''",
+      );
+      assert.ok(signalDetails, "Signal details were not visibly available without hover.");
+      await evaluate(client, page.sessionId, "document.querySelector('#view-toggle').click()");
+      await waitForNoSelector(client, page.sessionId, "#workspace-grid");
+
+      await evaluate(
+        client,
+        page.sessionId,
+        "document.querySelector('#refresh-now').focus(); document.querySelector('#refresh-now').click()",
+      );
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('#refresh-now')?.disabled === true",
+        "Manual refresh did not expose its busy state.",
+      );
+      const refreshing = await evaluate(
+        client,
+        page.sessionId,
+        `(() => ({
+          busy: document.querySelector('main')?.getAttribute('aria-busy'),
+          disabled: document.querySelector('#refresh-now')?.disabled,
+          detail: document.querySelector('#live-detail')?.textContent?.trim() || '',
+          title: document.querySelector('#live-title')?.textContent?.trim() || ''
+        }))()`,
+      );
+      assert.equal(refreshing.busy, "true");
+      assert.equal(refreshing.disabled, true);
+      assert.match(refreshing.title, /Refreshing/);
+      assert.match(refreshing.detail, /Last validated/);
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('#refresh-now')?.disabled === false",
+        "Manual refresh did not settle.",
+      );
+      await waitForActiveElement(client, page.sessionId, "#refresh-now");
+      const lastGood = await evaluate(
+        client,
+        page.sessionId,
+        "document.querySelector('#last-good-status strong')?.textContent?.trim() || ''",
+      );
+      assert.notEqual(lastGood, "Initial snapshot");
+
+      await evaluate(client, page.sessionId, "document.querySelector('#refresh-now').click()");
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('#live-region')?.getAttribute('role') === 'alert'",
+        "Refresh failure did not become an alert.",
+      );
+      const failedRefresh = await evaluate(
+        client,
+        page.sessionId,
+        `(() => ({
+          busy: document.querySelector('main')?.getAttribute('aria-busy'),
+          detail: document.querySelector('#live-detail')?.textContent?.trim() || '',
+          runs: document.querySelector('#runs-value')?.textContent?.trim() || ''
+        }))()`,
+      );
+      assert.equal(failedRefresh.busy, "false");
+      assert.match(failedRefresh.detail, /last known valid readout, validated/i);
+      assert.match(failedRefresh.runs, /5001/);
       const initialLedger = await evaluate(
         client,
         page.sessionId,
@@ -57,6 +174,20 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       assert.equal(initialLedger.rows, 100);
       assert.equal(initialLedger.loadText, "Load 100 older");
       assert.equal(initialLedger.tabbablePoints, 1);
+      const ledgerGeometry = await evaluate(
+        client,
+        page.sessionId,
+        `(() => [...document.querySelectorAll('#ledger-body tr')].slice(0, 20).map((row) => {
+          const cells = row.querySelectorAll('td');
+          const metric = cells[2].querySelector('.metric-stack').getBoundingClientRect();
+          const description = cells[3].getBoundingClientRect();
+          return { metricRight: metric.right, descriptionLeft: description.left };
+        }))()`,
+      );
+      assert.ok(
+        ledgerGeometry.every((row) => row.metricRight <= row.descriptionLeft + 0.5),
+        JSON.stringify(ledgerGeometry),
+      );
 
       await evaluate(
         client,
@@ -139,6 +270,26 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       );
       assert.deepEqual(mobile, { noPageOverflow: true, shellFits: true });
 
+      const staticPage = await openPage(client, pathToFileURL(staticFixturePath).href);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false },
+        staticPage.sessionId,
+      );
+      await waitForPageReady(client, staticPage.sessionId);
+      const staticShare = await evaluate(
+        client,
+        staticPage.sessionId,
+        `(() => ({
+          copyHidden: document.querySelector('#copy-dashboard-url')?.hidden,
+          guidance: document.querySelector('#static-share-guidance')?.textContent?.trim() || '',
+          localPathVisible: document.body.textContent.includes(location.href)
+        }))()`,
+      );
+      assert.equal(staticShare.copyHidden, true);
+      assert.equal(staticShare.localPathVisible, false);
+      assert.match(staticShare.guidance, /Share this HTML file/);
+
       const failurePage = await openPage(client, `${server.url}payload-missing.html`);
       await client.send(
         "Emulation.setDeviceMetricsOverride",
@@ -186,12 +337,17 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
 
       console.log(`ARTIFACT dashboard_browser_a11y_screenshot=${screenshotPath}`);
       console.log(`ARTIFACT dashboard_payload_failure_screenshot=${payloadFailureScreenshotPath}`);
+      console.log(
+        `ARTIFACT dashboard_decision_desktop_screenshot=${decisionDesktopScreenshotPath}`,
+      );
+      console.log(`ARTIFACT dashboard_decision_mobile_screenshot=${decisionMobileScreenshotPath}`);
     } finally {
       await client.close();
     }
   } finally {
     await browser?.close();
     await server.close();
+    await rm(staticFixtureDir, { recursive: true, force: true });
   }
 });
 
@@ -240,14 +396,22 @@ async function dashboardHtml() {
     liveActionsAvailable: false,
     refreshMs: 60_000,
     commands: [],
+    viewModel: dashboardViewModel(),
   };
-  const html = template
-    .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
-      JSON.stringify(entries).replaceAll("<", "\\u003c"),
-    )
-    .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replaceAll("<", "\\u003c"))
-    .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
-    .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+  const html = dashboardDocument(template, entries, meta, css, app);
+  const staticHtml = dashboardDocument(
+    template,
+    entries,
+    {
+      payloadVersion: 1,
+      deliveryMode: "static-export",
+      liveRefreshAvailable: false,
+      commands: [],
+      viewModel: dashboardViewModel(),
+    },
+    css,
+    app,
+  );
   const failureHtml = template
     .replace(
       /<script>\s*window\.__AUTORESEARCH_DATA__ = __AUTORESEARCH_DATA_PAYLOAD__;\s*window\.__AUTORESEARCH_META__ = __AUTORESEARCH_META_PAYLOAD__;\s*<\/script>/,
@@ -258,16 +422,55 @@ async function dashboardHtml() {
   return {
     failureHtml,
     html,
+    staticHtml,
     livePayload: {
       payloadVersion: 1,
       ledgerEntries: liveEntries,
       ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_001 },
       summary: { segment: 0, baseline: 5_001, best: 1, runs: 5_001 },
+      ...dashboardViewModel(),
     },
   };
 }
 
+function dashboardDocument(template, entries, meta, css, app) {
+  return template
+    .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
+      JSON.stringify(entries).replaceAll("<", "\\u003c"),
+    )
+    .replace("__AUTORESEARCH_META_PAYLOAD__", () => JSON.stringify(meta).replaceAll("<", "\\u003c"))
+    .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
+    .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+}
+
+function dashboardViewModel() {
+  return {
+    decisionEnvelope: {
+      resolvedStatus: "blocked",
+      strongestBlocker: "Promotion proof is missing.",
+    },
+    decisionEnvelopeSummary: {
+      kind: "gate-quality",
+      title: "Repeat the best packet",
+      detail: "Confirm the kept path before promotion.",
+      command: "node scripts/autoresearch.mjs state --cwd . --compact",
+    },
+    nextBestAction: {
+      title: "Repeat the best packet",
+      detail: "Confirm the kept path before promotion.",
+    },
+    evidenceReadout: { label: "promotion_eligible", title: "Promotion eligible", promotable: true },
+    evidenceLedger: {
+      counts: { accepted: 4_500, provisional: 1, rejected: 500, superseded: 0 },
+      acceptedCurrent: 4_500,
+    },
+    finalizationPressure: { status: "medium", recommendation: "Repeat first." },
+    watchdogSummary: { status: "tracking", recommendation: "Continue from the decision." },
+  };
+}
+
 async function serveHtml(html, failureHtml, livePayload) {
+  let liveRequestCount = 0;
   const server = http.createServer((request, response) => {
     if (request.url === "/" || request.url === "/index.html") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -280,6 +483,19 @@ async function serveHtml(html, failureHtml, livePayload) {
       return;
     }
     if (request.url === "/view-model.json") {
+      liveRequestCount += 1;
+      if (liveRequestCount === 2) {
+        setTimeout(() => {
+          response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify(livePayload));
+        }, 300);
+        return;
+      }
+      if (liveRequestCount >= 3) {
+        response.writeHead(503, { "content-type": "application/json; charset=utf-8" });
+        response.end(JSON.stringify({ message: "Fixture refresh failed.", retryable: false }));
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       response.end(JSON.stringify(livePayload));
       return;
@@ -294,6 +510,25 @@ async function serveHtml(html, failureHtml, livePayload) {
     url: `http://127.0.0.1:${address.port}/`,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
+}
+
+async function decisionViewportState(client, sessionId) {
+  return evaluate(
+    client,
+    sessionId,
+    `(() => {
+      const rail = document.querySelector('#decision-rail').getBoundingClientRect();
+      const summary = document.querySelector('#decision-envelope-summary').getBoundingClientRect();
+      const field = (id) => document.querySelector('#' + id)?.textContent?.trim() || '';
+      return {
+        audit: document.querySelector('#view-toggle')?.getAttribute('aria-pressed') === 'true',
+        blocker: field('decision-blocker'),
+        fields: ['decision-status', 'decision-blocker', 'next-action-detail', 'decision-next-command'].map(field),
+        status: field('decision-status'),
+        visible: rail.top >= 0 && summary.top >= 0 && summary.bottom <= innerHeight
+      };
+    })()`,
+  );
 }
 
 function resolveBrowserExecutable() {

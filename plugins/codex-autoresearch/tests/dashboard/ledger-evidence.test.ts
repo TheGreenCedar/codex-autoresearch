@@ -168,7 +168,7 @@ test("dashboard rejects malformed injected ledger entries", async () => {
   );
 
   assert.match(getById("payload-failure-reason").textContent || "", /invalid status/);
-  assert.equal(queryById("ledger-body"), null);
+  assert.equal(queryById("ledger-body") === null, true);
 });
 
 test("dashboard rejects unknown explicit ledger entry types before rendering evidence", async () => {
@@ -181,7 +181,7 @@ test("dashboard rejects unknown explicit ledger entry types before rendering evi
   );
 
   assert.match(getById("payload-failure-reason").textContent || "", /invalid auxiliary/);
-  assert.equal(queryById("ledger-body"), null);
+  assert.equal(queryById("ledger-body") === null, true);
 });
 
 test("dashboard labels bounded static export ledgers as partial", async () => {

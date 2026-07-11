@@ -51,13 +51,13 @@ node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --de
 
 The five statuses have deliberately narrow meanings:
 
-| Status | When it fits |
-| --- | --- |
-| `measure` | A baseline, environment check, no-change result, or diagnostic. It never commits or reverts work. |
-| `keep` | The metric is finite, required checks passed, and the scoped change is worth preserving. |
-| `discard` | The packet measured successfully, but the change is not worth keeping. Logging may clean the configured or explicit experiment paths. |
-| `crash` | The benchmark failed before it produced usable metric evidence. Logging may clean the configured or explicit experiment paths. |
-| `checks_failed` | A metric exists, but the correctness check failed. Logging may clean the configured or explicit experiment paths. |
+| Status          | When it fits                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `measure`       | A baseline, environment check, no-change result, or diagnostic. It never commits or reverts work.                                     |
+| `keep`          | The metric is finite, required checks passed, and the scoped change is worth preserving.                                              |
+| `discard`       | The packet measured successfully, but the change is not worth keeping. Logging may clean the configured or explicit experiment paths. |
+| `crash`         | The benchmark failed before it produced usable metric evidence. Logging may clean the configured or explicit experiment paths.        |
+| `checks_failed` | A metric exists, but the correctness check failed. Logging may clean the configured or explicit experiment paths.                     |
 
 Pass `--revert-paths` when the cleanup scope should be narrower than configured commit paths. Check `git status --short --branch` before logging any status that may mutate Git.
 
@@ -134,5 +134,7 @@ node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
 The printed loopback URL shows live state. `export` writes a static snapshot that is useful for review but cannot prove the current packet is fresh. Neither form runs experiments or changes the session.
+
+The live readout opens in the focused operate view: read status, blocker, next action, and safe command first. Switch to audit only when you need the deeper evidence trail; both views project the same decision. During refresh, the existing evidence remains visible with its last validated time. A refresh failure leaves that last known good readout in place. Static exports provide file-sharing guidance instead of presenting a local `file://` path as a shareable URL.
 
 Once accepted work is starting to pile up, stop adding packets and move to [Finish](finish.md).

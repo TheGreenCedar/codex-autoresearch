@@ -691,9 +691,9 @@ test("dashboard includes segment controls and visual-aid layout", async () => {
     assert.ok(doc.getElementById("ledger-scroll"));
     assert.match(doc.body.textContent, /Codex brief/);
     assert.ok(doc.getElementById("ai-summary-title"));
-    assert.equal(doc.getElementById("mission-control-grid"), null);
-    assert.equal(doc.getElementById("run-log-decision"), null);
-    assert.equal(doc.getElementById("trust-strip"), null);
+    assert.equal(doc.getElementById("mission-control-grid") === null, true);
+    assert.equal(doc.getElementById("run-log-decision") === null, true);
+    assert.equal(doc.getElementById("trust-strip") === null, true);
     assert.match(dashboard, /__AUTORESEARCH_META__/);
     assert.doesNotMatch(dashboard, /clipboard\?\.writeText/);
     assert.doesNotMatch(dashboard, /autoresearch\.mjs/);

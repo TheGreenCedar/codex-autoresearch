@@ -52,7 +52,6 @@ interface UseLiveDashboardArgs {
   setEntries: Dispatch<SetStateAction<DashboardEntry[]>>;
   setMeta: Dispatch<SetStateAction<DashboardMeta>>;
   setViewModel: Dispatch<SetStateAction<DashboardViewModel>>;
-  viewModel: DashboardViewModel;
 }
 
 export function useLiveDashboard({
@@ -66,9 +65,8 @@ export function useLiveDashboard({
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => liveStatusFor(mode, meta));
   const [liveEnabled, setLiveEnabled] = useState(liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
-  const [lastError, setLastError] = useState<string | null>(null);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const latestRefreshId = useRef(0);
+  const [lastGoodAt, setLastGoodAt] = useState<string | null>(() => meta.generatedAt || null);
+  const lastGoodAtRef = useRef<string | null>(meta.generatedAt || null);
   const activeAbortController = useRef<AbortController | null>(null);
   const lastAutoAnnouncementAt = useRef(0);
 
@@ -78,19 +76,20 @@ export function useLiveDashboard({
         setLiveStatus(refreshUnavailableStatus());
         return;
       }
-      const refreshId = latestRefreshId.current + 1;
-      latestRefreshId.current = refreshId;
-      activeAbortController.current?.abort();
+      if (activeAbortController.current) return;
       const controller = typeof AbortController === "function" ? new AbortController() : null;
       activeAbortController.current = controller;
-      const isLatestRefresh = () => refreshId === latestRefreshId.current;
+      let settledState: "idle" | "error" = "idle";
       try {
         setRefreshState("refreshing");
-        setLastError(null);
+        if (source === "manual") {
+          setLiveStatus(refreshingStatus(lastGoodAtRef.current));
+        }
         const snapshot = await fetchLiveDashboardSnapshot(controller?.signal ?? null);
-        if (!isLatestRefresh()) return;
         setEntries(snapshot.entries);
         setViewModel(snapshot.viewModel);
+        lastGoodAtRef.current = snapshot.generatedAt;
+        setLastGoodAt(snapshot.generatedAt);
         setMeta((current) => ({
           ...current,
           viewModel: snapshot.viewModel,
@@ -101,18 +100,17 @@ export function useLiveDashboard({
           if (source === "auto") lastAutoAnnouncementAt.current = Date.now();
           setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
         }
-        setRefreshState("idle");
-        setRefreshGeneration((value) => value + 1);
       } catch (error) {
-        if (!isLatestRefresh() || isAbortError(error)) return;
-        const message = error instanceof Error ? error.message : String(error);
-        setLiveStatus(refreshFailureStatus(liveRefresh, message));
-        setRefreshState("error");
-        setLastError(message);
+        if (!isAbortError(error)) {
+          const message = error instanceof Error ? error.message : String(error);
+          setLiveStatus(refreshFailureStatus(liveRefresh, message, lastGoodAtRef.current));
+          settledState = "error";
+        }
       } finally {
         if (activeAbortController.current === controller) {
           activeAbortController.current = null;
         }
+        setRefreshState(settledState);
       }
     },
     [liveRefresh, refreshDone, setEntries, setMeta, setViewModel],
@@ -130,13 +128,21 @@ export function useLiveDashboard({
   }, [liveEnabled, meta.refreshMs, liveRefresh, refreshLiveData]);
 
   return {
+    lastGoodAt,
     liveEnabled,
     liveStatus,
     refreshState,
-    lastError,
-    refreshGeneration,
     refreshLiveData,
     setLiveEnabled,
+  };
+}
+
+function refreshingStatus(lastGoodAt: string | null): LiveStatus {
+  return {
+    title: "Refreshing readout…",
+    detail: lastGoodAt
+      ? `Current evidence stays visible. Last validated ${formatDisplayTime(lastGoodAt)}.`
+      : "Current evidence stays visible until the refresh is validated.",
   };
 }
 
@@ -191,10 +197,17 @@ function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveSta
   };
 }
 
-function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
+function refreshFailureStatus(
+  liveRefresh: boolean,
+  message: string,
+  lastGoodAt: string | null,
+): LiveStatus {
+  const retained = lastGoodAt
+    ? `Showing the last known valid readout, validated ${formatDisplayTime(lastGoodAt)}.`
+    : "Showing the initial validated readout as the last known valid readout.";
   return {
     title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
-    detail: `Showing the last known valid readout. ${message} Restart the Autoresearch CLI: serve --cwd <project>. Then reload.`,
+    detail: `${retained} ${message} Restart the Autoresearch CLI: serve --cwd <project>. Then reload.`,
   };
 }
 
