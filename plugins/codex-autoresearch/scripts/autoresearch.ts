@@ -26,7 +26,7 @@ import {
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
-import { createDoctorCommandService } from "../lib/commands/doctor.js";
+import { doctorSession as runDoctorSession, type DoctorRuntime } from "../lib/commands/doctor.js";
 import {
   compactPublicState as compactStateResponse,
   finalizationPressureForWorkDir as buildFinalizationPressureForWorkDir,
@@ -75,18 +75,15 @@ import {
 } from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
-import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
 import {
   buildSessionReadModel,
   buildSessionReadModelState,
-  projectDoctorReadModel,
   resolveSessionDecision,
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
-import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
   buildProtectedBenchmarkGuard,
   buildProtectedBenchmarkSnapshot,
@@ -126,10 +123,7 @@ import {
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
-import {
-  classifyPacketDiagnostics,
-  benchmarkContractDiagnostics,
-} from "../lib/packet-diagnostics.js";
+import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
   activeQualityGapSlugCandidatesSync,
   currentQualityGapSummary,
@@ -150,7 +144,6 @@ import {
   listBuiltInRecipes,
   loadRecipeCatalog,
   recommendRecipe,
-  revalidateRecipeCatalogProvenance,
 } from "../lib/recipes.js";
 import {
   parseMetricLines,
@@ -365,48 +358,25 @@ function stateRuntime(): StateRuntime {
   };
 }
 
-const doctorCommandService = createDoctorCommandService({
-  actionMessage,
-  benchmarkContractDiagnostics,
-  boolOption,
-  buildDecisionEnvelope,
-  buildDriftReport,
-  buildRunProgress,
-  commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
-  continuationCommands,
-  currentState,
-  decisionGuidance,
-  errorMessage,
-  finiteMetric,
-  fixedControlBlockForCommand,
-  insideGitRepo,
-  inspectRuntimeDrift,
-  latestBenchmarkContractEntry,
-  listOption,
-  loopContinuation,
-  metricParseSource,
-  missingBenchmarkCommandMessage,
-  numberOption,
-  packetEnvModeFromArgs,
-  parseMetricLines,
-  pluginRoot: PLUGIN_ROOT,
-  pluginVersion: PLUGIN_VERSION,
-  publicState,
-  projectDoctorReadModel,
-  redactCommandDisplay,
-  redactEvidenceObject,
-  revalidateRecipeCatalogProvenance,
-  resolveBenchmarkCommandSource,
-  resolveWorkDir,
-  runShell,
-  runtimeProvenance,
-  shouldSuppressPreflightGateBlockerForCapsule,
-  uniqueStrings,
-  withCanonicalActionCommand,
-});
-
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
-  return await doctorCommandService.doctorSession(args);
+  return await runDoctorSession(args, doctorRuntime());
+}
+
+function doctorRuntime(): DoctorRuntime {
+  return {
+    buildRunProgress,
+    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
+    decisionGuidance,
+    fixedControlBlockForCommand,
+    insideGitRepo,
+    latestBenchmarkContractEntry,
+    pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
+    publicState,
+    resolveBenchmarkCommandSource,
+    runtimeProvenance,
+    withCanonicalActionCommand,
+  };
 }
 const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
