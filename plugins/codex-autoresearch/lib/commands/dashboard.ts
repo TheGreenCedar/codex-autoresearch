@@ -8,8 +8,21 @@ import {
   writeServeRegistry,
 } from "../dashboard-server-registry.js";
 import { compactDashboardTransportViewModel } from "../dashboard-transport.js";
+import { dashboardHtml } from "../dashboard-transport.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
-import { sessionPathIdentity, type SessionPaths } from "../session-paths.js";
+import {
+  AUTORESEARCH_DASHBOARD_FILE,
+  resolveSessionPaths,
+  sessionPathIdentity,
+} from "../session-paths.js";
+import { boolOption } from "../cli/args.js";
+import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { buildDriftReport } from "../drift-doctor.js";
+import { foldDashboardLedger } from "../dashboard-ledger.js";
+import { resolvePathInsideRootSync } from "../path-containment.js";
+import { PLUGIN_VERSION } from "../plugin-version.js";
+import { resolvePackageRoot } from "../runtime-paths.js";
+import { createSessionReadCache } from "../session-core.js";
 
 type LooseObject = Record<string, any>;
 type DashboardCommandListOptions = {
@@ -19,33 +32,24 @@ type DashboardCommandListOptions = {
   workDir: string;
 };
 
-export interface DashboardCommandDeps {
-  boolOption: (value: unknown, fallback: boolean) => boolean;
-  buildDriftReport: (options: LooseObject) => Promise<LooseObject>;
-  createSessionReadCache?: (options?: LooseObject) => LooseObject;
+export interface DashboardRuntime {
+  buildDriftReport?: typeof buildDriftReport;
   dashboardCommands: (workDir: string, ...extra: unknown[]) => LooseObject[];
-  dashboardHtml: (entries: LooseObject[], meta: LooseObject) => string;
-  dashboardSettings: (config: LooseObject, extra?: LooseObject) => LooseObject;
   dashboardViewModel: (
     workDir: string,
     config: LooseObject,
     context?: LooseObject,
   ) => Promise<LooseObject>;
-  operationProgress: (options: LooseObject) => LooseObject;
-  pluginRoot: string;
-  pluginVersion: string;
-  readDashboardLedger: (workDir: string) => Promise<LooseObject>;
-  resolveOutputInside: (workDir: string, output?: string) => string;
-  resolveWorkDir: (value: string) => {
-    workDir: string;
-    config: LooseObject;
-    sessionCwd?: string;
-    sessionPaths: SessionPaths;
-  };
   serveAutoresearch: (options: LooseObject) => Promise<LooseObject>;
-  shellQuote: (value: string) => string;
-  writeFile: typeof fsp.writeFile;
+  resolveWorkDir?: (value: unknown) => {
+    config: LooseObject;
+    sessionPaths: ReturnType<typeof resolveSessionPaths>;
+    workDir: string;
+  };
 }
+
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const liveDashboardServers = new Set<LooseObject>();
 
 export function buildDashboardSettings(config: LooseObject, extra: LooseObject = {}): LooseObject {
   return {
@@ -135,290 +139,273 @@ export function buildDashboardCommands({
   ];
 }
 
-export function createDashboardCommands(deps: DashboardCommandDeps) {
-  const liveDashboardServers = new Set<LooseObject>();
+export async function exportDashboard(args: LooseObject, runtime: DashboardRuntime) {
+  const startedAt = Date.now();
+  const { workDir, config } = resolveDashboardWorkDir(args, runtime);
+  emitProgress(args, "export", `reading session ledger from ${workDir}`);
+  const ledgerFold = foldDashboardLedger(workDir);
+  const ledger = await ledgerFold;
+  const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
+  if (Number(ledger.summary?.totalEntries || 0) === 0) {
+    throw new Error(`No autoresearch.jsonl found in ${workDir}`);
+  }
+  const output = resolveOutputInside(workDir, args.output);
+  const commands = runtime.dashboardCommands(workDir);
+  const generatedAt = new Date().toISOString();
+  const showcaseExport = boolOption(args.showcase ?? args.showcaseMode, false);
+  const deliveryMode = showcaseExport ? "showcase" : "static-export";
+  const sourceCwd = showcaseExport
+    ? path.relative(PLUGIN_ROOT, workDir).replaceAll("\\", "/") || "."
+    : workDir;
+  const runtimeDrift = await (runtime.buildDriftReport || buildDriftReport)({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: false,
+  }).catch(unavailableRuntimeDrift);
+  emitProgress(args, "export", "building dashboard view model");
+  const dashboardServerRegistry = await dashboardServerRegistryStatus(workDir, PLUGIN_VERSION);
+  const dashboardContext = {
+    deliveryMode,
+    generatedAt,
+    sourceCwd,
+    pluginVersion: PLUGIN_VERSION,
+    runtimeDrift,
+    dashboardServerRegistry,
+    publicExport: showcaseExport,
+    showcaseMode: showcaseExport,
+    suppressEnvironmentWarnings: showcaseExport,
+  };
+  const rawViewModel = await runtime.dashboardViewModel(workDir, config, {
+    ...dashboardContext,
+    ledgerFold: ledger,
+  });
+  const viewModel = compactDashboardTransportViewModel(
+    showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel,
+  );
+  const html = dashboardHtml(entries, {
+    workDir,
+    generatedAt,
+    jsonlName: "autoresearch.jsonl",
+    deliveryMode,
+    liveActionsAvailable: false,
+    modeGuidance: {
+      title: showcaseExport ? "Demo Snapshot" : "Static Snapshot",
+      detail: showcaseExport ? "Bundled read-only demo snapshot." : "Read-only snapshot.",
+    },
+    refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
+    commands,
+    settings: buildDashboardSettings(config, dashboardContext),
+    viewModel,
+    ledgerBounds: ledger.ledgerBounds,
+    publicExport: showcaseExport,
+    showcaseMode: showcaseExport,
+  });
+  emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
+  await fsp.writeFile(output, html, "utf8");
+  const modeGuidance = {
+    staticExport: output,
+    difference:
+      "The exported HTML is a read-only fallback snapshot; start the served dashboard explicitly from the CLI when the operator needs a live link.",
+    fullJson:
+      "Pass --json-full/--verbose on the CLI to include the full viewModel in the command response.",
+  };
+  const progress = operationProgress({
+    stage: "export",
+    label: "Write dashboard HTML",
+    startedAt,
+    status: "completed",
+    outputTail: output,
+  });
+  const fullJson = boolOption(args.json_full ?? args.jsonFull ?? args.full ?? args.verbose, false);
+  const summary = recordOrNull(viewModel.summary);
+  const nextBestAction = recordOrNull(viewModel.nextBestAction);
+  const readout = recordOrNull(viewModel.readout);
+  const result: LooseObject = {
+    ok: true,
+    workDir,
+    output,
+    summary,
+    decisionEnvelopeSummary: viewModel.decisionEnvelopeSummary || null,
+    baseline: summary?.baseline ?? null,
+    best: summary?.best ?? null,
+    nextAction: nextBestAction?.detail || readout?.nextAction || "",
+    modeGuidance,
+    progress,
+  };
+  if (fullJson) result.viewModel = rawViewModel;
+  return result;
+}
 
-  async function exportDashboard(args: LooseObject) {
-    const startedAt = Date.now();
-    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    emitProgress(args, "export", `reading session ledger from ${workDir}`);
-    const ledgerFold = deps.readDashboardLedger(workDir);
-    const ledger = await ledgerFold;
-    const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
-    if (Number(ledger.summary?.totalEntries || 0) === 0) {
-      throw new Error(`No autoresearch.jsonl found in ${workDir}`);
+export async function serveDashboard(args: LooseObject, runtime: DashboardRuntime) {
+  const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
+  const { workDir, sessionPaths } = resolveDashboardWorkDir(args, runtime);
+  const expectedSessionPathIdentity = sessionPathIdentity(sessionPaths);
+  const debugLedger = boolOption(args.debugLedger ?? args.debug_ledger, false);
+  const liveReadCache = createSessionReadCache({ invalidateOnLedgerChange: true });
+  let liveUrl = "";
+  let dashboardServerRegistry: LooseObject | null = null;
+  if (!args.port && debugLedger !== true) {
+    const reusableRegistry = await findReusableServeRegistry(workDir, {
+      expectedVersion: PLUGIN_VERSION,
+      timeoutMs: 500,
+      debugLedger,
+      sessionPaths,
+    });
+    dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
+    if (reusableRegistry.reusable) {
+      return reusedServeDashboardResult({
+        workDir,
+        lookup: reusableRegistry,
+        startedAt,
+      });
     }
-    const output = deps.resolveOutputInside(workDir, args.output);
-    const commands = deps.dashboardCommands(workDir);
-    const generatedAt = new Date().toISOString();
-    const showcaseExport = deps.boolOption(args.showcase ?? args.showcaseMode, false);
-    const deliveryMode = showcaseExport ? "showcase" : "static-export";
-    const sourceCwd = showcaseExport
-      ? path.relative(deps.pluginRoot, workDir).replaceAll("\\", "/") || "."
-      : workDir;
-    const runtimeDrift = await deps
-      .buildDriftReport({
-        pluginRoot: deps.pluginRoot,
-        includeInstalled: false,
-      })
-      .catch(unavailableRuntimeDrift);
-    emitProgress(args, "export", "building dashboard view model");
-    const dashboardServerRegistry = await dashboardServerRegistryStatus(
-      workDir,
-      deps.pluginVersion,
-    );
-    const dashboardContext = {
-      deliveryMode,
-      generatedAt,
-      sourceCwd,
-      pluginVersion: deps.pluginVersion,
-      runtimeDrift,
-      dashboardServerRegistry,
-      publicExport: showcaseExport,
-      showcaseMode: showcaseExport,
-      suppressEnvironmentWarnings: showcaseExport,
-    };
-    const rawViewModel = await deps.dashboardViewModel(workDir, config, {
-      ...dashboardContext,
-      ledgerFold: ledger,
-    });
-    const viewModel = compactDashboardTransportViewModel(
-      showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel,
-    );
-    const html = deps.dashboardHtml(entries, {
-      workDir,
-      generatedAt,
-      jsonlName: "autoresearch.jsonl",
-      deliveryMode,
-      liveActionsAvailable: false,
-      modeGuidance: {
-        title: showcaseExport ? "Demo Snapshot" : "Static Snapshot",
-        detail: showcaseExport ? "Bundled read-only demo snapshot." : "Read-only snapshot.",
-      },
-      refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
-      commands,
-      settings: deps.dashboardSettings(config, dashboardContext),
-      viewModel,
-      ledgerBounds: ledger.ledgerBounds,
-      publicExport: showcaseExport,
-      showcaseMode: showcaseExport,
-    });
-    emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
-    await deps.writeFile(output, html, "utf8");
-    const modeGuidance = {
-      staticExport: output,
-      difference:
-        "The exported HTML is a read-only fallback snapshot; start the served dashboard explicitly from the CLI when the operator needs a live link.",
-      fullJson:
-        "Pass --json-full/--verbose on the CLI to include the full viewModel in the command response.",
-    };
-    const progress = deps.operationProgress({
-      stage: "export",
-      label: "Write dashboard HTML",
+  }
+
+  const runtimeDrift = await (runtime.buildDriftReport || buildDriftReport)({
+    pluginRoot: PLUGIN_ROOT,
+    includeInstalled: true,
+  }).catch(unavailableRuntimeDrift);
+  const serveResult = await runtime.serveAutoresearch({
+    cwd: workDir,
+    sessionPaths,
+    port: args.port,
+    debugLedger,
+    pluginVersion: PLUGIN_VERSION,
+    startedAt: startedAtIso,
+    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
+    dashboardHtml: async () => {
+      const { config } = resolveDashboardWorkDir(args, runtime);
+      const generatedAt = new Date().toISOString();
+      const dashboardContext = {
+        deliveryMode: "live-server",
+        liveUrl,
+        generatedAt,
+        sourceCwd: workDir,
+        pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
+        activeServerCount: liveDashboardServers.size,
+        dashboardServerRegistry,
+      };
+      return dashboardHtml([], {
+        workDir,
+        generatedAt,
+        jsonlName: "autoresearch.jsonl",
+        deliveryMode: "live-server",
+        liveRefreshAvailable: true,
+        liveActionsAvailable: false,
+        modeGuidance: {
+          title: "Live Readout",
+          detail: "Live refresh is available; actions stay in CLI.",
+        },
+        refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
+        commands: runtime.dashboardCommands(workDir),
+        settings: buildDashboardSettings(config, dashboardContext),
+        viewModel: {},
+      });
+    },
+    viewModel: async (refreshContext: LooseObject = {}) => {
+      const { config } = resolveDashboardWorkDir(args, runtime);
+      return runtime.dashboardViewModel(workDir, config, {
+        deliveryMode: "live-server",
+        liveUrl,
+        generatedAt: new Date().toISOString(),
+        sourceCwd: workDir,
+        pluginVersion: PLUGIN_VERSION,
+        runtimeDrift,
+        activeServerCount: liveDashboardServers.size,
+        dashboardServerRegistry,
+        readCache: liveReadCache,
+        ...refreshContext,
+      });
+    },
+  });
+  liveUrl = serveResult.url;
+  liveDashboardServers.add(serveResult.server);
+  const healthUrl = new URL("health", liveUrl).toString();
+  const registryWrite = await writeServeRegistry(workDir, {
+    pid: process.pid,
+    port: Number(serveResult.port),
+    cwd: workDir,
+    sessionCwd: sessionPaths.sessionCwd,
+    sessionPathIdentity: expectedSessionPathIdentity,
+    startedAt: startedAtIso,
+    version: PLUGIN_VERSION,
+    healthUrl,
+    debugLedger,
+  });
+  const registrySummary = summarizeServeRegistry(registryWrite.record, {
+    currentPid: process.pid,
+    currentCwd: workDir,
+  });
+  const dashboardHealth = await verifyDashboardHealthSummary({
+    url: serveResult.url,
+    port: serveResult.port,
+    pid: process.pid,
+    registryPath: registryWrite.path,
+    cwd: workDir,
+    sessionCwd: sessionPaths.sessionCwd,
+    sessionPathIdentity: expectedSessionPathIdentity,
+    version: PLUGIN_VERSION,
+    startedAt: startedAtIso,
+    previous: registrySummary,
+    timeoutMs: 1000,
+  });
+  dashboardServerRegistry = mergeRegistryHealthSummary(registrySummary, dashboardHealth);
+  serveResult.server.on("close", () => {
+    liveDashboardServers.delete(serveResult.server);
+  });
+  const dashboardVerified = dashboardHealth.liveness === "alive" && dashboardHealth.stale === false;
+  return {
+    ok: true,
+    workDir: serveResult.workDir,
+    port: serveResult.port,
+    url: serveResult.url,
+    dashboardUrl: serveResult.url,
+    mode: "live",
+    registryReused: false,
+    detached: false,
+    pid: process.pid,
+    cwd: workDir,
+    version: PLUGIN_VERSION,
+    startedAt: startedAtIso,
+    verified: dashboardVerified,
+    healthUrl: dashboardHealth.healthUrl || healthUrl,
+    registryPath: registryWrite.path,
+    debugLedger: {
+      enabled: serveResult.debugLedger === true,
+      endpoint: new URL("autoresearch.jsonl", serveResult.url).toString(),
+      guidance:
+        serveResult.debugLedger === true
+          ? "Debug ledger endpoint is enabled and returns redacted ledger lines."
+          : "Raw ledger endpoint is disabled by default; restart with --debug-ledger only for local debugging.",
+    },
+    dashboardHealth,
+    checkedAt: new Date().toISOString(),
+    registry: {
+      path: registryWrite.path,
+      status: dashboardServerRegistry,
+      previous: registryWrite.previous,
+    },
+    decisionEnvelopeSummary: null,
+    deferredViewModel: {
+      availableAt: new URL("view-model.json", serveResult.url).toString(),
+      reason:
+        "Live dashboard startup returns after health verification; heavier decision diagnostics load from /view-model.json.",
+    },
+    modeGuidance: {
+      deliveryMode: "live-server",
+      difference: dashboardVerified
+        ? "This dashboard link was liveness-checked and can be handed to the operator; exported HTML is only a read-only fallback snapshot."
+        : `Dashboard server started but health verification reported ${dashboardHealth.liveness}. Restart serve before handing this URL to the operator.`,
+    },
+    progress: operationProgress({
+      stage: "serve",
+      label: "Start live dashboard",
       startedAt,
       status: "completed",
-      outputTail: output,
-    });
-    const fullJson = deps.boolOption(
-      args.json_full ?? args.jsonFull ?? args.full ?? args.verbose,
-      false,
-    );
-    const summary = recordOrNull(viewModel.summary);
-    const nextBestAction = recordOrNull(viewModel.nextBestAction);
-    const readout = recordOrNull(viewModel.readout);
-    const result: LooseObject = {
-      ok: true,
-      workDir,
-      output,
-      summary,
-      decisionEnvelopeSummary: viewModel.decisionEnvelopeSummary || null,
-      baseline: summary?.baseline ?? null,
-      best: summary?.best ?? null,
-      nextAction: nextBestAction?.detail || readout?.nextAction || "",
-      modeGuidance,
-      progress,
-    };
-    if (fullJson) result.viewModel = rawViewModel;
-    return result;
-  }
-
-  async function serveDashboard(args: LooseObject) {
-    const startedAt = Date.now();
-    const startedAtIso = new Date(startedAt).toISOString();
-    const { workDir, sessionPaths } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    const expectedSessionPathIdentity = sessionPathIdentity(sessionPaths);
-    const debugLedger = deps.boolOption(args.debugLedger ?? args.debug_ledger, false);
-    const liveReadCache = deps.createSessionReadCache?.({ invalidateOnLedgerChange: true });
-    let liveUrl = "";
-    let dashboardServerRegistry: LooseObject | null = null;
-    if (!args.port && debugLedger !== true) {
-      const reusableRegistry = await findReusableServeRegistry(workDir, {
-        expectedVersion: deps.pluginVersion,
-        timeoutMs: 500,
-        debugLedger,
-        sessionPaths,
-      });
-      dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
-      if (reusableRegistry.reusable) {
-        return reusedServeDashboardResult({
-          workDir,
-          lookup: reusableRegistry,
-          startedAt,
-        });
-      }
-    }
-
-    const runtimeDrift = await deps
-      .buildDriftReport({
-        pluginRoot: deps.pluginRoot,
-        includeInstalled: true,
-      })
-      .catch(unavailableRuntimeDrift);
-    const serveResult = await deps.serveAutoresearch({
-      cwd: workDir,
-      sessionPaths,
-      port: args.port,
-      debugLedger,
-      pluginVersion: deps.pluginVersion,
-      startedAt: startedAtIso,
-      scriptPath: path.join(deps.pluginRoot, "scripts", "autoresearch.mjs"),
-      dashboardHtml: async () => {
-        const { config } = deps.resolveWorkDir(args.working_dir || args.cwd);
-        const generatedAt = new Date().toISOString();
-        const dashboardContext = {
-          deliveryMode: "live-server",
-          liveUrl,
-          generatedAt,
-          sourceCwd: workDir,
-          pluginVersion: deps.pluginVersion,
-          runtimeDrift,
-          activeServerCount: liveDashboardServers.size,
-          dashboardServerRegistry,
-        };
-        return deps.dashboardHtml([], {
-          workDir,
-          generatedAt,
-          jsonlName: "autoresearch.jsonl",
-          deliveryMode: "live-server",
-          liveRefreshAvailable: true,
-          liveActionsAvailable: false,
-          modeGuidance: {
-            title: "Live Readout",
-            detail: "Live refresh is available; actions stay in CLI.",
-          },
-          refreshMs: Math.max(1, Number(config.dashboardRefreshSeconds || 5)) * 1000,
-          commands: deps.dashboardCommands(workDir),
-          settings: deps.dashboardSettings(config, dashboardContext),
-          viewModel: {},
-        });
-      },
-      viewModel: async (refreshContext: LooseObject = {}) => {
-        const { config } = deps.resolveWorkDir(args.working_dir || args.cwd);
-        return deps.dashboardViewModel(workDir, config, {
-          deliveryMode: "live-server",
-          liveUrl,
-          generatedAt: new Date().toISOString(),
-          sourceCwd: workDir,
-          pluginVersion: deps.pluginVersion,
-          runtimeDrift,
-          activeServerCount: liveDashboardServers.size,
-          dashboardServerRegistry,
-          readCache: liveReadCache,
-          ...refreshContext,
-        });
-      },
-    });
-    liveUrl = serveResult.url;
-    liveDashboardServers.add(serveResult.server);
-    const healthUrl = new URL("health", liveUrl).toString();
-    const registryWrite = await writeServeRegistry(workDir, {
-      pid: process.pid,
-      port: Number(serveResult.port),
-      cwd: workDir,
-      sessionCwd: sessionPaths.sessionCwd,
-      sessionPathIdentity: expectedSessionPathIdentity,
-      startedAt: startedAtIso,
-      version: deps.pluginVersion,
-      healthUrl,
-      debugLedger,
-    });
-    const registrySummary = summarizeServeRegistry(registryWrite.record, {
-      currentPid: process.pid,
-      currentCwd: workDir,
-    });
-    const dashboardHealth = await verifyDashboardHealthSummary({
-      url: serveResult.url,
-      port: serveResult.port,
-      pid: process.pid,
-      registryPath: registryWrite.path,
-      cwd: workDir,
-      sessionCwd: sessionPaths.sessionCwd,
-      sessionPathIdentity: expectedSessionPathIdentity,
-      version: deps.pluginVersion,
-      startedAt: startedAtIso,
-      previous: registrySummary,
-      timeoutMs: 1000,
-    });
-    dashboardServerRegistry = mergeRegistryHealthSummary(registrySummary, dashboardHealth);
-    serveResult.server.on("close", () => {
-      liveDashboardServers.delete(serveResult.server);
-    });
-    const dashboardVerified =
-      dashboardHealth.liveness === "alive" && dashboardHealth.stale === false;
-    return {
-      ok: true,
-      workDir: serveResult.workDir,
-      port: serveResult.port,
-      url: serveResult.url,
-      dashboardUrl: serveResult.url,
-      mode: "live",
-      registryReused: false,
-      detached: false,
-      pid: process.pid,
-      cwd: workDir,
-      version: deps.pluginVersion,
-      startedAt: startedAtIso,
-      verified: dashboardVerified,
-      healthUrl: dashboardHealth.healthUrl || healthUrl,
-      registryPath: registryWrite.path,
-      debugLedger: {
-        enabled: serveResult.debugLedger === true,
-        endpoint: new URL("autoresearch.jsonl", serveResult.url).toString(),
-        guidance:
-          serveResult.debugLedger === true
-            ? "Debug ledger endpoint is enabled and returns redacted ledger lines."
-            : "Raw ledger endpoint is disabled by default; restart with --debug-ledger only for local debugging.",
-      },
-      dashboardHealth,
-      checkedAt: new Date().toISOString(),
-      registry: {
-        path: registryWrite.path,
-        status: dashboardServerRegistry,
-        previous: registryWrite.previous,
-      },
-      decisionEnvelopeSummary: null,
-      deferredViewModel: {
-        availableAt: new URL("view-model.json", serveResult.url).toString(),
-        reason:
-          "Live dashboard startup returns after health verification; heavier decision diagnostics load from /view-model.json.",
-      },
-      modeGuidance: {
-        deliveryMode: "live-server",
-        difference: dashboardVerified
-          ? "This dashboard link was liveness-checked and can be handed to the operator; exported HTML is only a read-only fallback snapshot."
-          : `Dashboard server started but health verification reported ${dashboardHealth.liveness}. Restart serve before handing this URL to the operator.`,
-      },
-      progress: deps.operationProgress({
-        stage: "serve",
-        label: "Start live dashboard",
-        startedAt,
-        status: "completed",
-        outputTail: serveResult.url,
-      }),
-    };
-  }
-
-  return { exportDashboard, serveDashboard };
+      outputTail: serveResult.url,
+    }),
+  };
 }
 
 function reusedServeDashboardResult({
@@ -571,4 +558,22 @@ function unavailableRuntimeDrift(error: unknown): LooseObject {
     probeFailed: true,
     warnings: [error instanceof Error ? error.message : String(error)],
   };
+}
+
+function resolveOutputInside(workDir: string, output?: unknown): string {
+  const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
+  const resolved = output
+    ? resolvePathInsideRootSync(workDir, String(output))
+    : { absolutePath: defaultOutput, inside: true, relativePath: AUTORESEARCH_DASHBOARD_FILE };
+  if (!resolved.inside) {
+    throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
+  }
+  return resolved.absolutePath;
+}
+
+function resolveDashboardWorkDir(args: LooseObject, runtime: DashboardRuntime) {
+  const value = args.working_dir || args.cwd || "";
+  return runtime.resolveWorkDir
+    ? runtime.resolveWorkDir(value)
+    : resolveAuthorizedWorkDir(String(value));
 }

@@ -15,17 +15,11 @@ import {
   readServeRegistry,
 } from "../lib/dashboard-server-registry.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
-import { dashboardHtml, dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
-import {
-  DASHBOARD_LEDGER_MAX_ENTRIES,
-  foldDashboardLedger,
-  type DashboardLedgerFold,
-} from "../lib/dashboard-ledger.js";
+import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
+import { DASHBOARD_LEDGER_MAX_ENTRIES, type DashboardLedgerFold } from "../lib/dashboard-ledger.js";
 import {
   buildDashboardCommands,
   buildDashboardSettings as dashboardSettings,
-  createDashboardCommands,
-  operationProgress,
 } from "../lib/commands/dashboard.js";
 import {
   buildContinuationCommands,
@@ -460,24 +454,23 @@ const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "preflight",
 ]);
 
-const { exportDashboard, serveDashboard } = createDashboardCommands({
-  boolOption,
-  buildDriftReport,
-  createSessionReadCache,
-  dashboardCommands,
-  dashboardHtml,
-  dashboardSettings,
-  dashboardViewModel,
-  operationProgress,
-  pluginRoot: PLUGIN_ROOT,
-  pluginVersion: PLUGIN_VERSION,
-  readDashboardLedger: foldDashboardLedger,
-  resolveOutputInside,
-  resolveWorkDir,
-  serveAutoresearch: serveAutoresearchLazy,
-  shellQuote,
-  writeFile: fsp.writeFile,
-});
+async function exportDashboard(args: LooseObject): Promise<LooseObject> {
+  const { exportDashboard: runExportDashboard } = await import("../lib/commands/dashboard.js");
+  return await runExportDashboard(args, dashboardRuntime());
+}
+
+async function serveDashboard(args: LooseObject): Promise<LooseObject> {
+  const { serveDashboard: runServeDashboard } = await import("../lib/commands/dashboard.js");
+  return await runServeDashboard(args, dashboardRuntime());
+}
+
+function dashboardRuntime() {
+  return {
+    dashboardCommands,
+    dashboardViewModel,
+    serveAutoresearch: serveAutoresearchLazy,
+  };
+}
 
 async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
   const { benchmarkLint: runBenchmarkLint } = await import("../lib/commands/inspect.js");
@@ -599,17 +592,6 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
     }
     return normalized.replace(/\/$/, "");
   });
-}
-
-function resolveOutputInside(workDir: string, output?: string) {
-  const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
-  const resolved = output
-    ? resolvePathInsideRootSync(workDir, output)
-    : { absolutePath: defaultOutput, inside: true, relativePath: AUTORESEARCH_DASHBOARD_FILE };
-  if (!resolved.inside) {
-    throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
-  }
-  return resolved.absolutePath;
 }
 
 function errorMessage(error: unknown): string {
