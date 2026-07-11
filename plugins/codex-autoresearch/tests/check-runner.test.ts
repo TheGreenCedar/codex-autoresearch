@@ -20,7 +20,7 @@ import {
 } from "../scripts/check.js";
 import { runProcess } from "./helpers/process.js";
 
-test("product gate leaves enough time for one isolated shard retry", () => {
+test("product gate keeps a bounded native-suite deadline", () => {
   assert.ok(PRODUCT_PHASE_TIMEOUT_SECONDS >= 1_800);
 });
 

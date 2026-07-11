@@ -75,6 +75,8 @@ npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
+Compiled tests are organized by domain under `tests/cli/`, `tests/dashboard/`, `tests/finalize/`, `tests/process/`, and `tests/product/`. Package scripts use Node's native file-level concurrency with explicit 120-second test bounds; the outer CLI, dashboard, finalizer, process, and core groups remain serial to avoid cross-surface resource contention. The Windows process-lifecycle domain uses a native single-file lane so identity and termination probes do not compete with other process-heavy integration tests. Add new coverage to the narrowest domain file rather than rebuilding a catch-all suite or a custom scheduler.
+
 For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
 
 ## Dashboard review

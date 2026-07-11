@@ -124,7 +124,6 @@ export async function runPackageArtifactCheck() {
       "dashboard/src/Dashboard.tsx",
       "lib/session-core.ts",
       "scripts/autoresearch.ts",
-      "tests/autoresearch-cli.test.ts",
     ];
 
     const missing = requiredPaths.filter((file) => !packedPaths.has(file));
@@ -132,6 +131,14 @@ export async function runPackageArtifactCheck() {
       packedPaths.has(file),
     );
     const leakedExamples = Array.from(packedPaths).filter((file) => file.startsWith("examples/"));
+    const leakedTestPaths = Array.from(packedPaths).filter(
+      (file) => file.startsWith("tests/") || file.startsWith("dist/tests/"),
+    );
+    const leakedAuthoredSourcePaths = Array.from(packedPaths).filter(
+      (file) =>
+        file.startsWith("dashboard/src/") ||
+        (/^(?:lib|scripts)\/.+\.ts$/.test(file) && !file.endsWith(".d.ts")),
+    );
     const leakedScriptPaths = packageScriptLeaks(packedPaths);
     const wrapperProblems = await packageWrapperProblems(packedEntries);
 
@@ -139,6 +146,8 @@ export async function runPackageArtifactCheck() {
       missing.length ||
       unexpected.length ||
       leakedExamples.length ||
+      leakedTestPaths.length ||
+      leakedAuthoredSourcePaths.length ||
       leakedScriptPaths.length ||
       wrapperProblems.length
     ) {
@@ -151,6 +160,16 @@ export async function runPackageArtifactCheck() {
       }
       if (leakedExamples.length) {
         console.log(indent(`Leaked examples files in package:\n${leakedExamples.join("\n")}`));
+      }
+      if (leakedTestPaths.length) {
+        console.log(indent(`Leaked test files in package:\n${leakedTestPaths.join("\n")}`));
+      }
+      if (leakedAuthoredSourcePaths.length) {
+        console.log(
+          indent(
+            `Leaked authored source files in package:\n${leakedAuthoredSourcePaths.join("\n")}`,
+          ),
+        );
       }
       if (leakedScriptPaths.length) {
         console.log(

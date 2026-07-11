@@ -24,6 +24,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 - Serialized and coalesced active packet progress writes so terminal cleanup cannot be undone by a delayed older snapshot; progress generations remain ordered across interrupted runs, cleanup also runs after writer or packet failures, and non-missing deletion errors are reported.
 - Every Autoresearch ledger reader now rejects valid JSON values that are not object records, reports the file, physical line, observed JSON kind, and `ledger-doctor` recovery command, and keeps invalid rows diagnostic-only across state, finalization, export, and live dashboard reads.
 - Static dashboard exports and live refreshes now share one streaming ledger fold with fixed 5,000-row retention. Full-ledger counts, status totals, baseline, best, governing config, invalid-row diagnostics, and typed process-lifecycle blockers remain visible with explicit truncation provenance without loading the whole ledger or repeatedly shifting the retained tail; lifecycle projection overflow fails closed.
+- CLI, dashboard, finalizer, and full-product regressions now live in domain-owned test files scheduled by Node's native file runner with explicit two-minute test bounds. The custom range discovery, polling, retry, and shard environment protocol has been removed; package checks also reject any authored or compiled test leakage generically.
 
 ## 2.6.0 - 2026-07-09
 

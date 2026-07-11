@@ -9,14 +9,14 @@ import {
   DASHBOARD_LEDGER_MAX_ENTRIES,
   foldDashboardLedger,
   type DashboardLedgerFold,
-} from "../lib/dashboard-ledger.js";
-import { dashboardHtml } from "../lib/dashboard-transport.js";
-import { serveAutoresearch } from "../lib/live-server.js";
+} from "../../lib/dashboard-ledger.js";
+import { dashboardHtml } from "../../lib/dashboard-transport.js";
+import { serveAutoresearch } from "../../lib/live-server.js";
 import {
   buildProcessLifecycleRecord,
   buildResourcePreflight,
   PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
-} from "../lib/process-governor.js";
+} from "../../lib/process-governor.js";
 
 const LARGE_LEDGER_RECORDS = 100_000;
 const HEAP_DELTA_BUDGET_BYTES = 96 * 1024 * 1024;
