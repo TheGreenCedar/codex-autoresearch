@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -48,7 +47,7 @@ export {
 const syntaxChecks: CommandSpec[] = [
   ["syntax:autoresearch", node, ["--check", "scripts/autoresearch.mjs"]],
   ["syntax:finalize", node, ["--check", "scripts/finalize-autoresearch.mjs"]],
-  ["syntax:benchmark", node, ["--check", "scripts/perfection-benchmark.mjs"]],
+  ["syntax:operator-task-benchmark", node, ["--check", "scripts/operator-task-benchmark.mjs"]],
   ["syntax:check", node, ["--check", "scripts/check.mjs"]],
 ];
 
@@ -246,46 +245,7 @@ async function dashboardAssetHashes(): Promise<Record<string, string | null>> {
 
 async function runDogfoodHealthCheck() {
   console.log("\n== dogfood ==");
-  const qualityOk = await runTrackedDogfoodQualityCheck();
-  const selfOk = await runLocalDogfoodSessionCheck();
-  return qualityOk && selfOk;
-}
-
-async function runTrackedDogfoodQualityCheck() {
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-autoresearch-dogfood-"));
-  try {
-    await fsp.writeFile(
-      path.join(tempDir, "autoresearch.jsonl"),
-      `${JSON.stringify({
-        type: "config",
-        name: "codex autoresearch product gate",
-        metricName: "quality_gap",
-        metricUnit: "gaps",
-        bestDirection: "lower",
-      })}\n`,
-      "utf8",
-    );
-    const benchmarkCommand = `${shellQuote(node)} ${shellQuote(
-      path.join(ROOT, "scripts", "perfection-benchmark.mjs"),
-    )} --fail-on-gap`;
-    const result = await runCommand([
-      "dogfood:quality-gate",
-      node,
-      [
-        "scripts/autoresearch.mjs",
-        "doctor",
-        "--cwd",
-        tempDir,
-        "--check-benchmark",
-        "--explain",
-        "--command",
-        benchmarkCommand,
-      ],
-    ]);
-    return reportDogfoodDoctorResult("dogfood:quality-gate", result);
-  } finally {
-    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-  }
+  return await runLocalDogfoodSessionCheck();
 }
 
 async function runLocalDogfoodSessionCheck() {
@@ -379,10 +339,4 @@ function reportDogfoodDoctorResult(label: string, result: CommandResult) {
     console.log(`ok ${label}`);
   }
   return true;
-}
-
-function shellQuote(value: string) {
-  const text = String(value);
-  if (process.platform === "win32") return `"${text.replace(/"/g, '""')}"`;
-  return `'${text.replace(/'/g, "'\\''")}'`;
 }

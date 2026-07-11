@@ -148,7 +148,10 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
           runtimeAuthority: guidance.runtimeAuthority,
           scaffoldHealth,
         },
-        nextAction: "Run the next experiment, then log keep or discard with ASI.",
+        nextAction:
+          String(resolvedDecision.nextAction || "").trim() ||
+          String(recordOrEmpty(resolvedDecision.canonicalNextAction).reason || "").trim() ||
+          "Run the next experiment, then log keep or discard with ASI.",
         finalization: resolvedDecision.finalizationPressure || null,
       }),
       continuationCommands(workDir),

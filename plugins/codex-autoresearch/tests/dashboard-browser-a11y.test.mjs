@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +21,18 @@ const decisionDesktopScreenshotPath = path.join(
   "dashboard-decision-desktop.png",
 );
 const decisionMobileScreenshotPath = path.join(pluginRoot, "tmp", "dashboard-decision-mobile.png");
+const operatorDemoScreenshotPath = path.join(
+  pluginRoot,
+  "tmp",
+  "dashboard-operator-demo-details.png",
+);
+
+test("dashboard geometry evidence rejects an empty demo", () => {
+  assert.throws(
+    () => validateDashboardGeometryEvidence(emptyDashboardGeometryObservations(true)),
+    (error) => error?.code === "V27_DASHBOARD_GEOMETRY_EMPTY",
+  );
+});
 
 test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
   const browserExecutable = resolveBrowserExecutable();
@@ -28,6 +40,7 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
     browserExecutable,
     "Set CODEX_AUTORESEARCH_BROWSER to Chrome or Edge for the opt-in browser accessibility check.",
   );
+  await runDashboardGeometryOperatorTask(browserExecutable);
 
   const fixture = await dashboardHtml();
   const server = await serveHtml(fixture.html, fixture.failureHtml, fixture.livePayload);
@@ -478,6 +491,507 @@ function semanticAxNodeCount(nodes) {
   ).length;
 }
 
+async function runDashboardGeometryOperatorTask(browserExecutable) {
+  let tempRoot;
+  let browser;
+  let client;
+  let observations = emptyDashboardGeometryObservations(false);
+  try {
+    tempRoot = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-operator-evidence-"));
+    const demoSource = path.join(pluginRoot, "examples", "demo-session");
+    const demoDir = path.join(tempRoot, "demo-session");
+    const output = path.join(demoDir, "tmp", "operator-evidence.html");
+    await cp(demoSource, demoDir, {
+      recursive: true,
+      filter: (source) => {
+        const relative = path.relative(demoSource, source);
+        return !relative.split(path.sep).includes("tmp") && !/\.(?:html|png)$/i.test(relative);
+      },
+    });
+    await mkdir(path.dirname(output), { recursive: true });
+    await runProductExport(demoDir);
+    browser = await launchBrowser(browserExecutable);
+    client = await CdpClient.connect(browser.wsUrl);
+    const page = await openPage(client, pathToFileURL(output).href);
+    await client.send(
+      "Emulation.setDeviceMetricsOverride",
+      { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false },
+      page.sessionId,
+    );
+    await waitForPageReady(client, page.sessionId);
+    await waitForSelector(client, page.sessionId, "#trend-chart-range");
+    observations = await initialDashboardGeometryEvidence(client, page.sessionId);
+    await waitForFunction(
+      client,
+      page.sessionId,
+      "() => document.querySelectorAll('.chart-point-group > .chart-point').length > 0",
+      "The exported public demo rendered no chart points.",
+    );
+    const contrastScreenshots = await captureChartContrastScreenshots(client, page.sessionId);
+    const chartObservations = await dashboardGeometryEvidence(
+      client,
+      page.sessionId,
+      contrastScreenshots,
+    );
+    await evaluate(
+      client,
+      page.sessionId,
+      `(() => {
+        window.scrollTo(0, Math.max(0, document.querySelector('#trend-panel').offsetTop - 8));
+        document.querySelector('#trend-chart-range').focus({ preventScroll: true });
+      })()`,
+    );
+    await pressKey(client, page.sessionId, "Enter");
+    await waitForSelector(client, page.sessionId, '[role="dialog"][aria-modal="true"]');
+    observations = {
+      ...chartObservations,
+      ...(await dashboardModalEvidence(client, page.sessionId)),
+    };
+    validateDashboardGeometryEvidence(observations);
+    await captureScreenshot(client, page.sessionId, operatorDemoScreenshotPath);
+    emitDashboardGeometryEvidence("pass", observations);
+    console.log(`ARTIFACT dashboard_operator_demo_screenshot=${operatorDemoScreenshotPath}`);
+  } catch (error) {
+    emitDashboardGeometryEvidence("fail", {
+      ...observations,
+      failureCode: "V27_DASHBOARD_GEOMETRY_EMPTY",
+      error: String(error?.message || error).slice(0, 1_000),
+    });
+    throw error;
+  } finally {
+    await client?.close();
+    await browser?.close();
+    if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function emitDashboardGeometryEvidence(status, observations) {
+  const passed = status === "pass" ? 1 : 0;
+  console.log(
+    `EVIDENCE ${JSON.stringify({
+      schemaVersion: 1,
+      suite: "v2.7-operator-tasks",
+      case: "dashboard-geometry",
+      status,
+      observations,
+    })}`,
+  );
+  console.log(
+    `EVIDENCE_SUMMARY ${JSON.stringify({
+      schemaVersion: 1,
+      suite: "v2.7-operator-tasks",
+      status,
+      tasks: 1,
+      passed,
+      failed: 1 - passed,
+    })}`,
+  );
+}
+
+function validateDashboardGeometryEvidence(observation) {
+  if (
+    observation.factsCollected !== true ||
+    !Number.isInteger(observation.plottedPoints) ||
+    observation.plottedPoints < 1 ||
+    observation.plottedPoints > 48 ||
+    observation.finitePointBounds !== observation.plottedPoints ||
+    observation.visiblePoints !== observation.plottedPoints ||
+    observation.pointContrastSamples !== Math.min(3, observation.visiblePoints) ||
+    !Number.isFinite(observation.pointContrastMinimum) ||
+    observation.pointContrastMinimum < 3 ||
+    observation.pointContrastMinimum > 21 ||
+    !Number.isFinite(observation.chartHeight) ||
+    observation.chartHeight < 1 ||
+    observation.chartHeight > 1_000 ||
+    !Number.isFinite(observation.chartWidth) ||
+    observation.chartWidth < 1 ||
+    observation.chartWidth > 2_000 ||
+    !boundedPositiveInteger(observation.contrastScreenshotWidth, 4_000) ||
+    !boundedPositiveInteger(observation.contrastScreenshotHeight, 4_000) ||
+    !Number.isFinite(observation.pointHorizontalSpan) ||
+    observation.pointHorizontalSpan < 10 ||
+    observation.pointHorizontalSpan > observation.chartWidth ||
+    !Number.isFinite(observation.pointVerticalSpan) ||
+    observation.pointVerticalSpan < 1 ||
+    observation.pointVerticalSpan > observation.chartHeight ||
+    !Number.isFinite(observation.pointVerticalSpanRatio) ||
+    observation.pointVerticalSpanRatio < 0.1 ||
+    observation.pointVerticalSpanRatio > 1 ||
+    !Number.isInteger(observation.visibleLinePaths) ||
+    observation.visibleLinePaths < 1 ||
+    observation.visibleLinePaths > 8 ||
+    !Number.isFinite(observation.visibleLineLength) ||
+    observation.visibleLineLength < 100 ||
+    observation.visibleLineLength > 100_000 ||
+    !Number.isFinite(observation.lineContrast) ||
+    observation.lineContrast < 3 ||
+    observation.lineContrast > 21 ||
+    observation.lineContrastSamples !== observation.visibleLinePaths ||
+    !Number.isFinite(observation.lineHorizontalSpan) ||
+    observation.lineHorizontalSpan < 100 ||
+    observation.lineHorizontalSpan > observation.chartWidth ||
+    observation.placeholderCount !== 0 ||
+    observation.rangeEnabled !== true ||
+    observation.outputVisible !== true ||
+    !boundedPositiveInteger(observation.rangeDetailCharacters, 500) ||
+    !boundedPositiveInteger(observation.outputDetailCharacters, 500) ||
+    !boundedPositiveInteger(observation.modalRunNumber, 1_000_000) ||
+    !boundedPositiveInteger(observation.modalStatusCode, 5) ||
+    !boundedPositiveInteger(observation.modalMetricValues, 10) ||
+    !Number.isInteger(observation.modalNonPlaceholderMetricValues) ||
+    observation.modalNonPlaceholderMetricValues < 2 ||
+    observation.modalNonPlaceholderMetricValues > observation.modalMetricValues ||
+    !boundedPositiveInteger(observation.modalExperimentCharacters, 2_000)
+  ) {
+    const error = new Error("The dashboard demo has empty chart geometry or run details.");
+    error.code = "V27_DASHBOARD_GEOMETRY_EMPTY";
+    throw error;
+  }
+  return observation;
+}
+
+function emptyDashboardGeometryObservations(factsCollected) {
+  return {
+    factsCollected,
+    chartHeight: 0,
+    chartWidth: 0,
+    contrastScreenshotHeight: 0,
+    contrastScreenshotWidth: 0,
+    finitePointBounds: 0,
+    lineContrast: 0,
+    lineContrastSamples: 0,
+    lineHorizontalSpan: 0,
+    linePixelFacts: [],
+    modalExperimentCharacters: 0,
+    modalMetricValues: 0,
+    modalNonPlaceholderMetricValues: 0,
+    modalRunNumber: 0,
+    modalStatusCode: 0,
+    outputDetailCharacters: 0,
+    outputVisible: false,
+    placeholderCount: 0,
+    plottedPoints: 0,
+    pointContrastMinimum: 0,
+    pointContrastSamples: 0,
+    pointHorizontalSpan: 0,
+    pointPixelFacts: [],
+    pointVerticalSpan: 0,
+    pointVerticalSpanRatio: 0,
+    rangeDetailCharacters: 0,
+    rangeEnabled: false,
+    visibleLineLength: 0,
+    visibleLinePaths: 0,
+    visiblePoints: 0,
+  };
+}
+
+async function initialDashboardGeometryEvidence(client, sessionId) {
+  const facts = await evaluate(
+    client,
+    sessionId,
+    `(() => {
+      const points = [...document.querySelectorAll('.chart-point-group > .chart-point')];
+      const chart = document.querySelector('.chart-visual')?.getBoundingClientRect();
+      return {
+        chartHeight: chart?.height || 0,
+        chartWidth: chart?.width || 0,
+        finitePointBounds: points.filter((point) => {
+          const rect = point.getBoundingClientRect();
+          return [rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0;
+        }).length,
+        plottedPoints: points.length,
+      };
+    })()`,
+  );
+  return { ...emptyDashboardGeometryObservations(true), ...facts };
+}
+
+function boundedPositiveInteger(value, maximum) {
+  return Number.isInteger(value) && value > 0 && value <= maximum;
+}
+
+async function captureChartContrastScreenshots(client, sessionId) {
+  const painted = await client.send("Page.captureScreenshot", { format: "png" }, sessionId);
+  const hiddenPointCount = await evaluate(
+    client,
+    sessionId,
+    `(async () => {
+      const elements = [...document.querySelectorAll('.chart-point, .latest-halo')];
+      for (const element of elements) {
+        element.dataset.operatorEvidenceDisplay = element.style.display;
+        element.style.setProperty('display', 'none', 'important');
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return elements.length;
+    })()`,
+  );
+  assert.ok(hiddenPointCount > 0, `Expected chart points to hide; observed ${hiddenPointCount}.`);
+  try {
+    const lineOnly = await client.send("Page.captureScreenshot", { format: "png" }, sessionId);
+    const hiddenLineCount = await evaluate(
+      client,
+      sessionId,
+      `(async () => {
+        const elements = [...document.querySelectorAll('.linePath')];
+        for (const element of elements) {
+          element.dataset.operatorEvidenceDisplay = element.style.display;
+          element.style.setProperty('display', 'none', 'important');
+        }
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return elements.length;
+      })()`,
+    );
+    assert.ok(hiddenLineCount > 0, `Expected chart lines to hide; observed ${hiddenLineCount}.`);
+    const background = await client.send("Page.captureScreenshot", { format: "png" }, sessionId);
+    assert.notEqual(
+      lineOnly.data,
+      painted.data,
+      "Hidden chart points did not change the screenshot.",
+    );
+    assert.notEqual(
+      background.data,
+      lineOnly.data,
+      "Hidden chart line did not change the screenshot.",
+    );
+    return {
+      painted: painted.data,
+      lineOnly: lineOnly.data,
+      background: background.data,
+    };
+  } finally {
+    await evaluate(
+      client,
+      sessionId,
+      `(() => {
+        for (const element of document.querySelectorAll('[data-operator-evidence-display]')) {
+          element.style.display = element.dataset.operatorEvidenceDisplay || '';
+          delete element.dataset.operatorEvidenceDisplay;
+        }
+      })()`,
+    );
+  }
+}
+
+async function dashboardGeometryEvidence(client, sessionId, screenshots) {
+  return evaluate(
+    client,
+    sessionId,
+    `(async () => {
+      const loadScreenshot = (data) => new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d', { willReadFrequently: true });
+          context.drawImage(image, 0, 0);
+          resolve({ context, width: canvas.width, height: canvas.height });
+        };
+        image.onerror = () => reject(new Error('Could not decode dashboard contrast screenshot.'));
+        image.src = 'data:image/png;base64,' + data;
+      });
+      const paintedScreenshot = await loadScreenshot(${JSON.stringify(screenshots.painted)});
+      const lineOnlyScreenshot = await loadScreenshot(${JSON.stringify(screenshots.lineOnly)});
+      const backgroundScreenshot = await loadScreenshot(${JSON.stringify(screenshots.background)});
+      const screenshotPixel = (screenshot, x, y) => {
+        const scaledX = Math.max(0, Math.min(screenshot.width - 1, Math.round(x * screenshot.width / innerWidth)));
+        const scaledY = Math.max(0, Math.min(screenshot.height - 1, Math.round(y * screenshot.height / innerHeight)));
+        return [...screenshot.context.getImageData(scaledX, scaledY, 1, 1).data].slice(0, 3);
+      };
+      const points = [...document.querySelectorAll('.chart-point-group > .chart-point')];
+      const lines = [...new Set([...document.querySelectorAll('.linePath')].flatMap((element) =>
+        typeof element.getTotalLength === 'function' ? [element] : [...element.querySelectorAll('path')]
+      ))];
+      const range = document.querySelector('#trend-chart-range');
+      const output = document.querySelector('.chart-navigator output');
+      const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+      const experiment = [...(dialog?.querySelectorAll('.experiment-detail-list dt') || [])]
+        .find((term) => term.textContent?.trim() === 'Experiment')
+        ?.nextElementSibling;
+      const metricValues = [...(dialog?.querySelectorAll('.experiment-metrics strong') || [])]
+        .map((element) => element.textContent?.trim() || '');
+      const rangeDetail = range?.getAttribute('aria-valuetext')?.trim() || '';
+      const outputDetail = output?.textContent?.trim() || '';
+      const outputBounds = output?.getBoundingClientRect();
+      const modalTitle = dialog?.querySelector('#experiment-modal-title')?.textContent?.trim() || '';
+      const modalStatus = dialog?.getAttribute('data-status') || '';
+      const modalStatusText = dialog?.querySelector('.eyebrow')?.textContent?.trim() || '';
+      const experimentDetail = experiment?.textContent?.trim() || '';
+      const requiredText = [rangeDetail, outputDetail, modalTitle, modalStatusText, ...metricValues, experimentDetail];
+      const placeholder = (value) => {
+        const text = String(value || '').trim();
+        return !text || text === '—' || /no plotted/i.test(text) || /\\bunknown\\b/i.test(text);
+      };
+      const luminance = (color) => {
+        const channels = color.map((value) => {
+          const normalized = value / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+      };
+      const contrast = (foreground, background) => {
+        const first = luminance(foreground);
+        const second = luminance(background);
+        return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+      };
+      const intersects = (rect, bounds) => rect.right > bounds.left && rect.left < bounds.right &&
+        rect.bottom > bounds.top && rect.top < bounds.bottom;
+      const chart = document.querySelector('.chart-visual');
+      const chartBounds = chart?.getBoundingClientRect() || { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
+      const viewportBounds = { left: 0, right: innerWidth, top: 0, bottom: innerHeight };
+      const pointBounds = points.map((point) => point.getBoundingClientRect());
+      const finitePointBounds = pointBounds.filter((rect) =>
+        [rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0
+      ).length;
+      const visiblePointElements = points.filter((point, index) => {
+        const style = getComputedStyle(point);
+        const rect = pointBounds[index];
+        return style.display !== 'none' && style.visibility !== 'hidden' &&
+          Number(style.opacity) > 0 && rect.width > 0 && rect.height > 0 &&
+          intersects(rect, chartBounds) && intersects(rect, viewportBounds);
+      });
+      const visibleLines = lines.filter((line) => {
+        const style = getComputedStyle(line);
+        const rect = line.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' &&
+          Number(style.opacity) > 0 && style.stroke !== 'none' && Number(style.strokeOpacity) > 0 &&
+          rect.width > 0 && rect.height > 0 &&
+          intersects(rect, chartBounds) && intersects(rect, viewportBounds);
+      });
+      const contrastFactAt = (screenshot, x, y) => {
+        const painted = screenshotPixel(screenshot, x, y);
+        const background = screenshotPixel(backgroundScreenshot, x, y);
+        return { painted, background, ratio: contrast(painted, background) };
+      };
+      const pointContrastFacts = visiblePointElements.slice(0, 3).map((point) => {
+        const rect = point.getBoundingClientRect();
+        return contrastFactAt(paintedScreenshot, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      });
+      const lineContrastFacts = visibleLines.map((line) => {
+        const point = line.getPointAtLength(line.getTotalLength() / 2);
+        const matrix = line.getScreenCTM();
+        const screenPoint = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+        return contrastFactAt(lineOnlyScreenshot, screenPoint.x, screenPoint.y);
+      });
+      const pointContrasts = pointContrastFacts.map((fact) => fact.ratio);
+      const lineContrasts = lineContrastFacts.map((fact) => fact.ratio);
+      const visiblePointBounds = visiblePointElements.map((point) => point.getBoundingClientRect());
+      const pointCenters = visiblePointBounds.map((rect) => rect.top + rect.height / 2).filter(Number.isFinite);
+      const pointHorizontalCenters = visiblePointBounds.map((rect) => rect.left + rect.width / 2).filter(Number.isFinite);
+      const pointVerticalSpan = pointCenters.length > 1 ? Math.max(...pointCenters) - Math.min(...pointCenters) : 0;
+      const pointHorizontalSpan = pointHorizontalCenters.length > 1 ? Math.max(...pointHorizontalCenters) - Math.min(...pointHorizontalCenters) : 0;
+      const lineHorizontalSpan = visibleLines.length ? Math.min(chartBounds.right, Math.max(...visibleLines.map((line) => line.getBoundingClientRect().right))) -
+        Math.max(chartBounds.left, Math.min(...visibleLines.map((line) => line.getBoundingClientRect().left))) : 0;
+      const statusCodes = { measure: 1, keep: 2, discard: 3, crash: 4, checks_failed: 5 };
+      return {
+        factsCollected: true,
+        chartHeight: Math.min(1_000, Math.round(chartBounds.height * 1_000) / 1_000),
+        chartWidth: Math.min(2_000, Math.round(chartBounds.width * 1_000) / 1_000),
+        contrastScreenshotHeight: paintedScreenshot.height,
+        contrastScreenshotWidth: paintedScreenshot.width,
+        finitePointBounds,
+        lineContrast: lineContrasts.length ? Math.min(21, Math.round(Math.min(...lineContrasts) * 1_000) / 1_000) : 0,
+        lineContrastSamples: lineContrasts.length,
+        linePixelFacts: lineContrastFacts,
+        lineHorizontalSpan: Math.min(2_000, Math.round(lineHorizontalSpan * 1_000) / 1_000),
+        modalExperimentCharacters: Math.min(2_000, experimentDetail.length),
+        modalMetricValues: Math.min(10, metricValues.length),
+        modalNonPlaceholderMetricValues: Math.min(10, metricValues.filter((value) => !placeholder(value)).length),
+        modalRunNumber: Math.min(1_000_000, Number(modalTitle.match(/^Run #(\\d+)$/)?.[1] || 0)),
+        modalStatusCode: statusCodes[modalStatus] || 0,
+        outputDetailCharacters: Math.min(500, outputDetail.length),
+        outputVisible: Boolean(outputBounds && outputBounds.width > 0 && outputBounds.height > 0 && getComputedStyle(output).display !== 'none' && getComputedStyle(output).visibility !== 'hidden' && Number(getComputedStyle(output).opacity) > 0),
+        placeholderCount: Math.min(100, requiredText.filter(placeholder).length),
+        plottedPoints: points.length,
+        pointContrastMinimum: pointContrasts.length ? Math.min(21, Math.round(Math.min(...pointContrasts) * 1_000) / 1_000) : 0,
+        pointContrastSamples: pointContrasts.length,
+        pointPixelFacts: pointContrastFacts,
+        pointHorizontalSpan: Math.min(2_000, Math.round(pointHorizontalSpan * 1_000) / 1_000),
+        pointVerticalSpan: Math.min(1_000, Math.round(pointVerticalSpan * 1_000) / 1_000),
+        pointVerticalSpanRatio: chartBounds.height > 0 ? Math.min(1, Math.round((pointVerticalSpan / chartBounds.height) * 1_000) / 1_000) : 0,
+        rangeDetailCharacters: Math.min(500, rangeDetail.length),
+        rangeEnabled: Boolean(range && !range.disabled),
+        visibleLineLength: Math.min(100_000, Math.round(visibleLines.reduce((total, line) => total + line.getTotalLength(), 0))),
+        visibleLinePaths: Math.min(8, visibleLines.length),
+        visiblePoints: visiblePointElements.length,
+      };
+    })()`,
+  );
+}
+
+async function dashboardModalEvidence(client, sessionId) {
+  return evaluate(
+    client,
+    sessionId,
+    `(() => {
+      const range = document.querySelector('#trend-chart-range');
+      const output = document.querySelector('.chart-navigator output');
+      const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+      const experiment = [...(dialog?.querySelectorAll('.experiment-detail-list dt') || [])]
+        .find((term) => term.textContent?.trim() === 'Experiment')
+        ?.nextElementSibling;
+      const metricValues = [...(dialog?.querySelectorAll('.experiment-metrics strong') || [])]
+        .map((element) => element.textContent?.trim() || '');
+      const rangeDetail = range?.getAttribute('aria-valuetext')?.trim() || '';
+      const outputDetail = output?.textContent?.trim() || '';
+      const outputBounds = output?.getBoundingClientRect();
+      const modalTitle = dialog?.querySelector('#experiment-modal-title')?.textContent?.trim() || '';
+      const modalStatus = dialog?.getAttribute('data-status') || '';
+      const modalStatusText = dialog?.querySelector('.eyebrow')?.textContent?.trim() || '';
+      const experimentDetail = experiment?.textContent?.trim() || '';
+      const requiredText = [rangeDetail, outputDetail, modalTitle, modalStatusText, ...metricValues, experimentDetail];
+      const placeholder = (value) => {
+        const text = String(value || '').trim();
+        return !text || text === '—' || /no plotted/i.test(text) || /\\bunknown\\b/i.test(text);
+      };
+      const statusCodes = { measure: 1, keep: 2, discard: 3, crash: 4, checks_failed: 5 };
+      return {
+        modalExperimentCharacters: Math.min(2_000, experimentDetail.length),
+        modalMetricValues: Math.min(10, metricValues.length),
+        modalNonPlaceholderMetricValues: Math.min(10, metricValues.filter((value) => !placeholder(value)).length),
+        modalRunNumber: Math.min(1_000_000, Number(modalTitle.match(/^Run #(\\d+)$/)?.[1] || 0)),
+        modalStatusCode: statusCodes[modalStatus] || 0,
+        outputDetailCharacters: Math.min(500, outputDetail.length),
+        outputVisible: Boolean(outputBounds && outputBounds.width > 0 && outputBounds.height > 0 && getComputedStyle(output).display !== 'none' && getComputedStyle(output).visibility !== 'hidden' && Number(getComputedStyle(output).opacity) > 0),
+        placeholderCount: Math.min(100, requiredText.filter(placeholder).length),
+        rangeDetailCharacters: Math.min(500, rangeDetail.length),
+        rangeEnabled: Boolean(range && !range.disabled),
+      };
+    })()`,
+  );
+}
+
+function runProductExport(cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(pluginRoot, "scripts", "autoresearch.mjs"),
+        "export",
+        "--cwd",
+        cwd,
+        "--output",
+        "tmp/operator-evidence.html",
+        "--showcase",
+      ],
+      {
+        cwd: pluginRoot,
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4_000);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Public demo export failed with code ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
 async function dashboardScaleState(client, sessionId) {
   return evaluate(
     client,
@@ -628,7 +1142,12 @@ async function closeBrowserProcess(browser, userDataDir) {
       });
     });
   }
-  await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await rm(userDataDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
 }
 
 class CdpClient {
@@ -707,8 +1226,13 @@ class CdpClient {
 }
 
 async function openPage(client, url) {
-  const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-  const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
+  const { targetId } = await client.send("Target.createTarget", {
+    url: "about:blank",
+  });
+  const { sessionId } = await client.send("Target.attachToTarget", {
+    targetId,
+    flatten: true,
+  });
   await client.send("Page.enable", {}, sessionId);
   await client.send("Runtime.enable", {}, sessionId);
   const loaded = client.waitForEvent("Page.loadEventFired", sessionId);
@@ -773,7 +1297,11 @@ async function evaluate(client, sessionId, expression) {
     sessionId,
   );
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || "Runtime.evaluate failed.");
+    throw new Error(
+      result.exceptionDetails.exception?.description ||
+        result.exceptionDetails.text ||
+        "Runtime.evaluate failed.",
+    );
   }
   return result.result.value;
 }

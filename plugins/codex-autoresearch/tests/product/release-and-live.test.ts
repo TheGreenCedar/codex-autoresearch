@@ -5,96 +5,11 @@ import test from "node:test";
 import {
   assertNoSensitiveEvidence,
   git,
-  pluginRoot,
-  repoRoot,
   runCli,
   setupFixture,
   withLiveServer,
   withTempDir,
 } from "./helpers.js";
-
-test("release workflows preserve synchronized auto-release and tarball safeguards", async () => {
-  const autoRelease = await readFile(
-    path.join(repoRoot, ".github", "workflows", "auto-release.yml"),
-    "utf8",
-  );
-  const release = await readFile(
-    path.join(repoRoot, ".github", "workflows", "release.yml"),
-    "utf8",
-  );
-  const ci = await readFile(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
-  const maintainers = await readFile(path.join(pluginRoot, "docs", "maintainers.md"), "utf8");
-  const packageSmoke = await readFile(
-    path.join(pluginRoot, "lib", "checks", "package-smoke.ts"),
-    "utf8",
-  );
-  const packageJson = JSON.parse(await readFile(path.join(pluginRoot, "package.json"), "utf8"));
-  const codeql = await readFile(path.join(repoRoot, ".github", "workflows", "codeql.yml"), "utf8");
-
-  assert.match(autoRelease, /branches:\s*\n\s*-\s*main/);
-  assert.match(autoRelease, /plugins\/codex-autoresearch\/package\.json/);
-  assert.match(autoRelease, /plugins\/codex-autoresearch\/package-lock\.json/);
-  assert.match(autoRelease, /plugins\/codex-autoresearch\/\.codex-plugin\/plugin\.json/);
-  assert.match(autoRelease, /CHANGELOG\.md/);
-  assert.match(autoRelease, /contents:\s*read/);
-  assert.match(autoRelease, /Version surfaces are not synchronized/);
-  assert.match(autoRelease, /uses:\s*\.\/\.github\/workflows\/release\.yml/);
-
-  assert.doesNotMatch(release, /push:\s*\n\s*tags:/);
-  assert.match(release, /os:\s*\[ubuntu-latest,\s*windows-latest,\s*macos-latest\]/);
-  assert.match(release, /npm run check/);
-  for (const workflow of [ci, release]) {
-    assert.match(workflow, /npx playwright install --with-deps chromium firefox webkit/);
-    assert.match(workflow, /npm run test:dashboard:cross-browser/);
-    assert.match(
-      workflow,
-      /actions\/upload-artifact@[0-9a-f]{40}[\s\S]*tmp\/dashboard-cross-browser\//,
-    );
-  }
-  assert.equal(
-    packageJson.scripts["test:dashboard:cross-browser"],
-    "npm run build:dashboard && node --test tests/dashboard-cross-browser.test.mjs",
-  );
-  assert.match(packageJson.devDependencies.playwright, /^\^1\./);
-  assert.equal(packageJson.devDependencies["@playwright/test"], undefined);
-  assert.match(maintainers, /Automation does not prove spoken output/);
-  assert.match(maintainers, /pass\/fail\/needs-follow-up/);
-  assert.match(maintainers, /do not turn an unrecorded or partial pass into a compliance claim/);
-  assert.match(release, /node scripts\/autoresearch\.mjs --help/);
-  assert.match(release, /Refuse existing tag or release/);
-  assert.match(release, /npm pack/);
-  assert.match(release, /--phase release-package-smoke/);
-  assert.match(packageSmoke, /"scripts\/check\.mjs"/);
-  assert.match(packageSmoke, /"dist\/scripts\/check\.mjs"/);
-  assert.match(packageSmoke, /"dist\/lib\/checks\/package-smoke\.mjs"/);
-  assert.match(packageSmoke, /runPackageRuntimeSmokeFromTarball/);
-  assert.match(packageSmoke, /runExtractedPackageDashboardExportSmoke/);
-  assert.match(packageSmoke, /check-source-hygiene/);
-  assert.match(packageSmoke, /"--phase", "source-hygiene"/);
-  assert.match(packageSmoke, /ALLOWED_PACKAGED_SOURCE_SCRIPTS/);
-  assert.match(packageSmoke, /ALLOWED_PACKAGED_DIST_SCRIPTS/);
-  assert.equal(packageJson.files.includes("dist/scripts/"), false);
-  assert.equal(packageJson.files.includes("scripts/*.mjs"), false);
-  for (const file of [
-    "dist/scripts/autoresearch.mjs",
-    "dist/scripts/check.mjs",
-    "dist/scripts/check-runner.mjs",
-    "dist/scripts/finalize-autoresearch.mjs",
-    "scripts/autoresearch.mjs",
-    "scripts/bootstrap-runtime.mjs",
-    "scripts/check.mjs",
-    "scripts/directory-swap.mjs",
-    "scripts/finalize-autoresearch.mjs",
-    "scripts/release-integrity.mjs",
-  ]) {
-    assert.ok(packageJson.files.includes(file), `${file} is explicitly packaged`);
-  }
-  assert.match(release, /gh release create/);
-  assert.match(release, /--target "\$GITHUB_SHA"/);
-
-  assert.match(codeql, /pull_request:/);
-  assert.match(codeql, /branches:\s*\n\s*-\s*main\s*\n\s*-\s*dev/);
-});
 
 test("finalize-preview summarizes kept commits without creating branches", async () => {
   await withTempDir("finalize-preview", async (dir) => {

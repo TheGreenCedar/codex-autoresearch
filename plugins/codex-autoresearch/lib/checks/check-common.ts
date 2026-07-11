@@ -17,7 +17,7 @@ export const REPO_ROOT = resolveRepoRoot(import.meta.url);
 export const PACKAGE_ROOT_RELATIVE = normalizePathForGit(path.relative(REPO_ROOT, ROOT));
 export const node = process.execPath;
 
-const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "perfection-benchmark.ts");
+const BENCHMARK_SOURCE = path.join(ROOT, "scripts", "operator-task-benchmark.ts");
 
 export function runCommand(
   command: CommandSpec,
@@ -43,7 +43,10 @@ export async function runPhase(
       const output = `${result.stdout}${result.stderr}`.trim();
       if (output) console.log(indent(output));
     }
-    if (result.label === "quality-gap" && process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1") {
+    if (
+      result.label === "operator-task-evidence" &&
+      process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1"
+    ) {
       console.log(indent(`Benchmark source: ${BENCHMARK_SOURCE}`));
     }
   }
