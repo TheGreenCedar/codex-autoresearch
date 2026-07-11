@@ -11,10 +11,15 @@ import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/dashboard.js";
-import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { commandHandlerAdapterBindings, createCliCommandHandlers } from "../lib/cli-handlers.js";
 import { renderCliHelp } from "../lib/cli/help.js";
 import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
-import { commandTable, compatibilityErrorForCli } from "../lib/command-table.js";
+import {
+  actionPolicyRequiresSessionLock,
+  commandRequiresSessionMutationLock,
+  commandTable,
+  compatibilityErrorForCli,
+} from "../lib/command-table.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
 import {
   assertRunResourcePreflight,
@@ -122,6 +127,10 @@ test("command table derives schemas, registry, handlers, help, and compatibility
   assert.deepEqual(Object.keys(handlers).sort(), tableCliNames);
   assert.deepEqual(Object.keys(toolRegistry).sort(), tableToolNames);
   assert.deepEqual(toolSchemas.map((schema) => schema.name).sort(), tableToolNames);
+  assert.deepEqual(
+    toolSchemas.map((schema) => [schema.name, Object.keys(schema.outputSchema.properties)]),
+    commandTable.map((command) => [command.name, [...command.outputFields]]),
+  );
   for (const command of commandTable) {
     const help = renderCliHelp({ command: command.cliCommand });
     assert.match(help, new RegExp(`Command: ${command.cliCommand}`));
@@ -146,6 +155,99 @@ test("command table derives schemas, registry, handlers, help, and compatibility
     const migrationError = compatibilityErrorForCli(command);
     assert.match(migrationError || "", /scheduled for removal after 2026-10-01/);
     assert.match(renderCliHelp({ command }), /Migration: .*migrate/i);
+    const definition = commandTable.find((entry) => entry.cliCommand === command)!;
+    const schema = toolSchemas.find((entry) => entry.name === definition.name)!;
+    assert.deepEqual(definition.outputFields, []);
+    assert.equal(schema.description, definition.compatibility!.error);
+    assert.match(String(schema.annotations.safety), /Fails before dispatch, locking, or mutation/);
+  }
+});
+
+test("table lock policy covers every mutating and conditional command", () => {
+  const conditionalArgs: Record<string, Record<string, unknown>> = {
+    guide: { startDashboard: true },
+    "session-forensics": { apply: true },
+    "research-fanout": { yes: true },
+    "lane-runner": { command: "git status --short" },
+    "partial-results": { record: "candidate-1" },
+    "ledger-doctor": { repair: true },
+    "gap-candidates": { modelCommand: "node model.mjs" },
+    "benchmark-inspect": { command: "node bench.mjs" },
+    "benchmark-lint": { command: "node bench.mjs" },
+    "checks-inspect": { command: "npm test" },
+    doctor: { checkBenchmark: true },
+  };
+  assert.deepEqual(
+    Object.keys(conditionalArgs).sort(),
+    commandTable
+      .filter((command) => command.conditionallyMutating)
+      .map((command) => command.cliCommand)
+      .sort(),
+  );
+
+  for (const command of commandTable) {
+    const defaultMutates = actionPolicyRequiresSessionLock(command.actionPolicy);
+    if (defaultMutates && command.sessionLock !== "none") {
+      assert.equal(
+        commandRequiresSessionMutationLock(command.cliCommand),
+        true,
+        `${command.cliCommand} should lock by default`,
+      );
+    }
+    if (command.sessionLock === "none") {
+      assert.equal(commandRequiresSessionMutationLock(command.cliCommand), false);
+    }
+    if (command.inputSchema.properties?.dry_run) {
+      assert.equal(commandRequiresSessionMutationLock(command.cliCommand, { dryRun: true }), false);
+    }
+  }
+  for (const [command, args] of Object.entries(conditionalArgs)) {
+    const definition = commandTable.find((entry) => entry.cliCommand === command)!;
+    assert.equal(
+      commandRequiresSessionMutationLock(command, args),
+      definition.sessionLock === "none" ? false : true,
+      `${command} conditional lock policy drifted`,
+    );
+  }
+  assert.equal(commandRequiresSessionMutationLock("guide", { startDashboard: true }), false);
+});
+
+test("handler adapters invoke the binding declared by each table entry", async () => {
+  const calls: string[] = [];
+  const dependencies = Object.fromEntries(
+    commandTable
+      .filter((command) => !command.compatibility)
+      .map((command) => [
+        command.handler,
+        async (...args: unknown[]) => {
+          calls.push(command.handler);
+          return command.handler === "measureQualityGap"
+            ? { binding: command.handler, metricOutput: "METRIC quality_gap=0" }
+            : { args, binding: command.handler };
+        },
+      ]),
+  );
+  const handlers = createCliCommandHandlers({
+    ...dependencies,
+    doctorHooks: async () => ({ hooks: true }),
+    interactiveSetup: async () => ({ interactive: true }),
+    parseJsonOption,
+  } as any);
+
+  assert.deepEqual([...commandHandlerAdapterBindings].sort(), [
+    "checksInspect",
+    "doctorSession",
+    "logExperiment",
+    "measureQualityGap",
+    "publicState",
+    "recipeCommand",
+    "serveDashboard",
+    "setupSession",
+  ]);
+  for (const command of commandTable.filter((entry) => !entry.compatibility)) {
+    calls.length = 0;
+    await handlers[command.cliCommand]({ _: [command.cliCommand], cwd: "." });
+    assert.deepEqual(calls, [command.handler], `${command.cliCommand} bypassed its table binding`);
   }
 });
 

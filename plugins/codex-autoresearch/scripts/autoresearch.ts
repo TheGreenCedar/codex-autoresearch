@@ -53,7 +53,10 @@ import {
   resolveActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
-import { compatibilityErrorForCli } from "../lib/command-table.js";
+import {
+  commandRequiresSessionMutationLock,
+  compatibilityErrorForCli,
+} from "../lib/command-table.js";
 import {
   CliUsageError,
   cliDebugRequested,
@@ -9659,7 +9662,7 @@ async function executeAutoresearchCli(
       }
     };
     let outcome: LooseObject;
-    if (requiresSessionMutationLock(command, args)) {
+    if (commandRequiresSessionMutationLock(command, args)) {
       const resolution = resolveWorkDir(args.workingDir || args.cwd);
       const lock = await sessionMutationLockLocation(resolution.workDir);
       outcome = await withSessionMutationLock(lock.root, command, execute, lock.path);
@@ -9673,34 +9676,6 @@ async function executeAutoresearchCli(
     writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
-}
-
-function requiresSessionMutationLock(command: string, args: LooseObject): boolean {
-  if (boolOption(args.dryRun, false)) return false;
-  if (command === "ledger-doctor") return boolOption(args.repair, false);
-  if (command === "doctor") return boolOption(args.checkBenchmark || args.check_benchmark, false);
-  if (command === "gap-candidates") {
-    return boolOption(args.apply, false) || Boolean(args.modelCommand || args.model_command);
-  }
-  if (command === "partial-results") return boolOption(args.record, false);
-  if (command === "session-forensics") return boolOption(args.apply, false);
-  return new Set([
-    "setup",
-    "research-setup",
-    "research-start",
-    "research-fanout",
-    "lane-runner",
-    "benchmark-lint",
-    "benchmark-inspect",
-    "checks-inspect",
-    "config",
-    "finalize-current-tree",
-    "next",
-    "log",
-    "new-segment",
-    "promote-gate",
-    "clear",
-  ]).has(command);
 }
 
 async function main() {

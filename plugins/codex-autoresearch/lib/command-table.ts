@@ -8,10 +8,12 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type ToolArgs = Record<string, JsonValue | undefined>;
 export type JsonSchema = {
   type?: string | string[];
+  description?: string;
   enum?: string[];
   properties?: Record<string, JsonSchema | undefined>;
   required?: string[];
   items?: JsonSchema;
+  additionalProperties?: boolean | JsonSchema;
 };
 
 export type ActionPolicy =
@@ -32,6 +34,7 @@ export type CommandCategory =
   | "dangerous";
 export type CommandAudience = "default" | "advanced" | "maintainer";
 export type CliOptionKind = "boolean" | "list" | "string";
+export type SessionLockPolicy = "action" | "always" | "none";
 export interface CommandCliOption {
   aliases?: readonly string[];
   key: string;
@@ -62,8 +65,14 @@ export interface CommandDefinition {
   inputSchema: JsonSchema;
   name: string;
   openWorld?: boolean;
+  outputFields: readonly string[];
+  outputSchemaOverrides?: Readonly<Record<string, JsonSchema>>;
   resolveActionPolicy?: (args: Readonly<Record<string, unknown>>) => ActionPolicy;
+  sessionLock?: SessionLockPolicy;
 }
+const defineOutputSchemaOverrides = (
+  schemas: Readonly<Record<string, JsonSchema>>,
+): Readonly<Record<string, JsonSchema>> => schemas;
 const LOOP_INTENT_PROPERTIES = {
   name: { type: "string" },
   goal: { type: "string" },
@@ -144,6 +153,17 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "setupPlan",
+    outputFields: [
+      "ok",
+      "workDir",
+      "missing",
+      "missingEssentials",
+      "recommendedRecipe",
+      "guidedFlow",
+      "nextStep",
+      "gateQuality",
+      "preflight",
+    ],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs setup-plan --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
@@ -172,6 +192,26 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "guidedSetup",
+    outputFields: [
+      "ok",
+      "workDir",
+      "stage",
+      "commands",
+      "nextAction",
+      "nextStep",
+      "lastRun",
+      "dashboard",
+      "gateQuality",
+      "preflight",
+    ],
+    outputSchemaOverrides: defineOutputSchemaOverrides({
+      commands: {
+        type: "object",
+        description: "Named guided workflow command map.",
+        additionalProperties: true,
+      },
+    }),
+    sessionLock: "none",
     help: [
       "node scripts/autoresearch.mjs guide --cwd <project> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--name <name>] [--metric-name <name>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--shell bash|powershell] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
     ],
@@ -206,6 +246,15 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "promptPlan",
+    outputFields: [
+      "ok",
+      "workDir",
+      "intent",
+      "setup",
+      "missingEssentials",
+      "nextAction",
+      "nextStep",
+    ],
     defaultHelp: true,
     help: ["node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>"],
     cliOptions: [
@@ -233,6 +282,15 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "onboardingPacket",
+    outputFields: [
+      "ok",
+      "workDir",
+      "protocol",
+      "missingEssentials",
+      "nextAction",
+      "nextStep",
+      "templates",
+    ],
     help: ["node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]"],
     description:
       "Return a compact human-and-agent onboarding packet with state, hazards, report templates, and next commands.",
@@ -252,6 +310,31 @@ export const commandTable = [
     category: "diagnostic",
     audience: "default",
     handler: "recommendNext",
+    outputFields: [
+      "ok",
+      "workDir",
+      "action",
+      "whySafe",
+      "nextStep",
+      "commands",
+      "operatorChecklist",
+      "resolvedDecision",
+      "sessionDecisionCapsule",
+      "runtimeProvenance",
+      "laneLifecycle",
+      "packetDiagnostics",
+      "portfolioRecommendation",
+    ],
+    outputSchemaOverrides: defineOutputSchemaOverrides({
+      action: {
+        type: ["string", "object"],
+        description: "Safe next action summary or action object.",
+      },
+      commands: {
+        type: ["array", "object"],
+        description: "Copyable command list or named command map.",
+      },
+    }),
     help: [
       "node scripts/autoresearch.mjs recommend-next --cwd <project> [--compact] [--operator-checklist]",
     ],
@@ -275,6 +358,14 @@ export const commandTable = [
     category: "integration",
     audience: "advanced",
     handler: "codexGoalBrief",
+    outputFields: ["ok", "workDir", "boundary", "objectiveDraft", "completionAudit", "commands"],
+    outputSchemaOverrides: defineOutputSchemaOverrides({
+      commands: {
+        type: "object",
+        description: "Named Codex Goal workflow command map.",
+        additionalProperties: true,
+      },
+    }),
     help: [
       "node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]",
     ],
@@ -305,6 +396,19 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "sessionForensics",
+    outputFields: [
+      "ok",
+      "workDir",
+      "dryRun",
+      "wrote",
+      "outputDir",
+      "plannedFiles",
+      "counts",
+      "workflowWaste",
+      "decisionCapsule",
+      "canonicalNextAction",
+      "nextAction",
+    ],
     help: [
       "node scripts/autoresearch.mjs session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> [--dry-run|--apply] [--allow-snippets] [--allow-outside-workdir] [--json-full|--verbose]",
     ],
@@ -338,6 +442,7 @@ export const commandTable = [
     category: "setup",
     audience: "advanced",
     handler: "recipeCommand",
+    outputFields: ["ok", "recipes"],
     help: [
       "node scripts/autoresearch.mjs recipes list|show|recommend [recipe-id] [--cwd <project>] [--catalog <path-or-url>]",
     ],
@@ -369,6 +474,7 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "setupSession",
+    outputFields: ["ok", "workDir", "files", "init"],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs setup --cwd <project> --name <name> --metric-name <name> [--recipe <id>] [--catalog <path-or-url>] [--trust-catalog] [--direction lower|higher] [--benchmark-command <cmd>] [--benchmark-prints-metric true|false] [--checks-command <cmd>] [--shell bash|powershell] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>]",
@@ -428,6 +534,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "setupResearchSession",
+    outputFields: ["ok", "workDir", "slug", "qualityGap"],
     help: [
       "node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
     ],
@@ -448,6 +555,14 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "researchStart",
+    outputFields: ["dryRun", "workDir", "slug", "metricName", "baselineLogged", "commands"],
+    outputSchemaOverrides: defineOutputSchemaOverrides({
+      commands: {
+        type: "object",
+        description: "Named research workflow command map.",
+        additionalProperties: true,
+      },
+    }),
     help: [
       "node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--dry-run] [--skip-init] [--no-baseline-log]",
     ],
@@ -470,6 +585,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "researchFanout",
+    outputFields: ["ok", "workDir", "dryRun", "fanoutPlan", "parallelLanes"],
     help: [
       "node scripts/autoresearch.mjs research-fanout --cwd <project> [--lanes <n>] [--dry-run|--yes]",
     ],
@@ -497,6 +613,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "laneRunner",
+    outputFields: ["ok", "workDir", "dryRun", "lane", "result", "coordinatorRecommendation"],
     help: [
       "node scripts/autoresearch.mjs lane-runner --cwd <project> [--lane-id <id>] [--mode read_only_scout|implementation|big_idea] [--command <allowlisted-git-read>] [--worktree <path>|--write-scope <paths>] [--summary <text>] [--recommendation <text>] [--evidence <items>] [--risks <items>] [--human-approval] [--time-budget-seconds <n>] [--dry-run|--yes]",
     ],
@@ -546,6 +663,14 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "configureSession",
+    outputFields: ["ok", "workDir", "config", "updates"],
+    outputSchemaOverrides: defineOutputSchemaOverrides({
+      updates: {
+        type: "object",
+        description: "Applied configuration updates keyed by setting.",
+        additionalProperties: true,
+      },
+    }),
     help: [
       "node scripts/autoresearch.mjs config --cwd <project> [--autonomy-mode guarded|owner-autonomous|manual] [--checks-policy always|on-improvement|manual] [--extend <n>] [--commit-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--budget-note <text>] [--protected-benchmark-paths <paths>] [--secondary-metric-constraints <rules>] [--secondary-metric-constraint-mode advisory|blocking]",
     ],
@@ -581,6 +706,7 @@ export const commandTable = [
     category: "advanced",
     audience: "maintainer",
     handler: "compatibilityError",
+    outputFields: [],
     help: [
       "node scripts/autoresearch.mjs init --cwd <project> --name <name> --metric-name <name> [--goal <goal>] [--metric-unit <unit>] [--direction lower|higher]",
     ],
@@ -611,6 +737,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "compatibilityError",
+    outputFields: [],
     help: [
       "node scripts/autoresearch.mjs run --cwd <project> [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--packet-env-mode minimal|inherit] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",
     ],
@@ -636,6 +763,28 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "nextExperiment",
+    outputFields: [
+      "ok",
+      "workDir",
+      "doctor",
+      "run",
+      "decision",
+      "packetEvidence",
+      "fullPacket",
+      "history",
+      "lastRunPath",
+      "report",
+      "refused",
+      "code",
+      "blockingAction",
+      "decisionEnvelope",
+      "sessionDecisionCapsule",
+      "loopContract",
+      "nextAction",
+      "clearingCondition",
+      "commandHint",
+      "continuation",
+    ],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--packet-env-mode minimal|inherit] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",
@@ -658,6 +807,14 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "partialResultsCommand",
+    outputFields: [
+      "ok",
+      "workDir",
+      "candidates",
+      "skippedArtifacts",
+      "experiment",
+      "evidenceClaim",
+    ],
     help: [
       "node scripts/autoresearch.mjs partial-results --cwd <project> [--from-last|--artifact <path>] [--record <candidate-id>] [--research-slug <slug>]",
     ],
@@ -686,6 +843,7 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "logExperiment",
+    outputFields: ["ok", "workDir", "experiment", "continuation"],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit <hash>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
@@ -728,6 +886,28 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "publicState",
+    outputFields: [
+      "ok",
+      "workDir",
+      "runs",
+      "best",
+      "warnings",
+      "memory",
+      "resolvedDecision",
+      "sessionDecisionCapsule",
+      "runtimeProvenance",
+      "runtimeDriftSummary",
+      "runtimeAuthority",
+      "dashboardHealth",
+      "sourceCleanliness",
+      "ledgerHealth",
+      "gateQuality",
+      "preflight",
+      "portfolioRecommendation",
+      "laneLifecycle",
+      "packetDiagnostics",
+      "report",
+    ],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs state --cwd <project> [--compact] [--report] [--json-full]",
@@ -752,6 +932,17 @@ export const commandTable = [
     category: "diagnostic",
     audience: "default",
     handler: "ledgerDoctor",
+    outputFields: [
+      "ok",
+      "workDir",
+      "ledgerPath",
+      "readOnly",
+      "ledgerHealth",
+      "repairedLedgerHealth",
+      "backupPath",
+      "repair",
+      "warnings",
+    ],
     defaultHelp: true,
     help: ["node scripts/autoresearch.mjs ledger-doctor --cwd <project> [--json] [--repair --yes]"],
     conditionallyMutating: true,
@@ -776,6 +967,7 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "measureQualityGap",
+    outputFields: ["ok", "workDir", "open", "closed", "openItems"],
     help: [
       "node scripts/autoresearch.mjs quality-gap --cwd <project> [--research-slug <slug>] [--list] [--json]",
     ],
@@ -801,12 +993,18 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "gapCandidates",
+    outputFields: ["ok", "workDir", "candidates", "qualityGap", "stopRecommended", "stopStatus"],
     help: [
       "node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug> [--apply] [--model-command <cmd>] [--model-timeout-seconds <n>]",
     ],
     conditionallyMutating: true,
     openWorld: true,
-    resolveActionPolicy: (args) => (enabledArg(args.apply) ? "state_mutation" : "preview"),
+    resolveActionPolicy: (args) =>
+      enabledArg(args.apply)
+        ? "state_mutation"
+        : args.model_command || args.modelCommand
+          ? "process_start"
+          : "preview",
     description:
       "Extract or apply validated deep-research gap candidates from synthesis and optional model command output.",
     inputSchema: {
@@ -829,6 +1027,7 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "finalizePreview",
+    outputFields: ["ok", "ready", "warnings", "nextAction", "semanticSafety", "finalTreeCoverage"],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]",
@@ -851,6 +1050,7 @@ export const commandTable = [
     category: "dangerous",
     audience: "advanced",
     handler: "finalizeCurrentTree",
+    outputFields: ["ok", "ready", "files", "planOutput", "currentTreeCoverage"],
     help: [
       "node scripts/autoresearch.mjs finalize-current-tree --cwd <project> [--trunk main] [--exclude-session-artifacts|--include-session-artifacts] [--progress]",
     ],
@@ -875,6 +1075,7 @@ export const commandTable = [
     category: "integration",
     audience: "advanced",
     handler: "compatibilityError",
+    outputFields: [],
     help: [
       "node scripts/autoresearch.mjs integrations list|doctor|sync-recipes [--catalog <path-or-url>]",
     ],
@@ -902,6 +1103,7 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "benchmarkInspect",
+    outputFields: ["ok", "workDir", "warnings", "hints", "outputPreview"],
     help: [
       "node scripts/autoresearch.mjs benchmark-inspect --cwd <project> [--command <cmd>] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",
     ],
@@ -929,6 +1131,7 @@ export const commandTable = [
     category: "diagnostic",
     audience: "default",
     handler: "benchmarkLint",
+    outputFields: ["ok", "workDir", "issues", "parsedMetrics"],
     help: [
       "node scripts/autoresearch.mjs benchmark-lint --cwd <project> [--metric-name <name>] [--sample <text>|--command <cmd>] [--allow-fixed-control-rerun]",
     ],
@@ -959,6 +1162,7 @@ export const commandTable = [
     category: "diagnostic",
     audience: "advanced",
     handler: "checksInspect",
+    outputFields: ["ok", "workDir", "failedTests", "warnings", "hints"],
     help: [
       "node scripts/autoresearch.mjs checks-inspect --cwd <project> --command <cmd> [--timeout-seconds <n>]",
     ],
@@ -987,6 +1191,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "newSegment",
+    outputFields: ["ok", "workDir", "dryRun", "entry"],
     help: [
       "node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
     ],
@@ -1028,6 +1233,7 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "promoteGate",
+    outputFields: ["ok", "workDir", "dryRun", "entry"],
     help: [
       "node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
     ],
@@ -1061,6 +1267,8 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "exportDashboard",
+    outputFields: ["ok", "workDir", "output", "summary", "best", "nextAction", "modeGuidance"],
+    sessionLock: "none",
     help: [
       "node scripts/autoresearch.mjs export --cwd <project> [--output <html>] [--showcase] [--json-full|--verbose] [--progress]",
     ],
@@ -1100,6 +1308,23 @@ export const commandTable = [
     category: "advanced",
     audience: "advanced",
     handler: "serveDashboard",
+    outputFields: [
+      "ok",
+      "workDir",
+      "url",
+      "port",
+      "pid",
+      "version",
+      "startedAt",
+      "healthUrl",
+      "registryPath",
+      "debugLedger",
+      "dashboardHealth",
+      "verified",
+      "deferredViewModel",
+      "modeGuidance",
+    ],
+    sessionLock: "none",
     help: ["node scripts/autoresearch.mjs serve --cwd <project> [--port <n>] [--debug-ledger]"],
     actionAliases: { liveDashboard: "serve dashboard" },
     description: "Start a local live dashboard for autoresearch.jsonl and return the operator URL.",
@@ -1120,6 +1345,34 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "doctorSession",
+    outputFields: [
+      "ok",
+      "workDir",
+      "config",
+      "state",
+      "git",
+      "benchmarkContract",
+      "benchmark",
+      "catalogTrust",
+      "issues",
+      "warnings",
+      "warningDetails",
+      "drift",
+      "runtimeDriftSummary",
+      "runtimeAuthority",
+      "gateQuality",
+      "preflight",
+      "resolvedDecision",
+      "commandExecutionBoundary",
+      "commandAuthority",
+      "runtimeProvenance",
+      "sessionDecisionCapsule",
+      "scaffoldHealth",
+      "researchIntegrity",
+      "nextAction",
+      "continuation",
+      "explanation",
+    ],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs doctor --cwd <project> [--command <cmd>] [--check-benchmark] [--revalidate-catalog] [--allow-fixed-control-rerun] [--explain] [--json-full]",
@@ -1158,6 +1411,7 @@ export const commandTable = [
     category: "dangerous",
     audience: "maintainer",
     handler: "clearSession",
+    outputFields: ["ok", "workDir", "dryRun", "wouldDelete", "deleted", "missing"],
     help: ["node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]"],
     description: "Delete autoresearch runtime artifacts after explicit confirmation.",
     inputSchema: {
@@ -1187,6 +1441,30 @@ export function commandDefinitionForCli(command: string): CommandDefinition | nu
 
 export function compatibilityErrorForCli(command: string): string | null {
   return commandDefinitionForCli(command)?.compatibility?.error || null;
+}
+
+export function commandRequiresSessionMutationLock(
+  command: string,
+  args: Readonly<Record<string, unknown>> = {},
+): boolean {
+  const definition = commandDefinitionForCli(command);
+  if (!definition || definition.compatibility) return false;
+  if (enabledArg(args.dry_run ?? args.dryRun)) return false;
+  if (definition.sessionLock === "none") return false;
+  if (definition.sessionLock === "always") return true;
+  const policy = definition.resolveActionPolicy?.(args) || definition.actionPolicy;
+  return actionPolicyRequiresSessionLock(policy);
+}
+
+export function actionPolicyRequiresSessionLock(policy: ActionPolicy): boolean {
+  return [
+    "artifact_write",
+    "state_mutation",
+    "git_mutation",
+    "process_start",
+    "destructive",
+    "unsafe_open_world",
+  ].includes(policy);
 }
 
 export function validateToolArguments(name: string, args: ToolArgs = {}, options: ToolArgs = {}) {

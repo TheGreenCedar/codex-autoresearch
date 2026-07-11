@@ -11,6 +11,7 @@ type CliHandler = (args: LooseObject) => Promise<LooseObject>;
 type CliDependency = (...args: any[]) => any;
 
 type ActiveHandlerBinding = Exclude<CommandHandlerBinding, "compatibilityError">;
+type HandlerAdapter = (deps: CliCommandDeps, args: LooseObject) => Promise<LooseObject>;
 
 export type CliCommandDeps = Record<ActiveHandlerBinding, CliDependency> & {
   doctorHooks: CliDependency;
@@ -18,51 +19,62 @@ export type CliCommandDeps = Record<ActiveHandlerBinding, CliDependency> & {
   parseJsonOption: CliDependency;
 };
 
-export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, CliHandler> {
-  const dependencies = deps as unknown as Record<string, CliDependency>;
-  const handlers = Object.fromEntries(
-    commandTable.map((command) => [
-      command.cliCommand,
-      command.compatibility
-        ? async () => {
-            throw new Error(command.compatibility.error);
-          }
-        : async (args: LooseObject) => ({ result: await dependencies[command.handler](args) }),
-    ]),
-  ) as Record<string, CliHandler>;
-
-  handlers.setup = async (args) => ({
+const HANDLER_ADAPTERS: Partial<Record<ActiveHandlerBinding, HandlerAdapter>> = {
+  setupSession: async (deps, args) => ({
     result: await (args.interactive ? deps.interactiveSetup(args) : deps.setupSession(args)),
-  });
-  handlers.recipes = async (args) => ({
+  }),
+  recipeCommand: async (deps, args) => ({
     result: await deps.recipeCommand(args._?.[1] || "list", args),
-  });
-  handlers["quality-gap"] = async (args) => {
+  }),
+  measureQualityGap: async (deps, args) => {
     const result = await deps.measureQualityGap(args);
     return args.list || args.json ? { result } : { text: result.metricOutput };
-  };
-  handlers.log = async (args) => ({
+  },
+  logExperiment: async (deps, args) => ({
     result: await deps.logExperiment({
       ...args,
       metrics: args.metricsFile ? args.metrics : deps.parseJsonOption(args.metrics, null),
       asi: args.asiFile || args.asiJsonFile ? args.asi : deps.parseJsonOption(args.asi, null),
     }),
-  });
-  handlers.state = async (args) => ({
+  }),
+  publicState: async (deps, args) => ({
     result: await deps.publicState({ ...args, bounded: args.jsonFull !== true }),
-  });
-  handlers.doctor = async (args) => ({
+  }),
+  doctorSession: async (deps, args) => ({
     result: await (args._?.[1] === "hooks" || args.hooks
       ? deps.doctorHooks(args)
       : deps.doctorSession(args)),
-  });
-  handlers["checks-inspect"] = async (args) => ({
+  }),
+  checksInspect: async (deps, args) => ({
     result: await deps.checksInspect({ ...args, command: args.command || args.checksCommand }),
-  });
-  handlers.serve = async (args) => ({
+  }),
+  serveDashboard: async (deps, args) => ({
     keepAlive: true,
     result: await deps.serveDashboard(args),
-  });
+  }),
+};
+
+export const commandHandlerAdapterBindings = Object.freeze(
+  Object.keys(HANDLER_ADAPTERS) as ActiveHandlerBinding[],
+);
+
+export function createCliCommandHandlers(deps: CliCommandDeps): Record<string, CliHandler> {
+  const dependencies = deps as unknown as Record<string, CliDependency>;
+  const handlers = Object.fromEntries(
+    commandTable.map((command) => {
+      const adapter = HANDLER_ADAPTERS[command.handler as ActiveHandlerBinding];
+      return [
+        command.cliCommand,
+        command.compatibility
+          ? async () => {
+              throw new Error(command.compatibility.error);
+            }
+          : adapter
+            ? async (args: LooseObject) => await adapter(deps, args)
+            : async (args: LooseObject) => ({ result: await dependencies[command.handler](args) }),
+      ];
+    }),
+  ) as Record<string, CliHandler>;
 
   return normalizeCliHandlers(handlers);
 }

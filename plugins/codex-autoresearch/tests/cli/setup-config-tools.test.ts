@@ -522,6 +522,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   const readState = toolSchemas.find((tool) => tool.name === "read_state");
   const onboardingPacket = toolSchemas.find((tool) => tool.name === "onboarding_packet");
   const recommendNext = toolSchemas.find((tool) => tool.name === "recommend_next");
+  const goalBridge = toolSchemas.find((tool) => tool.name === "codex_goal_bridge");
   const configureSession = toolSchemas.find((tool) => tool.name === "configure_session");
   const ledgerDoctor = toolSchemas.find((tool) => tool.name === "ledger_doctor");
   const startResearch = toolSchemas.find((tool) => tool.name === "start_research_loop");
@@ -536,21 +537,22 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.ok(readState);
   assert.ok(onboardingPacket);
   assert.ok(recommendNext);
+  assert.ok(goalBridge);
   assert.ok(configureSession);
   assert.ok(ledgerDoctor);
   assert.ok(startResearch);
-  assert.match(guided.description, /first-run or resume action packet/);
+  assert.match(guided.description, /guided first-run or resume packet/);
   assert.equal(guided.outputSchema.type, "object");
   assert.equal(next.outputSchema.type, "object");
-  assert.match(next.description, /normal measured loop iteration/);
-  assert.match(serve.description, /live local dashboard/);
+  assert.match(next.description, /preflight readout and benchmark/);
+  assert.match(serve.description, /local live dashboard/);
   assert.equal(
     doctor.annotations.safety,
-    "Read-only unless benchmark check runs configured commands.",
+    "Read-only by default; mutating or process-starting options are explicit and session-locked.",
   );
   assert.equal(
     guided.annotations.safety,
-    "Read-only by default; starts a local dashboard only when start_dashboard=true.",
+    "Read-only by default; process-starting options are explicit and do not mutate or lock session state.",
   );
   assert.equal(guided.annotations.readOnlyHint, false);
   assert.equal(researchFanout.annotations.readOnlyHint, false);
@@ -585,8 +587,10 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.deepEqual(recommendNext.outputSchema.properties.commands.type, ["array", "object"]);
   assert.equal(recommendNext.outputSchema.properties.laneLifecycle.type, "object");
   assert.equal(recommendNext.outputSchema.properties.packetDiagnostics.type, "object");
-  assert.equal(guided.outputSchema.properties.commands.type, "array");
-  assert.equal(guided.outputSchema.properties.commands.items.type, "string");
+  assert.equal(guided.outputSchema.properties.commands.type, "object");
+  assert.equal(goalBridge.outputSchema.properties.commands.type, "object");
+  assert.equal(configureSession.outputSchema.properties.updates.type, "object");
+  assert.equal(startResearch.outputSchema.properties.commands.type, "object");
   assert.equal(guided.outputSchema.properties.dashboard.type, "object");
   assert.equal(next.outputSchema.properties.parsedMetrics, undefined);
   assert.equal(next.outputSchema.properties.decision.type, "object");
@@ -637,7 +641,7 @@ test("tool schemas expose guidance and output contracts", async () => {
   }
   assert.equal(
     richDoctor.annotations.safety,
-    "Read-only unless benchmark check runs configured commands.",
+    "Read-only by default; mutating or process-starting options are explicit and session-locked.",
   );
   assert.equal(richDoctor.annotations.readOnlyHint, false);
   assert.equal(richDoctor.annotations.openWorldHint, true);
@@ -675,6 +679,31 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(actionPolicyForTool("ledger_doctor"), "read");
   assert.equal(actionPolicyForTool("ledger_doctor", { repair: true, yes: true }), "artifact_write");
   assert.equal(toolMutates("read_state"), false);
+});
+
+test("table output types match representative runtime command maps", async () => {
+  await withTempDir("tool-output-types", async (dir) => {
+    await setupFixture(dir, { name: "tool output types" });
+    const { toolSchemas } = await import("../../lib/tool-schemas.js");
+    const guidedResult = await runCli(["guide", "--cwd", dir, "--compact"]);
+    const configuredResult = await runCli(["config", "--cwd", dir, "--packet-budget", "2"]);
+    assert.equal(guidedResult.code, 0, guidedResult.stderr);
+    assert.equal(configuredResult.code, 0, configuredResult.stderr);
+
+    const guidedPayload = JSON.parse(guidedResult.stdout);
+    const configuredPayload = JSON.parse(configuredResult.stdout);
+    const guidedSchema = toolSchemas.find((tool) => tool.name === "guided_setup");
+    const configuredSchema = toolSchemas.find((tool) => tool.name === "configure_session");
+    assert.ok(guidedSchema);
+    assert.ok(configuredSchema);
+    assert.equal(Array.isArray(guidedPayload.commands), false);
+    assert.equal(typeof guidedPayload.commands, guidedSchema.outputSchema.properties.commands.type);
+    assert.equal(Array.isArray(configuredPayload.updates), false);
+    assert.equal(
+      typeof configuredPayload.updates,
+      configuredSchema.outputSchema.properties.updates.type,
+    );
+  });
 });
 
 test("CLI and tool argument normalization share runtime contracts", async () => {
