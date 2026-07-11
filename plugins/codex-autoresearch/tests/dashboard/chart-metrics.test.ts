@@ -66,6 +66,59 @@ test("dashboard chart samples full bounded history while preserving semantic anc
   assert.equal(sampled.find((point) => point.runNumber === 777)?.heldMetric, true);
 });
 
+test("dashboard chart reserves full-history coverage when every run changes status", () => {
+  const runs: SessionRun[] = Array.from({ length: 5_001 }, (_, index) => {
+    const run = index + 1;
+    const status =
+      run === 3_333
+        ? "crash"
+        : run === 4_444
+          ? "checks_failed"
+          : run % 2 === 0
+            ? "discard"
+            : "keep";
+    return {
+      run,
+      metric: status === "crash" || status === "checks_failed" ? null : 5_002 - run,
+      status,
+      description: `Run ${run}`,
+      metrics: {},
+      asi: {},
+      segment: 0,
+    };
+  });
+  const session = {
+    segment: 0,
+    config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" as const },
+    runs,
+  };
+  const readout = buildReadout(session);
+  const sampledRuns = sampleTrendChartData(
+    buildChartData(buildChart(session, readout), readout),
+    10,
+    2_600,
+  ).map((point) => point.runNumber);
+  const anchors = new Set([1, 2_600, 3_333, 4_444, 5_001]);
+  const coverageRuns = sampledRuns.filter((run) => !anchors.has(run) && run < 4_900);
+
+  assert.equal(sampledRuns.length, 10);
+  for (const anchor of anchors) {
+    assert.ok(sampledRuns.includes(anchor), `missing sampled run ${anchor}`);
+  }
+  assert.ok(
+    coverageRuns.some((run) => run < 1_667),
+    `missing early coverage: ${sampledRuns}`,
+  );
+  assert.ok(
+    coverageRuns.some((run) => run >= 1_667 && run < 3_334),
+    `missing middle coverage: ${sampledRuns}`,
+  );
+  assert.ok(
+    coverageRuns.some((run) => run >= 3_334),
+    `missing late coverage: ${sampledRuns}`,
+  );
+});
+
 test("dashboard summary cannot override the best accepted visible keep", () => {
   const runs: SessionRun[] = Array.from({ length: 4 }, (_, index) => ({
     run: index + 102,
