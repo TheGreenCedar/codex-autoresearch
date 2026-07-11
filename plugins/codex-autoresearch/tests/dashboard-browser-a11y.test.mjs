@@ -33,13 +33,17 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
   const server = await serveHtml(fixture.html, fixture.failureHtml, fixture.livePayload);
   const staticFixtureDir = await mkdtemp(path.join(tmpdir(), "autoresearch-dashboard-static-"));
   const staticFixturePath = path.join(staticFixtureDir, "autoresearch-dashboard.html");
+  const smallFixturePath = path.join(staticFixtureDir, "autoresearch-dashboard-100.html");
   await writeFile(staticFixturePath, fixture.staticHtml);
+  await writeFile(smallFixturePath, fixture.smallHtml);
+  assert.ok(fixture.livePayloadBytes <= 2_500_000, `${fixture.livePayloadBytes} response bytes`);
   let browser;
 
   try {
     browser = await launchBrowser(browserExecutable);
     const client = await CdpClient.connect(browser.wsUrl);
     try {
+      const readyStartedAt = Date.now();
       const page = await openPage(client, server.url);
       await client.send(
         "Emulation.setDeviceMetricsOverride",
@@ -47,13 +51,20 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         page.sessionId,
       );
       await waitForPageReady(client, page.sessionId);
-      await waitForSelector(client, page.sessionId, ".chart-point-button");
+      await waitForSelector(client, page.sessionId, "#trend-chart-range");
+      const readyMs = Date.now() - readyStartedAt;
+      assert.ok(readyMs <= 2_000, `${readyMs}ms dashboard readiness`);
       await waitForFunction(
         client,
         page.sessionId,
         "() => document.querySelector('#ledger-body')?.textContent?.includes('#5001')",
         "Live refresh did not render run #5001.",
       );
+      const desktopChart = await dashboardScaleState(client, page.sessionId);
+      assert.ok(desktopChart.chartPoints <= 48, JSON.stringify(desktopChart));
+      assert.equal(desktopChart.chartRanges, 1);
+      assert.equal(desktopChart.pointButtons, 0);
+      assert.equal(desktopChart.hiddenPointLists, 0);
       const canonicalOperateDecision = await decisionViewportState(client, page.sessionId);
       assert.equal(canonicalOperateDecision.audit, false);
       assert.equal(canonicalOperateDecision.visible, true);
@@ -167,13 +178,17 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         page.sessionId,
         `(() => ({
           rows: document.querySelectorAll('#ledger-body tr').length,
-          loadText: document.querySelector('.ledger-load-more button')?.textContent?.trim() || '',
-          tabbablePoints: document.querySelectorAll('.chart-point-button[tabindex="0"]').length
+          pageText: document.querySelector('.ledger-pagination [aria-current="page"]')?.textContent?.trim() || '',
+          chartRanges: document.querySelectorAll('#trend-chart input[type="range"]').length,
+          pointButtons: document.querySelectorAll('.chart-point-button').length,
+          hiddenPointLists: document.querySelectorAll('.chart-data-list li').length
         }))()`,
       );
-      assert.equal(initialLedger.rows, 100);
-      assert.equal(initialLedger.loadText, "Load 100 older");
-      assert.equal(initialLedger.tabbablePoints, 1);
+      assert.equal(initialLedger.rows, 20);
+      assert.equal(initialLedger.pageText, "Page 1 of 251");
+      assert.equal(initialLedger.chartRanges, 1);
+      assert.equal(initialLedger.pointButtons, 0);
+      assert.equal(initialLedger.hiddenPointLists, 0);
       await evaluate(
         client,
         page.sessionId,
@@ -200,21 +215,49 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         JSON.stringify(ledgerGeometry),
       );
 
+      const paginationStartedAt = Date.now();
       await evaluate(
         client,
         page.sessionId,
-        "document.querySelector('.ledger-load-more button').click()",
+        "document.querySelector('.ledger-pagination button:last-child').click()",
       );
       await waitForFunction(
         client,
         page.sessionId,
-        "() => document.querySelectorAll('#ledger-body tr').length === 200",
-        "Large ledger did not load the next 100 older rows.",
+        "() => document.querySelector('.ledger-pagination [aria-current=\"page\"]')?.textContent?.includes('Page 2')",
+        "Large ledger did not show the next 20 older rows.",
+      );
+      const paginationMs = Date.now() - paginationStartedAt;
+      assert.ok(paginationMs <= 200, "Ledger pagination exceeded 200ms");
+      assert.equal(
+        await evaluate(
+          client,
+          page.sessionId,
+          "document.querySelectorAll('#ledger-body tr').length",
+        ),
+        20,
       );
 
-      const opener = await tabUntil(client, page.sessionId, ".chart-point-button", 80);
-      assert.equal(opener.matches, true, `Tab did not reach a chart point: ${opener.summary}`);
-      assert.match(opener.ariaLabel, /Open details for run/);
+      const opener = await tabUntil(client, page.sessionId, "#trend-chart-range", 80);
+      assert.equal(opener.matches, true, `Tab did not reach the chart range: ${opener.summary}`);
+      assert.match(
+        opener.ariaValueText,
+        /run 5000/i,
+        "Live refresh should preserve the externally selected chart run.",
+      );
+
+      const priorRun = opener.run;
+      const rangeStartedAt = Date.now();
+      await pressKey(client, page.sessionId, "ArrowLeft");
+      await waitForFunction(
+        client,
+        page.sessionId,
+        `(run) => document.querySelector('#trend-chart-range')?.getAttribute('data-chart-run') !== run`,
+        "Chart range did not move to the previous sampled run.",
+        [priorRun],
+      );
+      const rangeMs = Date.now() - rangeStartedAt;
+      assert.ok(rangeMs <= 200, "Chart range interaction exceeded 200ms");
 
       await pressKey(client, page.sessionId, "Enter");
       await waitForSelector(client, page.sessionId, '[role="dialog"][aria-modal="true"]');
@@ -245,11 +288,7 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
 
       await pressKey(client, page.sessionId, "Escape");
       await waitForNoSelector(client, page.sessionId, '[role="dialog"]');
-      await waitForActiveElement(
-        client,
-        page.sessionId,
-        `.chart-point-button[data-chart-run="${opener.run}"]`,
-      );
+      await waitForActiveElement(client, page.sessionId, "#trend-chart-range");
 
       await client.send(
         "Emulation.setEmulatedMedia",
@@ -259,27 +298,89 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       const reducedMotion = await evaluate(
         client,
         page.sessionId,
-        "getComputedStyle(document.querySelector('.latest-halo-ui')).animationDuration",
+        "getComputedStyle(document.querySelector('.chart-open-details')).transitionDuration",
       );
       assert.ok(["0.001ms", "1e-06s"].includes(reducedMotion), reducedMotion);
 
+      const smallPage = await openPage(client, pathToFileURL(smallFixturePath).href);
+      await client.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
+        smallPage.sessionId,
+      );
+      await waitForPageReady(client, smallPage.sessionId);
+      await waitForSelector(client, smallPage.sessionId, "#trend-chart-range");
+      const smallScale = await dashboardScaleState(client, smallPage.sessionId);
+      const smallAx = await client.send("Accessibility.getFullAXTree", {}, smallPage.sessionId);
+
+      await client.send("Target.activateTarget", { targetId: page.targetId });
       await client.send(
         "Emulation.setDeviceMetricsOverride",
         { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
         page.sessionId,
       );
-      const mobile = await evaluate(
-        client,
-        page.sessionId,
-        `(() => {
-          const shell = document.querySelector('.runboard-shell').getBoundingClientRect();
-          return {
-            noPageOverflow: document.documentElement.scrollWidth <= window.innerWidth,
-            shellFits: shell.left >= 0 && shell.right <= window.innerWidth + 1
-          };
-        })()`,
+      try {
+        await waitForFunction(
+          client,
+          page.sessionId,
+          "() => document.querySelectorAll('.chart-point-group > .chart-point').length <= 10",
+          "Mobile chart did not settle to its point budget.",
+        );
+      } catch (error) {
+        const diagnostics = await evaluate(
+          client,
+          page.sessionId,
+          `(() => {
+            const panelWidth = document.querySelector('#trend-panel')?.clientWidth || 0;
+            const range = document.querySelector('#trend-chart-range');
+            return {
+              visibility: document.visibilityState,
+              viewportWidth: window.innerWidth,
+              panelWidth,
+              chartWidth: document.querySelector('.chart-visual')?.clientWidth || 0,
+              expectedBudget: Math.min(48, Math.max(10, Math.floor(panelWidth / 56))),
+              rangeMax: Number(range?.max ?? -1),
+              selectedRun: range?.getAttribute('data-chart-run') || '',
+              pointCount: document.querySelectorAll('.chart-point-group > .chart-point').length,
+              sampleNote: document.querySelector('.chart-sample-note')?.textContent?.trim() || ''
+            };
+          })()`,
+        );
+        throw new Error(`${error.message} ${JSON.stringify(diagnostics)}`);
+      }
+      await evaluate(client, page.sessionId, "document.querySelector('.toast-close')?.click()");
+      await waitForNoSelector(client, page.sessionId, ".toast");
+      const mobile = await dashboardScaleState(client, page.sessionId);
+      const largeAx = await client.send("Accessibility.getFullAXTree", {}, page.sessionId);
+      const largeSliders = largeAx.nodes.filter((node) => node.role?.value === "slider");
+      const smallSemanticAx = semanticAxNodeCount(smallAx.nodes);
+      const largeSemanticAx = semanticAxNodeCount(largeAx.nodes);
+
+      assert.equal(mobile.noPageOverflow, true, JSON.stringify(mobile));
+      assert.equal(mobile.shellFits, true, JSON.stringify(mobile));
+      assert.equal(mobile.ledgerFits, true, JSON.stringify(mobile));
+      assert.equal(mobile.mobileLabels, true, JSON.stringify(mobile));
+      assert.ok(mobile.elements <= 1_200, JSON.stringify(mobile));
+      assert.ok(mobile.buttons <= 20, JSON.stringify(mobile));
+      assert.ok(mobile.chartPoints <= 10, JSON.stringify(mobile));
+      assert.equal(mobile.chartRanges, 1);
+      assert.equal(mobile.pointButtons, 0);
+      assert.equal(mobile.hiddenPointLists, 0);
+      assert.equal(mobile.ledgerRows, 20);
+      assert.ok(mobile.minimumOperationalFont >= 12, JSON.stringify(mobile));
+      assert.ok(
+        mobile.elements - smallScale.elements <= 10,
+        JSON.stringify({ smallScale, mobile }),
       );
-      assert.deepEqual(mobile, { noPageOverflow: true, shellFits: true });
+      assert.ok(largeAx.nodes.length <= 1_300, `${largeAx.nodes.length} raw AX nodes`);
+      assert.ok(
+        largeSemanticAx - smallSemanticAx <= 10,
+        JSON.stringify({
+          smallSemanticAx,
+          largeSemanticAx,
+        }),
+      );
+      assert.equal(largeSliders.length, 1);
 
       const staticPage = await openPage(client, pathToFileURL(staticFixturePath).href);
       await client.send(
@@ -346,6 +447,16 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       );
       assert.deepEqual(mobileFailure, { cardFits: true, noPageOverflow: true });
 
+      console.log(`METRIC dashboard_ready_ms=${readyMs}`);
+      console.log(`METRIC dashboard_response_bytes=${fixture.livePayloadBytes}`);
+      console.log(`METRIC dashboard_mobile_elements=${mobile.elements}`);
+      console.log(`METRIC dashboard_mobile_buttons=${mobile.buttons}`);
+      console.log(`METRIC dashboard_mobile_chart_points=${mobile.chartPoints}`);
+      console.log(`METRIC dashboard_dom_growth=${mobile.elements - smallScale.elements}`);
+      console.log(`METRIC dashboard_ax_nodes=${largeAx.nodes.length}`);
+      console.log(`METRIC dashboard_ax_growth=${largeSemanticAx - smallSemanticAx}`);
+      console.log(`METRIC dashboard_range_interaction_ms=${rangeMs}`);
+      console.log(`METRIC dashboard_pagination_ms=${paginationMs}`);
       console.log(`ARTIFACT dashboard_browser_a11y_screenshot=${screenshotPath}`);
       console.log(`ARTIFACT dashboard_payload_failure_screenshot=${payloadFailureScreenshotPath}`);
       console.log(
@@ -423,6 +534,21 @@ async function dashboardHtml() {
     css,
     app,
   );
+  const smallHtml = dashboardDocument(
+    template,
+    entries.slice(0, 101),
+    {
+      payloadVersion: 1,
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 60_000,
+      commands: [],
+      viewModel: dashboardViewModel(),
+    },
+    css,
+    app,
+  );
   const failureHtml = template
     .replace(
       /<script>\s*window\.__AUTORESEARCH_DATA__ = __AUTORESEARCH_DATA_PAYLOAD__;\s*window\.__AUTORESEARCH_META__ = __AUTORESEARCH_META_PAYLOAD__;\s*<\/script>/,
@@ -430,17 +556,20 @@ async function dashboardHtml() {
     )
     .replace("__AUTORESEARCH_DASHBOARD_CSS__", () => css)
     .replace("__AUTORESEARCH_DASHBOARD_APP__", () => app);
+  const livePayload = {
+    payloadVersion: 1,
+    ledgerEntries: liveEntries,
+    ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_001 },
+    summary: { segment: 0, baseline: 5_001, best: 1, runs: 5_001 },
+    ...dashboardViewModel(),
+  };
   return {
     failureHtml,
     html,
+    livePayloadBytes: Buffer.byteLength(JSON.stringify(livePayload)),
+    smallHtml,
     staticHtml,
-    livePayload: {
-      payloadVersion: 1,
-      ledgerEntries: liveEntries,
-      ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_001 },
-      summary: { segment: 0, baseline: 5_001, best: 1, runs: 5_001 },
-      ...dashboardViewModel(),
-    },
+    livePayload,
   };
 }
 
@@ -521,6 +650,45 @@ async function serveHtml(html, failureHtml, livePayload) {
     url: `http://127.0.0.1:${address.port}/`,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
+}
+
+function semanticAxNodeCount(nodes) {
+  return nodes.filter(
+    (node) => !node.ignored && !["StaticText", "InlineTextBox"].includes(node.role?.value || ""),
+  ).length;
+}
+
+async function dashboardScaleState(client, sessionId) {
+  return evaluate(
+    client,
+    sessionId,
+    `(() => {
+      const shell = document.querySelector('.runboard-shell')?.getBoundingClientRect();
+      const ledger = document.querySelector('.ledger-scroll')?.getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#ledger-body tr')];
+      const operational = [...document.querySelectorAll(
+        '#chart-keyboard-help, .chart-navigator label, .chart-navigator output, .chart-sample-note, .chart-open-details, .ledger-cell, .ledger-cell *, .ledger-pagination *'
+      )].filter((element) => element.textContent?.trim() && getComputedStyle(element).display !== 'none');
+      const fontSizes = operational.map((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+      return {
+        elements: document.querySelectorAll('*').length,
+        buttons: document.querySelectorAll('button').length,
+        chartPoints: document.querySelectorAll('.chart-point-group > .chart-point').length,
+        chartRanges: document.querySelectorAll('#trend-chart input[type="range"]').length,
+        pointButtons: document.querySelectorAll('.chart-point-button').length,
+        hiddenPointLists: document.querySelectorAll('.chart-data-list li').length,
+        ledgerRows: rows.length,
+        minimumOperationalFont: Math.min(...fontSizes),
+        mobileLabels: rows.every((row) => [...row.querySelectorAll('td')].every((cell) => {
+          const content = getComputedStyle(cell, '::before').content;
+          return content && content !== 'none' && content !== '""';
+        })),
+        noPageOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+        shellFits: Boolean(shell && shell.left >= 0 && shell.right <= window.innerWidth + 1),
+        ledgerFits: Boolean(ledger && ledger.left >= 0 && ledger.right <= window.innerWidth + 1),
+      };
+    })()`,
+  );
 }
 
 async function decisionViewportState(client, sessionId) {
@@ -810,6 +978,7 @@ async function activeElement(client, sessionId, selector) {
         : "none";
       return {
         ariaLabel: active?.getAttribute("aria-label") || "",
+        ariaValueText: active?.getAttribute("aria-valuetext") || "",
         insideDialog: Boolean(active?.closest('[role="dialog"]')),
         matches: Boolean(active?.matches(${JSON.stringify(selector)})),
         run: active?.getAttribute("data-chart-run") || "",
@@ -822,6 +991,7 @@ async function activeElement(client, sessionId, selector) {
 
 async function pressKey(client, sessionId, key, options = {}) {
   const codes = {
+    ArrowLeft: { code: "ArrowLeft", windowsVirtualKeyCode: 37 },
     Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
     Enter: { code: "Enter", windowsVirtualKeyCode: 13 },
     Tab: { code: "Tab", windowsVirtualKeyCode: 9 },
@@ -901,10 +1071,20 @@ function collectCriticalAccessibilityFailures() {
       failures.push(`${describeElement(button)} has no accessible name`);
     }
   }
-  for (const chartButton of root.querySelectorAll(".chart-point-button")) {
-    if (chartButton.getAttribute("aria-haspopup") !== "dialog") {
-      failures.push(`${describeElement(chartButton)} does not expose dialog affordance`);
-    }
+  const ranges = root.querySelectorAll('#trend-chart input[type="range"]');
+  if (ranges.length !== 1) failures.push(`chart exposes ${ranges.length} range controls`);
+  const range = ranges[0];
+  if (range && !range.getAttribute("aria-valuetext")) {
+    failures.push("chart range has no concise current-run value");
+  }
+  if (range?.getAttribute("aria-haspopup") !== "dialog") {
+    failures.push("chart range does not expose its details dialog");
+  }
+  if (root.querySelectorAll(".chart-point-button, .chart-data-list li").length) {
+    failures.push("chart retains duplicate per-point accessibility nodes");
+  }
+  if (root.querySelector(".chart-visual")?.getAttribute("aria-hidden") !== "true") {
+    failures.push("chart SVG is not decorative");
   }
   const dialog = root.querySelector('[role="dialog"]');
   if (!dialog) {

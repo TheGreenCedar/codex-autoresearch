@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildChart, DASHBOARD_CHART_MAX_POINTS } from "../../dashboard/src/model/chart.js";
+import { buildChart } from "../../dashboard/src/model/chart.js";
 import { formatCompactMetricTick } from "../../dashboard/src/model/formatting.js";
 import { normalizeEntries } from "../../dashboard/src/model/entries.js";
 import { buildReadout } from "../../dashboard/src/model/readout.js";
+import {
+  buildChartData,
+  sampleTrendChartData,
+} from "../../dashboard/src/components/trend/shared.js";
 import { type SessionRun } from "../../dashboard/src/types.js";
 import {
   createDashboardHarness,
@@ -28,66 +32,38 @@ test.afterEach(() => {
   dashboard.closeDashboardWindows();
 });
 
-test("dashboard chart downsamples long histories while preserving anchor points", () => {
-  const runs: SessionRun[] = Array.from(
-    { length: DASHBOARD_CHART_MAX_POINTS + 75 },
-    (_, index) => ({
-      run: index + 1,
-      metric: index + 1,
-      status: "keep",
-      description: `Run ${index + 1}`,
+test("dashboard chart samples full bounded history while preserving semantic anchors", () => {
+  const runs: SessionRun[] = Array.from({ length: 5_000 }, (_, index) => {
+    const run = index + 1;
+    const status =
+      run === 401 ? "crash" : run === 777 ? "checks_failed" : run === 4_500 ? "discard" : "keep";
+    return {
+      run,
+      metric:
+        status === "crash" || status === "checks_failed" ? null : run === 250 ? 0 : 1_000 + run,
+      status,
+      description: `Run ${run}`,
       metrics: {},
       asi: {},
       segment: 0,
-    }),
-  );
-  const bestRun = runs[250]!;
-  const chart = buildChart(
-    {
-      segment: 0,
-      config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
-      runs,
-    },
-    {
-      baseline: 1,
-      baselineRun: runs[0],
-      best: bestRun.metric,
-      bestRun,
-      latestPlottedRun: runs.at(-1) || null,
-      latestFailure: null,
-      nextAction: "Continue.",
-      confidence: null,
-      confidenceText: "",
-      improvement: null,
-      recentRuns: runs.slice(-4),
-      plottedRuns: runs,
-      invalidLedgerEntryCount: 0,
-      metricDefinition: {
-        requestedMode: "raw",
-        mode: "raw",
-        metricName: "seconds",
-        displayUnit: "s",
-        bestDirection: "lower",
-        valueLabel: "Real value",
-        percentLabel: "Percent",
-        weights: { time: 0.7, memory: 0.3 },
-        memoryKey: "memory_mb",
-        formulaInline: "",
-        formulaDetails: "",
-        formulaSource: "",
-        formulaConfigured: false,
-        fallbackNote: "",
-        baselineMetric: 1,
-        baselineTime: 1,
-        baselineMemory: null,
-      },
-    },
-  );
+    };
+  });
+  const session = {
+    segment: 0,
+    config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" as const },
+    runs,
+  };
+  const readout = buildReadout(session);
+  const chart = buildChart(session, readout);
+  const sampled = sampleTrendChartData(buildChartData(chart, readout), 10, 4_999);
+  const sampledRuns = sampled.map((point) => point.runNumber);
 
-  assert.ok(chart.points.length <= DASHBOARD_CHART_MAX_POINTS);
-  assert.equal(chart.points[0].run.run, 1);
-  assert.equal(chart.points.at(-1)?.run.run, runs.length);
-  assert.ok(chart.points.some((point) => point.run === bestRun));
+  assert.equal(chart.points.length, 5_000);
+  assert.equal(sampled.length, 10);
+  for (const anchor of [1, 250, 401, 777, 4_999, 5_000]) {
+    assert.ok(sampledRuns.includes(anchor), `missing sampled run ${anchor}`);
+  }
+  assert.equal(sampled.find((point) => point.runNumber === 777)?.heldMetric, true);
 });
 
 test("dashboard summary cannot override the best accepted visible keep", () => {
@@ -210,7 +186,7 @@ test("dashboard ledger normalization skips malformed rows without expanding segm
   assert.equal(maxed.invalidLedgerEntryCount, 1);
 });
 
-test("dashboard chart crash copy distinguishes visible crashes from plotted crashes", () => {
+test("dashboard chart crash copy distinguishes full candidates from adaptive display", () => {
   const runs: SessionRun[] = Array.from({ length: 1000 }, (_, index) => {
     const run = index + 1;
     const crash = run % 5 === 0;
@@ -232,12 +208,11 @@ test("dashboard chart crash copy distinguishes visible crashes from plotted cras
   const readout = buildReadout(session);
   const chart = buildChart(session, readout);
 
-  assert.match(chart.summary, /200 crash runs in visible history; \d+ plotted after downsampling/);
-  assert.doesNotMatch(chart.summary, /200 crash runs are plotted/);
+  assert.match(chart.summary, /200 crash runs are available to the adaptive chart/);
 });
 
-test("dashboard chart handles very large histories without spread limits", () => {
-  const runCount = 150_000;
+test("dashboard chart handles the full 5,000-row retained history without spread limits", () => {
+  const runCount = 5_000;
   const runs: SessionRun[] = Array.from({ length: runCount }, (_, index) => ({
     run: index + 1,
     metric: index + 1,
@@ -290,10 +265,10 @@ test("dashboard chart handles very large histories without spread limits", () =>
     },
   );
 
-  assert.ok(chart.points.length <= DASHBOARD_CHART_MAX_POINTS);
+  assert.equal(chart.points.length, runCount);
   assert.equal(chart.points.at(-1)?.run.run, runCount);
-  assert.match(chart.summary, /\d+ plotted runs out of 150000 logged runs/);
-  assert.match(chart.note, /150000 finite measurements/);
+  assert.match(chart.summary, /5000 chart-eligible runs out of 5000 logged runs/);
+  assert.match(chart.note, /5000 finite measurements/);
 });
 
 test("dashboard weighted score readout uses configured metric weights", async () => {
@@ -488,18 +463,21 @@ test("dashboard holds crash runs at the nearest successful metric level", async 
     { type: "run", run: 4, metric: 106, status: "keep", description: "Recovered", confidence: 1 },
   ];
 
+  const session = normalizeEntries(entries).segments[0]!;
+  const readout = buildReadout(session);
+  const crash = buildChartData(buildChart(session, readout), readout).find(
+    (point) => point.runNumber === 2,
+  );
   const { getById } = await runDashboard(entries, emptyCommandMeta());
-  const chart = getById("trend-chart").innerHTML;
   const note = getById("chart-note").textContent;
   const summary = getById("trend-chart-summary").textContent;
 
+  assert.equal(crash?.heldMetric, true);
+  assert.equal(crash?.metric, 100);
   assert.match(note, /3 finite measurements; crashes held out of best evidence\./);
   assert.match(note, /crashes held out of best evidence/);
-  assert.match(summary, /4 plotted runs out of 4 logged runs/);
-  assert.match(summary, /1 crash run is plotted at the nearest successful metric level/);
-  assert.match(chart, /#4/);
-  assert.match(chart, /#2/);
-  assert.doesNotMatch(chart, /Infinity|NaN/);
+  assert.match(summary, /4 chart-eligible runs out of 4 logged runs/);
+  assert.match(summary, /1 crash run is available to the adaptive chart/);
 });
 
 test("dashboard chart note does not mention crashes when all plotted runs are finite", async () => {
@@ -590,15 +568,15 @@ test("dashboard renders formatted x-axis labels when timestamp mode is enabled",
     .map((node) => node.textContent?.trim() || "")
     .filter(Boolean);
   const timestampLikeLabels = axisText.filter((label) => label.includes(":"));
-  const chartButton = getById("trend-chart").querySelector(".chart-point-button");
+  const chartRange = getById("trend-chart").querySelector("#trend-chart-range");
 
   assert.ok(
     timestampLikeLabels.length >= 4,
     `Expected timestamp labels in x-axis ticks, saw: ${axisText.join(", ")}`,
   );
-  assert.equal(chartButton?.tagName.toLowerCase(), "button");
-  assert.equal(chartButton?.getAttribute("aria-haspopup"), "dialog");
-  assert.match(chartButton?.getAttribute("aria-label") || "", /Open details for run/);
+  assert.equal(chartRange?.tagName.toLowerCase(), "input");
+  assert.equal(chartRange?.getAttribute("type"), "range");
+  assert.match(chartRange?.getAttribute("aria-valuetext") || "", /run 8/i);
 });
 
 test("dashboard formats large raw y-axis labels compactly", () => {
@@ -630,15 +608,18 @@ test("dashboard holds leading crash runs at the next successful metric level", a
     { type: "run", run: 3, metric: 10, status: "keep", description: "Improved", confidence: 1 },
   ];
 
+  const session = normalizeEntries(entries).segments[0]!;
+  const readout = buildReadout(session);
+  const crash = buildChartData(buildChart(session, readout), readout).find(
+    (point) => point.runNumber === 1,
+  );
   const { getById } = await runDashboard(entries, emptyCommandMeta());
-  const chart = getById("trend-chart").innerHTML;
   const summary = getById("trend-chart-summary").textContent;
 
-  assert.match(summary, /3 plotted runs out of 3 logged runs/);
-  assert.match(summary, /1 crash run is plotted at the nearest successful metric level/);
-  assert.match(chart, /#1/);
-  assert.match(chart, /#2/);
-  assert.doesNotMatch(chart, /Infinity|NaN/);
+  assert.equal(crash?.heldMetric, true);
+  assert.equal(crash?.metric, 12);
+  assert.match(summary, /3 chart-eligible runs out of 3 logged runs/);
+  assert.match(summary, /1 crash run is available to the adaptive chart/);
 });
 
 test("dashboard does not let held crash metrics become best evidence", async () => {

@@ -5,17 +5,14 @@ import type { DashboardReadout, SessionSegment } from "../types";
 import { useUrlParam } from "../hooks/useUrlState";
 import { ExperimentModal } from "./trend/ExperimentModal";
 import { MetricDetails } from "./trend/MetricDetails";
-import {
-  ChartControls,
-  ChartDataList,
-  StatusLegend,
-  TrendChartFigure,
-} from "./trend/TrendChartFigure";
+import { ChartControls, StatusLegend, TrendChartFigure } from "./trend/TrendChartFigure";
 import { restoreChartPointFocus, type ChartPointOpener } from "./trend/focus";
 import {
   AXIS_MODES,
   buildChartData,
   buildTrendChartState,
+  chartPointBudget,
+  sampleTrendChartData,
   VALUE_MODES,
   type ChartDatum,
   type ValueMode,
@@ -39,25 +36,59 @@ export function TrendPanel({
   const [axisModeParam, setAxisMode] = useUrlParam("axis", AXIS_MODES, "iteration");
   const valueMode = valueModeParam as ValueMode;
   const axisMode = axisModeParam as AxisMode;
-  const [selectedPoint, setSelectedPoint] = useState<ChartDatum | null>(null);
+  const [openedPoint, setOpenedPoint] = useState<ChartDatum | null>(null);
+  const [selectedRunNumber, setSelectedRunNumber] = useState<number | null>(null);
+  const [chartWidth, setChartWidth] = useState(0);
   const [restoreFocusTick, setRestoreFocusTick] = useState(0);
+  const panelRef = useRef<HTMLElement>(null);
   const modalOpenerRef = useRef<ChartPointOpener>(null);
   const modalOpenerSelectorRef = useRef<string>("");
   const chart = useMemo(() => buildChart(session, readout), [readout, session]);
   const chartData = useMemo(() => buildChartData(chart, readout), [chart, readout]);
-  const chartState = useMemo(
-    () => buildTrendChartState({ axisMode, chart, chartData, readout, valueMode }),
-    [axisMode, chart, chartData, readout, valueMode],
+  useEffect(() => {
+    const latest = chartData.find((point) => point.latest) || chartData.at(-1) || null;
+    if (chartData.some((point) => point.runNumber === selectedRunNumber)) return;
+    setSelectedRunNumber(latest?.runNumber ?? null);
+  }, [chartData, selectedRunNumber]);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const updateWidth = () => setChartWidth(panel.clientWidth);
+    updateWidth();
+    window.addEventListener("resize", updateWidth);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateWidth);
+    observer?.observe(panel);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateWidth);
+    };
+  }, []);
+  const displayedChartData = useMemo(
+    () => sampleTrendChartData(chartData, chartPointBudget(chartWidth), selectedRunNumber),
+    [chartData, chartWidth, selectedRunNumber],
   );
-  const detailPoint = selectedPoint || chartData.at(-1) || null;
+  const chartState = useMemo(
+    () =>
+      buildTrendChartState({
+        axisMode,
+        chart,
+        chartData: displayedChartData,
+        readout,
+        valueMode,
+      }),
+    [axisMode, chart, displayedChartData, readout, valueMode],
+  );
+  const detailPoint =
+    chartData.find((point) => point.runNumber === selectedRunNumber) || chartData.at(-1) || null;
   const openPoint = (point: ChartDatum, opener: ChartPointOpener) => {
+    setSelectedRunNumber(point.runNumber);
     modalOpenerRef.current = opener;
-    modalOpenerSelectorRef.current = `[data-chart-run="${point.runNumber}"]`;
-    setSelectedPoint(point);
+    modalOpenerSelectorRef.current = "#trend-chart-range";
+    setOpenedPoint(point);
   };
   const closePoint = () => {
     flushSync(() => {
-      setSelectedPoint(null);
+      setOpenedPoint(null);
     });
     setRestoreFocusTick((value) => value + 1);
   };
@@ -71,6 +102,7 @@ export function TrendPanel({
       id="trend-panel"
       aria-label="Evidence trail"
       tabIndex={-1}
+      ref={panelRef}
     >
       <div className="panel-head">
         <div>
@@ -93,19 +125,20 @@ export function TrendPanel({
 
       <TrendChartFigure
         chart={chart}
-        chartData={chartData}
+        chartData={displayedChartData}
         chartHeight={chartHeight}
         chartState={chartState}
         onPointSelect={openPoint}
+        onPointPreview={setSelectedRunNumber}
         readout={readout}
+        selectedRunNumber={selectedRunNumber}
+        totalPointCount={chartData.length}
         valueMode={valueMode}
       />
 
       <p id="trend-chart-summary" className="sr-summary">
         {chart.summary}
       </p>
-      <ChartDataList chartData={chartData} />
-
       {detailsDefaultOpen ? (
         <MetricDetails readout={readout} session={session} point={detailPoint} />
       ) : (
@@ -115,9 +148,9 @@ export function TrendPanel({
         </details>
       )}
 
-      {selectedPoint && (
+      {openedPoint && (
         <ExperimentModal
-          point={selectedPoint}
+          point={openedPoint}
           valueMode={valueMode}
           readout={readout}
           onClose={closePoint}

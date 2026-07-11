@@ -32,7 +32,7 @@ test.afterEach(() => {
   dashboard.closeDashboardWindows();
 });
 
-test("dashboard chart does not place interactive point buttons under an image role", async () => {
+test("dashboard chart exposes one range while keeping the plotted SVG decorative", async () => {
   const entries = [
     dashboardConfigEntry({ name: "chart semantics", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
@@ -42,29 +42,22 @@ test("dashboard chart does not place interactive point buttons under an image ro
   const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), chartLayoutOptions());
   const chart = getById("trend-chart");
   await waitFor(
-    () => chart.querySelectorAll(".chart-point-button").length === 2,
-    "Chart points did not render.",
+    () => chart.querySelector("#trend-chart-range") != null,
+    "Chart range did not render.",
   );
-  const buttons = [...dom.window.document.querySelectorAll(".chart-point-button")];
+  const range = chart.querySelector<HTMLInputElement>("#trend-chart-range");
 
+  assert.ok(range);
   assert.equal(chart.getAttribute("role"), null);
   assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
-  assert.match(
-    getById("chart-keyboard-help").textContent || "",
-    /arrow keys move through history/i,
-  );
-  assert.equal(
-    buttons.filter((button) => button.getAttribute("aria-current") === "true").length,
-    1,
-  );
-  assert.equal(buttons.filter((button) => (button as HTMLButtonElement).tabIndex === 0).length, 1);
-  for (const button of buttons) {
-    assert.equal(button.closest('[role="img"]'), null);
-    assert.equal(button.getAttribute("aria-describedby"), "chart-keyboard-help");
-    assert.doesNotMatch(button.getAttribute("aria-describedby") || "", /trend-chart-selected/);
-    assert.match(button.getAttribute("aria-label") || "", /Open details for run/);
-  }
-  assert.match(getById("trend-chart-selected").textContent || "", /Selected chart point:/);
+  assert.match(getById("chart-keyboard-help").textContent || "", /slider to move/i);
+  assert.equal(chart.querySelectorAll(".chart-point-button, .chart-data-list").length, 0);
+  assert.equal(chart.querySelectorAll('input[type="range"]').length, 1);
+  assert.equal(chart.querySelector(".chart-visual")?.getAttribute("aria-hidden"), "true");
+  assert.equal(range.getAttribute("aria-describedby"), "chart-keyboard-help trend-chart-desc");
+  assert.equal(range.getAttribute("aria-haspopup"), "dialog");
+  assert.match(range.getAttribute("aria-valuetext") || "", /run 2/i);
+  assert.equal(chart.querySelectorAll(".chart-open-details").length, 1);
   dom.window.close();
 });
 
@@ -79,16 +72,14 @@ test("dashboard restores chart focus after the experiment modal unmounts", async
     chartLayoutOptions(),
   );
   await waitFor(
-    () => dom.window.document.querySelectorAll(".chart-point-button").length === 2,
-    "Chart points did not render.",
+    () => dom.window.document.querySelector("#trend-chart-range") != null,
+    "Chart range did not render.",
   );
-  const opener = dom.window.document.querySelector<HTMLButtonElement>(
-    '.chart-point-button[tabindex="0"]',
-  );
+  const opener = dom.window.document.querySelector<HTMLInputElement>("#trend-chart-range");
   assert.ok(opener);
   const openerRun = opener.dataset.chartRun;
   opener.focus();
-  opener.click();
+  opener.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await waitFor(
     () => dom.window.document.activeElement?.classList.contains("modal-close") === true,
     "Modal close button did not receive focus.",
@@ -100,7 +91,7 @@ test("dashboard restores chart focus after the experiment modal unmounts", async
   );
   await waitFor(
     () => dom.window.document.activeElement?.getAttribute("data-chart-run") === openerRun,
-    "Chart point opener did not regain focus.",
+    "Chart range did not regain focus.",
   );
 });
 
@@ -218,10 +209,7 @@ test("dashboard contrast tokens cover reported a11y targets", () => {
     extractCssBlock(css, ".legend-swatch.checks_failed"),
     /background:\s*var\(--amber-dark\)/,
   );
-  assert.match(
-    extractCssBlock(css, ".chart-point-button:focus-visible .chart-point-dot"),
-    /0 0 0 6px var\(--amber-dark\)/,
-  );
+  assert.match(css, /input:focus-visible[\s\S]*outline:\s*3px solid var\(--focus\)/);
 });
 
 test("dashboard surfaces generated suspicious research reasons", async () => {

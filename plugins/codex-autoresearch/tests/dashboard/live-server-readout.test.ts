@@ -106,7 +106,7 @@ test("served dashboard live refresh starts by default and can be stopped", async
   );
   assert.match(
     getById("ledger-note").textContent,
-    /2 runs \/ newest first \/ 25 older ledger entries omitted from snapshot/,
+    /2 shown of 2 runs \/ page 1 of 1 \/ newest first \/ 25 older ledger entries omitted from snapshot/,
   );
   assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));

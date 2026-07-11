@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -15,7 +14,7 @@ import {
 import { STATUS_LABELS, STATUS_VALUES } from "../../constants";
 import { formatDisplayTime } from "../../model";
 import type { ChartModel, DashboardReadout } from "../../types";
-import { chartPointAriaLabel, type ChartPointOpener } from "./focus";
+import { chartPointAriaLabel, chartPointSelectionText, type ChartPointOpener } from "./focus";
 import {
   formatChartAxisTickValue,
   formatChartAxisValue,
@@ -79,28 +78,16 @@ export function StatusLegend() {
   );
 }
 
-export function ChartDataList({ chartData }: { chartData: ChartDatum[] }) {
-  return (
-    <ul className="chart-data-list sr-only" aria-label="Chart data points">
-      {chartData.map((item) => (
-        <li key={`data-${item.runNumber}`}>
-          {item.runLabel}: {item.statusLabel}, {item.metricDisplay}, {item.description}
-          {item.heldMetric ? ", crash held at nearest successful metric" : ""}
-          {item.best ? ", best kept" : ""}
-          {item.latest ? ", latest" : ""}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export function TrendChartFigure({
   chart,
   chartData,
   chartHeight,
   chartState,
   onPointSelect,
+  onPointPreview,
   readout,
+  selectedRunNumber,
+  totalPointCount,
   valueMode,
 }: {
   chart: ChartModel;
@@ -108,20 +95,20 @@ export function TrendChartFigure({
   chartHeight: number;
   chartState: TrendChartState;
   onPointSelect: (point: ChartDatum, opener: ChartPointOpener) => void;
+  onPointPreview: (runNumber: number) => void;
   readout: DashboardReadout;
+  selectedRunNumber: number | null;
+  totalPointCount: number;
   valueMode: ValueMode;
 }) {
   const { baselineLine, bestLine, timestampTicks, usesTimestampScale, xKey, yDomain, yKey } =
     chartState;
-  const [selectedRunNumber, setSelectedRunNumber] = useState<number | null>(() =>
-    initialSelectedRunNumber(chartData),
-  );
-  useEffect(() => {
-    if (chartData.some((item) => item.runNumber === selectedRunNumber)) return;
-    setSelectedRunNumber(initialSelectedRunNumber(chartData));
-  }, [chartData, selectedRunNumber]);
   const selectedPoint =
     chartData.find((item) => item.runNumber === selectedRunNumber) || chartData.at(-1) || null;
+  const selectedIndex = Math.max(
+    0,
+    chartData.findIndex((item) => item.runNumber === selectedPoint?.runNumber),
+  );
   const hasChartData = chartData.length > 0;
   return (
     <figure
@@ -135,132 +122,163 @@ export function TrendChartFigure({
       <p id="trend-chart-desc" className="sr-only">
         {chart.summary}
       </p>
-      <p id="trend-chart-selected" className="sr-only" aria-live="polite">
-        {selectedPoint
-          ? `Selected chart point: ${selectedPoint.runLabel}, ${selectedPoint.statusLabel}, ${selectedPoint.metricDisplay}.`
-          : "No chart point selected."}
-      </p>
       <p id="chart-keyboard-help" className="chart-keyboard-help">
-        Keyboard: Tab to a plotted run, arrow keys move through history, Enter opens run details.
+        Use the slider to move through sampled history. Press Enter or use Open details for the
+        selected run.
       </p>
-      <ResponsiveContainer width="100%" height={chartHeight}>
-        <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
-          <defs>
-            <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.22} />
-              <stop offset="95%" stopColor="var(--graph)" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="trendAreaGradientDark" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.38} />
-              <stop offset="95%" stopColor="var(--graph)" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="6 8" />
-          <XAxis
-            dataKey={xKey}
-            type={usesTimestampScale ? "number" : "category"}
-            scale={usesTimestampScale ? "time" : undefined}
-            domain={usesTimestampScale ? ["dataMin", "dataMax"] : undefined}
-            padding={usesTimestampScale ? { left: 20, right: 28 } : undefined}
-            ticks={usesTimestampScale ? timestampTicks : undefined}
-            tickFormatter={
-              usesTimestampScale ? (value) => formatDisplayTime(Number(value)) : undefined
-            }
-            interval={usesTimestampScale ? 0 : "preserveStartEnd"}
-            minTickGap={usesTimestampScale ? 32 : 8}
-            tickMargin={10}
-            tickLine={false}
-            axisLine={false}
-            tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
-          />
-          <YAxis
-            width={74}
-            domain={yDomain}
-            tickCount={5}
-            tickFormatter={(value) =>
-              formatChartAxisTickValue(Number(value), valueMode, readout, chart.domain)
-            }
-            tickMargin={8}
-            tickLine={false}
-            axisLine={false}
-            tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
-          />
-          {valueMode === "value" && chart.winZoneBounds && (
-            <ReferenceArea
-              className="win-zone"
-              y1={chart.winZoneBounds.y1}
-              y2={chart.winZoneBounds.y2}
-              strokeOpacity={0}
+      <div className="chart-visual" aria-hidden="true">
+        <ResponsiveContainer width="100%" height={chartHeight}>
+          <ComposedChart data={chartData} margin={{ top: 18, right: 28, bottom: 8, left: 12 }}>
+            <defs>
+              <linearGradient id="trendAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.22} />
+                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="trendAreaGradientDark" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--graph)" stopOpacity={0.38} />
+                <stop offset="95%" stopColor="var(--graph)" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="6 8" />
+            <XAxis
+              dataKey={xKey}
+              type={usesTimestampScale ? "number" : "category"}
+              scale={usesTimestampScale ? "time" : undefined}
+              domain={usesTimestampScale ? ["dataMin", "dataMax"] : undefined}
+              padding={usesTimestampScale ? { left: 20, right: 28 } : undefined}
+              ticks={usesTimestampScale ? timestampTicks : undefined}
+              tickFormatter={
+                usesTimestampScale ? (value) => formatDisplayTime(Number(value)) : undefined
+              }
+              interval={usesTimestampScale ? 0 : "preserveStartEnd"}
+              minTickGap={usesTimestampScale ? 32 : 8}
+              tickMargin={10}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
             />
-          )}
-          {baselineLine != null && (
-            <ReferenceLine
-              className="baseline-line"
-              y={baselineLine}
-              stroke="var(--coral)"
-              strokeDasharray="8 8"
-              strokeWidth={2}
+            <YAxis
+              width={74}
+              domain={yDomain}
+              tickCount={5}
+              tickFormatter={(value) =>
+                formatChartAxisTickValue(Number(value), valueMode, readout, chart.domain)
+              }
+              tickMargin={8}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "var(--muted)", fontSize: 12, fontWeight: 800 }}
             />
-          )}
-          {bestLine != null && (
-            <ReferenceLine
-              className="best-line"
-              y={bestLine}
-              stroke="var(--amber-dark)"
-              strokeDasharray="4 6"
-              strokeWidth={3}
-            />
-          )}
-          <Tooltip
-            content={<ChartTooltip valueMode={valueMode} readout={readout} />}
-            cursor={{ stroke: "var(--teal)", strokeWidth: 2, strokeDasharray: "4 6" }}
-          />
-          <Area
-            className="trendArea"
-            type="monotone"
-            dataKey={yKey}
-            fill="url(#trendAreaGradient)"
-            stroke="none"
-            isAnimationActive={false}
-          />
-          <Line
-            className="linePath"
-            type="monotone"
-            dataKey={yKey}
-            isAnimationActive={false}
-            stroke="var(--graph)"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={5}
-            dot={
-              <ChartDot
-                chartData={chartData}
-                onPreview={setSelectedRunNumber}
-                onSelect={onPointSelect}
-                selectedRunNumber={selectedRunNumber}
+            {valueMode === "value" && chart.winZoneBounds && (
+              <ReferenceArea
+                className="win-zone"
+                y1={chart.winZoneBounds.y1}
+                y2={chart.winZoneBounds.y2}
+                strokeOpacity={0}
               />
-            }
-            activeDot={<ChartActiveDot />}
-          >
-            <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
-          </Line>
-        </ComposedChart>
-      </ResponsiveContainer>
+            )}
+            {baselineLine != null && (
+              <ReferenceLine
+                className="baseline-line"
+                y={baselineLine}
+                stroke="var(--coral)"
+                strokeDasharray="8 8"
+                strokeWidth={2}
+              />
+            )}
+            {bestLine != null && (
+              <ReferenceLine
+                className="best-line"
+                y={bestLine}
+                stroke="var(--amber-dark)"
+                strokeDasharray="4 6"
+                strokeWidth={3}
+              />
+            )}
+            <Tooltip
+              content={<ChartTooltip valueMode={valueMode} readout={readout} />}
+              cursor={{ stroke: "var(--teal)", strokeWidth: 2, strokeDasharray: "4 6" }}
+            />
+            <Area
+              className="trendArea"
+              type="monotone"
+              dataKey={yKey}
+              fill="url(#trendAreaGradient)"
+              stroke="none"
+              isAnimationActive={false}
+            />
+            <Line
+              className="linePath"
+              type="monotone"
+              dataKey={yKey}
+              isAnimationActive={false}
+              stroke="var(--graph)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={5}
+              dot={<ChartDot selectedRunNumber={selectedRunNumber} />}
+              activeDot={<ChartActiveDot />}
+            >
+              <LabelList content={<ChartLabel valueMode={valueMode} readout={readout} />} />
+            </Line>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
       {!hasChartData ? (
         <div className="chart-empty-state" aria-hidden="true">
           <strong>No finite plotted metrics yet.</strong>
           <span>Waiting for numeric evidence.</span>
         </div>
       ) : null}
-      <div className="chartRunTicks" aria-hidden="true">
-        {chartData.map((item) => (
-          <span key={`tick-${item.runNumber}`} />
-        ))}
-      </div>
-      <div className="chart-point-labels" aria-hidden="true">
-        {chartData.map((item) => (
-          <span key={`label-${item.runNumber}`}>{item.label}</span>
-        ))}
+      <div className="chart-navigator">
+        <label htmlFor="trend-chart-range">Explore plotted history</label>
+        <input
+          id="trend-chart-range"
+          type="range"
+          min={0}
+          max={Math.max(0, chartData.length - 1)}
+          step={1}
+          value={selectedIndex}
+          disabled={!selectedPoint}
+          aria-describedby="chart-keyboard-help trend-chart-desc"
+          aria-haspopup="dialog"
+          aria-valuetext={
+            selectedPoint ? chartPointSelectionText(selectedPoint) : "No plotted runs"
+          }
+          data-chart-run={selectedPoint?.runNumber}
+          onChange={(event) => {
+            const point = chartData[Number(event.currentTarget.value)];
+            if (point) onPointPreview(point.runNumber);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && selectedPoint) {
+              event.preventDefault();
+              onPointSelect(selectedPoint, event.currentTarget);
+            }
+          }}
+        />
+        <output htmlFor="trend-chart-range" aria-hidden="true">
+          {selectedPoint
+            ? `${selectedPoint.runLabel} · ${selectedPoint.statusLabel} · ${selectedPoint.metricDisplay}`
+            : "No plotted runs"}
+        </output>
+        <span className="chart-sample-note">
+          {chartData.length} of {totalPointCount} plotted runs shown
+        </span>
+        <button
+          type="button"
+          className="tool-button subtle chart-open-details"
+          disabled={!selectedPoint}
+          aria-haspopup="dialog"
+          aria-label={
+            selectedPoint ? chartPointAriaLabel(selectedPoint) : "No run details available"
+          }
+          onClick={(event) => {
+            if (selectedPoint) onPointSelect(selectedPoint, event.currentTarget);
+          }}
+        >
+          Open details
+        </button>
       </div>
     </figure>
   );
@@ -298,85 +316,32 @@ function SegmentedControl<T extends string>({
 }
 
 function ChartDot({
-  chartData = [],
   cx,
   cy,
-  onPreview,
   payload,
-  onSelect,
   selectedRunNumber = null,
 }: {
-  chartData?: ChartDatum[];
   cx?: number;
   cy?: number;
-  onPreview?: (runNumber: number) => void;
   payload?: ChartDatum;
-  onSelect?: (payload: ChartDatum, opener: ChartPointOpener) => void;
   selectedRunNumber?: number | null;
 }) {
   const x = Number(cx);
   const y = Number(cy);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !payload) return null;
-  const targetSize = payload.latest ? 44 : 40;
-  const tabbable = isTabbableChartPoint(payload, selectedRunNumber);
-  const selectAdjacentPoint = (direction: -1 | 1) => {
-    const currentIndex = chartData.findIndex((item) => item.runNumber === payload.runNumber);
-    const next = chartData[currentIndex + direction];
-    if (!next) return;
-    onPreview?.(next.runNumber);
-    window.setTimeout(() => {
-      const target = document.querySelector<HTMLButtonElement>(
-        `[data-chart-run="${next.runNumber}"]`,
-      );
-      target?.focus();
-    }, 0);
-  };
   return (
-    <foreignObject
-      className="chart-point-wrap"
-      x={x - targetSize / 2}
-      y={y - targetSize / 2}
-      width={targetSize}
-      height={targetSize}
-    >
-      <button
-        type="button"
-        className="chart-point-button"
-        aria-haspopup="dialog"
-        aria-current={payload.runNumber === selectedRunNumber ? "true" : undefined}
-        aria-describedby="chart-keyboard-help"
-        aria-label={chartPointAriaLabel(payload)}
-        data-chart-run={payload.runNumber}
-        tabIndex={tabbable ? 0 : -1}
-        onClick={(event) => onSelect?.(payload, event.currentTarget)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-            event.preventDefault();
-            selectAdjacentPoint(-1);
-          } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-            event.preventDefault();
-            selectAdjacentPoint(1);
-          }
-        }}
-      >
-        {payload.latest && (
-          <span className={`latest-halo-ui ${payload.status}`} aria-hidden="true" />
-        )}
-        <span
-          className={`chart-point-dot ${payload.status}${payload.best ? " best" : ""}`}
-          aria-hidden="true"
-        />
-      </button>
-    </foreignObject>
+    <g className="chart-point-group">
+      {payload.latest ? <circle className="latest-halo" cx={x} cy={y} r={15} /> : null}
+      <circle
+        className={`chart-point ${payload.status}${payload.best ? " best" : ""}${
+          payload.runNumber === selectedRunNumber ? " selected" : ""
+        }`}
+        cx={x}
+        cy={y}
+        r={payload.best ? 8 : 6}
+      />
+    </g>
   );
-}
-
-function initialSelectedRunNumber(chartData: ChartDatum[]) {
-  return chartData.find((item) => item.latest)?.runNumber ?? chartData.at(-1)?.runNumber ?? null;
-}
-
-function isTabbableChartPoint(payload: ChartDatum, selectedRunNumber: number | null) {
-  return payload.runNumber === selectedRunNumber;
 }
 
 function ChartActiveDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartDatum }) {
@@ -450,9 +415,7 @@ function ChartTooltip({
         </div>
       )}
       {item.heldMetric && (
-        <p style={{ marginTop: "4px", fontSize: "10px", fontStyle: "italic" }}>
-          Plotted at nearest successful metric level
-        </p>
+        <p className="chart-tooltip-held">Plotted at nearest successful metric level</p>
       )}
     </div>
   );
