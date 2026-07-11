@@ -304,7 +304,6 @@ const OUTPUT_MAX_BYTES = 8192;
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
-type LaneRunnerCommandModule = typeof import("../lib/commands/lane-runner.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
 
 async function buildDashboardViewModelLazy(
@@ -525,36 +524,21 @@ async function sessionForensics(args: LooseObject): Promise<LooseObject> {
   return await runSessionForensics(args);
 }
 
-let laneRunnerHandler: ((args: LooseObject) => Promise<LooseObject>) | null = null;
-
 async function laneRunner(args: LooseObject): Promise<LooseObject> {
-  if (!laneRunnerHandler) {
-    const { createLaneRunnerCommand } = await import("../lib/commands/lane-runner.js");
-    laneRunnerHandler = createLaneRunnerCommand({
-      appendJsonl,
-      assertNoDirtyPathsOutsideWriteScope,
-      assertWriteScopeIntegrity,
-      boolOption,
-      buildParallelOrchestrationContext,
-      commandLooksUnsafeForWriteScope,
-      currentState,
-      dashboardSettings,
-      latestLaneResults,
-      normalizeLaneMode,
-      normalizeParallelLane,
-      normalizeRelativePaths,
-      positiveIntegerOption,
-      readJsonl,
-      resolveLaneWorktree,
-      resolveWorkDir,
-      runProcess: runBoundedProcess,
-      runShell,
-      synthesizeLaneDecision,
-      tailText,
-      writeScopeSnapshot,
-    });
-  }
-  return await laneRunnerHandler(args);
+  const { laneRunner: runLaneRunner } = await import("../lib/commands/lane-runner.js");
+  return await runLaneRunner(args, {
+    assertNoDirtyPathsOutsideWriteScope,
+    assertWriteScopeIntegrity,
+    buildParallelOrchestrationContext,
+    commandLooksUnsafeForWriteScope,
+    latestLaneResults,
+    normalizeLaneMode,
+    normalizeParallelLane,
+    normalizeRelativePaths,
+    resolveLaneWorktree,
+    synthesizeLaneDecision,
+    writeScopeSnapshot,
+  });
 }
 
 function usage(options: { all?: boolean; command?: string | null } = {}) {

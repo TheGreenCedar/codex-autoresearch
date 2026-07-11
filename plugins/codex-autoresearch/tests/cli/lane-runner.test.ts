@@ -3,7 +3,7 @@ import { access, chmod, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { createLaneRunnerCommand } from "../../lib/commands/lane-runner.js";
+import { laneRunner, type LaneRunnerRuntime } from "../../lib/commands/lane-runner.js";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import {
   createCliRunner,
@@ -27,30 +27,20 @@ const delimitedItems = (label: string, count: number, length: number) =>
 test("lane-runner stops before post-run probes when termination is unproven", async () => {
   let postRunProbeCalled = false;
   let synthesisCalled = false;
-  const laneRunner = createLaneRunnerCommand({
-    appendJsonl: () => {},
+  const runtime = {
     assertNoDirtyPathsOutsideWriteScope: async () => {},
     assertWriteScopeIntegrity: async () => {
       postRunProbeCalled = true;
     },
-    boolOption: (value, fallback = false) => (value == null ? fallback : Boolean(value)),
     buildParallelOrchestrationContext: () => ({
       parallelLanes: [{ id: "unsafe-lane", label: "Unsafe lane", mode: "implementation" }],
     }),
     commandLooksUnsafeForWriteScope: () => false,
-    currentState: () => ({ config: {}, segment: 1 }),
-    dashboardSettings: () => ({}),
     latestLaneResults: () => [],
     normalizeLaneMode: (value) => String(value),
     normalizeParallelLane: (lane) => lane,
     normalizeRelativePaths: (value) => (Array.isArray(value) ? value.map(String) : []),
-    positiveIntegerOption: (value, fallback) => Number(value || fallback),
-    readJsonl: () => [],
     resolveLaneWorktree: async (_workDir, worktreePath) => worktreePath,
-    resolveWorkDir: (value) => ({ workDir: value, config: {} }),
-    runProcess: async () => {
-      throw new Error("runProcess should not be called");
-    },
     runShell: async () =>
       ({
         exitCode: null,
@@ -74,18 +64,20 @@ test("lane-runner stops before post-run probes when termination is unproven", as
       synthesisCalled = true;
       return {};
     },
-    tailText: (text) => text,
     writeScopeSnapshot: async () => ({}),
-  });
+  } satisfies LaneRunnerRuntime;
 
-  const result = await laneRunner({
-    cwd: process.cwd(),
-    laneId: "unsafe-lane",
-    mode: "implementation",
-    command: "node task.mjs",
-    writeScope: ["src"],
-    yes: true,
-  });
+  const result = await laneRunner(
+    {
+      cwd: process.cwd(),
+      laneId: "unsafe-lane",
+      mode: "implementation",
+      command: "node task.mjs",
+      writeScope: ["src"],
+      yes: true,
+    },
+    runtime,
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "termination_failed");
