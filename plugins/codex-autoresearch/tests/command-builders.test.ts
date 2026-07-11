@@ -585,6 +585,7 @@ test("compact recommend-next preserves finalization readiness as canonical autho
   });
 
   assert.equal(response.resolvedDecision.finalizationPressure?.available, true);
+  assert.equal(response.resolvedDecision.canonicalNextAction?.toolName, "finalize_current_tree");
   assert.equal((response.action as any).kind, "current-tree-finalization");
   assert.equal(
     response.commands.primary,
