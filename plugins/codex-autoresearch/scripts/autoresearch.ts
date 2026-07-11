@@ -27,7 +27,11 @@ import {
   createDashboardCommands,
   operationProgress,
 } from "../lib/commands/dashboard.js";
-import { buildContinuationCommands } from "../lib/commands/continuation.js";
+import {
+  buildContinuationCommands,
+  continuationCommands,
+  loopContinuation,
+} from "../lib/commands/continuation.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
@@ -7829,154 +7833,6 @@ function confirmedRuntimeDrift(drift: LooseObject | null): boolean {
   return false;
 }
 
-function loopContinuation(
-  workDir: string,
-  state: any,
-  config: LooseObject = {},
-  stage: any = "state",
-  options: LooseObject = {},
-) {
-  const mode = config.autonomyMode || "guarded";
-  const limit = iterationLimitInfo(state, config);
-  const activeBudget = loopBudgetActive(limit) && mode !== "manual";
-  const remainingBudget = loopBudgetRemainingText(limit);
-  const commands = continuationCommands(workDir);
-  const memory = buildExperimentMemory({
-    runs: state.current,
-    direction: state.config.bestDirection,
-    settings: dashboardSettings(config),
-  });
-  const topLane = memory.diversityGuidance || memory.lanePortfolio?.[0];
-  const stopConditions = [
-    "user interrupts or turns the loop off",
-    "packet, wall-clock, or iteration budget is reached",
-    "benchmark or correctness checks are blocked",
-    "the task is genuinely exhausted",
-  ];
-  if (options.stopReason) {
-    return {
-      mode,
-      stage,
-      shouldContinue: false,
-      shouldAskUser: false,
-      stopReason: options.stopReason,
-      nextAction: options.stopReason,
-      commands,
-      stopConditions,
-    };
-  }
-  if (stage === "needs-log-decision") {
-    const logThenContinue = options.requiredStatus
-      ? `Log this packet as ${options.requiredStatus} with rollback ASI, then continue to the next hypothesis.`
-      : "Log this packet as keep or discard with ASI, then continue to the next hypothesis.";
-    return {
-      mode,
-      stage,
-      activeBudget,
-      shouldContinue: activeBudget,
-      shouldAskUser: false,
-      requiresLogDecision: true,
-      forbidFinalAnswer: mode === "owner-autonomous" || activeBudget,
-      finalAnswerPolicy:
-        mode === "owner-autonomous" || activeBudget
-          ? "Do not send a final answer after this packet; log it, read continuation, and keep the budget moving until a stop condition appears."
-          : "Report the pending log decision if the user only asked for state.",
-      logThenContinue: true,
-      afterLogAction:
-        "After the log command succeeds, immediately read the returned continuation and run the next packet when the user asked for an ongoing budget.",
-      nextAction: logThenContinue,
-      commands,
-      stopConditions,
-    };
-  }
-  if (limit.limitReached) {
-    return {
-      mode,
-      stage,
-      shouldContinue: false,
-      shouldAskUser: false,
-      stopReason: limit.stopReason || `maxIterations reached (${limit.maxIterations}).`,
-      nextAction:
-        limit.budgetStatus?.nextAction ||
-        "Export the dashboard and summarize the limit, or extend the session before more experiments.",
-      commands,
-      stopConditions,
-    };
-  }
-  if (mode === "manual") {
-    return {
-      mode,
-      stage,
-      shouldContinue: false,
-      shouldAskUser: true,
-      stopReason: "autonomy_mode is manual.",
-      nextAction: "Return the current state and wait for the operator before the next experiment.",
-      commands,
-      stopConditions,
-    };
-  }
-  const ownerAutonomous = mode === "owner-autonomous";
-  return {
-    mode,
-    stage,
-    activeBudget,
-    plateau: memory.plateau,
-    lanePortfolio: memory.lanePortfolio,
-    shouldContinue: true,
-    shouldAskUser: false,
-    forbidFinalAnswer: ownerAutonomous || activeBudget,
-    finalAnswerPolicy:
-      ownerAutonomous || activeBudget
-        ? "Do not stop at a status report while iterations remain; continue running packets until the limit, blocker, exhaustion, or user interruption."
-        : "A status report is acceptable when the user asked only to inspect state.",
-    nextAction: ownerAutonomous
-      ? memory.plateau?.detected
-        ? `Keep the floor: run the ${topLane?.label || "distant scout"} lane next because the current search is plateauing.`
-        : "Keep the floor: choose the next hypothesis from ASI/autoresearch.ideas.md, edit the scoped files, run next_experiment, and log the result without asking the user to invoke another subskill."
-      : activeBudget
-        ? memory.plateau?.detected
-          ? `Keep going: run the ${topLane?.label || "distant scout"} lane next, log it, and continue because ${remainingBudget}.`
-          : `Keep going: choose the next hypothesis, run next --compact, log the packet, and continue because ${remainingBudget}.`
-        : "Continue the active loop when the current user request asks for iteration; otherwise report the state and next command.",
-    commands,
-    stopConditions,
-  };
-}
-
-function loopBudgetActive(limit: LooseObject): boolean {
-  if (limit.limitReached) return false;
-  if (limit.maxIterations != null && Number(limit.remainingIterations) > 0) return true;
-  const budget = limit.budgetStatus || {};
-  if (budget.configured !== true) return false;
-  if (budget.exhausted === true) return false;
-  if (budget.packetsRemaining != null && Number(budget.packetsRemaining) <= 0) return false;
-  if (budget.wallClockRemainingSeconds != null && Number(budget.wallClockRemainingSeconds) <= 0) {
-    return false;
-  }
-  return true;
-}
-
-function loopBudgetRemainingText(limit: LooseObject): string {
-  const parts = [];
-  if (limit.maxIterations != null && limit.remainingIterations != null) {
-    parts.push(
-      `${limit.remainingIterations} iteration${limit.remainingIterations === 1 ? "" : "s"}`,
-    );
-  }
-  const budget = limit.budgetStatus || {};
-  if (budget.packetsRemaining != null) {
-    parts.push(
-      `${budget.packetsRemaining} packet${budget.packetsRemaining === 1 ? "" : "s"} in the packet budget`,
-    );
-  }
-  if (budget.wallClockRemainingSeconds != null) {
-    parts.push(`${budget.wallClockRemainingSeconds} wall-clock second(s)`);
-  }
-  return parts.length
-    ? `the active budget still has ${parts.join(" and ")} left`
-    : "the loop is still active";
-}
-
 function resolveFanoutForSegment(workDir: string, segment: number, records?: LooseObject[] | null) {
   const entry = [...recordsOrReadJsonl(workDir, records)]
     .reverse()
@@ -8479,15 +8335,6 @@ async function researchFanout(args: LooseObject) {
     fanoutPlan: plan,
     parallelLanes: lanes,
   };
-}
-
-function continuationCommands(workDir: string) {
-  return buildContinuationCommands({
-    researchSlug: currentQualityGapSlug(workDir) || "research",
-    scriptPath: path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-    shellQuote,
-    workDir,
-  });
 }
 
 function withCanonicalActionCommand(envelope: LooseObject, commands: unknown): LooseObject {
