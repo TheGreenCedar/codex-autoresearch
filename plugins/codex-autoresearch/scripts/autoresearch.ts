@@ -306,7 +306,6 @@ type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
 type InspectCommandsModule = typeof import("../lib/commands/inspect.js");
 type LaneRunnerCommandModule = typeof import("../lib/commands/lane-runner.js");
-type PartialResultsCommandModule = typeof import("../lib/commands/partial-results.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
 type InspectCommandHandlers = ReturnType<InspectCommandsModule["createInspectCommands"]>;
 
@@ -525,29 +524,14 @@ async function checksInspect(args: LooseObject): Promise<LooseObject> {
   return await (await getInspectCommandHandlers()).checksInspect(args);
 }
 
-let partialResultsCommandHandler: ((args: LooseObject) => Promise<LooseObject>) | null = null;
-
 async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
-  if (!partialResultsCommandHandler) {
-    const { createPartialResultsCommand } = await import("../lib/commands/partial-results.js");
-    partialResultsCommandHandler = createPartialResultsCommand({
-      appendJsonl,
-      assertFreshLastRunPacket,
-      boolOption,
-      computeConfidence,
-      currentState,
-      deleteLastRunPacket: async (workDir: string) => {
-        await deleteLastRunPacket(workDir);
-      },
-      finiteMetric,
-      loopContinuation,
-      readConfig,
-      readLastRunPacket,
-      researchSlugFromArgs,
-      resolveWorkDir,
-    });
-  }
-  return await partialResultsCommandHandler(args);
+  const { partialResultsCommand: runPartialResultsCommand } =
+    await import("../lib/commands/partial-results.js");
+  return await runPartialResultsCommand(args, {
+    assertFreshLastRunPacket,
+    deleteLastRunPacket,
+    readLastRunPacket,
+  });
 }
 
 async function sessionForensics(args: LooseObject): Promise<LooseObject> {

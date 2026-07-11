@@ -4,76 +4,72 @@ import { mergeEvidenceClaims } from "../evidence-index.js";
 import {
   buildPartialResultEvidenceClaim,
   discoverPartialResultCandidates,
+  type PartialResultCandidate,
 } from "../partial-results.js";
+import { boolOption } from "../cli/args.js";
+import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { loopContinuation } from "./continuation.js";
+import {
+  computeConfidence,
+  currentState,
+  finiteMetric,
+  readConfig,
+  researchSlugFromArgs,
+} from "../session-core.js";
+import { appendJsonl } from "../session-records.js";
+import type { UnknownRecord } from "../types/json.js";
 
-type LooseObject = Record<string, any>;
+type LooseObject = UnknownRecord;
+type LastRunPacket = LooseObject & { packetEvidence?: LooseObject };
+type SessionState = ReturnType<typeof currentState>;
 
-export interface PartialResultsCommandDeps {
-  appendJsonl: (workDir: string, entry: LooseObject) => void;
+export interface PartialResultsIo {
   assertFreshLastRunPacket: (workDir: string, packet: LooseObject) => Promise<void>;
-  boolOption: (value: unknown, fallback?: boolean) => boolean;
-  computeConfidence: (runs: LooseObject[], direction: string) => number | null;
-  currentState: (workDir: string) => LooseObject;
-  deleteLastRunPacket: (workDir: string) => Promise<void>;
-  finiteMetric: (value: unknown) => number | null;
-  loopContinuation: (
-    workDir: string,
-    state: LooseObject,
-    config: LooseObject,
-    lastAction?: string,
-  ) => LooseObject;
-  readConfig: (workDir: string) => LooseObject;
-  readLastRunPacket: (workDir: string) => Promise<LooseObject | null>;
-  researchSlugFromArgs: (args: LooseObject) => string;
-  resolveWorkDir: (value: string) => { workDir: string };
+  deleteLastRunPacket: (workDir: string) => Promise<unknown>;
+  readLastRunPacket: (workDir: string) => Promise<LastRunPacket | null>;
 }
 
-export function createPartialResultsCommand(deps: PartialResultsCommandDeps) {
-  return async function partialResultsCommand(args: LooseObject) {
-    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    const state = deps.currentState(workDir);
-    const artifact = args.artifact ? String(args.artifact) : "";
-    const recordId = args.record ? String(args.record).trim() : "";
-    const fromLast = deps.boolOption(
-      args.from_last ?? args.fromLast,
-      !artifact || Boolean(recordId),
-    );
-    const lastRun = fromLast || recordId ? await deps.readLastRunPacket(workDir) : null;
-    if (lastRun) await deps.assertFreshLastRunPacket(workDir, lastRun);
-    const lastRunPacket =
-      lastRun ||
-      partialResultPacketFromArtifact({
-        artifact,
-        commandHash: args.command_hash ?? args.commandHash,
-        state,
-        workDir,
-      });
-    const discovery = await discoverPartialResultCandidates({
+export async function partialResultsCommand(args: LooseObject, io: PartialResultsIo) {
+  const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const state = currentState(workDir);
+  const artifact = args.artifact ? String(args.artifact) : "";
+  const recordId = args.record ? String(args.record).trim() : "";
+  const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
+  const lastRun = fromLast || recordId ? await io.readLastRunPacket(workDir) : null;
+  if (lastRun) await io.assertFreshLastRunPacket(workDir, lastRun);
+  const lastRunPacket =
+    lastRun ||
+    partialResultPacketFromArtifact({
+      artifact,
+      commandHash: args.command_hash ?? args.commandHash,
+      state,
       workDir,
-      primaryMetricName: state.config?.metricName || "metric",
-      lastRunPacket,
     });
-    if (!recordId) {
-      return {
-        ok: true,
-        workDir,
-        source: lastRun ? "last-run" : "artifact",
-        candidates: discovery.candidates,
-        skippedArtifacts: discovery.skippedArtifacts,
-        nextAction: discovery.candidates.length
-          ? "Review a candidate, then record it as diagnostic measure evidence with --record <candidate-id>."
-          : "No partial-result candidates were found.",
-      };
-    }
-    if (!lastRun) {
-      throw new Error(
-        "--record requires a fresh last-run packet so salvaged evidence links to its source packet.",
-      );
-    }
-    const candidate = discovery.candidates.find((item: any) => item.id === recordId);
-    if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
-    return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args }, deps);
-  };
+  const discovery = await discoverPartialResultCandidates({
+    workDir,
+    primaryMetricName: state.config?.metricName || "metric",
+    lastRunPacket,
+  });
+  if (!recordId) {
+    return {
+      ok: true,
+      workDir,
+      source: lastRun ? "last-run" : "artifact",
+      candidates: discovery.candidates,
+      skippedArtifacts: discovery.skippedArtifacts,
+      nextAction: discovery.candidates.length
+        ? "Review a candidate, then record it as diagnostic measure evidence with --record <candidate-id>."
+        : "No partial-result candidates were found.",
+    };
+  }
+  if (!lastRun) {
+    throw new Error(
+      "--record requires a fresh last-run packet so salvaged evidence links to its source packet.",
+    );
+  }
+  const candidate = discovery.candidates.find((item) => item.id === recordId);
+  if (!candidate) throw new Error(`partial result candidate not found: ${recordId}`);
+  return await recordPartialResultCandidate({ workDir, state, lastRun, candidate, args }, io);
 }
 
 function partialResultPacketFromArtifact({
@@ -81,7 +77,12 @@ function partialResultPacketFromArtifact({
   commandHash,
   state,
   workDir,
-}: LooseObject): LooseObject {
+}: {
+  artifact: string;
+  commandHash: unknown;
+  state: SessionState;
+  workDir: string;
+}): LastRunPacket {
   if (!artifact) throw new Error("--artifact is required unless --from-last is used.");
   const artifactPath = path.isAbsolute(artifact) ? path.resolve(artifact) : artifact;
   return {
@@ -120,18 +121,30 @@ function lastRunConfigSnapshot(config: LooseObject = {}) {
 }
 
 async function recordPartialResultCandidate(
-  { workDir, state, lastRun, candidate, args }: LooseObject,
-  deps: PartialResultsCommandDeps,
+  {
+    workDir,
+    state,
+    lastRun,
+    candidate,
+    args,
+  }: {
+    workDir: string;
+    state: SessionState;
+    lastRun: LastRunPacket;
+    candidate: PartialResultCandidate;
+    args: LooseObject;
+  },
+  io: PartialResultsIo,
 ) {
   const metricName = candidate.metricName || state.config?.metricName || "metric";
-  const metric = deps.finiteMetric(candidate.metricValue);
+  const metric = finiteMetric(candidate.metricValue);
   if (metric == null) {
     throw new Error(
       `partial result candidate ${candidate.id} has no finite metric and must stay manual-review only.`,
     );
   }
   const sourcePacketId = lastRun?.packetEvidence?.packetId || "";
-  const researchSlug = deps.researchSlugFromArgs({
+  const researchSlug = researchSlugFromArgs({
     slug: args.research_slug ?? args.researchSlug ?? "partial-results",
   });
   const evidenceClaim = buildPartialResultEvidenceClaim(candidate);
@@ -187,13 +200,13 @@ async function recordPartialResultCandidate(
       validationStatus: candidate.status,
     },
   };
-  experiment.confidence = deps.computeConfidence(
+  experiment.confidence = computeConfidence(
     [...state.current, experiment],
     state.config?.bestDirection || "lower",
   );
-  deps.appendJsonl(workDir, experiment);
-  await deps.deleteLastRunPacket(workDir);
-  const stateAfter = deps.currentState(workDir);
+  appendJsonl(workDir, experiment);
+  await io.deleteLastRunPacket(workDir);
+  const stateAfter = currentState(workDir);
   return {
     ok: true,
     workDir,
@@ -207,6 +220,6 @@ async function recordPartialResultCandidate(
     baseline: stateAfter.baseline,
     best: stateAfter.best,
     confidence: stateAfter.confidence,
-    continuation: deps.loopContinuation(workDir, stateAfter, deps.readConfig(workDir), "logged"),
+    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
   };
 }
