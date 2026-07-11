@@ -196,7 +196,7 @@ test(
         ["recommend-next", "--cwd", dir, "--compact"],
         ["guide", "--cwd", dir, "--compact"],
       ];
-      const budgetMs = process.env.CODEX_AUTORESEARCH_TEST_SHARD_RANGE ? 2200 : 1500;
+      const budgetMs = 1500;
       for (const command of commands) {
         let bestElapsedMs = Number.POSITIVE_INFINITY;
         for (let attempt = 0; attempt < 3; attempt += 1) {
