@@ -527,8 +527,8 @@ test("dashboard script renders zero and negative metric points", async () => {
     const dashboard = await readFile(path.join(dir, "autoresearch-dashboard.html"), "utf8");
     const dom = await renderExportedDashboard(dashboard);
     const chart = dom.window.document.getElementById("trend-chart").innerHTML;
-    assert.match(chart, /#1 0 keep/);
-    assert.match(chart, /#2 -2 keep/);
+    assert.match(chart, /2 chart-eligible runs out of 2 logged runs/);
+    assert.match(chart, /#2 · Keep · -2/);
     dom.window.close();
   });
 });
