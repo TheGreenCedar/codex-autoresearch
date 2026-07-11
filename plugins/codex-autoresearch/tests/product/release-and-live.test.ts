@@ -22,6 +22,8 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
   );
+  const ci = await readFile(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const maintainers = await readFile(path.join(pluginRoot, "docs", "maintainers.md"), "utf8");
   const packageSmoke = await readFile(
     path.join(pluginRoot, "lib", "checks", "package-smoke.ts"),
     "utf8",
@@ -41,6 +43,23 @@ test("release workflows preserve synchronized auto-release and tarball safeguard
   assert.doesNotMatch(release, /push:\s*\n\s*tags:/);
   assert.match(release, /os:\s*\[ubuntu-latest,\s*windows-latest,\s*macos-latest\]/);
   assert.match(release, /npm run check/);
+  for (const workflow of [ci, release]) {
+    assert.match(workflow, /npx playwright install --with-deps chromium firefox webkit/);
+    assert.match(workflow, /npm run test:dashboard:cross-browser/);
+    assert.match(
+      workflow,
+      /actions\/upload-artifact@[0-9a-f]{40}[\s\S]*tmp\/dashboard-cross-browser\//,
+    );
+  }
+  assert.equal(
+    packageJson.scripts["test:dashboard:cross-browser"],
+    "npm run build:dashboard && node --test tests/dashboard-cross-browser.test.mjs",
+  );
+  assert.match(packageJson.devDependencies.playwright, /^\^1\./);
+  assert.equal(packageJson.devDependencies["@playwright/test"], undefined);
+  assert.match(maintainers, /Automation does not prove spoken output/);
+  assert.match(maintainers, /pass\/fail\/needs-follow-up/);
+  assert.match(maintainers, /do not turn an unrecorded or partial pass into a compliance claim/);
   assert.match(release, /node scripts\/autoresearch\.mjs --help/);
   assert.match(release, /Refuse existing tag or release/);
   assert.match(release, /npm pack/);
