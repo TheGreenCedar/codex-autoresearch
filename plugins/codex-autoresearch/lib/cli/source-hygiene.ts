@@ -42,7 +42,6 @@ const LOOSE_OBJECT_COMPATIBILITY_ALLOWLIST = new Set(
     "plugins/codex-autoresearch/lib/workflow-friction.ts",
     "plugins/codex-autoresearch/scripts/autoresearch.ts",
     "plugins/codex-autoresearch/scripts/finalize-autoresearch.ts",
-    "plugins/codex-autoresearch/scripts/perfection-benchmark.ts",
   ].map(normalizeTrackedPath),
 );
 

@@ -35,6 +35,7 @@ const ALLOWED_PACKAGED_SOURCE_SCRIPTS = new Set([
   "scripts/check.mjs",
   "scripts/directory-swap.mjs",
   "scripts/finalize-autoresearch.mjs",
+  "scripts/operator-task-benchmark.mjs",
   "scripts/release-integrity.mjs",
 ]);
 
@@ -43,6 +44,7 @@ const ALLOWED_PACKAGED_DIST_SCRIPTS = new Set([
   "dist/scripts/check.mjs",
   "dist/scripts/check-runner.mjs",
   "dist/scripts/finalize-autoresearch.mjs",
+  "dist/scripts/operator-task-benchmark.mjs",
 ]);
 
 export async function runPackageArtifactCheck() {
@@ -96,6 +98,7 @@ export async function runPackageArtifactCheck() {
       "dist/scripts/check.mjs",
       "dist/scripts/check-runner.mjs",
       "dist/scripts/finalize-autoresearch.mjs",
+      "dist/scripts/operator-task-benchmark.mjs",
       "dist/lib/checks/check-common.mjs",
       "dist/lib/checks/demo-trust.mjs",
       "dist/lib/checks/npm-command.mjs",
@@ -109,6 +112,7 @@ export async function runPackageArtifactCheck() {
       "scripts/directory-swap.mjs",
       "scripts/release-integrity.mjs",
       "scripts/finalize-autoresearch.mjs",
+      "scripts/operator-task-benchmark.mjs",
       "skills/codex-autoresearch/SKILL.md",
     ];
     const forbiddenPackagePaths = [
@@ -373,6 +377,7 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
     ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
     ["scripts/check.mjs", 'ensureRuntime("check.mjs"'],
     ["scripts/finalize-autoresearch.mjs", 'ensureRuntime("finalize-autoresearch.mjs"'],
+    ["scripts/operator-task-benchmark.mjs", 'ensureRuntime("operator-task-benchmark.mjs"'],
   ];
   const problems: string[] = [];
 

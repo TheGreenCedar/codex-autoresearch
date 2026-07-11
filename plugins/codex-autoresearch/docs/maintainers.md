@@ -46,7 +46,7 @@ When behavior, commands, dashboard wording, safety rules, finalization, packagin
 - SKILL for Codex behavior
 - nearest topic doc
 - `lib/command-table.ts` for command identity, schemas, safety, help, handler binding, and compatibility lifecycle; the CLI/tool/dashboard surfaces derive from it
-- tests and `scripts/perfection-benchmark.mjs` where drift should fail the product gate
+- focused contract tests and `scripts/operator-task-benchmark.mjs` where externally observed drift should fail the product gate
 
 Rewrite stale guidance instead of appending a second version. Removed invocation paths need a migration note.
 
@@ -82,6 +82,14 @@ Compiled tests are organized by domain under `tests/cli/`, `tests/dashboard/`, `
 Session read-model budgets are reviewed product contracts. The 100-run fixture caps compact state at 10 KiB/200 lines, default state at 20 KiB/260 lines, and doctor/report at 8 KiB/100 lines; compact must remain smaller than default and must not repeat exact object subtrees. Change a ceiling only with measured before/after output and a reason the additional data belongs on the default surface. Full state and doctor detail is opt-in through `--json-full`.
 
 For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
+
+## Product evidence gate
+
+`npm run check` executes six portable operator tasks through `scripts/operator-task-benchmark.mjs`: decision consistency across public readouts, invalid CLI rejection, installed-cache discovery, hostile-path finalization safety, bounded default output, and long-history retention. Each task emits one machine-readable `EVIDENCE` record, followed by one reconciled `EVIDENCE_SUMMARY`. The independent `METRIC operator_task_failures=<count>` ceiling is zero; `--fail-on-failure` makes any failed case fail the product phase.
+
+Dashboard geometry is the seventh operator task. It requires a real browser, so the required Chrome dashboard gate emits its own `EVIDENCE` and `EVIDENCE_SUMMARY` records instead of hiding a browser dependency inside the portable package check. Focused contract-integrity tests separately protect version and manifest agreement, package contents, documentation links, release wiring, and session-artifact invariants. Tests also feed each portable validator intentionally faulty raw observations and require the case-specific failure code, proving that representative defects are rejected rather than converted into a qualitative score.
+
+This evidence is not proof of perfection, broad UX quality, manual screen-reader behavior, physical-device behavior, undiscovered defects, or every possible session. Ordinary qualitative research still uses `quality_gap`; `quality_gap=0` remains valid only for the accepted checklist in the current research round. The product gate uses `operator_task_failures` for its explicitly bounded cases.
 
 ## Dashboard review
 
