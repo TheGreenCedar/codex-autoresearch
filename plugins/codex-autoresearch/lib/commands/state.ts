@@ -1,243 +1,14 @@
 import type { UnknownRecord } from "../types/json.js";
-import { compactFinalizationReadiness } from "../state-finalization-readout.js";
+import { projectFullState, projectStateReadModel } from "../session-read-model.js";
 
-type JsonObject = Record<string, unknown>;
-
-export interface CompactStateBuilderInput {
-  ok?: boolean;
+export interface CompactStateBuilderInput extends UnknownRecord {
   workDir: string;
-  name?: string;
-  goal?: string;
-  metric?: string;
-  direction?: string;
-  segment?: number;
-  runs?: number;
-  kept?: number;
-  discarded?: number;
-  measured?: number;
-  baseline?: unknown;
-  best?: unknown;
-  historicalBest?: unknown;
-  developmentBest?: unknown;
-  promotionBest?: unknown;
-  goalFrame?: unknown;
-  goalContract?: unknown;
-  operatorHandoff?: unknown;
-  evidenceRegistry?: unknown;
-  productClaimCoverage?: unknown;
-  sessionDecisionCapsule?: unknown;
-  evidenceLabels?: unknown[];
-  scaffoldHealth?: unknown;
-  researchIntegrity?: unknown;
-  limitReached?: boolean;
-  remainingIterations?: unknown;
-  nextAction?: string;
-  shouldContinue?: boolean;
-  canRunNextPacket?: boolean;
-  forbidFinalAnswer?: boolean;
-  activeBudget?: boolean;
-  requiresLogDecision?: boolean;
-  afterLogAction?: string;
-  finalAnswerPolicy?: string;
-  parallelLanes?: unknown[];
-  fanoutPlan?: unknown;
-  fanoutProvenance?: unknown;
-  watchdogSummary?: unknown;
-  blockers?: unknown[];
-  goalAdvice?: unknown;
-  report?: unknown;
-  memory?: unknown;
-  experimentEconomics?: unknown;
-  partialResults?: unknown;
-  commandExecutionBoundary?: unknown;
-  workflowFriction?: unknown[];
-  commands?: JsonObject;
-  resumeAudit?: unknown;
-  decisionEnvelope?: unknown;
-  canonicalNextAction?: unknown;
-  runtimeProvenance?: unknown;
-  runtimeDriftSummary?: unknown;
-  runtimeAuthority?: unknown;
-  dashboardHealth?: unknown;
-  sourceCleanliness?: unknown;
-  ledgerHealth?: unknown;
-  gateQuality?: unknown;
-  preflight?: unknown;
-  portfolioRecommendation?: unknown;
-  loopContract?: unknown;
-  approvalLedger?: unknown;
-  resourcePreflight?: unknown;
-  evidenceMaturity?: unknown;
-  laneOrchestration?: unknown;
-  finalizationRunway?: unknown;
-  operatorReadout?: unknown;
-  laneLifecycle?: unknown;
-  packetDiagnostics?: unknown;
-  metricSemanticsWarning?: unknown;
-  fixedControl?: unknown;
 }
 
-const OPTIONAL_COMPACT_STATE_FIELDS = [
-  "runtimeProvenance",
-  "runtimeDriftSummary",
-  "runtimeAuthority",
-  "dashboardHealth",
-  "sourceCleanliness",
-  "ledgerHealth",
-  "gateQuality",
-  "preflight",
-  "portfolioRecommendation",
-  "loopContract",
-  "approvalLedger",
-  "resourcePreflight",
-  "evidenceMaturity",
-  "laneOrchestration",
-  "finalizationRunway",
-  "operatorReadout",
-  "laneLifecycle",
-  "packetDiagnostics",
-  "commandExecutionBoundary",
-  "metricSemanticsWarning",
-  "fixedControl",
-] as const satisfies readonly (keyof CompactStateBuilderInput)[];
-
-export interface CompactStateResponse {
-  ok: boolean;
-  workDir: string;
-  name: string;
-  goal: string;
-  metric: string;
-  direction: string;
-  segment: number;
-  runs: number;
-  kept: number;
-  discarded: number;
-  measured: number;
-  baseline: unknown;
-  best: unknown;
-  historicalBest: unknown;
-  developmentBest: unknown;
-  promotionBest: unknown;
-  goalFrame: unknown;
-  goalContract: unknown;
-  operatorHandoff: unknown;
-  evidenceRegistry: unknown;
-  productClaimCoverage: unknown;
-  sessionDecisionCapsule: unknown;
-  evidenceLabels: unknown[];
-  scaffoldHealth: unknown;
-  researchIntegrity: unknown;
-  limitReached: boolean;
-  remainingIterations: unknown;
-  nextAction: string;
-  shouldContinue: boolean;
-  canRunNextPacket: boolean;
-  forbidFinalAnswer: boolean;
-  activeBudget: boolean;
-  requiresLogDecision: boolean;
-  afterLogAction: string;
-  finalAnswerPolicy: string;
-  parallelLanes: unknown[];
-  fanoutPlan: unknown;
-  fanoutProvenance: unknown;
-  watchdogSummary: unknown;
-  blockers: unknown[];
-  goalAdvice: unknown;
-  report: unknown;
-  memory: unknown;
-  experimentEconomics: unknown;
-  partialResults: unknown;
-  commandExecutionBoundary?: unknown;
-  workflowFriction: unknown[];
-  commands: JsonObject;
-  resumeAudit: unknown;
-  decisionEnvelope: unknown;
-  canonicalNextAction: unknown;
-  runtimeProvenance?: unknown;
-  runtimeDriftSummary?: unknown;
-  runtimeAuthority?: unknown;
-  dashboardHealth?: unknown;
-  sourceCleanliness?: unknown;
-  ledgerHealth?: unknown;
-  gateQuality?: unknown;
-  preflight?: unknown;
-  portfolioRecommendation?: unknown;
-  loopContract?: unknown;
-  approvalLedger?: unknown;
-  resourcePreflight?: unknown;
-  evidenceMaturity?: unknown;
-  laneOrchestration?: unknown;
-  finalizationRunway?: unknown;
-  operatorReadout?: unknown;
-  laneLifecycle?: unknown;
-  packetDiagnostics?: unknown;
-  metricSemanticsWarning?: unknown;
-  fixedControl?: unknown;
-}
+export type CompactStateResponse = UnknownRecord;
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {
-  const response: CompactStateResponse = {
-    ok: input.ok ?? true,
-    workDir: input.workDir,
-    name: input.name || "Autoresearch",
-    goal: input.goal || "",
-    metric: input.metric || "metric",
-    direction: input.direction || "lower",
-    segment: input.segment ?? 0,
-    runs: input.runs ?? 0,
-    kept: input.kept ?? 0,
-    discarded: input.discarded ?? 0,
-    measured: input.measured ?? 0,
-    baseline: input.baseline ?? null,
-    best: input.best ?? null,
-    historicalBest: input.historicalBest ?? null,
-    developmentBest: input.developmentBest ?? null,
-    promotionBest: input.promotionBest ?? null,
-    goalFrame: input.goalFrame ?? null,
-    goalContract: input.goalContract ?? null,
-    operatorHandoff: input.operatorHandoff ?? null,
-    evidenceRegistry: input.evidenceRegistry ?? null,
-    productClaimCoverage: input.productClaimCoverage ?? null,
-    sessionDecisionCapsule: input.sessionDecisionCapsule ?? null,
-    evidenceLabels: Array.isArray(input.evidenceLabels) ? input.evidenceLabels : [],
-    scaffoldHealth: input.scaffoldHealth ?? null,
-    researchIntegrity: input.researchIntegrity ?? null,
-    limitReached: input.limitReached === true,
-    remainingIterations: input.remainingIterations ?? null,
-    nextAction: input.nextAction || "Run doctor, then next.",
-    shouldContinue: input.shouldContinue === true,
-    canRunNextPacket: input.canRunNextPacket === true,
-    forbidFinalAnswer: input.forbidFinalAnswer === true,
-    activeBudget: input.activeBudget === true,
-    requiresLogDecision: input.requiresLogDecision === true,
-    afterLogAction: input.afterLogAction || "",
-    finalAnswerPolicy: input.finalAnswerPolicy || "",
-    parallelLanes: Array.isArray(input.parallelLanes) ? input.parallelLanes : [],
-    fanoutPlan: input.fanoutPlan ?? null,
-    fanoutProvenance: input.fanoutProvenance ?? null,
-    watchdogSummary: input.watchdogSummary ?? null,
-    blockers: Array.isArray(input.blockers) ? input.blockers : [],
-    goalAdvice: input.goalAdvice ?? null,
-    report: input.report ?? null,
-    memory: input.memory ?? null,
-    experimentEconomics: input.experimentEconomics ?? null,
-    partialResults: input.partialResults ?? null,
-    workflowFriction: Array.isArray(input.workflowFriction) ? input.workflowFriction : [],
-    commands: input.commands || {},
-    resumeAudit: input.resumeAudit ?? null,
-    decisionEnvelope: input.decisionEnvelope ?? input.resumeAudit ?? null,
-    canonicalNextAction: input.canonicalNextAction ?? null,
-  };
-
-  for (const field of OPTIONAL_COMPACT_STATE_FIELDS) {
-    copyIfProvided(response, field, input[field]);
-  }
-
-  return response;
-}
-
-function copyIfProvided<T extends object>(target: T, key: string, value: unknown) {
-  if (value !== undefined) (target as JsonObject)[key] = value;
+  return projectStateReadModel(input, "compact");
 }
 
 function decisionSetupState(state: CommandRecord): CommandRecord | null {
@@ -255,7 +26,6 @@ export type StateCommandServiceDeps = Record<string, any>;
 
 export function createStateCommandService(deps: StateCommandServiceDeps) {
   const {
-    actionMessage,
     analyzeExperimentEconomics,
     analyzeLedgerHealth,
     analyzeWorkflowFriction,
@@ -263,8 +33,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     buildCheapFinalizationPressure,
     buildDecisionEnvelope,
     buildFinalizePreview,
-    buildGoalContract,
-    buildGoalFrame,
     buildLaneLifecycle,
     buildParallelOrchestrationContext,
     buildScaffoldHealth,
@@ -285,7 +53,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     errorMessage,
     fixedControlStateSummary,
     isAcceptedCurrentRun,
-    isPacketBrakeKind,
     iterationLimitInfo,
     lastRunPacketFreshness,
     listBuiltInRecipes,
@@ -304,12 +71,10 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     resolveWorkDir,
     runtimeProvenance,
     statusCountsFromState,
-    uniqueStrings,
     verifyDashboardHealthSummary,
     withCanonicalActionCommand,
   } = deps;
   const COMMAND_EXECUTION_BOUNDARY = deps.commandExecutionBoundary;
-  const PENDING_LOG_TRANSACTION_CODE = deps.pendingLogTransactionCode;
   const PLUGIN_ROOT = deps.pluginRoot;
   const PLUGIN_VERSION = deps.pluginVersion;
 
@@ -317,6 +82,8 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
     const compact = boolOption(args.compact, false);
     const report = boolOption(args.report, false);
+    const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
+    const bounded = boolOption(args.bounded, false);
     const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
     const readCache = args.readCache || createSessionReadCache();
     if (compact || report) {
@@ -355,13 +122,16 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       records = loadSessionRecords(workDir, readCache);
     } catch (error) {
       if (!isStrictLedgerParseError(error)) throw error;
-      return repairFirstStateForInvalidLedger({
+      const repairState = repairFirstStateForInvalidLedger({
         workDir,
         config,
         codexGoalObjective,
         error,
         compact: false,
       });
+      return jsonFull || !bounded
+        ? projectFullState(repairState)
+        : projectStateReadModel(repairState, "default");
     }
     const ledgerHealth = analyzeLedgerHealth(records);
     const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -527,6 +297,16 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
         : preliminaryDecisionEnvelope,
       stateCommands,
     );
+    const resolvedReadModel = deps.withResolvedSessionDecision(readModel, {
+      state: {
+        decisionEnvelope,
+        blockers: decisionEnvelope.loopContract?.blockers || [],
+      },
+      decisionEnvelope,
+      commands: stateCommands,
+      runtimeProvenance: currentRuntimeProvenance,
+      finalization,
+    });
     const fullState = {
       ok: true,
       workDir,
@@ -579,6 +359,8 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       metricSemanticsWarning: state.metricSemanticsWarning || null,
       commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
       portfolioRecommendation,
+      finalizationPressure: finalization,
+      qualityRound: decisionEnvelope.qualityRound || null,
       ...controlPlane,
       watchdogSummary,
       memory,
@@ -586,10 +368,14 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       partialResults,
       workflowFriction,
       continuation,
+      resolvedDecision: resolvedReadModel.resolvedDecision,
       resumeAudit: decisionEnvelope,
       decisionEnvelope,
     };
-    return compact ? compactPublicState(fullState) : fullState;
+    if (compact) return compactPublicState(fullState);
+    return jsonFull || !bounded
+      ? projectFullState(fullState)
+      : projectStateReadModel(fullState, "default");
   }
 
   function isStrictLedgerParseError(error: unknown): boolean {
@@ -671,7 +457,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       canonicalNextAction: decisionEnvelope.canonicalNextAction,
       loopContract: decisionEnvelope.loopContract,
     };
-    return compact ? compactPublicState(response) : response;
+    return compact ? compactPublicState(response) : projectFullState(response);
   }
 
   async function publicCompactState({
@@ -968,240 +754,7 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
   }
 
   function compactPublicState(state: CommandRecord): CommandRecord {
-    const limit = state.limit || {};
-    const continuation = state.continuation || {};
-    const compactDecisionEnvelope = compactEnvelope(state.decisionEnvelope || state.resumeAudit);
-    const canonicalNextAction =
-      compactDecisionEnvelope?.canonicalNextAction ||
-      state.decisionEnvelope?.canonicalNextAction ||
-      state.resumeAudit?.canonicalNextAction ||
-      null;
-    const canonicalReason =
-      canonicalNextAction?.reason ||
-      compactDecisionEnvelope?.nextAction ||
-      continuation.nextAction ||
-      "Run doctor, then next.";
-    const loopBlockers = Array.isArray(compactDecisionEnvelope?.loopContract?.blockers)
-      ? compactDecisionEnvelope.loopContract.blockers.map(actionMessage).filter(Boolean)
-      : [];
-    const canonicalBlocker =
-      canonicalNextAction && isPacketBrakeKind(canonicalNextAction.kind)
-        ? actionMessage(canonicalNextAction)
-        : "";
-    const warningBlockers = Array.isArray(state.warningDetails)
-      ? state.warningDetails
-          .filter((warning: any) =>
-            ["git_dirty", "missing_commit_paths", PENDING_LOG_TRANSACTION_CODE].includes(
-              String(warning?.code || ""),
-            ),
-          )
-          .map((warning: any) => warning.message || warning.code)
-      : [];
-    const blockers = uniqueStrings(
-      [...loopBlockers, canonicalBlocker, ...warningBlockers].filter(Boolean),
-    );
-    const goalFrame = buildGoalFrame({
-      autoresearchGoal: state.config?.goal,
-      codexGoalObjective: state.codexGoalObjective,
-    });
-    const goalContract =
-      state.goalContract ||
-      buildGoalContract({
-        autoresearchGoal: state.config?.goal,
-        codexGoalObjective: state.codexGoalObjective,
-        benchmarkGoal: state.config?.benchmarkGoal || state.config?.goal,
-        finalizationClaim: state.config?.finalizationClaim,
-        recoveryCommand: state.commands?.codexGoalBrief || state.commands?.state,
-      });
-    const operatorHandoff = {
-      goal: goalFrame.operatorLine,
-      next: canonicalReason,
-      blocker: blockers[0] || "",
-      command: canonicalNextAction?.command || continuation.commands?.next || "",
-    };
-    return buildCompactStateResponse({
-      ok: state.ok,
-      workDir: state.workDir,
-      name: state.config?.name || "Autoresearch",
-      goal: state.config?.goal || "",
-      metric: state.config?.metricName || "metric",
-      direction: state.config?.bestDirection || "lower",
-      segment: state.segment,
-      runs: state.runs,
-      kept: state.kept,
-      discarded: state.discarded,
-      measured: state.measured,
-      baseline: state.baseline,
-      best: state.best,
-      historicalBest: state.historicalBest ?? null,
-      developmentBest: state.development?.best ?? null,
-      promotionBest: state.promotion?.best ?? null,
-      goalFrame,
-      goalContract,
-      operatorHandoff,
-      evidenceRegistry: state.evidenceRegistry
-        ? {
-            counts: state.evidenceRegistry.counts,
-            acceptedCurrent: Array.isArray(state.evidenceRegistry.acceptedCurrent)
-              ? state.evidenceRegistry.acceptedCurrent.length
-              : 0,
-            currentArtifacts: Array.isArray(state.evidenceRegistry.currentArtifacts)
-              ? state.evidenceRegistry.currentArtifacts.slice(0, 5)
-              : [],
-          }
-        : null,
-      productClaimCoverage: state.productClaimCoverage || null,
-      sessionDecisionCapsule:
-        state.sessionDecisionCapsule || compactDecisionEnvelope?.sessionDecisionCapsule || null,
-      evidenceLabels: state.researchIntegrity?.evidenceLabels || [],
-      scaffoldHealth: state.scaffoldHealth
-        ? {
-            ok: state.scaffoldHealth.ok,
-            status: state.scaffoldHealth.status,
-            blockers: (state.scaffoldHealth.checks || [])
-              .filter((check: any) => check.severity === "blocker")
-              .map((check: any) => check.message || check.code),
-          }
-        : null,
-      researchIntegrity: state.researchIntegrity
-        ? {
-            ok: state.researchIntegrity.ok,
-            currentLabel: state.researchIntegrity.currentLabel,
-            evidenceLabels: state.researchIntegrity.evidenceLabels || [],
-            notPromotableBecause: state.researchIntegrity.notPromotableBecause || [],
-          }
-        : null,
-      limitReached: Boolean(limit.limitReached),
-      remainingIterations: limit.remainingIterations ?? null,
-      nextAction: canonicalReason,
-      shouldContinue: continuation.shouldContinue === true,
-      canRunNextPacket: compactDecisionEnvelope?.loopContract?.canRunNextPacket === true,
-      forbidFinalAnswer: continuation.forbidFinalAnswer === true,
-      activeBudget: continuation.activeBudget === true,
-      requiresLogDecision: continuation.requiresLogDecision === true,
-      afterLogAction: continuation.afterLogAction || "",
-      finalAnswerPolicy: continuation.finalAnswerPolicy || "",
-      parallelLanes: Array.isArray(state.parallelLanes)
-        ? state.parallelLanes.slice(0, 6).map((lane: any) => ({
-            id: lane.id,
-            title: lane.title || lane.label,
-            status: lane.status,
-            mode: lane.mode,
-            evidenceStatus: lane.evidenceStatus,
-            nextActionHint: lane.nextActionHint,
-            brief: lane.brief || null,
-          }))
-        : [],
-      fanoutPlan: state.fanoutPlan
-        ? {
-            id: state.fanoutPlan.id,
-            status: state.fanoutPlan.status,
-            segment: state.fanoutPlan.segment ?? state.segment,
-            nextAction: state.fanoutPlan.nextAction,
-          }
-        : null,
-      fanoutProvenance: state.fanoutProvenance || null,
-      watchdogSummary: state.watchdogSummary
-        ? {
-            stale: state.watchdogSummary.stale === true,
-            status: state.watchdogSummary.status || "",
-            recommendation: state.watchdogSummary.recommendation || "",
-            quietHours: state.watchdogSummary.quietHours ?? null,
-          }
-        : state.decisionEnvelope?.watchdog || null,
-      blockers: [...new Set(blockers)].slice(0, 6),
-      goalAdvice: compactDecisionEnvelope?.goalAdvice || null,
-      report: {
-        happened: `${state.runs} run${state.runs === 1 ? "" : "s"} in this segment; ${state.kept} kept, ${state.discarded} discarded, ${state.measured} measured, ${state.crashed} crashed, ${state.checksFailed} checks failed.`,
-        decision:
-          continuation.requiresLogDecision === true
-            ? "A packet is waiting for a keep/discard/measure/crash/checks_failed log decision."
-            : state.best == null
-              ? "No best metric yet."
-              : `Best ${state.config?.metricName || "metric"} is ${state.best}.`,
-        next: canonicalReason,
-      },
-      memory: {
-        plateau: state.memory?.plateau?.detected === true,
-        suggestedLane: state.memory?.summary?.suggestedLane || "",
-        latestNextAction: state.memory?.latestNextAction || "",
-        exhaustedFamilies: Array.isArray(state.memory?.exhaustedFamilies)
-          ? state.memory.exhaustedFamilies.slice(0, 3)
-          : [],
-        metricShelves: Array.isArray(state.memory?.metricShelves)
-          ? state.memory.metricShelves.slice(0, 3)
-          : [],
-      },
-      experimentEconomics: state.experimentEconomics
-        ? {
-            runtimeClass: state.experimentEconomics.runtimeClass,
-            expectedRuntimeSeconds: state.experimentEconomics.expectedRuntimeSeconds ?? null,
-            baselineFreshness: state.experimentEconomics.baselineFreshness,
-            freshRunRequired: state.experimentEconomics.freshRunRequired === true,
-            freshRunReason: state.experimentEconomics.freshRunReason || "",
-            warnings: Array.isArray(state.experimentEconomics.warnings)
-              ? state.experimentEconomics.warnings.slice(0, 3)
-              : [],
-            progress: state.experimentEconomics.progress || null,
-          }
-        : null,
-      partialResults: {
-        candidates: Array.isArray(state.partialResults?.candidates)
-          ? state.partialResults.candidates.slice(0, 5)
-          : [],
-        skippedArtifacts: Array.isArray(state.partialResults?.skippedArtifacts)
-          ? state.partialResults.skippedArtifacts.slice(0, 5)
-          : [],
-      },
-      commandExecutionBoundary: state.commandExecutionBoundary || null,
-      portfolioRecommendation: compactPortfolioRecommendation(state.portfolioRecommendation),
-      workflowFriction: Array.isArray(state.workflowFriction)
-        ? state.workflowFriction.slice(0, 5)
-        : [],
-      commands: state.commands || {},
-      resumeAudit: compactDecisionEnvelope,
-      decisionEnvelope: compactDecisionEnvelope,
-      canonicalNextAction,
-      runtimeProvenance: state.runtimeProvenance,
-      runtimeDriftSummary: state.runtimeDriftSummary
-        ? {
-            installedRuntime: state.runtimeDriftSummary.installedRuntime,
-            builtRuntime: state.runtimeDriftSummary.builtRuntime,
-            nextActionHint: state.runtimeDriftSummary.nextActionHint,
-          }
-        : null,
-      runtimeAuthority: compactRuntimeAuthority(state.runtimeAuthority),
-      dashboardHealth: state.dashboardHealth || null,
-      sourceCleanliness: state.sourceCleanliness || null,
-      ledgerHealth: state.ledgerHealth || null,
-      gateQuality: state.gateQuality
-        ? {
-            posture: state.gateQuality.posture,
-            blockers: state.gateQuality.blockers || [],
-            warnings: state.gateQuality.warnings || [],
-            nextActionHint: state.gateQuality.nextActionHint || "",
-          }
-        : null,
-      fixedControl: state.fixedControl || null,
-      preflight: state.preflight
-        ? {
-            status: state.preflight.status,
-            blockers: state.preflight.blockers || [],
-            warnings: state.preflight.warnings || [],
-            nextCommand: state.preflight.nextCommand || "",
-          }
-        : null,
-      loopContract: compactDecisionEnvelope?.loopContract,
-      approvalLedger: state.approvalLedger || null,
-      resourcePreflight: state.resourcePreflight || null,
-      evidenceMaturity: state.evidenceMaturity || null,
-      laneOrchestration: state.laneOrchestration || null,
-      finalizationRunway: state.finalizationRunway || null,
-      operatorReadout: compactDecisionEnvelope?.operatorReadout || state.operatorReadout || null,
-      laneLifecycle: compactLaneLifecycle(state.laneLifecycle),
-      packetDiagnostics: state.packetDiagnostics,
-      metricSemanticsWarning: state.metricSemanticsWarning || null,
-    }) as unknown as CommandRecord;
+    return projectStateReadModel(state, "compact");
   }
 
   function commandExecutionBoundaryForState({
@@ -1222,133 +775,6 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       mode: String(boundary),
       note: COMMAND_EXECUTION_BOUNDARY.note,
       recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
-    };
-  }
-
-  function compactEnvelope(envelope: CommandRecord | null | undefined): CommandRecord | null {
-    if (!envelope) return null;
-    return {
-      activeSegment: envelope.activeSegment || null,
-      historicalBest: envelope.historicalBest || null,
-      promotionGradeBest: envelope.promotionGradeBest || null,
-      latestPacketFreshness: envelope.latestPacketFreshness || null,
-      benchmarkConfigDrift: envelope.benchmarkConfigDrift || null,
-      dirtySourceDrift: envelope.dirtySourceDrift || null,
-      sourceCleanliness: envelope.sourceCleanliness || null,
-      goalContract: envelope.goalContract || null,
-      approvalLedger: envelope.approvalLedger || null,
-      resourcePreflight: envelope.resourcePreflight || null,
-      evidenceMaturity: envelope.evidenceMaturity || null,
-      laneOrchestration: envelope.laneOrchestration || null,
-      finalizationRunway: envelope.finalizationRunway || null,
-      budgetStatus: envelope.budgetStatus || null,
-      qualityRound: envelope.qualityRound || null,
-      scaffoldHealth: compactScaffoldHealth(envelope.scaffoldHealth),
-      researchIntegrity: envelope.researchIntegrity || null,
-      goalAdvice: envelope.goalAdvice || null,
-      finalizationReadiness: compactFinalizationReadiness(envelope.finalizationReadiness),
-      experimentEconomics: compactExperimentEconomics(envelope.experimentEconomics),
-      workflowFriction: Array.isArray(envelope.workflowFriction)
-        ? envelope.workflowFriction.slice(0, 5)
-        : [],
-      watchdog: envelope.watchdog || null,
-      contextDistillation: envelope.contextDistillation || null,
-      laneLifecycle: compactLaneLifecycle(envelope.laneLifecycle),
-      runtimeProvenance: envelope.runtimeProvenance || null,
-      packetDiagnostics: envelope.packetDiagnostics || null,
-      sessionDecisionCapsule: envelope.sessionDecisionCapsule || null,
-      nextAction: envelope.nextAction || "",
-      loopContract: envelope.loopContract || null,
-      canonicalNextAction: envelope.canonicalNextAction || null,
-      operatorReadout: envelope.operatorReadout || null,
-    };
-  }
-
-  function compactScaffoldHealth(
-    scaffoldHealth: CommandRecord | null | undefined,
-  ): CommandRecord | null {
-    if (!scaffoldHealth) return null;
-    return {
-      ok: scaffoldHealth.ok,
-      status: scaffoldHealth.status,
-      blockers: Array.isArray(scaffoldHealth.blockers)
-        ? scaffoldHealth.blockers.slice(0, 6)
-        : Array.isArray(scaffoldHealth.checks)
-          ? scaffoldHealth.checks
-              .filter((check: any) => check.severity === "blocker")
-              .map((check: any) => check.message || check.code)
-              .slice(0, 6)
-          : [],
-    };
-  }
-
-  function compactExperimentEconomics(
-    economics: CommandRecord | null | undefined,
-  ): CommandRecord | null {
-    if (!economics) return null;
-    return {
-      runtimeClass: economics.runtimeClass,
-      expectedRuntimeSeconds: economics.expectedRuntimeSeconds ?? null,
-      baselineFreshness: economics.baselineFreshness,
-      freshRunRequired: economics.freshRunRequired === true,
-      freshRunReason: economics.freshRunReason || "",
-      warnings: Array.isArray(economics.warnings) ? economics.warnings.slice(0, 3) : [],
-      progress: economics.progress || null,
-    };
-  }
-
-  function compactLaneLifecycle(
-    laneLifecycle: CommandRecord | null | undefined,
-  ): CommandRecord | null {
-    if (!laneLifecycle) return null;
-    const lanes = Array.isArray(laneLifecycle.lanes) ? laneLifecycle.lanes : [];
-    return {
-      stale: laneLifecycle.stale === true,
-      counts: {
-        planned: Array.isArray(laneLifecycle.plannedLanes) ? laneLifecycle.plannedLanes.length : 0,
-        running: Array.isArray(laneLifecycle.runningLanes) ? laneLifecycle.runningLanes.length : 0,
-        result: Array.isArray(laneLifecycle.resultLanes) ? laneLifecycle.resultLanes.length : 0,
-        stale: Array.isArray(laneLifecycle.staleLanes) ? laneLifecycle.staleLanes.length : 0,
-      },
-      lanes: lanes.slice(0, 6).map((lane: any) => ({
-        id: lane.id,
-        title: lane.title || lane.label,
-        status: lane.status,
-        mode: lane.mode,
-        evidenceStatus: lane.evidenceStatus,
-        nextActionHint: lane.nextActionHint,
-        brief: lane.brief || null,
-      })),
-      lessonsToAvoid: Array.isArray(laneLifecycle.lessonsToAvoid)
-        ? laneLifecycle.lessonsToAvoid.slice(0, 8)
-        : [],
-      recommendation: laneLifecycle.recommendation || "",
-      command: laneLifecycle.command || "",
-    };
-  }
-
-  function compactRuntimeAuthority(value: CommandRecord | null | undefined): CommandRecord | null {
-    if (!value) return null;
-    return {
-      sourceRuntime: value.sourceRuntime || null,
-      installedRuntime: value.installedRuntime || null,
-      trustScope: value.trustScope || "source-checkout",
-      blocking: value.blocking === true,
-      blocker: value.blocker || "",
-      warning: value.warning || "",
-    };
-  }
-
-  function compactPortfolioRecommendation(
-    value: CommandRecord | null | undefined,
-  ): CommandRecord | null {
-    if (!value) return null;
-    return {
-      kind: value.kind || "insufficient-evidence",
-      confidence: value.confidence || "low",
-      reason: value.reason || "",
-      nextActionHint: value.nextActionHint || "",
-      evidence: Array.isArray(value.evidence) ? value.evidence.slice(0, 6) : [],
     };
   }
 

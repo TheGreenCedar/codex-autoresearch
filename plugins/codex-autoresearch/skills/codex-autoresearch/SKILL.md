@@ -38,6 +38,7 @@ For an existing session:
 1. Read [loop operations](references/loop-operations.md).
 2. Read `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, and the active `autoresearch.research/<slug>/` folder when present.
 3. Run `state --report`, `recommend-next --compact --operator-checklist`, and `doctor --explain`.
+   These defaults are bounded and share one `resolvedDecision`; use `state --json-full` or `doctor --json-full` only for complete machine diagnostics.
 4. Keep `goalFrame.authoritativeGoal` authoritative unless the user deliberately replaces it. If a new request would change the benchmark, metric, edit scope, or final claim, treat it as a possible replacement and resolve that choice before packet work.
 5. Follow the printed blocker or command. If the CLI, report, and dashboard disagree, stop mutation and diagnose the shared state.
 

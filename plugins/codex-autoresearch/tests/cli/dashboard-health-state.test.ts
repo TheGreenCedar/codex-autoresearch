@@ -40,7 +40,7 @@ test("state report marks registry-only dashboard health dead until HTTP responds
     const compactPayload = JSON.parse(compact.stdout);
     assert.equal(compactPayload.dashboardHealth.liveness, "dead");
     assert.equal(compactPayload.dashboardHealth.stale, true);
-    assert.equal(compactPayload.dashboardHealth.registryPath.includes("serve-registry.json"), true);
+    assert.equal(Object.hasOwn(compactPayload.dashboardHealth, "registryPath"), false);
   });
 });
 
@@ -260,7 +260,7 @@ test("legacy failed sentinel metrics do not suppress next-run baseline measure g
     ]);
     assert.equal(legacyFailure.code, 0, legacyFailure.stderr);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).baseline, null);
 
@@ -399,7 +399,7 @@ test("state normalizes invalid metrics before experiment memory ranking", async 
       "utf8",
     );
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     const family = payload.memory.families.find((item) => item.label === "same");
@@ -528,7 +528,7 @@ test("config extend is based on the active segment run count", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.config.maxIterations, 4);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.limit.maxIterations, 4);

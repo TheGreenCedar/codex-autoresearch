@@ -123,6 +123,11 @@ export function readoutSafeCommand(value: unknown): string {
   return isDashboardReadOnlyCommand(command) ? command : "";
 }
 
+export function hasUnsafeShellOperator(value: unknown): boolean {
+  const command = cleanCommandText(value);
+  return Boolean(command && firstUnsafeShellOperator(command));
+}
+
 export function isDashboardReadOnlyCommand(command: unknown): boolean {
   return dashboardCommandSafety(command).safe;
 }

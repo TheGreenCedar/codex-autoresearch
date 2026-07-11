@@ -189,14 +189,14 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(stateAfterUnapproved.code, 0, stateAfterUnapproved.stderr);
     const unapprovedStatePayload = JSON.parse(stateAfterUnapproved.stdout);
     assert.equal(unapprovedStatePayload.approvalLedger.status, "blocked");
-    assert.equal(unapprovedStatePayload.canonicalNextAction.kind, "approval-gate");
+    assert.equal(unapprovedStatePayload.resolvedDecision.canonicalNextAction.kind, "approval-gate");
     assert.match(unapprovedStatePayload.approvalLedger.blockers.join(" "), /architecture-scout/);
 
     const recommendAfterUnapproved = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommendAfterUnapproved.code, 0, recommendAfterUnapproved.stderr);
     const unapprovedRecommendPayload = JSON.parse(recommendAfterUnapproved.stdout);
     assert.equal(
-      unapprovedRecommendPayload.decisionEnvelope.canonicalNextAction.kind,
+      unapprovedRecommendPayload.resolvedDecision.canonicalNextAction.kind,
       "approval-gate",
     );
 
@@ -259,7 +259,10 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(stateAfterApproval.code, 0, stateAfterApproval.stderr);
     const approvedStatePayload = JSON.parse(stateAfterApproval.stdout);
     assert.equal(approvedStatePayload.approvalLedger.status, "approved");
-    assert.notEqual(approvedStatePayload.canonicalNextAction.kind, "approval-gate");
+    assert.notEqual(
+      approvedStatePayload.resolvedDecision.canonicalNextAction.kind,
+      "approval-gate",
+    );
   });
 });
 

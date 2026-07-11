@@ -950,9 +950,12 @@ test("guarded sessions with active budgets keep continuation non-final", async (
     assert.equal(statePayload.canRunNextPacket, false);
     assert.equal(statePayload.forbidFinalAnswer, true);
     assert.match(statePayload.commands.next, /--compact/);
-    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "preflight");
     assert.match(statePayload.report.next, /benchmark command/i);
-    assert.equal(statePayload.report.next, statePayload.canonicalNextAction.reason);
+    assert.equal(
+      statePayload.report.next,
+      statePayload.resolvedDecision.canonicalNextAction.reason,
+    );
   });
 });
 

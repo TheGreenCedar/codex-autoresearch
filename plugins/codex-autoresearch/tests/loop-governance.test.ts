@@ -961,9 +961,7 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
     compactState,
   });
   const action = response.action as { kind?: string };
-  const decisionEnvelope = response.decisionEnvelope as {
-    finalizationReadiness?: { available?: boolean };
-  };
+  const resolvedDecision = response.resolvedDecision;
 
   assert.equal(action.kind, "decision-capsule");
   assert.equal(
@@ -972,17 +970,15 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   );
   assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
   assert.match(response.whySafe, /compact state/);
-  assert.match(response.whySafe, /shared decision envelope/);
-  assert.equal(response.compactState, compactState);
-  assert.equal(response.decisionEnvelope, compactState.decisionEnvelope);
-  assert.equal(response.resumeAudit, compactState.resumeAudit);
-  assert.deepEqual(response.runtimeProvenance, compactState.runtimeProvenance);
-  assert.deepEqual(response.loopContract, compactState.loopContract);
-  assert.deepEqual(response.laneLifecycle, compactState.laneLifecycle);
-  assert.deepEqual(response.packetDiagnostics, compactState.packetDiagnostics);
+  assert.match(response.whySafe, /shared resolved decision/);
+  assert.notEqual(response.compactState, compactState);
+  assert.equal(Object.hasOwn(response, "decisionEnvelope"), false);
+  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
+  assert.deepEqual(resolvedDecision.runtimeProvenance, compactState.runtimeProvenance);
+  assert.deepEqual(resolvedDecision.loopContract, compactState.loopContract);
   assert.deepEqual(response.portfolioRecommendation, compactState.portfolioRecommendation);
   assert.deepEqual(response.sessionDecisionCapsule, compactState.sessionDecisionCapsule);
-  assert.equal(decisionEnvelope.finalizationReadiness?.available, false);
+  assert.equal(resolvedDecision.finalizationPressure?.available, false);
 });
 
 test("compact recommend-next uses blocker metadata fallback instead of next", () => {

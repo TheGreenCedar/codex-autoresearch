@@ -10,7 +10,7 @@ import { quoteForShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git } from "../helpers/cli-test-context.js";
 
-test("compact state, recommend-next, and onboarding-packet surface decision envelopes", async () => {
+test("compact state, recommend-next, and onboarding-packet surface resolved decisions", async () => {
   await withTempDir("decision-envelope", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "envelope", "--metric-name", "seconds"]);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
@@ -23,31 +23,35 @@ test("compact state, recommend-next, and onboarding-packet surface decision enve
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.decisionEnvelope.activeSegment.segment, 0);
-    assert.equal(statePayload.resumeAudit.latestPacketFreshness.fresh, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, false);
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
+    assert.equal(statePayload.resolvedDecision.finalizationPressure.available, true);
+    assert.equal(statePayload.resolvedDecision.finalizationPressure.ready, false);
     assert.match(
-      statePayload.decisionEnvelope.finalizationReadiness.nextAction,
+      statePayload.resolvedDecision.finalizationPressure.nextAction,
       /Git-backed autoresearch branch/,
     );
-    assert.equal(typeof statePayload.decisionEnvelope.nextAction, "string");
+    assert.equal(typeof statePayload.resolvedDecision.nextAction, "string");
+    assert.equal(Object.hasOwn(statePayload, "decisionEnvelope"), false);
+    assert.equal(Object.hasOwn(statePayload, "resumeAudit"), false);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
-    assert.equal(recommendPayload.nextAction, statePayload.canonicalNextAction.reason);
     assert.equal(
-      recommendPayload.decisionEnvelope.canonicalNextAction.reason,
-      statePayload.canonicalNextAction.reason,
+      recommendPayload.nextAction,
+      statePayload.resolvedDecision.canonicalNextAction.reason,
+    );
+    assert.equal(
+      recommendPayload.resolvedDecision.canonicalNextAction.reason,
+      statePayload.resolvedDecision.canonicalNextAction.reason,
     );
 
     const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
     assert.equal(onboarding.code, 0, onboarding.stderr);
     const onboardingPayload = JSON.parse(onboarding.stdout);
-    assert.equal(onboardingPayload.decisionEnvelope.latestPacketFreshness.fresh, true);
-    assert.equal(onboardingPayload.resumeAudit.activeSegment.runs, 0);
+    assert.equal(onboardingPayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
+    assert.equal(Object.hasOwn(onboardingPayload, "decisionEnvelope"), false);
+    assert.equal(Object.hasOwn(onboardingPayload, "resumeAudit"), false);
   });
 });
 
@@ -189,7 +193,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
       await fixture.prepare(dir);
       const [fullResult, compactResult, reportResult, recommendResult, dashboardResult] =
         await Promise.all([
-          runCli(["state", "--cwd", dir]),
+          runCli(["state", "--cwd", dir, "--json-full"]),
           runCli(["state", "--cwd", dir, "--compact"]),
           runCli(["state", "--cwd", dir, "--report"]),
           runCli(["recommend-next", "--cwd", dir, "--compact"]),
@@ -211,9 +215,9 @@ test("canonical next action stays consistent across state, report, recommend-nex
       const recommend = JSON.parse(recommendResult.stdout);
       const dashboard = JSON.parse(dashboardResult.stdout);
       const actions = [
-        full.decisionEnvelope.canonicalNextAction,
-        compact.decisionEnvelope.canonicalNextAction,
-        recommend.decisionEnvelope.canonicalNextAction,
+        full.resolvedDecision.canonicalNextAction,
+        compact.resolvedDecision.canonicalNextAction,
+        recommend.resolvedDecision.canonicalNextAction,
         dashboard.viewModel.decisionEnvelope.canonicalNextAction,
       ];
 
@@ -229,16 +233,14 @@ test("canonical next action stays consistent across state, report, recommend-nex
       );
       assert.deepEqual(
         [
-          full.decisionEnvelope.nextAction,
-          compact.decisionEnvelope.nextAction,
-          compact.nextAction,
-          compact.report.next,
-          recommend.decisionEnvelope.nextAction,
+          full.resolvedDecision.nextAction,
+          compact.resolvedDecision.nextAction,
+          recommend.resolvedDecision.nextAction,
           recommend.nextAction,
           dashboard.viewModel.decisionEnvelope.nextAction,
           report.report.json.nextAction,
         ],
-        Array(8).fill(actions[0].reason),
+        Array(6).fill(actions[0].reason),
         fixture.name,
       );
       assert.equal(report.report.json.nextAction, actions[0].reason, fixture.name);
@@ -254,9 +256,9 @@ test("canonical next action stays consistent across state, report, recommend-nex
       assert.match(commands[0], fixture.commandPattern, fixture.name);
 
       const loopContracts = [
-        full.decisionEnvelope.loopContract,
-        compact.decisionEnvelope.loopContract,
-        recommend.decisionEnvelope.loopContract,
+        full.resolvedDecision.loopContract,
+        compact.resolvedDecision.loopContract,
+        recommend.resolvedDecision.loopContract,
         dashboard.viewModel.decisionEnvelope.loopContract,
       ];
       assert.deepEqual(
@@ -264,25 +266,22 @@ test("canonical next action stays consistent across state, report, recommend-nex
         Array(loopContracts.length).fill(!fixture.blocked),
         fixture.name,
       );
-      assert.equal(compact.canRunNextPacket, !fixture.blocked, fixture.name);
-      assert.equal(compact.shouldContinue, true, fixture.name);
       assert.equal(
-        compact.canRunNextPacket,
-        compact.decisionEnvelope.loopContract.canRunNextPacket,
+        compact.resolvedDecision.loopContract.canRunNextPacket,
+        !fixture.blocked,
         fixture.name,
       );
       assert.equal(report.report.json.status === "blocked", fixture.blocked, fixture.name);
 
       const portfolioKinds = [
         full.portfolioRecommendation?.kind,
-        compact.portfolioRecommendation?.kind,
         recommend.portfolioRecommendation?.kind,
         dashboard.viewModel.portfolioRecommendation?.kind,
         report.report.json.portfolio.kind,
       ];
       assert.equal(portfolioKinds.includes("exploit-best"), false, fixture.name);
       if (fixture.blocked) {
-        assert.deepEqual(portfolioKinds.slice(0, 4), [undefined, undefined, undefined, undefined]);
+        assert.deepEqual(portfolioKinds.slice(0, 3), [undefined, undefined, undefined]);
       }
       if (fixture.absentBest) {
         assert.equal(full.best, null, fixture.name);
@@ -303,8 +302,8 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.available, true);
-    assert.equal(statePayload.decisionEnvelope.finalizationReadiness.ready, false);
+    assert.equal(statePayload.resolvedDecision.finalizationPressure.available, true);
+    assert.equal(statePayload.resolvedDecision.finalizationPressure.ready, false);
     assert.match(statePayload.commands.state, /state --cwd/);
 
     const recommend = await runCli([
@@ -318,25 +317,16 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
     ]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(
-      recommendPayload.compactState.goalFrame.codexObjectiveRole,
-      "operator_instruction",
-    );
-    assert.equal(
-      recommendPayload.compactState.decisionEnvelope.finalizationReadiness.available,
-      true,
-    );
-    assert.equal(recommendPayload.decisionEnvelope.finalizationReadiness.available, true);
-    assert.equal(statePayload.canonicalNextAction.kind, "log-decision");
-    assert.doesNotMatch(statePayload.operatorHandoff.command, /(?:^|\s)next(?:\s|$).*--compact/);
+    assert.equal(recommendPayload.resolvedDecision.finalizationPressure.available, true);
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
     assert.equal(
       recommendPayload.commands.primary,
-      statePayload.canonicalNextAction.command || statePayload.commands.state,
+      statePayload.resolvedDecision.canonicalNextAction.command,
     );
     assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
     assert.equal(
-      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
-      statePayload.canonicalNextAction.kind,
+      recommendPayload.resolvedDecision.canonicalNextAction.kind,
+      statePayload.resolvedDecision.canonicalNextAction.kind,
     );
     assert.equal(recommendPayload.operatorChecklist.source, "latestPacketFreshness");
     assert.doesNotMatch(
@@ -344,7 +334,7 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
       /(?:^|\s)next(?:\s|$).*--compact/,
     );
     assert.match(recommendPayload.whySafe, /compact state/);
-    assert.match(recommendPayload.whySafe, /shared decision envelope/);
+    assert.match(recommendPayload.whySafe, /shared resolved decision/);
   });
 });
 
@@ -418,7 +408,7 @@ test("recommend-next compact refuses stale next command for plateau pivot", asyn
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.action?.kind, "plateau-pivot");
-    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "plateau-pivot");
+    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "plateau-pivot");
     assert.doesNotMatch(payload.commands.primary, /(?:^|\s)next(?:\s|$)/);
     assert.match(payload.commands.primary, /(?:^|\s)(?:lane-runner|new-segment)(?:\s|$)/);
   });
@@ -452,11 +442,7 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.report.json.status, "blocked");
     assert.match(
-      statePayload.compactState.preflight.blockers.join("\n"),
-      /pending receipt|not be recorded in autoresearch\.jsonl/i,
-    );
-    assert.match(
-      statePayload.compactState.blockers.join("\n"),
+      statePayload.compactState.resolvedDecision.loopContract.blockers.join("\n"),
       /pending receipt|not be recorded in autoresearch\.jsonl/i,
     );
 
@@ -504,12 +490,14 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
     const payload = JSON.parse(doctor.stdout);
 
     assert.equal(payload.ok, false);
-    assert.equal(payload.canonicalNextAction.kind, "current-tree-finalization");
-    assert.equal(payload.loopContract.canRunNextPacket, false);
-    assert.equal(payload.decisionEnvelope.finalizationReadiness.available, true);
-    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "current-tree-finalization");
+    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "current-tree-finalization");
+    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
+    assert.equal(payload.resolvedDecision.finalizationPressure.available, true);
     assert.match(payload.nextAction, /finalize-current-tree|Final tree coverage/i);
-    assert.doesNotMatch(payload.canonicalNextAction.command, /(?:^|\s)next(?:\s|$)/);
+    assert.doesNotMatch(
+      payload.resolvedDecision.canonicalNextAction.command,
+      /(?:^|\s)next(?:\s|$)/,
+    );
   });
 });
 
@@ -522,8 +510,11 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     const compactState = statePayload.compactState;
-    assert.equal(compactState.canonicalNextAction.kind, "current-tree-finalization");
-    assert.equal(compactState.decisionEnvelope.finalizationReadiness.available, true);
+    assert.equal(
+      compactState.resolvedDecision.canonicalNextAction.kind,
+      "current-tree-finalization",
+    );
+    assert.equal(compactState.resolvedDecision.finalizationPressure.available, true);
     assert.equal(statePayload.report.json.status, "blocked");
 
     const recommend = await runCli([
@@ -536,13 +527,10 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(
-      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
-      compactState.canonicalNextAction.kind,
+      recommendPayload.resolvedDecision.canonicalNextAction.kind,
+      compactState.resolvedDecision.canonicalNextAction.kind,
     );
-    assert.equal(
-      recommendPayload.compactState.decisionEnvelope.finalizationReadiness.available,
-      true,
-    );
+    assert.equal(recommendPayload.resolvedDecision.finalizationPressure.available, true);
     assert.match(recommendPayload.operatorChecklist.source, /currentTree/);
     assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
 
@@ -557,15 +545,18 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     ]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
-    assert.equal(doctorPayload.canonicalNextAction.kind, compactState.canonicalNextAction.kind);
-    assert.equal(doctorPayload.loopContract.canRunNextPacket, false);
+    assert.equal(
+      doctorPayload.resolvedDecision.canonicalNextAction.kind,
+      compactState.resolvedDecision.canonicalNextAction.kind,
+    );
+    assert.equal(doctorPayload.resolvedDecision.loopContract.canRunNextPacket, false);
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);
     const exportPayload = JSON.parse(exported.stdout);
     assert.equal(
       exportPayload.viewModel.decisionEnvelope.canonicalNextAction.kind,
-      compactState.canonicalNextAction.kind,
+      compactState.resolvedDecision.canonicalNextAction.kind,
     );
     assert.equal(exportPayload.viewModel.nextBestAction.kind, "current-tree-finalization");
   });
@@ -662,25 +653,28 @@ test("stale packet compact state recommends replacement next command", async () 
     assert.equal(fullState.code, 0, fullState.stderr);
     const fullStatePayload = JSON.parse(fullState.stdout);
 
-    assert.equal(fullStatePayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
+    assert.equal(fullStatePayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
     assert.match(
-      fullStatePayload.decisionEnvelope.canonicalNextAction.command,
+      fullStatePayload.resolvedDecision.canonicalNextAction.command,
       /(?:^|\s)next(?:\s|$)/,
     );
-    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--command/);
-    assert.match(fullStatePayload.decisionEnvelope.canonicalNextAction.command, /--checks-command/);
+    assert.match(fullStatePayload.resolvedDecision.canonicalNextAction.command, /--command/);
+    assert.match(fullStatePayload.resolvedDecision.canonicalNextAction.command, /--checks-command/);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
 
-    assert.equal(statePayload.canonicalNextAction.kind, "stale-packet");
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
     assert.match(statePayload.commands.replaceLast, /(?:^|\s)next(?:\s|$)/);
     assert.match(statePayload.commands.replaceLast, /--command/);
     assert.match(statePayload.commands.replaceLast, /--checks-command/);
-    assert.equal(statePayload.canonicalNextAction.command, statePayload.commands.replaceLast);
     assert.equal(
-      fullStatePayload.decisionEnvelope.canonicalNextAction.command,
+      statePayload.resolvedDecision.canonicalNextAction.command,
+      statePayload.commands.replaceLast,
+    );
+    assert.equal(
+      fullStatePayload.resolvedDecision.canonicalNextAction.command,
       statePayload.commands.replaceLast,
     );
 
@@ -688,7 +682,7 @@ test("stale packet compact state recommends replacement next command", async () 
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
 
-    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "stale-packet");
+    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
     assert.equal(recommendPayload.commands.primary, statePayload.commands.replaceLast);
     assert.match(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$)/);
 
@@ -753,8 +747,14 @@ test("state report uses canonical command for blocked decision capsules", async 
     assert.equal(report.code, 0, report.stderr);
     const payload = JSON.parse(report.stdout);
 
-    assert.equal(payload.compactState.canonicalNextAction.kind, "decision-capsule");
-    assert.equal(payload.report.json.nextCommand, payload.compactState.canonicalNextAction.command);
+    assert.equal(
+      payload.compactState.resolvedDecision.canonicalNextAction.kind,
+      "decision-capsule",
+    );
+    assert.equal(
+      payload.report.json.nextCommand,
+      payload.compactState.resolvedDecision.canonicalNextAction.command,
+    );
     assert.doesNotMatch(payload.report.json.nextCommand, /doctor --cwd/);
   });
 });

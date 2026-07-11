@@ -50,7 +50,6 @@ import {
 import {
   actionSafeActionForKind,
   actionTitleForKind,
-  isPacketBrakeKind,
   resolveActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
@@ -80,7 +79,10 @@ import {
   buildCheapFinalizationPressure,
   buildSessionReadModel,
   buildSessionReadModelState,
+  projectDoctorReadModel,
+  resolveSessionDecision,
   statusCountsFromState,
+  withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
 import {
@@ -113,11 +115,7 @@ import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { displayGitPath, parseNulPathList, parsePorcelainV1Z } from "../lib/git-paths.js";
-import {
-  buildGoalContract,
-  buildGoalFrame,
-  goalCompletionUnresolvedBlockers,
-} from "../lib/goal-frame.js";
+import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -394,7 +392,6 @@ const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 
 const stateCommandService = createStateCommandService({
-  actionMessage,
   analyzeExperimentEconomics,
   analyzeLedgerHealth,
   analyzeWorkflowFriction,
@@ -402,8 +399,6 @@ const stateCommandService = createStateCommandService({
   buildCheapFinalizationPressure,
   buildDecisionEnvelope,
   buildFinalizePreview,
-  buildGoalContract,
-  buildGoalFrame,
   buildLaneLifecycle,
   buildParallelOrchestrationContext,
   buildResearchIntegrity,
@@ -425,7 +420,6 @@ const stateCommandService = createStateCommandService({
   errorMessage,
   fixedControlStateSummary,
   isAcceptedCurrentRun,
-  isPacketBrakeKind,
   iterationLimitInfo,
   lastRunPacketFreshness,
   listBuiltInRecipes,
@@ -447,9 +441,9 @@ const stateCommandService = createStateCommandService({
   resolveWorkDir,
   runtimeProvenance,
   statusCountsFromState,
-  uniqueStrings,
   verifyDashboardHealthSummary,
   withCanonicalActionCommand,
+  withResolvedSessionDecision,
 });
 async function publicState(args: LooseObject): Promise<LooseObject> {
   return await stateCommandService.publicState(args);
@@ -495,6 +489,7 @@ const doctorCommandService = createDoctorCommandService({
   pluginRoot: PLUGIN_ROOT,
   pluginVersion: PLUGIN_VERSION,
   publicState,
+  projectDoctorReadModel,
   redactCommandDisplay,
   redactEvidenceObject,
   revalidateRecipeCatalogProvenance,
@@ -1355,8 +1350,9 @@ function canonicalActionForGuidedSetup({
   ) {
     return null;
   }
-  const loopContract = doctor?.loopContract || {};
-  const canonicalNextAction = doctor?.canonicalNextAction || null;
+  const loopContract = doctor?.resolvedDecision?.loopContract || doctor?.loopContract || {};
+  const canonicalNextAction =
+    doctor?.resolvedDecision?.canonicalNextAction || doctor?.canonicalNextAction || null;
   const action = blockingLoopAction(loopContract, canonicalNextAction);
   if (!action || action.kind === "next-packet") return null;
   if (stage === "needs-baseline" && action.kind === "preflight" && explicitBenchmarkCommand) {
@@ -2177,6 +2173,7 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
     cwd: workDir,
     checkBenchmark: false,
     check_benchmark: false,
+    jsonFull: true,
   });
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const lastRunFingerprint = lastRun ? await lastRunPacketFingerprint(workDir).catch(() => "") : "";
@@ -2296,8 +2293,8 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
       issues: doctor.issues,
       warnings: doctor.warnings,
       nextAction: doctor.nextAction,
-      canonicalNextAction: doctor.canonicalNextAction || null,
-      loopContract: doctor.loopContract || null,
+      canonicalNextAction: doctor.resolvedDecision?.canonicalNextAction || null,
+      loopContract: doctor.resolvedDecision?.loopContract || null,
     },
     lastRun: lastRun
       ? {
@@ -2338,7 +2335,7 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 
 async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
   const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
-  const canonicalNextAction = state.canonicalNextAction || null;
+  const canonicalNextAction = state.resolvedDecision?.canonicalNextAction || null;
   const shouldReadLastRun =
     state.requiresLogDecision === true ||
     ["log-decision", "stale-packet"].includes(String(canonicalNextAction?.kind || ""));
@@ -2432,6 +2429,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       checkBenchmark: false,
       checkInstalled: true,
       explain: true,
+      jsonFull: true,
     }).catch(
       (error: any): LooseObject => ({
         ok: false,
@@ -2452,12 +2450,10 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
-  const decisionEnvelope =
-    nextPacket.decisionEnvelope ||
-    nextPacket.resumeAudit ||
-    state.decisionEnvelope ||
-    state.resumeAudit ||
-    null;
+  const resolvedDecision =
+    nextPacket.resolvedDecision ||
+    state.resolvedDecision ||
+    resolveSessionDecision({ state: nextPacket, commands: nextPacket.commands });
   return {
     ok: true,
     workDir,
@@ -2478,10 +2474,8 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "autoresearch.last-run.json when present",
     ],
     state,
-    sessionDecisionCapsule:
-      decisionEnvelope?.sessionDecisionCapsule || state.sessionDecisionCapsule || null,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    resolvedDecision,
     guidedSetup: guidePacket,
     doctor: {
       ok: doctor.ok,
@@ -2539,19 +2533,17 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     withCanonicalDecisionEnvelopeToolName(response as LooseObject);
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
       const action = (response.action || {}) as LooseObject;
-      const canonicalNextAction = (compact.canonicalNextAction || {}) as LooseObject;
+      const canonicalNextAction = (compact.resolvedDecision?.canonicalNextAction ||
+        {}) as LooseObject;
+      const loopContract = (response.resolvedDecision?.loopContract || null) as LooseObject | null;
       return {
         ...response,
         operatorChecklist: buildOperatorChecklist(action, {
           workDir,
           pluginRoot: PLUGIN_ROOT,
           primaryCommand: (response.commands as LooseObject)?.primary,
-          loopContract: (response.loopContract || null) as LooseObject | null,
-          source: recommendNextChecklistSource(
-            action,
-            canonicalNextAction,
-            (response.loopContract || null) as LooseObject | null,
-          ),
+          loopContract,
+          source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
         }),
       };
     }
@@ -2648,11 +2640,26 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     portfolioRecommendation: compact.portfolioRecommendation,
     sessionDecisionCapsule:
       decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
+    resolvedDecision: resolveSessionDecision({
+      state: {
+        resolvedDecision: authority.resolvedDecision,
+        decisionEnvelope,
+        blockers: viewModel.trustBlockers || compact.blockers || [],
+        nextAction,
+      },
+      decisionEnvelope,
+      commands: {
+        primary: action.command || action.primaryCommand?.command || "",
+        ...compact.commands,
+      },
+      runtimeProvenance: authority.runtimeProvenance,
+      finalization: viewModel.finalizePreview,
+    }),
   });
 }
 
 function withCanonicalDecisionEnvelopeToolName(response: LooseObject): LooseObject {
-  const action = compactRecord(compactRecord(response.decisionEnvelope)?.canonicalNextAction);
+  const action = compactRecord(compactRecord(response.resolvedDecision)?.canonicalNextAction);
   if (action && !action.toolName) {
     action.toolName = guidedToolNameForCanonicalKind(String(action.kind || ""));
   }
@@ -2660,28 +2667,15 @@ function withCanonicalDecisionEnvelopeToolName(response: LooseObject): LooseObje
 }
 
 function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
-  const envelope = compactRecord(compact.decisionEnvelope) || compactRecord(compact.resumeAudit);
-  const envelopeCanonical = compactRecord(envelope?.canonicalNextAction);
-  const compactCanonical = compactRecord(compact.canonicalNextAction);
-  const canonicalNextAction =
-    envelopeCanonical && compactCanonical && envelopeCanonical.kind === compactCanonical.kind
-      ? { ...envelopeCanonical, command: envelopeCanonical.command || compactCanonical.command }
-      : envelopeCanonical || compactCanonical;
-  const sessionDecisionCapsule = compactSessionCapsuleForHandoff(
-    compact.sessionDecisionCapsule || envelope?.sessionDecisionCapsule,
-  );
-  const minimalEnvelope = envelope
-    ? {
-        activeSegment: envelope.activeSegment || null,
-        nextAction: envelope.nextAction || compact.nextAction || "",
-        canonicalNextAction: canonicalNextAction || envelope.canonicalNextAction || null,
-        finalizationReadiness: envelope.finalizationReadiness || null,
-        latestPacketFreshness: envelope.latestPacketFreshness || null,
-        loopContract: envelope.loopContract || compact.loopContract || null,
-        sessionDecisionCapsule: compactSessionCapsuleIdentity(sessionDecisionCapsule),
-        watchdog: envelope.watchdog || compact.watchdogSummary || null,
-      }
-    : null;
+  const resolvedDecision =
+    compactRecord(compact.resolvedDecision) ||
+    resolveSessionDecision({
+      state: compact,
+      decisionEnvelope: compact.decisionEnvelope || compact.resumeAudit,
+      commands: compact.commands,
+      runtimeProvenance: compact.runtimeProvenance,
+    });
+  const canonicalNextAction = compactRecord(resolvedDecision.canonicalNextAction);
   return {
     ok: compact.ok,
     workDir: compact.workDir,
@@ -2697,25 +2691,15 @@ function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
     baseline: compact.baseline,
     best: compact.best,
     historicalBest: compact.historicalBest,
-    developmentBest: compact.developmentBest,
-    promotionBest: compact.promotionBest,
-    goalFrame: compact.goalFrame,
-    goalContract: compact.goalContract,
-    operatorHandoff: compact.operatorHandoff,
-    canonicalNextAction,
-    nextAction: compact.nextAction,
+    resolvedDecision,
+    nextAction: resolvedDecision.nextAction || compact.nextAction,
     blockers: compact.blockers,
     commands: compactRecommendCommands(compactRecord(compact.commands), canonicalNextAction),
-    decisionEnvelope: minimalEnvelope,
-    sessionDecisionCapsule,
+    sessionDecisionCapsule: compactSessionCapsuleForHandoff(compact.sessionDecisionCapsule),
     portfolioRecommendation: compact.portfolioRecommendation,
-    approvalLedger: compact.approvalLedger,
-    resourcePreflight: compact.resourcePreflight,
-    evidenceMaturity: compact.evidenceMaturity,
-    laneOrchestration: compact.laneOrchestration,
-    finalizationRunway: compact.finalizationRunway,
     operatorReadout: compact.operatorReadout,
     workflowFriction: compact.workflowFriction,
+    compatibility: compact.compatibility,
   };
 }
 
@@ -2764,21 +2748,6 @@ function compactSessionCapsuleForHandoff(value: unknown): LooseObject | null {
     commandBudgetWarnings: Array.isArray(capsule.commandBudgetWarnings)
       ? capsule.commandBudgetWarnings.slice(0, 3)
       : [],
-  };
-}
-
-function compactSessionCapsuleIdentity(capsule: LooseObject | null): LooseObject | null {
-  if (!capsule) return null;
-  return {
-    kind: capsule.kind || null,
-    status: capsule.status || null,
-    enforcement: capsule.enforcement
-      ? {
-          canRunNextPacket: (capsule.enforcement as LooseObject).canRunNextPacket ?? null,
-          blocksFinalization: (capsule.enforcement as LooseObject).blocksFinalization ?? null,
-          commandHint: (capsule.enforcement as LooseObject).commandHint || "",
-        }
-      : null,
   };
 }
 
@@ -2872,7 +2841,7 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
       best: state.best,
       limit: state.limit,
       nextAction: compact.nextAction,
-      decisionEnvelope: state.decisionEnvelope || state.resumeAudit || null,
+      resolvedDecision: state.resolvedDecision || null,
     },
     settings: {
       autonomyMode: config.autonomyMode || "guarded",
@@ -2972,13 +2941,11 @@ function codexGoalCompletionAudit({
     ...(Array.isArray(state.researchIntegrity?.notPromotableBecause)
       ? state.researchIntegrity.notPromotableBecause
       : []),
-    ...(Array.isArray(state.decisionEnvelope?.researchIntegrity?.notPromotableBecause)
-      ? state.decisionEnvelope.researchIntegrity.notPromotableBecause
-      : []),
   ].filter(Boolean);
   const limitReached = compact.limitReached === true;
-  const finalizationReady = state.decisionEnvelope?.finalizationReadiness?.ready === true;
-  const qualityRound = state.decisionEnvelope?.qualityRound || {};
+  const finalizationPressure = state.resolvedDecision?.finalizationPressure || null;
+  const finalizationReady = finalizationPressure?.ready === true;
+  const qualityRound = state.qualityRound || {};
   const completionRequested = completionConfirmed && Boolean(completionEvidence);
   const blockers = [
     ...new Set([
@@ -2986,14 +2953,11 @@ function codexGoalCompletionAudit({
       ...goalCompletionUnresolvedBlockers({
         completionClaimed: completionRequested,
         blockers: evidenceBlockers,
-        finalizationReadiness: state.decisionEnvelope?.finalizationReadiness,
+        finalizationReadiness: finalizationPressure,
         preflight: state.preflight,
         qualityRound,
         warningDetails: state.warningDetails,
-        workflowFriction:
-          state.workflowFriction ||
-          state.decisionEnvelope?.workflowFriction ||
-          compact.workflowFriction,
+        workflowFriction: state.workflowFriction || compact.workflowFriction,
       }),
     ]),
   ];
@@ -5958,6 +5922,13 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       : preliminaryDecisionEnvelope,
     canonicalCommandHints,
   );
+  const resolvedReadModel = withResolvedSessionDecision(readModel, {
+    state: { ...decisionInput.state, decisionEnvelope },
+    decisionEnvelope,
+    commands: canonicalCommandHints,
+    runtimeProvenance: currentRuntimeProvenance,
+    finalization: effectiveFinalizePreview,
+  });
   const enrichedState = {
     ...state,
     scaffoldHealth,
@@ -5977,8 +5948,8 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     workflowFriction,
     portfolioRecommendation,
     ...controlPlane,
-    resumeAudit: decisionEnvelope,
     decisionEnvelope,
+    resolvedDecision: resolvedReadModel.resolvedDecision,
   };
   return buildDashboardViewModelLazy({
     state: enrichedState as any,
@@ -9173,10 +9144,14 @@ async function nextExperimentWithActiveProgress(args: any) {
     ...args,
     check_benchmark: false,
     checkBenchmark: false,
+    jsonFull: true,
   });
   if (!doctor.ok) {
-    const loopContract = doctor.loopContract || {};
-    const blockingAction = blockingLoopAction(loopContract, doctor.canonicalNextAction);
+    const loopContract = doctor.resolvedDecision?.loopContract || doctor.loopContract || {};
+    const blockingAction = blockingLoopAction(
+      loopContract,
+      doctor.resolvedDecision?.canonicalNextAction || doctor.canonicalNextAction,
+    );
     if (
       shouldRefuseBeforeRun({
         blockingAction,
@@ -9199,9 +9174,9 @@ async function nextExperimentWithActiveProgress(args: any) {
         loopContract,
         sessionDecisionCapsule: capsule,
         decisionEnvelope: {
-          ...doctor.decisionEnvelope,
           loopContract,
           canonicalNextAction: blockingAction,
+          finalizationReadiness: doctor.resolvedDecision?.finalizationPressure || null,
         },
         nextAction:
           blockingAction.reason ||
@@ -9248,7 +9223,7 @@ async function nextExperimentWithActiveProgress(args: any) {
       state: stateBeforeRun,
       nextAction: "Run the next measured packet.",
       lastRunFreshness,
-      finalization: doctor.decisionEnvelope?.finalizationReadiness || null,
+      finalization: doctor.resolvedDecision?.finalizationPressure || null,
     }),
     continuationCommands(workDir),
   );

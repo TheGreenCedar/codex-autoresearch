@@ -488,7 +488,7 @@ test("CLI parser accepts equals-form options", async () => {
       "--metric-name=seconds",
     ]);
     assert.equal(init.code, 0, init.stderr);
-    const state = await runCli(["state", `--cwd=${dir}`]);
+    const state = await runCli(["state", `--cwd=${dir}`, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).config.metricName, "seconds");
   });
@@ -618,10 +618,9 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(richDoctor.outputSchema.properties.state.type, "object");
   assert.equal(richDoctor.outputSchema.properties.git.type, "object");
   assert.equal(richDoctor.outputSchema.properties.benchmark.type, "object");
-  assert.equal(richDoctor.outputSchema.properties.loopContract.type, "object");
-  assert.equal(richDoctor.outputSchema.properties.canonicalNextAction.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.resolvedDecision.type, "object");
   assert.equal(richDoctor.outputSchema.properties.runtimeProvenance.type, "object");
-  assert.equal(richDoctor.outputSchema.properties.decisionEnvelope.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.decisionEnvelope, undefined);
   assert.equal(richDoctor.outputSchema.properties.sessionDecisionCapsule.type, "object");
   assert.equal(richDoctor.outputSchema.properties.scaffoldHealth.type, "object");
   assert.equal(richDoctor.outputSchema.properties.researchIntegrity.type, "object");

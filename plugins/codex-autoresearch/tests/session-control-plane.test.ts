@@ -23,9 +23,29 @@ import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
 import { buildProcessLifecycleRecord, buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
+import {
+  COMPACT_STATE_MAX_BYTES,
+  COMPACT_STATE_MAX_LINES,
+  COMPACT_STATE_MAX_TOKENS,
+  DEFAULT_DOCTOR_MAX_BYTES,
+  DEFAULT_DOCTOR_MAX_LINES,
+  DEFAULT_DOCTOR_MAX_TOKENS,
+  DEFAULT_STATE_MAX_BYTES,
+  DEFAULT_STATE_MAX_LINES,
+  DEFAULT_STATE_MAX_TOKENS,
+  projectDashboardDecision,
+  projectDoctorReadModel,
+  projectFinalizationDecision,
+  projectionBudget,
+  projectStateReadModel,
+  resolveSessionDecision,
+  resolveFinalizationDecision,
+} from "../lib/session-read-model.js";
 import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { resolveSessionPaths } from "../lib/session-paths.js";
+import { buildTerminalReport } from "../lib/terminal-report.js";
+import { parseDashboardContext } from "../lib/types/dashboard-wire.js";
 import {
   codeStoryLanguageSupportFrictionFixtureEntries,
   fixtureJsonl,
@@ -936,3 +956,307 @@ test("session forensics detects update_goal complete function calls", async () =
     assert.equal(parsed.goal.status, "complete");
   });
 });
+
+test("resolved decision fails closed when a ready action contradicts a stronger blocker", () => {
+  const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
+  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: {
+          canRunNextPacket: true,
+          blockers: ["Ledger order is invalid."],
+          strongestAction: {
+            kind: "ledger-integrity",
+            reason: "Repair ledger order before packet work.",
+          },
+        },
+        runtimeProvenance,
+        finalizationReadiness: finalizationPressure,
+      },
+    },
+    commands: { ledgerDoctor: "node scripts/autoresearch.mjs ledger-doctor --cwd . --json" },
+  });
+
+  assert.equal(resolved.status, "blocked");
+  assert.equal(resolved.strongestBlocker, "Ledger order is invalid.");
+  assert.equal(resolved.canonicalNextAction?.kind, "ledger-integrity");
+  assert.equal(resolved.nextAction, "Repair ledger order before packet work.");
+  assert.match(resolved.command, /ledger-doctor/);
+  assert.deepEqual(resolved.runtimeProvenance, runtimeProvenance);
+  assert.deepEqual(resolved.finalizationPressure, finalizationPressure);
+});
+
+test("resolved decision rejects unsafe commands and legacy aliases cannot override authority", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      resolvedDecision: {
+        version: 1,
+        status: "complete",
+        strongestBlocker: null,
+        nextAction: "Review the completed evidence.",
+        command: "node -e \"require('child_process').execSync('whoami')\"",
+        canonicalNextAction: {
+          kind: "complete",
+          reason: "Review the completed evidence.",
+          command: "<unsafe-placeholder>",
+        },
+        loopContract: { complete: true, blockers: [] },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Legacy alias says run another packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.status, "complete");
+  assert.equal(resolved.canonicalNextAction?.kind, "complete");
+  assert.equal(resolved.command, "");
+});
+
+test("blocked decisions without a repair action never retain a ready packet command", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      blockers: ["The ledger is inconsistent and must be repaired before any packet can run."],
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: { canRunNextPacket: false, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.status, "blocked");
+  assert.equal(resolved.canonicalNextAction?.kind, "blocked");
+  assert.equal(resolved.command, "");
+});
+
+test("resolved operational commands reject nested shell operators", () => {
+  for (const command of [
+    "node scripts/autoresearch.mjs next --cwd . && node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd . | node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd .\nnode payload.mjs",
+  ]) {
+    const resolved = resolveSessionDecision({
+      state: {
+        decisionEnvelope: {
+          canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+          loopContract: { canRunNextPacket: true, blockers: [] },
+        },
+      },
+    });
+    assert.equal(resolved.command, "", command);
+    assert.equal(resolved.canonicalNextAction?.command, "", command);
+  }
+});
+
+test("finalization results resolve blocked and ready status explicitly", () => {
+  const blocked = resolveFinalizationDecision({
+    ready: false,
+    warnings: ["Working directory is not a Git repository."],
+    nextAction: "Run finalization preview from a Git-backed branch.",
+  });
+  const ready = resolveFinalizationDecision({
+    ready: true,
+    nextAction: "Review the finalization preview.",
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.match(blocked.strongestBlocker || "", /Git-backed branch/);
+  assert.equal(ready.status, "ready");
+});
+
+test("state, doctor, report, dashboard, and finalization share one resolved authority", () => {
+  const source = readModelFixture(12);
+  const defaultState = projectStateReadModel(source, "default");
+  const compactState = projectStateReadModel(source, "compact");
+  const doctor = projectDoctorReadModel({
+    ok: false,
+    workDir: source.workDir,
+    state: source,
+    decisionEnvelope: source.decisionEnvelope,
+    issues: ["Ledger order is invalid."],
+  });
+  const dashboard = projectDashboardDecision(source);
+  const finalization = projectFinalizationDecision(source);
+  const report = buildTerminalReport(defaultState).json;
+  const authorities = [
+    defaultState.resolvedDecision,
+    compactState.resolvedDecision,
+    doctor.resolvedDecision,
+    dashboard,
+  ] as Array<Record<string, unknown>>;
+
+  for (const authority of authorities) {
+    assert.equal(authority.status, "blocked");
+    assert.match(String(authority.strongestBlocker), /Ledger order is invalid/);
+    assert.equal(authority.nextAction, "Repair ledger order before packet work.");
+    assert.match(String(authority.command), /ledger-doctor/);
+    assert.deepEqual(authority.runtimeProvenance, source.runtimeProvenance);
+    assert.deepEqual(authority.finalizationPressure, source.finalizationPressure);
+  }
+  assert.equal(report.status, "blocked");
+  assert.match(report.blocker, /Ledger order is invalid/);
+  assert.equal(report.nextAction, "Repair ledger order before packet work.");
+  assert.match(report.nextCommand, /ledger-doctor/);
+  assert.equal(finalization.status, "blocked");
+  assert.match(String(finalization.strongestBlocker), /Ledger order is invalid/);
+  assert.deepEqual(finalization.runtimeProvenance, source.runtimeProvenance);
+  assert.deepEqual(finalization.finalizationPressure, source.finalizationPressure);
+});
+
+test("100-run state and doctor projections enforce reviewed byte and line budgets", () => {
+  const source = readModelFixture(100);
+  const defaultState = projectStateReadModel(source, "default");
+  const compactState = projectStateReadModel(source, "compact");
+  const doctor = projectDoctorReadModel({
+    ok: false,
+    workDir: source.workDir,
+    state: source,
+    decisionEnvelope: source.decisionEnvelope,
+    issues: Array.from({ length: 40 }, (_, index) => `Issue ${index}: ${"x".repeat(200)}`),
+    warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}: ${"y".repeat(200)}`),
+  });
+  const defaultBudget = projectionBudget(defaultState);
+  const compactBudget = projectionBudget(compactState);
+  const doctorBudget = projectionBudget(doctor);
+
+  assert.ok(defaultBudget.bytes <= DEFAULT_STATE_MAX_BYTES, JSON.stringify(defaultBudget));
+  assert.ok(defaultBudget.lines <= DEFAULT_STATE_MAX_LINES, JSON.stringify(defaultBudget));
+  assert.ok(defaultBudget.tokens <= DEFAULT_STATE_MAX_TOKENS, JSON.stringify(defaultBudget));
+  assert.ok(compactBudget.bytes <= COMPACT_STATE_MAX_BYTES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.lines <= COMPACT_STATE_MAX_LINES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.tokens <= COMPACT_STATE_MAX_TOKENS, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.bytes < defaultBudget.bytes, "compact must be smaller than default");
+  assert.ok(doctorBudget.bytes <= DEFAULT_DOCTOR_MAX_BYTES, JSON.stringify(doctorBudget));
+  assert.ok(doctorBudget.lines <= DEFAULT_DOCTOR_MAX_LINES, JSON.stringify(doctorBudget));
+  assert.ok(doctorBudget.tokens <= DEFAULT_DOCTOR_MAX_TOKENS, JSON.stringify(doctorBudget));
+  assert.deepEqual(exactDuplicateSubtrees(compactState), []);
+  assert.equal(Object.hasOwn(compactState, "resumeAudit"), false);
+  assert.equal(Object.hasOwn(compactState, "decisionEnvelope"), false);
+});
+
+test("mandatory Unicode state fields truncate deterministically within every reviewed budget", () => {
+  const source = readModelFixture(100);
+  source.workDir = `C:/${"😀".repeat(12_000)}`;
+  source.config.goal = `Improve ${"界".repeat(20_000)}`;
+  source.commands = {
+    state: `node scripts/autoresearch.mjs state --cwd "${"😀".repeat(10_000)}"`,
+  };
+  const compact = projectStateReadModel(source, "compact");
+  const normal = projectStateReadModel(source, "default");
+  const compactBudget = projectionBudget(compact);
+  const normalBudget = projectionBudget(normal);
+  assert.ok(compactBudget.bytes <= COMPACT_STATE_MAX_BYTES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.lines <= COMPACT_STATE_MAX_LINES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.tokens <= COMPACT_STATE_MAX_TOKENS, JSON.stringify(compactBudget));
+  assert.ok(normalBudget.bytes <= DEFAULT_STATE_MAX_BYTES, JSON.stringify(normalBudget));
+  assert.match(String(compact.goal), /truncated/);
+  assert.match(String(compact.workDir), /truncated/);
+});
+
+test("dashboard wire context validates backend input outside the React source tree", () => {
+  assert.throws(() => parseDashboardContext([]), /must be an object/);
+  assert.throws(
+    () => parseDashboardContext({ state: { config: {}, current: "not-an-array" } }),
+    /state\.current must be an array/,
+  );
+  assert.throws(() => parseDashboardContext({ state: {} }), /state\.config must be an object/);
+  assert.throws(
+    () => parseDashboardContext({ state: { config: {}, current: [{ run: "one" }] } }),
+    /current\[0\]\.run must be a finite number/,
+  );
+  const parsed = parseDashboardContext({
+    state: { config: { metricName: "latency" }, current: [{ run: 1, status: "keep" }] },
+    warnings: [],
+  });
+  assert.equal(parsed.state.config.metricName, "latency");
+  assert.equal(parsed.state.current?.[0].run, 1);
+});
+
+function readModelFixture(runCount: number): Record<string, any> {
+  const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
+  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
+  const decisionEnvelope = {
+    canonicalNextAction: { kind: "next-packet", reason: "Run the next packet." },
+    loopContract: {
+      canRunNextPacket: false,
+      blockers: [
+        "Ledger order is invalid because a duplicate physical run number breaks the accepted evidence sequence and must be repaired before another packet.",
+      ],
+      strongestAction: {
+        kind: "ledger-integrity",
+        reason: "Repair ledger order before packet work.",
+      },
+    },
+    runtimeProvenance,
+    finalizationReadiness: finalizationPressure,
+  };
+  return {
+    ok: false,
+    workDir: "C:/fixture",
+    config: {
+      name: "Budget fixture",
+      goal: "Keep latency low",
+      metricName: "latency_ms",
+      bestDirection: "lower",
+    },
+    segment: 1,
+    runs: runCount,
+    kept: Math.floor(runCount / 2),
+    discarded: Math.ceil(runCount / 2),
+    measured: 0,
+    current: Array.from({ length: runCount }, (_, index) => ({
+      run: index + 1,
+      metric: runCount - index,
+      status: index % 2 ? "discard" : "keep",
+      description: `Run ${index + 1}`,
+    })),
+    decisionEnvelope,
+    runtimeProvenance,
+    finalizationPressure,
+    blockers: [
+      "Ledger order is invalid because a duplicate physical run number breaks the accepted evidence sequence and must be repaired before another packet.",
+    ],
+    commands: {
+      ledgerDoctor: "node scripts/autoresearch.mjs ledger-doctor --cwd C:/fixture --json",
+      state: "node scripts/autoresearch.mjs state --cwd C:/fixture",
+    },
+    researchIntegrity: {
+      notPromotableBecause: ["Missing repeat evidence."],
+      warnings: ["Missing repeat evidence."],
+    },
+    preflight: { status: "blocked", blockers: ["Ledger order is invalid."] },
+  };
+}
+
+function exactDuplicateSubtrees(value: unknown): string[] {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  const visit = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const serialized = JSON.stringify(item);
+    if (serialized.length >= 64) {
+      if (seen.has(serialized)) duplicates.push(serialized);
+      else seen.add(serialized);
+    }
+    if (Array.isArray(item)) item.forEach(visit);
+    else Object.values(item as Record<string, unknown>).forEach(visit);
+  };
+  visit(value);
+  return duplicates;
+}

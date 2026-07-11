@@ -18,6 +18,7 @@ import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
+import { resolveFinalizationDecision } from "./session-read-model.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const FINALIZATION_GIT_PROBE_CONCURRENCY = 4;
@@ -754,6 +755,7 @@ function withProgress(
       : "Preview review branch readiness";
   return {
     ...result,
+    resolvedDecision: resolveFinalizationDecision(result, kind),
     progress: {
       mode: "synchronous",
       status,
