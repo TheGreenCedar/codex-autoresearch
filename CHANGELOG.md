@@ -30,6 +30,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 - The dashboard now opens in a focused operate view with the canonical status, blocker, action, and safe command visible before charts on desktop and mobile. Audit keeps the same decision with deeper evidence, live refresh exposes busy, last-valid, failure, and restored-focus state, static exports never offer `file://` URLs for copying, readiness details work without hover, and ledger columns have overlap-tested geometry.
 - Long dashboard histories now use a width-bounded chart with one keyboard/touch range control, preserve baseline, best, latest, selected, failure, and transition anchors, and page the single semantic ledger at 20 runs. Mobile ledger rows stack without hidden horizontal content, while 5,000-run DOM, payload, readiness, and interaction budgets are executable browser checks.
 - Chromium, Firefox, and WebKit now run a sequential release dashboard gate across live and static modes, keyboard/modal focus, forced colors, computed reduced-motion styles, 200%/400% equivalent reflow, long ledgers, and emulated touch taps and target geometry. CI retains current-run screenshots; manual screen-reader and physical-device evidence remains required before making broader accessibility claims.
+- Removed the stale checked-in demo dashboard export and review SVG. Portable dashboard review exports now stay in the ignored `examples/demo-session/tmp/` path, while the maintained public showcase image remains tracked.
 
 ## 2.6.0 - 2026-07-09
 
