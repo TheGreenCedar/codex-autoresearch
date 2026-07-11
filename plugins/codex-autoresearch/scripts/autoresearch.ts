@@ -298,8 +298,6 @@ const COMMAND_EXECUTION_BOUNDARY = {
   recommendation:
     "Prefer project-local scripts or --command-file for reviewable command text and safer quoting.",
 };
-const OUTPUT_MAX_LINES = 20;
-const OUTPUT_MAX_BYTES = 8192;
 
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
@@ -3511,21 +3509,6 @@ function parseArtifactLines(output: string, workDir: string) {
     }
   }
   return { artifacts, artifactWarnings };
-}
-
-function headText(
-  text: string,
-  maxLines: any = OUTPUT_MAX_LINES,
-  maxBytes: number = OUTPUT_MAX_BYTES,
-) {
-  let trimmed = text;
-  if (Buffer.byteLength(trimmed, "utf8") > maxBytes) {
-    const buf = Buffer.from(trimmed, "utf8");
-    trimmed = buf.subarray(0, maxBytes).toString("utf8");
-  }
-  const lines = trimmed.split(/\r?\n/);
-  if (lines.length > maxLines) trimmed = lines.slice(0, maxLines).join("\n");
-  return trimmed;
 }
 
 async function defaultBenchmarkCommand(workDir: string) {
