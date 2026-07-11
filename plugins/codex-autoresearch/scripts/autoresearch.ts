@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -72,6 +71,10 @@ import {
   parseJsonOption,
   positiveIntegerOption,
 } from "../lib/cli/args.js";
+import {
+  resolveAuthorizedWorkDir,
+  withOutsideWorkdirAuthorization,
+} from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
 import { buildDriftReport } from "../lib/drift-doctor.js";
 import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
@@ -194,7 +197,6 @@ import {
   isMetricEligibleStatus,
   promotionGradeValue,
   readConfig as readSessionConfig,
-  resolveWorkDir as resolveSessionWorkDir,
 } from "../lib/session-core.js";
 import {
   buildResearchIntegrity,
@@ -587,20 +589,10 @@ async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
   return await partialResultsCommandHandler(args);
 }
 
-let sessionForensicsCommand: ((args: LooseObject) => Promise<LooseObject>) | null = null;
-
 async function sessionForensics(args: LooseObject): Promise<LooseObject> {
-  if (!sessionForensicsCommand) {
-    const { createSessionForensicsCommand } = await import("../lib/commands/session-forensics.js");
-    sessionForensicsCommand = createSessionForensicsCommand({
-      boolOption,
-      pluginRoot: PLUGIN_ROOT,
-      positiveIntegerOption,
-      resolveWorkDir,
-      shellQuote,
-    });
-  }
-  return await sessionForensicsCommand(args);
+  const { sessionForensics: runSessionForensics } =
+    await import("../lib/commands/session-forensics.js");
+  return await runSessionForensics(args);
 }
 
 let laneRunnerHandler: ((args: LooseObject) => Promise<LooseObject>) | null = null;
@@ -697,8 +689,6 @@ function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): s
   });
 }
 
-const outsideWorkdirAuthorization = new AsyncLocalStorage<boolean>();
-
 function resolveOutputInside(workDir: string, output?: string) {
   const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
   const resolved = output
@@ -774,9 +764,7 @@ function runtimeConfigPath(sessionCwd: string): string {
 }
 
 function resolveWorkDir(cwdArg: unknown): WorkDirResolution {
-  return resolveSessionWorkDir(String(cwdArg || "") || undefined, {
-    allowOutsideWorkdir: outsideWorkdirAuthorization.getStore() === true,
-  });
+  return resolveAuthorizedWorkDir(cwdArg);
 }
 
 function assetPath(fileName: string) {
@@ -9603,7 +9591,7 @@ async function executeAutoresearchCli(
   }
   const migrationError = compatibilityErrorForCli(command);
   if (migrationError) throw new CliUsageError(migrationError, command);
-  await outsideWorkdirAuthorization.run(boolOption(args.allowOutsideWorkdir, false), async () => {
+  await withOutsideWorkdirAuthorization(boolOption(args.allowOutsideWorkdir, false), async () => {
     const handlers = createCliCommandHandlers({
       benchmarkInspect,
       benchmarkLint,
