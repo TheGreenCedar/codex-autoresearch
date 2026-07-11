@@ -10,22 +10,7 @@ import { resolvePackageRoot } from "./runtime-paths.js";
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const RECIPE_CATALOG_MAX_BYTES = 2 * 1024 * 1024;
 const RECIPE_CATALOG_TIMEOUT_MS = 10_000;
-const NON_GLOBAL_CATALOG_ADDRESSES = buildNonGlobalCatalogBlockList();
-const NON_GLOBAL_IPV6_SUBNETS = [
-  ["::", 128],
-  ["::1", 128],
-  ["::ffff:0:0", 96],
-  ["100::", 64],
-  ["2001:2::", 48],
-  ["2001:10::", 28],
-  ["2001:20::", 28],
-  ["2001:db8::", 32],
-  ["2002::", 16],
-  ["3fff::", 20],
-  ["fc00::", 7],
-  ["fe80::", 10],
-  ["ff00::", 8],
-] as const;
+const NON_GLOBAL_CATALOG_ADDRESSES = buildNonGlobalCatalogBlockLists();
 const REQUIRED_EXTERNAL_RECIPE_FIELDS = [
   "id",
   "title",
@@ -615,17 +600,12 @@ async function fetchText(url: string): Promise<string> {
 export function isPublicCatalogAddress(address: string): boolean {
   const normalized = address.toLowerCase().split("%")[0];
   const family = net.isIP(normalized);
-  if (family === 4) return !NON_GLOBAL_CATALOG_ADDRESSES.check(normalized, "ipv4");
-  if (family !== 6) return false;
-  const value = ipv6Value(normalized);
-  return !NON_GLOBAL_IPV6_SUBNETS.some(([subnet, prefix]) => {
-    const shift = 128n - BigInt(prefix);
-    return value >> shift === ipv6Value(subnet) >> shift;
-  });
+  if (family === 4) return !NON_GLOBAL_CATALOG_ADDRESSES.ipv4.check(normalized, "ipv4");
+  return family === 6 && !NON_GLOBAL_CATALOG_ADDRESSES.ipv6.check(normalized, "ipv6");
 }
 
-function buildNonGlobalCatalogBlockList(): net.BlockList {
-  const blockList = new net.BlockList();
+function buildNonGlobalCatalogBlockLists(): { ipv4: net.BlockList; ipv6: net.BlockList } {
+  const ipv4 = new net.BlockList();
   for (const [address, prefix] of [
     ["0.0.0.0", 8],
     ["10.0.0.0", 8],
@@ -643,34 +623,27 @@ function buildNonGlobalCatalogBlockList(): net.BlockList {
     ["224.0.0.0", 4],
     ["240.0.0.0", 4],
   ] as const) {
-    blockList.addSubnet(address, prefix, "ipv4");
+    ipv4.addSubnet(address, prefix, "ipv4");
   }
-  return blockList;
-}
-
-function ipv6Value(address: string): bigint {
-  const [left = "", right = ""] = address.split("::", 2);
-  const leftParts = ipv6Parts(left);
-  const rightParts = ipv6Parts(right);
-  const missing = 8 - leftParts.length - rightParts.length;
-  const parts = address.includes("::")
-    ? [...leftParts, ...Array.from({ length: missing }, () => "0"), ...rightParts]
-    : leftParts;
-  return parts.reduce((value, part) => (value << 16n) | BigInt(`0x${part || "0"}`), 0n);
-}
-
-function ipv6Parts(value: string): string[] {
-  const parts = value ? value.split(":") : [];
-  const last = parts.at(-1) || "";
-  if (!last.includes(".")) return parts;
-  const octets = last.split(".").map(Number);
-  parts.splice(
-    -1,
-    1,
-    ((octets[0] << 8) | octets[1]).toString(16),
-    ((octets[2] << 8) | octets[3]).toString(16),
-  );
-  return parts;
+  const ipv6 = new net.BlockList();
+  for (const [address, prefix] of [
+    ["::", 128],
+    ["::1", 128],
+    ["::ffff:0:0", 96],
+    ["100::", 64],
+    ["2001:2::", 48],
+    ["2001:10::", 28],
+    ["2001:20::", 28],
+    ["2001:db8::", 32],
+    ["2002::", 16],
+    ["3fff::", 20],
+    ["fc00::", 7],
+    ["fe80::", 10],
+    ["ff00::", 8],
+  ] as const) {
+    ipv6.addSubnet(address, prefix, "ipv6");
+  }
+  return { ipv4, ipv6 };
 }
 
 function catalogSizeExceedsLimit(bytes: number): boolean {

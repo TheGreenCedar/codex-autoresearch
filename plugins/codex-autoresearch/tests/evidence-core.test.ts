@@ -366,10 +366,14 @@ test("remote catalog address validation accepts only globally routable IPs", () 
     "203.0.113.1",
     "::1",
     "::ffff:7f00:1",
+    "::ffff:127.0.0.1",
+    "::ffff:8.8.8.8",
     "2001:db8::1",
     "fc00::1",
     "fe80::1",
+    "fe80::1%eth0",
     "ff02::1",
+    "not-an-ip",
   ]) {
     assert.equal(isPublicCatalogAddress(address), false, address);
   }
