@@ -306,77 +306,34 @@ type PartialResultsCommandModule = typeof import("../lib/commands/partial-result
 type LiveServerModule = typeof import("../lib/live-server.js");
 type InspectCommandHandlers = ReturnType<InspectCommandsModule["createInspectCommands"]>;
 
-let dashboardViewModelModulePromise: Promise<DashboardViewModelModule> | null = null;
-let finalizePreviewModulePromise: Promise<FinalizePreviewModule> | null = null;
-let partialResultsModulePromise: Promise<PartialResultsModule> | null = null;
-let inspectCommandsModulePromise: Promise<InspectCommandsModule> | null = null;
-let laneRunnerCommandModulePromise: Promise<LaneRunnerCommandModule> | null = null;
-let partialResultsCommandModulePromise: Promise<PartialResultsCommandModule> | null = null;
-let liveServerModulePromise: Promise<LiveServerModule> | null = null;
-
-function dashboardViewModelModule(): Promise<DashboardViewModelModule> {
-  dashboardViewModelModulePromise ??= import("../lib/dashboard-view-model.js");
-  return dashboardViewModelModulePromise;
-}
-
-function finalizePreviewModule(): Promise<FinalizePreviewModule> {
-  finalizePreviewModulePromise ??= import("../lib/finalize-preview.js");
-  return finalizePreviewModulePromise;
-}
-
-function partialResultsModule(): Promise<PartialResultsModule> {
-  partialResultsModulePromise ??= import("../lib/partial-results.js");
-  return partialResultsModulePromise;
-}
-
-function inspectCommandsModule(): Promise<InspectCommandsModule> {
-  inspectCommandsModulePromise ??= import("../lib/commands/inspect.js");
-  return inspectCommandsModulePromise;
-}
-
-function laneRunnerCommandModule(): Promise<LaneRunnerCommandModule> {
-  laneRunnerCommandModulePromise ??= import("../lib/commands/lane-runner.js");
-  return laneRunnerCommandModulePromise;
-}
-
-function partialResultsCommandModule(): Promise<PartialResultsCommandModule> {
-  partialResultsCommandModulePromise ??= import("../lib/commands/partial-results.js");
-  return partialResultsCommandModulePromise;
-}
-
-function liveServerModule(): Promise<LiveServerModule> {
-  liveServerModulePromise ??= import("../lib/live-server.js");
-  return liveServerModulePromise;
-}
-
 async function buildDashboardViewModelLazy(
   ...args: Parameters<DashboardViewModelModule["buildDashboardViewModel"]>
 ): Promise<ReturnType<DashboardViewModelModule["buildDashboardViewModel"]>> {
-  return (await dashboardViewModelModule()).buildDashboardViewModel(...args);
+  return (await import("../lib/dashboard-view-model.js")).buildDashboardViewModel(...args);
 }
 
 async function buildFinalizePreview(
   ...args: Parameters<FinalizePreviewModule["finalizePreview"]>
 ): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizePreview"]>>> {
-  return (await finalizePreviewModule()).finalizePreview(...args);
+  return (await import("../lib/finalize-preview.js")).finalizePreview(...args);
 }
 
 async function buildFinalizeCurrentTree(
   ...args: Parameters<FinalizePreviewModule["finalizeCurrentTree"]>
 ): Promise<Awaited<ReturnType<FinalizePreviewModule["finalizeCurrentTree"]>>> {
-  return (await finalizePreviewModule()).finalizeCurrentTree(...args);
+  return (await import("../lib/finalize-preview.js")).finalizeCurrentTree(...args);
 }
 
 async function discoverPartialResultCandidatesLazy(
   ...args: Parameters<PartialResultsModule["discoverPartialResultCandidates"]>
 ): Promise<Awaited<ReturnType<PartialResultsModule["discoverPartialResultCandidates"]>>> {
-  return (await partialResultsModule()).discoverPartialResultCandidates(...args);
+  return (await import("../lib/partial-results.js")).discoverPartialResultCandidates(...args);
 }
 
 async function serveAutoresearchLazy(
   ...args: Parameters<LiveServerModule["serveAutoresearch"]>
 ): Promise<Awaited<ReturnType<LiveServerModule["serveAutoresearch"]>>> {
-  return (await liveServerModule()).serveAutoresearch(...args);
+  return (await import("../lib/live-server.js")).serveAutoresearch(...args);
 }
 const MAX_PARSED_METRICS = 512;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
@@ -528,7 +485,7 @@ let inspectCommandHandlers: InspectCommandHandlers | null = null;
 
 async function getInspectCommandHandlers(): Promise<InspectCommandHandlers> {
   if (!inspectCommandHandlers) {
-    const { createInspectCommands } = await inspectCommandsModule();
+    const { createInspectCommands } = await import("../lib/commands/inspect.js");
     inspectCommandHandlers = createInspectCommands({
       currentState,
       defaultBenchmarkCommand,
@@ -568,7 +525,7 @@ let partialResultsCommandHandler: ((args: LooseObject) => Promise<LooseObject>) 
 
 async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
   if (!partialResultsCommandHandler) {
-    const { createPartialResultsCommand } = await partialResultsCommandModule();
+    const { createPartialResultsCommand } = await import("../lib/commands/partial-results.js");
     partialResultsCommandHandler = createPartialResultsCommand({
       appendJsonl,
       assertFreshLastRunPacket,
@@ -599,7 +556,7 @@ let laneRunnerHandler: ((args: LooseObject) => Promise<LooseObject>) | null = nu
 
 async function laneRunner(args: LooseObject): Promise<LooseObject> {
   if (!laneRunnerHandler) {
-    const { createLaneRunnerCommand } = await laneRunnerCommandModule();
+    const { createLaneRunnerCommand } = await import("../lib/commands/lane-runner.js");
     laneRunnerHandler = createLaneRunnerCommand({
       appendJsonl,
       assertNoDirtyPathsOutsideWriteScope,
