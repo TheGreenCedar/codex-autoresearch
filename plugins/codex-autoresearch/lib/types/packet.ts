@@ -37,6 +37,46 @@ export interface PacketRecord extends UnknownRecord {
   status?: string;
 }
 
+export interface LastRunDecision extends UnknownRecord {
+  allowedStatuses?: string[];
+  asiTemplate?: UnknownRecord;
+  diversityGuidance?: unknown;
+  lanePortfolio?: unknown[];
+  metric?: number | null;
+  metrics?: UnknownRecord;
+  rawSuggestedStatus?: string;
+  safeSuggestedStatus?: string;
+  statusGuidance?: string;
+  suggestedStatus?: string;
+}
+
+export interface LastRunExecution extends UnknownRecord {
+  checks?: UnknownRecord;
+  metrics?: UnknownRecord;
+  parsedMetrics?: UnknownRecord;
+}
+
+export interface LastRunPacketEvidence extends UnknownRecord {
+  processLifecycle?: unknown[];
+  progressSnapshot?: UnknownRecord;
+}
+
+/** The durable packet written by `next` and consumed by `log` and read models. */
+export interface LastRunPacket extends UnknownRecord {
+  decision?: LastRunDecision;
+  history?: UnknownRecord;
+  lastRunPath?: string;
+  ok?: boolean;
+  packetEvidence?: LastRunPacketEvidence;
+  run?: LastRunExecution;
+  workDir?: string;
+}
+
+export interface LastRunPacketFreshness extends UnknownRecord {
+  fresh: boolean;
+  reason: string;
+}
+
 export function normalizePacketEvidence(value: unknown): PacketEvidence {
   const record = unknownRecordOrEmpty(value);
   return {

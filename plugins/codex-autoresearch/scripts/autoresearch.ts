@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -35,8 +34,9 @@ import {
   type StateRuntime,
 } from "../lib/commands/state.js";
 import {
-  clearFilesWithWarnings,
-  clearPendingLogTransactionWithWarning,
+  deleteLastRunPacket,
+  logExperiment,
+  pendingLogTransactionWarnings,
 } from "../lib/commands/log.js";
 import {
   defaultCommandShell,
@@ -66,7 +66,6 @@ import {
   enumOption,
   nonNegativeIntegerOption,
   numberOption,
-  parseJsonFileOption,
   parseJsonOption,
   positiveIntegerOption,
 } from "../lib/cli/args.js";
@@ -84,6 +83,7 @@ import {
   readActiveProgressSnapshot,
   resolveProgressPath,
 } from "../lib/active-progress-store.js";
+import { rekeyProcessLifecycleRecords } from "../lib/process-governor.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
 import { defaultChecksCommand } from "../lib/check-policy.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
@@ -94,10 +94,7 @@ import {
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
 import {
-  buildProtectedBenchmarkSnapshot,
   normalizeProtectedBenchmarkPaths,
-  protectedBenchmarkGuardBlocksKeep,
-  protectedBenchmarkGuardError,
   protectedBenchmarkGuardForWorkDir,
   protectedBenchmarkPathsFromConfig,
   protectedBenchmarkWarningFromGuard,
@@ -109,7 +106,6 @@ import {
 } from "../lib/benchmark/command-input.js";
 import { benchmarkContractSnapshot } from "../lib/benchmark/contract-snapshot.js";
 import {
-  evaluateSecondaryMetricConstraints,
   normalizeSecondaryMetricConstraintMode,
   normalizeSecondaryMetricConstraints,
 } from "../lib/benchmark/multi-metric-constraints.js";
@@ -119,30 +115,38 @@ import {
   redactEvidenceText,
   redactPathDisplay,
 } from "../lib/evidence-redaction.js";
-import {
-  EVIDENCE_STATUSES,
-  artifactEvidenceList,
-  artifactList,
-  defaultEvidenceStatusForRun,
-} from "../lib/evidence-registry.js";
-import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
+import { artifactList } from "../lib/evidence-registry.js";
+import { isPathInside } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { displayGitPath, parseNulPathList, parsePorcelainV1Z } from "../lib/git-paths.js";
+import { displayGitPath } from "../lib/git-paths.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
 import {
   fixedControlBlockForCommand,
-  fixedControlRerunError,
   fixedControlViolationForCommand,
   normalizeFixedControlConfig,
 } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
+import { normalizeRelativePaths } from "../lib/literal-paths.js";
+import {
+  assertFreshLastRunPacket,
+  fingerprintsContainReason,
+  gitSnapshotContainsDirtyFingerprintTruncation,
+  lastRunConfigSnapshot,
+  lastRunGitSnapshot,
+  lastRunPacketFingerprint,
+  lastRunPacketFreshness,
+  lastRunTrustConfigSnapshot,
+  readLastRunPacket,
+  resolveLastRunPath,
+} from "../lib/last-run-store.js";
 import {
   gitDirtyPathDetails,
+  gitOutput,
   gitPrivatePath,
-  gitPrivateRoot,
   insideGitRepo,
   privateStateWriteRoot,
+  runGit as git,
 } from "../lib/git-private-state.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { normalizeLaneBrief, summarizeLaneLessons } from "../lib/lane-briefs.js";
@@ -155,10 +159,6 @@ import {
   resolveResearchSlugForQualityGapSync,
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
-import {
-  buildProcessLifecycleRecord,
-  type ProcessLifecycleEvent,
-} from "../lib/process-governor.js";
 import {
   applyResolvedRecipeDefaults,
   findRecipe,
@@ -174,11 +174,8 @@ import {
   progressSnapshotFromRun,
 } from "../lib/runner-progress.js";
 import {
-  STATUS_VALUES,
-  FAILURE_STATUSES,
   appendJsonl,
   buildDecisionEnvelope,
-  computeConfidence,
   createSessionReadCache,
   finiteMetric,
   currentState,
@@ -192,8 +189,6 @@ import {
   stateFromSessionRecords,
   safeSlug,
   iterationLimitInfo,
-  isBaselineEligibleMetricRun,
-  isMetricEligibleStatus,
   promotionGradeValue,
   readConfig as readSessionConfig,
 } from "../lib/session-core.js";
@@ -216,12 +211,7 @@ import {
   type SessionPaths,
 } from "../lib/session-paths.js";
 import { indexTaskArtifacts } from "../lib/task-artifact-indexer.js";
-import {
-  assertSafeDirectoryTree,
-  checkedAtomicWriteFile,
-  checkedEnsureDirectory,
-  checkedReplaceDirectory,
-} from "../lib/checked-write.js";
+import { checkedAtomicWriteFile, checkedEnsureDirectory } from "../lib/checked-write.js";
 import {
   sessionMutationLockLocation,
   withSessionMutationLock,
@@ -260,9 +250,6 @@ const SECONDARY_METRIC_CONSTRAINT_MODES = new Set(["advisory", "blocking"]);
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const DEFAULT_TIMEOUT_SECONDS = 600;
-const DIRECTORY_FINGERPRINT_ENTRY_LIMIT = 500;
-const DIRECTORY_FINGERPRINT_DEPTH_LIMIT = 6;
-const FINGERPRINT_TOTAL_BYTE_LIMIT = 16 * 1024 * 1024;
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
@@ -299,8 +286,6 @@ async function serveAutoresearchLazy(
 }
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
-const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
-const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
   return await readPublicState(args, stateRuntime());
@@ -356,7 +341,6 @@ function doctorRuntime(): DoctorRuntime {
     withCanonicalActionCommand,
   };
 }
-const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "runtimeDriftSummary",
   "gateQuality",
@@ -445,15 +429,6 @@ function usage(options: { all?: boolean; command?: string | null } = {}) {
   return renderCliHelp(options);
 }
 
-function evidenceStatusOption(value: unknown, status: string) {
-  return enumOption(
-    value,
-    EVIDENCE_STATUSES,
-    defaultEvidenceStatusForRun({ status }),
-    "--evidence-status",
-  );
-}
-
 function commandLine(
   argv: readonly unknown[],
   shell: CommandShell = defaultCommandShell(),
@@ -478,29 +453,6 @@ function validateMetricName(name: string) {
     );
   }
   return String(name);
-}
-
-function normalizeRelativePaths(paths: unknown, optionName: string = "paths"): string[] {
-  return listOption(paths).map((item) => {
-    const normalized = item.replace(/\\/g, "/").replace(/\/+/g, "/");
-    if (
-      !normalized ||
-      normalized === "." ||
-      path.isAbsolute(normalized) ||
-      normalized.startsWith("../") ||
-      normalized.includes("/../") ||
-      normalized === ".." ||
-      normalized.startsWith(":") ||
-      /[*?[\]]/.test(normalized) ||
-      normalized.startsWith(".git/") ||
-      normalized === ".git"
-    ) {
-      throw new Error(
-        `${optionName} must contain literal project-relative paths that do not escape the working directory or use Git pathspec magic: ${item}`,
-      );
-    }
-    return normalized.replace(/\/$/, "");
-  });
 }
 
 function errorMessage(error: unknown): string {
@@ -3361,156 +3313,6 @@ async function runProcess(
   };
 }
 
-async function git(args: any, cwd: string): Promise<LocalProcessResult> {
-  return await runProcess("git", args, cwd, { maxOutputBytes: 16 * 1024 * 1024 });
-}
-
-function gitOutput(result: any, fallback: any) {
-  return (result.stderr || result.stdout || fallback || "").trim();
-}
-
-function fallbackPendingLogTransactionPath(workDir: string) {
-  return resolveSessionPaths({ workDir }).pendingLogTransactionFallbackPath;
-}
-
-async function pendingLogTransactionPath(workDir: string, inGit?: boolean) {
-  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
-  if (gitRepo) {
-    return await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH);
-  }
-  return fallbackPendingLogTransactionPath(workDir);
-}
-
-async function pendingLogTransactionCandidatePaths(workDir: string, inGit?: boolean) {
-  const candidates = [fallbackPendingLogTransactionPath(workDir)];
-  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
-  if (gitRepo) {
-    try {
-      candidates.unshift(await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH));
-    } catch {
-      // Fall back to the workspace marker below when Git cannot resolve its private path.
-    }
-  }
-  return [...new Set(candidates)];
-}
-
-async function writePendingLogTransaction(workDir: string, inGit: boolean, receipt: LooseObject) {
-  const receiptPath = await pendingLogTransactionPath(workDir, inGit);
-  await checkedAtomicWriteFile(
-    inGit ? await gitPrivateRoot(workDir) : workDir,
-    receiptPath,
-    `${JSON.stringify(
-      {
-        type: "autoresearch.log.pending",
-        version: 1,
-        createdAt: new Date().toISOString(),
-        workDir,
-        ledgerPath: resolveSessionPaths({ workDir }).ledgerPath,
-        ...receipt,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  return receiptPath;
-}
-
-async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
-  const warnings = [];
-  for (const receiptPath of await pendingLogTransactionCandidatePaths(workDir, inGit)) {
-    if (!(await pathExists(receiptPath))) continue;
-    warnings.push({
-      code: PENDING_LOG_TRANSACTION_CODE,
-      severity: "blocker",
-      message:
-        "A previous log mutation has a pending receipt and may not be recorded in autoresearch.jsonl; inspect the receipt before another packet.",
-      action:
-        "Compare the receipt with git status and autoresearch.jsonl, then remove the receipt after recovery.",
-      path: receiptPath,
-      paths: [receiptPath],
-    });
-  }
-  return warnings;
-}
-
-async function assertNoGitIndexLock(workDir: string, phase: string = "git operation") {
-  const lockPath = await gitPrivatePath(workDir, "index.lock");
-  if (!(await pathExists(lockPath))) return;
-  throw new Error(await gitIndexLockMessage(workDir, lockPath, phase, false));
-}
-
-function gitIndexLockFailure(result: any) {
-  return /index\.lock|another git process|Unable to create/i.test(gitOutput(result, ""));
-}
-
-async function gitIndexLockMessage(
-  workDir: string,
-  lockPath: string,
-  phase: string,
-  stagedMayHaveChanged: boolean,
-) {
-  const liveGit = await liveGitProcessSummary(workDir);
-  return [
-    `Git index lock blocked ${phase}: ${lockPath}.`,
-    `Live git process check: ${liveGit}.`,
-    stagedMayHaveChanged
-      ? "Autoresearch could not prove whether staging partially changed; inspect git status before retrying."
-      : "Autoresearch has not staged or committed anything for this log attempt.",
-    "Wait for active Git commands to finish, then retry. If no Git process is active, remove the index.lock file and rerun the exact log command.",
-  ].join(" ");
-}
-
-async function liveGitProcessSummary(workDir: string) {
-  try {
-    const result =
-      process.platform === "win32"
-        ? await runProcess(
-            "powershell",
-            [
-              "-NoProfile",
-              "-Command",
-              "Get-Process git -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
-            ],
-            workDir,
-            { timeoutMs: 2000 },
-          )
-        : await runProcess("pgrep", ["-fl", "git"], workDir, { timeoutMs: 2000 });
-    const outputText = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
-    if (!outputText) return "no live git process found";
-    return outputText.split(/\r?\n/).slice(0, 5).join(", ");
-  } catch (error) {
-    return `process check unavailable (${errorMessage(error)})`;
-  }
-}
-
-async function shortHead(cwd: string) {
-  const result = await git(["rev-parse", "--short=7", "HEAD"], cwd);
-  return result.code === 0 ? result.stdout.trim() : "";
-}
-
-async function resolveCommitRef(cwd: string, commit: any) {
-  const value = String(commit || "").trim();
-  if (!value) throw new Error("commit is required");
-  const result = await git(["rev-parse", "--verify", `${value}^{commit}`], cwd);
-  if (result.code !== 0)
-    throw new Error(`Git commit could not be resolved: ${gitOutput(result, value)}`);
-  return result.stdout.trim();
-}
-
-async function hasStagedChanges(cwd: string) {
-  const result = await git(["diff", "--cached", "--quiet"], cwd);
-  return result.code === 1;
-}
-
-async function hasStagedChangesInPaths(cwd: string, paths: string[]) {
-  const result = await git(
-    ["--literal-pathspecs", "diff", "--cached", "--quiet", "--", ...paths],
-    cwd,
-  );
-  return result.code === 1;
-}
-
 function isAutoresearchOwnedDirtyPath(relativePath: string) {
   const normalized = relativePath;
   return (
@@ -3518,277 +3320,6 @@ function isAutoresearchOwnedDirtyPath(relativePath: string) {
     AUTORESEARCH_OWNED_FILES.includes(normalized) ||
     AUTORESEARCH_OWNED_DIRS.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`))
   );
-}
-
-function emptyCommitPathsWarning() {
-  return {
-    code: EMPTY_COMMIT_PATHS_WARNING_CODE,
-    severity: "warning",
-    message:
-      "Kept runs will not auto-commit because commitPaths is empty. Configure commitPaths, pass --commit-paths, or use --allow-add-all explicitly.",
-    action:
-      "Configure commitPaths for the experiment surface before logging kept changes, or use --allow-add-all when broad staging is intentional.",
-  };
-}
-
-function shouldWarnEmptyCommitPaths({
-  inGit,
-  commitPaths = [],
-  explicitCommit = false,
-  allowAddAll = false,
-}: LooseObject = {}) {
-  return Boolean(inGit && !explicitCommit && !allowAddAll && commitPaths.length === 0);
-}
-
-async function assertCommitPathsExist(workDir: string, commitPaths: any[]) {
-  const missing: string[] = [];
-  for (const relative of commitPaths) {
-    if (await pathExists(path.join(workDir, relative))) continue;
-    if (await gitPathIsTracked(workDir, relative)) continue;
-    missing.push(relative);
-  }
-  if (!missing.length) return;
-  const remaining = commitPaths.filter((item: any) => !missing.includes(item));
-  throw new Error(
-    [
-      `Configured commitPaths do not exist before git add: ${missing.slice(0, 8).join(", ")}.`,
-      remaining.length
-        ? `Repair with: node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} config --cwd ${shellQuote(workDir)} --commit-paths ${shellQuote(remaining.join(","))}`
-        : "Repair by configuring commitPaths that exist or by passing --commit-paths for this log.",
-      "No git add or commit was attempted.",
-    ].join(" "),
-  );
-}
-
-async function gitPathIsTracked(workDir: string, relativePath: string) {
-  const result = await git(["--literal-pathspecs", "ls-files", "-z", "--", relativePath], workDir);
-  return result.code === 0 && result.stdout.length > 0;
-}
-
-async function gitStatusShort(cwd: string) {
-  const result = await git(["status", "--porcelain=v1", "-z", "-uall"], cwd);
-  if (result.code !== 0)
-    throw new Error(`Git status failed: ${gitOutput(result, "unknown error")}`);
-  assertCompleteGitPathOutput(result);
-  return result.stdout;
-}
-
-function assertCompleteGitPathOutput(result: LocalProcessResult) {
-  if (result.stdoutTruncated) {
-    throw new Error(
-      "Git path output exceeded the capture limit; refusing an incomplete trust check.",
-    );
-  }
-}
-
-function hashText(value: any) {
-  return createHash("sha256")
-    .update(String(value || ""), "utf8")
-    .digest("hex");
-}
-
-async function scopedFileFingerprints(
-  workDir: string,
-  paths: any[] = [],
-  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
-) {
-  const safePaths = normalizeRelativePaths(paths, "commitPaths");
-  if (safePaths.length === 0) return [];
-  const result = await git(["--literal-pathspecs", "ls-files", "-z", "--", ...safePaths], workDir);
-  if (result.code !== 0) return [];
-  assertCompleteGitPathOutput(result);
-  const files = parseNulPathList(result.stdout).sort((a, b) => a.localeCompare(b));
-  const fingerprints = [];
-  for (const file of files) {
-    if (fingerprints.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
-      fingerprints.push({
-        path: "<scoped-files>",
-        truncated: true,
-        reason: "scoped_file_entry_limit",
-        maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
-        totalFiles: files.length,
-      });
-      break;
-    }
-    const filePath = path.join(workDir, file);
-    try {
-      const fingerprint = await hashFileWithBudget(filePath, budget);
-      fingerprints.push({ path: file, ...fingerprint });
-      if (fingerprint.truncated) break;
-    } catch (error) {
-      fingerprints.push({
-        path: file,
-        missing: true,
-        error: errorCodeOrMessage(error),
-      });
-    }
-  }
-  return fingerprints;
-}
-
-function dirtyPathsFromStatus(statusShort: string) {
-  return parsePorcelainV1Z(statusShort)
-    .flatMap((entry) => entry.paths)
-    .sort((a: any, b: any) => a.localeCompare(b));
-}
-
-async function fileFingerprintsForPaths(
-  workDir: string,
-  paths: any[] = [],
-  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
-) {
-  const fingerprints = [];
-  const uniquePaths = [...new Set(paths)].sort((a: any, b: any) => a.localeCompare(b));
-  for (const file of uniquePaths) {
-    if (fingerprints.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
-      fingerprints.push({
-        path: "<dirty-files>",
-        truncated: true,
-        reason: "dirty_file_entry_limit",
-        maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
-        totalFiles: uniquePaths.length,
-      });
-      break;
-    }
-    const filePath = path.join(workDir, file);
-    try {
-      const stats = await fsp.lstat(filePath);
-      if (stats.isDirectory()) {
-        const children = await directoryFingerprints(workDir, file, budget);
-        fingerprints.push({ path: file, directory: true, files: children });
-        continue;
-      }
-      if (stats.isSymbolicLink()) {
-        fingerprints.push({ path: file, symlink: await fsp.readlink(filePath) });
-        continue;
-      }
-      const fingerprint = await hashFileWithBudget(filePath, budget);
-      fingerprints.push({ path: file, ...fingerprint });
-      if (fingerprint.truncated) break;
-    } catch (error) {
-      fingerprints.push({
-        path: file,
-        missing: true,
-        error: errorCodeOrMessage(error),
-      });
-    }
-  }
-  return fingerprints;
-}
-
-async function directoryFingerprints(
-  workDir: string,
-  rootPath: string,
-  budget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT },
-) {
-  const root = path.resolve(workDir, rootPath);
-  const base = path.resolve(workDir);
-  const relativeRoot = path.relative(base, root);
-  if (relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) return [];
-  const entries: LooseObject[] = [];
-  let truncated = false;
-  const markTruncated = (relativePath: string, reason: string) => {
-    if (truncated) return;
-    truncated = true;
-    entries.push({
-      path: relativePath,
-      truncated: true,
-      reason,
-      maxDepth: DIRECTORY_FINGERPRINT_DEPTH_LIMIT,
-      maxEntries: DIRECTORY_FINGERPRINT_ENTRY_LIMIT,
-    });
-  };
-  async function visit(relativeDir: any, depth = 0) {
-    if (truncated) return;
-    if (depth > DIRECTORY_FINGERPRINT_DEPTH_LIMIT) {
-      markTruncated(relativeDir, "directory_depth_limit");
-      return;
-    }
-    const absoluteDir = path.join(workDir, relativeDir);
-    const dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
-    for (const dirent of dirents.sort((a: any, b: any) => a.name.localeCompare(b.name))) {
-      if (entries.length >= DIRECTORY_FINGERPRINT_ENTRY_LIMIT) {
-        markTruncated(relativeDir, "directory_entry_limit");
-        return;
-      }
-      const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
-      const absolutePath = path.join(workDir, relativePath);
-      if (dirent.isDirectory()) {
-        entries.push({ path: relativePath, directory: true });
-        await visit(relativePath, depth + 1);
-        if (truncated) return;
-      } else if (dirent.isSymbolicLink()) {
-        entries.push({ path: relativePath, symlink: await fsp.readlink(absolutePath) });
-      } else if (dirent.isFile()) {
-        const fingerprint = await hashFileWithBudget(absolutePath, budget);
-        entries.push({
-          path: relativePath,
-          ...fingerprint,
-        });
-        if (fingerprint.truncated) {
-          truncated = true;
-          return;
-        }
-      } else {
-        const stats = await fsp.lstat(absolutePath);
-        entries.push({ path: relativePath, type: stats.isFIFO() ? "fifo" : "other" });
-      }
-    }
-  }
-  await visit(rootPath);
-  return entries;
-}
-
-async function lastRunGitSnapshot(workDir: string, config: LooseObject = {}) {
-  if (!(await insideGitRepo(workDir).catch(() => false))) return { inside: false };
-  const scopedPaths = normalizeRelativePaths(config.commitPaths, "commitPaths");
-  const statusShort = await gitStatusShort(workDir);
-  const fingerprintBudget = { remaining: FINGERPRINT_TOTAL_BYTE_LIMIT };
-  return {
-    inside: true,
-    head: await shortHead(workDir),
-    dirty: Boolean(statusShort),
-    statusHash: hashText(statusShort),
-    scopedPaths,
-    fileFingerprints: await scopedFileFingerprints(workDir, scopedPaths, fingerprintBudget),
-    dirtyFileFingerprints: await fileFingerprintsForPaths(
-      workDir,
-      dirtyPathsFromStatus(statusShort),
-      fingerprintBudget,
-    ),
-  };
-}
-
-async function hashFileWithBudget(
-  filePath: string,
-  budget: { remaining: number },
-): Promise<LooseObject> {
-  const stats = await fsp.stat(filePath);
-  if (stats.size > budget.remaining) {
-    return {
-      truncated: true,
-      reason: "fingerprint_byte_budget",
-      maxBytes: FINGERPRINT_TOTAL_BYTE_LIMIT,
-      size: stats.size,
-    };
-  }
-  const hash = createHash("sha256");
-  let bytes = 0;
-  for await (const chunk of fs.createReadStream(filePath)) {
-    const length = (chunk as Buffer).byteLength;
-    if (length > budget.remaining) {
-      return {
-        truncated: true,
-        reason: "fingerprint_byte_budget",
-        maxBytes: FINGERPRINT_TOTAL_BYTE_LIMIT,
-        size: Math.max(stats.size, bytes + length),
-      };
-    }
-    budget.remaining -= length;
-    bytes += length;
-    hash.update(chunk as Buffer);
-  }
-  return { hash: hash.digest("hex"), size: bytes };
 }
 
 function latestBenchmarkContractEntry(
@@ -3871,193 +3402,6 @@ async function benchmarkContractDrift(workDir: string, state: any) {
     previousHash: latest.benchmarkContract.surfaceHash,
     currentHash: current.surfaceHash,
   };
-}
-
-async function preserveSessionFiles(workDir: string) {
-  const saved = new Map();
-  for (const file of [...SESSION_FILES, ...AUTORESEARCH_OWNED_FILES]) {
-    const filePath = path.join(workDir, file);
-    if (!fs.existsSync(filePath)) continue;
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Session artifact must not be a symlink or junction: ${filePath}`);
-    }
-    if (stat.isFile()) {
-      saved.set(file, { type: "file", bytes: fs.readFileSync(filePath) });
-    }
-  }
-  for (const dir of AUTORESEARCH_OWNED_DIRS) {
-    const researchPath = path.join(workDir, dir);
-    if (!fs.existsSync(researchPath)) continue;
-    await assertSafeDirectoryTree(workDir, researchPath);
-    const tempPath = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-preserve-"));
-    fs.cpSync(researchPath, tempPath, { recursive: true });
-    saved.set(dir, { type: "dir", tempPath });
-  }
-  return saved;
-}
-
-async function restoreSessionFiles(workDir: string, saved: any) {
-  for (const [file, artifact] of saved.entries()) {
-    const filePath = path.join(workDir, file);
-    if (artifact.type === "dir") {
-      await checkedReplaceDirectory(workDir, filePath, artifact.tempPath);
-      await fsp.rm(artifact.tempPath, { recursive: true, force: true });
-    } else {
-      await checkedAtomicWriteFile(workDir, filePath, artifact.bytes, { mode: 0o600 });
-    }
-  }
-}
-
-async function appendSessionRunNote(
-  workDir: string,
-  experiment: any,
-  state: any,
-  messages: LooseObject = {},
-) {
-  const filePath = path.join(workDir, "autoresearch.md");
-  if (!(await pathExists(filePath))) return;
-  const startMarker = "<!-- AUTORESEARCH_RUN_LEDGER:START -->";
-  const endMarker = "<!-- AUTORESEARCH_RUN_LEDGER:END -->";
-  const parts = [
-    `- Run ${experiment.run} ${experiment.status}: ${experiment.description}`,
-    `metric=${experiment.metric}`,
-    `best=${state.best ?? "unknown"}`,
-  ];
-  if (experiment.commit) parts.push(`commit=${experiment.commit}`);
-  if (messages.revertMessage) parts.push(messages.revertMessage);
-  if (messages.gitMessage && experiment.status === "keep") parts.push(messages.gitMessage);
-  const line = `${parts.join("; ")}.`;
-  const existing = await fsp.readFile(filePath, "utf8");
-  if (existing.includes(startMarker) && existing.includes(endMarker)) {
-    const next = existing.replace(endMarker, `${line}\n${endMarker}`);
-    await checkedAtomicWriteFile(workDir, filePath, next, { mode: 0o600 });
-    return;
-  }
-  const block = ["", "## Run Ledger", "", startMarker, `${line}`, endMarker, ""].join("\n");
-  await checkedAtomicWriteFile(workDir, filePath, `${existing.trimEnd()}\n${block}`, {
-    mode: 0o600,
-  });
-}
-
-async function revertExceptSessionFiles(workDir: string) {
-  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
-  const saved = await preserveSessionFiles(workDir);
-  const restore = await git(
-    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", "."],
-    workDir,
-  );
-  if (restore.code !== 0) {
-    await restoreSessionFiles(workDir, saved);
-    throw new Error(
-      `Git restore failed during discard cleanup: ${gitOutput(restore, "unknown error")}`,
-    );
-  }
-  const clean = await git(["clean", "-fd"], workDir);
-  if (clean.code !== 0) {
-    await restoreSessionFiles(workDir, saved);
-    throw new Error(
-      `Git clean failed during discard cleanup: ${gitOutput(clean, "unknown error")}`,
-    );
-  }
-  await restoreSessionFiles(workDir, saved);
-  return "Git: reverted non-session changes; autoresearch files preserved.";
-}
-
-async function revertScopedPathsExceptSessionFiles(workDir: string, paths: any[]) {
-  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
-  const safePaths = normalizeRelativePaths(paths, "revertPaths");
-  if (!safePaths.length) throw new Error("No scoped paths were provided for discard cleanup.");
-  const saved = await preserveSessionFiles(workDir);
-  const restore = await git(
-    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", ...safePaths],
-    workDir,
-  );
-  if (restore.code !== 0) {
-    await restoreSessionFiles(workDir, saved);
-    throw new Error(
-      `Git scoped restore failed during discard cleanup: ${gitOutput(restore, "unknown error")}`,
-    );
-  }
-  const clean = await git(["--literal-pathspecs", "clean", "-fd", "--", ...safePaths], workDir);
-  if (clean.code !== 0) {
-    await restoreSessionFiles(workDir, saved);
-    throw new Error(
-      `Git scoped clean failed during discard cleanup: ${gitOutput(clean, "unknown error")}`,
-    );
-  }
-  await restoreSessionFiles(workDir, saved);
-  return `Git: reverted scoped experiment paths (${safePaths.join(", ")}); autoresearch files preserved.`;
-}
-
-async function discardCleanupPlan(workDir: string, args: any, config: any) {
-  const scopedPaths = normalizeRelativePaths(
-    args.revert_paths ??
-      args.revertPaths ??
-      args.commit_paths ??
-      args.commitPaths ??
-      config.commitPaths,
-    "revertPaths",
-  );
-  const statusShort = await gitStatusShort(workDir);
-  const dirtyPaths = dirtyPathsFromStatus(statusShort);
-  const ownedDirtyPaths = dirtyPaths.filter((dirtyPath: any) =>
-    scopedPaths.some((scopedPath: any) => pathIsCoveredByScope(dirtyPath, scopedPath)),
-  );
-  const unownedDirtyPaths = dirtyPaths.filter(
-    (dirtyPath: any) => !ownedDirtyPaths.includes(dirtyPath),
-  );
-  return {
-    scopedPaths,
-    dirtyPaths,
-    ownedDirtyPaths,
-    unownedDirtyPaths,
-    fingerprint: hashText(
-      JSON.stringify({ scopedPaths, ownedDirtyPaths, unownedDirtyPaths, statusShort }),
-    ),
-    willRevert: scopedPaths.length > 0 ? ownedDirtyPaths : dirtyPaths,
-  };
-}
-
-function pathIsCoveredByScope(filePath: string, scopePath: any) {
-  const file = process.platform === "win32" ? slashPath(filePath) : filePath;
-  const scope = slashPath(scopePath);
-  return file === scope || file.startsWith(`${scope}/`);
-}
-
-function discardCleanupWillMutate(plan: LooseObject, args: LooseObject) {
-  if (Array.isArray(plan.scopedPaths) && plan.scopedPaths.length > 0) {
-    return Array.isArray(plan.ownedDirtyPaths) && plan.ownedDirtyPaths.length > 0;
-  }
-  return (
-    Array.isArray(plan.dirtyPaths) &&
-    plan.dirtyPaths.length > 0 &&
-    boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false)
-  );
-}
-
-async function cleanupDiscardChanges(
-  workDir: string,
-  args: any,
-  config: any,
-  precomputedPlan: LooseObject | null = null,
-) {
-  if (!(await insideGitRepo(workDir))) return "Git: not a repo, skipped revert.";
-  const plan = precomputedPlan || (await discardCleanupPlan(workDir, args, config));
-  if (plan.scopedPaths.length > 0) {
-    if (!plan.ownedDirtyPaths.length) {
-      return `Git: no scoped experiment changes to revert; preserved ${plan.unownedDirtyPaths.length} unowned dirty path(s). cleanup=${plan.fingerprint.slice(0, 12)}.`;
-    }
-    const message = await revertScopedPathsExceptSessionFiles(workDir, plan.scopedPaths);
-    return `${message} Preserved ${plan.unownedDirtyPaths.length} unowned dirty path(s). cleanup=${plan.fingerprint.slice(0, 12)}.`;
-  }
-  if (!plan.dirtyPaths.length) return "Git: clean tree, no discard cleanup needed.";
-  if (boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false)) {
-    return await revertExceptSessionFiles(workDir);
-  }
-  throw new Error(
-    "Refusing broad discard cleanup in a dirty Git tree without scoped revert paths. Configure commitPaths/revertPaths or pass --allow-dirty-revert.",
-  );
 }
 
 function mergeRuntimeConfig(sessionCwd: any, updates: any) {
@@ -5401,359 +4745,6 @@ export async function initExperiment(args: LooseObject) {
   };
 }
 
-async function logExperiment(args: any) {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const existingPendingReceipts = await pendingLogTransactionWarnings(workDir);
-  if (existingPendingReceipts.length > 0) {
-    throw new Error(existingPendingReceipts[0].message);
-  }
-  const lastPacket = boolOption(args.from_last ?? args.fromLast, false)
-    ? await readLastRunPacket(workDir)
-    : null;
-  if (lastPacket) await assertFreshLastRunPacket(workDir, lastPacket, config);
-  const packetProcessLifecycle = processLifecycleRecordsFromPacket(lastPacket);
-  const hasUnprovenTermination = packetProcessLifecycle.some(
-    (record) => record.event === "termination-failed",
-  );
-  if (hasUnprovenTermination) {
-    const retainedProgress = await readActiveProgressSnapshot(workDir);
-    if (retainedProgress?.exitState === "termination_failed") {
-      throw new Error(
-        "Cannot log a packet while process-tree termination remains unproven. Verify the reported PID and descendants, then clear retained progress first.",
-      );
-    }
-    packetProcessLifecycle.push(...terminalReconciliationRecords(packetProcessLifecycle));
-  }
-  const packetAllowed = Array.isArray(lastPacket?.decision?.allowedStatuses)
-    ? lastPacket.decision.allowedStatuses
-    : [];
-  const status = String(
-    args.status || (packetAllowed.length === 1 ? lastPacket?.decision?.suggestedStatus : "") || "",
-  );
-  if (!status)
-    throw new Error(
-      "status is required; choose keep, discard, or measure explicitly for successful packets.",
-    );
-  if (!STATUS_VALUES.has(status))
-    throw new Error(`status must be one of ${[...STATUS_VALUES].join(", ")}`);
-  if (
-    lastPacket?.decision &&
-    Array.isArray(lastPacket.decision.allowedStatuses) &&
-    !lastPacket.decision.allowedStatuses.includes(status)
-  ) {
-    throw new Error(
-      `Cannot log status '${status}' for the last run. Allowed statuses: ${lastPacket.decision.allowedStatuses.join(", ")}.`,
-    );
-  }
-  const metric = numberOption(args.metric ?? lastPacket?.decision?.metric, null);
-  if (!FAILURE_STATUSES.has(status) && metric == null) {
-    throw new Error("metric is required for keep, discard, and measure");
-  }
-  if (status === "keep" && lastPacket?.run?.checks?.passed === false) {
-    throw new Error(
-      "Cannot keep the last run because correctness checks failed. Log it as checks_failed.",
-    );
-  }
-  const description = args.description || lastPacket?.run?.description || "";
-  if (!description) throw new Error("description is required");
-  const metricsFilePath = args.metrics_file ?? args.metricsFile;
-  if (metricsFilePath && args.metrics != null) {
-    throw new Error("Use either --metrics or --metrics-file, not both.");
-  }
-  const metricsFromFile = await parseJsonFileOption(metricsFilePath, workDir, "--metrics-file");
-  const metrics = metricsFromFile ?? args.metrics ?? lastPacket?.decision?.metrics ?? {};
-  const artifacts = args.artifacts ?? lastPacket?.run?.artifacts ?? {};
-  const legacyAsiFilePath = args.asi_file ?? args.asiFile;
-  const asiJsonFilePath = args.asi_json_file ?? args.asiJsonFile;
-  if (legacyAsiFilePath && asiJsonFilePath) {
-    throw new Error("Use either --asi-json-file or --asi-file, not both.");
-  }
-  const asiFilePath = asiJsonFilePath ?? legacyAsiFilePath;
-  const asiFileOptionName = asiJsonFilePath ? "--asi-json-file" : "--asi-file";
-  if (asiFilePath && args.asi != null) {
-    throw new Error(`Use either --asi or ${asiFileOptionName}, not both.`);
-  }
-  const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, asiFileOptionName);
-  const asi = asiFromFile ?? args.asi ?? lastPacket?.decision?.asiTemplate ?? {};
-  let evidenceStatus =
-    evidenceStatusOption(args.evidence_status ?? args.evidenceStatus, status) ||
-    defaultEvidenceStatusForRun({ status });
-
-  const stateBefore = currentState(workDir);
-  const constraintRunMetrics = {
-    ...metrics,
-    [stateBefore.config.metricName || "metric"]: metric,
-  };
-  const constraintState =
-    stateBefore.current.some(isBaselineEligibleMetricRun) || !isMetricEligibleStatus(status)
-      ? stateBefore
-      : {
-          ...stateBefore,
-          current: [
-            ...stateBefore.current,
-            {
-              run: stateBefore.results.length + 1,
-              metric,
-              metrics,
-              status,
-            },
-          ],
-        };
-  const secondaryMetricConstraints = evaluateSecondaryMetricConstraints({
-    config,
-    state: constraintState,
-    runMetrics: constraintRunMetrics,
-  });
-  if (
-    status === "keep" &&
-    secondaryMetricConstraints.blockPromotion &&
-    evidenceStatus === "accepted"
-  ) {
-    evidenceStatus = "provisional";
-  }
-  const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(
-    workDir,
-    config,
-    stateBefore,
-  );
-  if (status === "keep" && protectedBenchmarkGuardBlocksKeep(protectedBenchmarkGuard)) {
-    throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
-  }
-  const inGit = await insideGitRepo(workDir);
-  const explicitCommit = args.commit != null && String(args.commit).trim() !== "";
-  const allowAddAll = boolOption(args.allow_add_all ?? args.allowAddAll, false);
-  if (explicitCommit && !inGit) {
-    throw new Error("--commit requires a Git repository so the commit can be verified.");
-  }
-  if (explicitCommit && status === "measure") {
-    throw new Error(
-      "--commit is not allowed for measure logs; measure records trend evidence only.",
-    );
-  }
-  let commit = "";
-  if (explicitCommit) {
-    commit = (await resolveCommitRef(workDir, args.commit)).slice(0, 12);
-  } else if (inGit && status !== "keep" && status !== "measure") {
-    commit = await shortHead(workDir);
-  }
-  let gitMessage = inGit ? "Git: no commit created." : "Git: not a repo.";
-  let revertMessage = "";
-  let pendingLogReceiptPath: string | null = null;
-  let pendingLogReceiptWarning = "";
-  const logWarnings: string[] = [];
-
-  if (status === "keep" && inGit) {
-    if (explicitCommit) {
-      gitMessage = `Git: recorded existing commit ${commit}.`;
-    } else {
-      const resultData = {
-        status,
-        [stateBefore.config.metricName || "metric"]: metric,
-        ...metrics,
-      };
-      const commitPaths = normalizeRelativePaths(
-        args.commit_paths ?? args.commitPaths ?? config.commitPaths,
-        "commitPaths",
-      );
-      if (shouldWarnEmptyCommitPaths({ inGit, commitPaths, allowAddAll })) {
-        throw new Error(
-          `${emptyCommitPathsWarning().message} Pass --allow-add-all only when every dirty file belongs in the kept commit.`,
-        );
-      }
-      if (commitPaths.length > 0) await assertCommitPathsExist(workDir, commitPaths);
-      await assertNoGitIndexLock(workDir, "git add");
-      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
-        run: stateBefore.results.length + 1,
-        status,
-        description,
-        metric,
-        mutation: "keep-commit",
-        commitPaths,
-        allowAddAll,
-        explicitCommit: false,
-      });
-      const addResult =
-        commitPaths.length > 0
-          ? await git(["--literal-pathspecs", "add", "--", ...commitPaths], workDir)
-          : await git(["add", "-A"], workDir);
-      if (addResult.code !== 0) {
-        if (gitIndexLockFailure(addResult)) {
-          const lockPath = await gitPrivatePath(workDir, "index.lock");
-          throw new Error(await gitIndexLockMessage(workDir, lockPath, "git add", true));
-        }
-        throw new Error(`Git add failed: ${gitOutput(addResult, "unknown error")}`);
-      }
-      const stagedChanges = commitPaths.length
-        ? await hasStagedChangesInPaths(workDir, commitPaths)
-        : await hasStagedChanges(workDir);
-      if (stagedChanges) {
-        const commitResult = await git(
-          commitPaths.length
-            ? [
-                "--literal-pathspecs",
-                "commit",
-                "--only",
-                "-m",
-                description,
-                "-m",
-                `Result: ${JSON.stringify(resultData)}`,
-                "--",
-                ...commitPaths,
-              ]
-            : ["commit", "-m", description, "-m", `Result: ${JSON.stringify(resultData)}`],
-          workDir,
-        );
-        if (commitResult.code === 0) {
-          commit = await shortHead(workDir);
-          gitMessage = allowAddAll
-            ? `Git: committed ${commit} using explicit add-all.`
-            : `Git: committed ${commit}.`;
-        } else {
-          throw new Error(`Git commit failed: ${gitOutput(commitResult, "unknown error")}`);
-        }
-      } else {
-        gitMessage = "Git: nothing to commit.";
-      }
-    }
-  } else if (status !== "keep" && status !== "measure") {
-    const discardPlan = inGit ? await discardCleanupPlan(workDir, args, config) : null;
-    if (discardPlan && discardCleanupWillMutate(discardPlan, args)) {
-      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
-        run: stateBefore.results.length + 1,
-        status,
-        description,
-        metric,
-        mutation: "discard-cleanup",
-        revertPaths: discardPlan.scopedPaths || [],
-        willRevert: Array.isArray(discardPlan.willRevert)
-          ? discardPlan.willRevert.slice(0, 50)
-          : [],
-        cleanupFingerprint: discardPlan.fingerprint || "",
-        allowDirtyRevert: boolOption(args.allow_dirty_revert ?? args.allowDirtyRevert, false),
-      });
-    }
-    revertMessage = await cleanupDiscardChanges(workDir, args, config, discardPlan);
-  }
-
-  const currentRuns = stateBefore.current;
-  const experiment: LooseObject = {
-    run: stateBefore.results.length + 1,
-    commit: String(commit || "").slice(0, 12),
-    metric,
-    metrics,
-    metricEligible: isMetricEligibleStatus(status) && finiteMetric(metric) != null,
-    status,
-    evidenceStatus,
-    description,
-    timestamp: Date.now(),
-    segment: stateBefore.segment,
-    confidence: null,
-  };
-  if (lastPacket?.packetEvidence?.freshnessFingerprint) {
-    experiment.packetFingerprint = lastPacket.packetEvidence.freshnessFingerprint;
-  }
-  if (lastPacket?.packetEvidence?.commandExecutionBoundary) {
-    experiment.commandExecutionBoundary = lastPacket.packetEvidence.commandExecutionBoundary;
-  }
-  const protectedPaths = protectedBenchmarkPathsFromConfig(config);
-  if (protectedPaths.length > 0 && isBaselineEligibleMetricRun(experiment)) {
-    experiment.protectedBenchmarkSnapshot = await buildProtectedBenchmarkSnapshot({
-      workDir,
-      paths: protectedPaths,
-    });
-  }
-  const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
-  if (protectedBenchmarkWarning) {
-    experiment.protectedBenchmarkGuard = protectedBenchmarkWarning;
-  }
-  if (secondaryMetricConstraints.configured) {
-    experiment.secondaryMetricConstraints = secondaryMetricConstraints;
-  }
-  experiment.promotion = promotionStateForLoggedDecision({
-    status,
-    metric,
-    metrics,
-    packetPromotion: lastPacket?.decision?.promotion,
-  });
-  if (secondaryMetricConstraints.blockPromotion) {
-    experiment.promotion = {
-      label: "blocked",
-      reasons: [
-        "Blocking secondary metric constraints failed or were unavailable.",
-        ...secondaryMetricConstraints.messages,
-      ],
-    };
-  }
-  if (asi && Object.keys(asi).length > 0) experiment.asi = asi;
-  if (artifacts && Object.keys(artifacts).length > 0) {
-    experiment.artifacts = artifacts;
-    experiment.artifactEvidence = artifactEvidenceList(artifacts, workDir, evidenceStatus);
-  }
-  if (
-    lastPacket?.packetEvidence?.taskArtifacts &&
-    typeof lastPacket.packetEvidence.taskArtifacts === "object" &&
-    !Array.isArray(lastPacket.packetEvidence.taskArtifacts)
-  ) {
-    experiment.taskArtifacts = lastPacket.packetEvidence.taskArtifacts;
-    experiment.taskArtifactsScope = "durable";
-  }
-  const benchmarkContract =
-    lastPacket?.history?.benchmarkContract ||
-    (await benchmarkContractSnapshot(workDir, {
-      command: lastPacket?.history?.command || "",
-      checksCommand: lastPacket?.run?.checks?.command || "",
-    }));
-  if (benchmarkContract?.surfaceHash) experiment.benchmarkContract = benchmarkContract;
-  experiment.confidence = computeConfidence(
-    [...currentRuns, experiment],
-    stateBefore.config.bestDirection,
-  );
-  for (const lifecycle of packetProcessLifecycle) appendJsonl(workDir, lifecycle);
-  appendJsonl(workDir, experiment);
-  if (pendingLogReceiptPath) {
-    const cleanupWarning = await clearPendingLogTransactionWithWarning(
-      pendingLogReceiptPath,
-      undefined,
-      { workDir },
-    );
-    if (cleanupWarning) {
-      pendingLogReceiptWarning = cleanupWarning;
-      logWarnings.push(pendingLogReceiptWarning);
-    }
-  }
-  const lastRunCleanupWarnings = lastPacket ? await deleteLastRunPacket(workDir) : [];
-  logWarnings.push(...lastRunCleanupWarnings.map((warning) => warning.message));
-
-  const stateAfter = currentState(workDir);
-  const limit = iterationLimitInfo(stateAfter, config);
-  try {
-    await appendSessionRunNote(workDir, experiment, stateAfter, {
-      gitMessage: [gitMessage, pendingLogReceiptWarning].filter(Boolean).join(" "),
-      revertMessage,
-    });
-  } catch (error: unknown) {
-    logWarnings.push(
-      `Run was durably logged to autoresearch.jsonl, but autoresearch.md could not be updated: ${errorMessage(error)}.`,
-    );
-  }
-  return {
-    ok: true,
-    workDir,
-    experiment,
-    baseline: stateAfter.baseline,
-    best: stateAfter.best,
-    confidence: stateAfter.confidence,
-    limit,
-    git: gitMessage,
-    revert: revertMessage,
-    recovery: logWarnings.join(" "),
-    warnings: logWarnings,
-    warningDetails: lastRunCleanupWarnings,
-    lastRunCleared: Boolean(lastPacket) && lastRunCleanupWarnings.length === 0,
-    continuation: loopContinuation(workDir, stateAfter, config, "logged"),
-  };
-}
-
 async function clearSession(args: any) {
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   if (!dryRun && !boolOption(args.confirm ?? args.yes, false)) {
@@ -5790,13 +4781,6 @@ async function clearSession(args: any) {
     deleted,
     missing,
   };
-}
-
-async function resolveLastRunPath(workDir: string) {
-  if (await insideGitRepo(workDir)) {
-    return await gitPrivatePath(workDir, "autoresearch/last-run.json");
-  }
-  return resolveSessionPaths({ workDir }).lastRunFallbackPath;
 }
 
 async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
@@ -6125,308 +5109,6 @@ function looksLikeProcessEvidence(value: LooseObject): boolean {
     Object.hasOwn(value, "commandDiagnostics") ||
     (Object.hasOwn(value, "exitCode") && Object.hasOwn(value, "command")),
   );
-}
-
-async function readLastRunPacket(workDir: string) {
-  const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
-  if (!fs.existsSync(readablePath))
-    throw new Error(
-      [
-        `No last-run packet found for ${workDir}.`,
-        `Recovery: run ${shellQuote("node")} ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact,`,
-        `or manually log measurement evidence with log --cwd ${shellQuote(workDir)} --metric <value> --status measure --description ${shellQuote("Describe the measurement")}.`,
-      ].join(" "),
-    );
-  return JSON.parse(fs.readFileSync(readablePath, "utf8"));
-}
-
-async function lastRunPacketFingerprint(workDir: string) {
-  const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
-  if (!fs.existsSync(readablePath)) return "";
-  return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
-}
-
-async function assertFreshLastRunPacket(
-  workDir: string,
-  packet: any,
-  config: LooseObject | null = null,
-) {
-  const freshness = await lastRunPacketFreshness(workDir, packet, config);
-  if (!freshness.fresh) throw new Error(`${freshness.reason} ${lastRunRecoveryText(workDir)}`);
-}
-
-function lastRunRecoveryText(workDir: string) {
-  return [
-    `Recovery: run node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} next --cwd ${shellQuote(workDir)} --compact,`,
-    `or manually log measurement evidence with log --cwd ${shellQuote(workDir)} --metric <value> --status measure --description ${shellQuote("Describe the measurement")}.`,
-  ].join(" ");
-}
-
-async function lastRunPacketFreshness(
-  workDir: string,
-  packet: any,
-  runtimeConfig: LooseObject | null = null,
-) {
-  const expectedNextRun = Number(packet.history?.nextRun);
-  const expectedSegment = Number(packet.history?.segment);
-  if (!Number.isFinite(expectedNextRun)) {
-    return {
-      fresh: false,
-      reason: "Last-run packet is missing history metadata. Run next again before logging.",
-    };
-  }
-  const state = currentState(workDir);
-  const expectedWorkDir = packet.history?.workDir || packet.workDir;
-  if (expectedWorkDir && path.resolve(expectedWorkDir) !== path.resolve(workDir)) {
-    return {
-      fresh: false,
-      expectedWorkDir,
-      actualWorkDir: workDir,
-      reason:
-        "Last-run packet is stale: working directory changed since the packet was created. Run next again before logging.",
-    };
-  }
-  const actualNextRun = state.results.length + 1;
-  if (Number.isFinite(expectedSegment) && state.segment !== expectedSegment) {
-    return {
-      fresh: false,
-      expectedSegment,
-      actualSegment: state.segment,
-      reason: `Last-run packet is stale: expected segment #${expectedSegment}, but current segment is #${state.segment}. Run next again before logging.`,
-    };
-  }
-  const expectedConfig = packet.history?.config;
-  if (!expectedConfig || typeof expectedConfig !== "object") {
-    return {
-      fresh: false,
-      reason: "Last-run packet is missing config metadata. Run next again before logging.",
-    };
-  }
-  const actualConfig = lastRunConfigSnapshot(state.config);
-  if (JSON.stringify(expectedConfig) !== JSON.stringify(actualConfig)) {
-    return {
-      fresh: false,
-      expectedConfig,
-      actualConfig,
-      reason:
-        "Last-run packet is stale: session config changed since the packet was created. Run next again before logging.",
-    };
-  }
-  if (actualNextRun !== expectedNextRun) {
-    return {
-      fresh: false,
-      expectedNextRun,
-      actualNextRun,
-      reason: `Last-run packet is stale: expected next log run #${expectedNextRun}, but current history would log #${actualNextRun}. Run next again before logging.`,
-    };
-  }
-  if (packet.history?.trustConfig && runtimeConfig) {
-    const actualTrustConfig = lastRunTrustConfigSnapshot(workDir, runtimeConfig, {
-      benchmarkContractHash: packet.history?.benchmarkContract?.surfaceHash,
-      benchmarkCommand:
-        packet.run?.command ||
-        packet.history?.benchmarkContract?.command ||
-        packet.history?.command,
-      checksCommand:
-        packet.run?.checks?.command || packet.history?.benchmarkContract?.checksCommand,
-      checksPolicy: packet.run?.checksPolicy,
-      packetEnvMode: packet.history?.packetEnvMode || packet.run?.packetEnvMode,
-    });
-    if (packet.history.trustConfig.hash !== actualTrustConfig.hash) {
-      return {
-        fresh: false,
-        expectedTrustFields: packet.history.trustConfig.fields,
-        actualTrustFields: actualTrustConfig.fields,
-        reason:
-          "Last-run packet is stale: execution, checks, scope, or recipe trust configuration changed since the packet was created. Run next again before logging.",
-      };
-    }
-  }
-  if (
-    fingerprintsContainReason(packet.history?.benchmarkContract?.files, "fingerprint_byte_budget")
-  ) {
-    return {
-      fresh: false,
-      expectedTrustFields: packet.history?.trustConfig?.fields || [],
-      reason:
-        "Last-run packet is stale: benchmark, checks, config, command, or environment files exceeded the shared fingerprint byte budget. Reduce those files, then run next again before logging.",
-    };
-  }
-  const expectedGit = packet.history?.git;
-  if (expectedGit?.inside) {
-    const actualGit = await lastRunGitSnapshot(workDir, {
-      commitPaths: expectedGit.scopedPaths || [],
-    });
-    if (!actualGit.inside) {
-      return {
-        fresh: false,
-        expectedGit,
-        actualGit,
-        reason:
-          "Last-run packet is stale: the working directory is no longer a Git worktree. Run next again before logging.",
-      };
-    }
-    if (expectedGit.head && actualGit.head && expectedGit.head !== actualGit.head) {
-      return {
-        fresh: false,
-        expectedGit,
-        actualGit,
-        reason: `Last-run packet is stale: Git HEAD changed from ${expectedGit.head} to ${actualGit.head}. Run next again before logging.`,
-      };
-    }
-    if (
-      expectedGit.statusHash &&
-      actualGit.statusHash &&
-      expectedGit.statusHash !== actualGit.statusHash
-    ) {
-      return {
-        fresh: false,
-        expectedGit,
-        actualGit,
-        reason:
-          "Last-run packet is stale: Git dirty state changed since the packet was created. Run next again before logging.",
-      };
-    }
-    if (
-      gitSnapshotContainsDirtyFingerprintTruncation(expectedGit) ||
-      gitSnapshotContainsDirtyFingerprintTruncation(actualGit)
-    ) {
-      return {
-        fresh: false,
-        expectedGit,
-        actualGit,
-        reason:
-          "Last-run packet is stale: dirty file fingerprints were truncated before freshness could be proven. Clean or narrow the dirty tree, then run next again before logging.",
-      };
-    }
-    if (expectedGit.fileFingerprints?.length || actualGit.fileFingerprints?.length) {
-      const expectedFiles = JSON.stringify(expectedGit.fileFingerprints || []);
-      const actualFiles = JSON.stringify(actualGit.fileFingerprints || []);
-      if (expectedFiles !== actualFiles) {
-        return {
-          fresh: false,
-          expectedGit,
-          actualGit,
-          reason:
-            "Last-run packet is stale: scoped file fingerprints changed since the packet was created. Run next again before logging.",
-        };
-      }
-    }
-    if (expectedGit.dirtyFileFingerprints?.length || actualGit.dirtyFileFingerprints?.length) {
-      const expectedDirtyFiles = JSON.stringify(expectedGit.dirtyFileFingerprints || []);
-      const actualDirtyFiles = JSON.stringify(actualGit.dirtyFileFingerprints || []);
-      if (expectedDirtyFiles !== actualDirtyFiles) {
-        return {
-          fresh: false,
-          expectedGit,
-          actualGit,
-          reason:
-            "Last-run packet is stale: dirty file contents changed since the packet was created. Run next again before logging.",
-        };
-      }
-    }
-  }
-  return {
-    fresh: true,
-    expectedNextRun,
-    actualNextRun,
-    expectedWorkDir: expectedWorkDir || workDir,
-    command: packet.history?.replayCommand || packet.history?.command || packet.run?.command || "",
-    git: packet.history?.git || null,
-    reason: "Last-run packet matches the current ledger.",
-  };
-}
-
-function fingerprintsContainTruncation(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some((item) => fingerprintsContainTruncation(item));
-  if (!value || typeof value !== "object") return false;
-  const record = value as LooseObject;
-  if (record.truncated === true) return true;
-  return Object.values(record).some((item) => fingerprintsContainTruncation(item));
-}
-
-function gitSnapshotContainsDirtyFingerprintTruncation(git: LooseObject): boolean {
-  return (
-    fingerprintsContainReason(git.fileFingerprints, "fingerprint_byte_budget") ||
-    fingerprintsContainTruncation(git.dirtyFileFingerprints)
-  );
-}
-
-function fingerprintsContainReason(value: unknown, reason: string): boolean {
-  if (Array.isArray(value)) return value.some((item) => fingerprintsContainReason(item, reason));
-  if (!value || typeof value !== "object") return false;
-  const record = value as LooseObject;
-  if (record.truncated === true && record.reason === reason) return true;
-  return Object.values(record).some((item) => fingerprintsContainReason(item, reason));
-}
-
-function lastRunConfigSnapshot(config: LooseObject = {}) {
-  return {
-    name: config.name || null,
-    metricName: config.metricName || "metric",
-    metricUnit: config.metricUnit ?? "",
-    bestDirection: config.bestDirection === "higher" ? "higher" : "lower",
-  };
-}
-
-function lastRunTrustConfigSnapshot(
-  workDir: string,
-  config: LooseObject = {},
-  context: LooseObject = {},
-) {
-  const surface = {
-    benchmarkContractHash: String(context.benchmarkContractHash || ""),
-    benchmarkCommandHash: hashText(normalizedTrustCommand(context.benchmarkCommand)),
-    checksCommandHash: hashText(normalizedTrustCommand(context.checksCommand)),
-    checksPolicy: String(config.checksPolicy || context.checksPolicy || "always"),
-    protectedBenchmarkPaths: normalizeStringListForTrustHash(config.protectedBenchmarkPaths),
-    fixedControl: config.fixedControl || null,
-    secondaryMetricConstraints: normalizeStringListForTrustHash(config.secondaryMetricConstraints),
-    secondaryMetricConstraintMode: String(config.secondaryMetricConstraintMode || "advisory"),
-    packetEnvMode: String(context.packetEnvMode || "minimal"),
-    commitPaths: normalizeRelativePaths(config.commitPaths, "commitPaths").sort(),
-    workingDirectory: path.resolve(workDir),
-    recipeProvenance: config.recipeCatalogProvenance || config.recipe_catalog_provenance || null,
-  };
-  return {
-    hash: hashText(stableTrustJson(surface)),
-    fields: Object.keys(surface).sort(),
-  };
-}
-
-function normalizedTrustCommand(value: unknown): string {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function normalizeStringListForTrustHash(value: unknown): string[] {
-  const items = Array.isArray(value) ? value : listOption(value);
-  return items
-    .map((item) => stableTrustJson(item))
-    .filter(Boolean)
-    .sort();
-}
-
-function stableTrustJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableTrustJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as LooseObject)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stableTrustJson(child)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
-
-async function deleteLastRunPacket(workDir: string) {
-  const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  return await clearFilesWithWarnings([filePath, legacyPath], undefined, { workDir });
 }
 
 async function discoverLastRunPartialResults(
@@ -7437,50 +6119,6 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
   };
 }
 
-function processLifecycleRecordsFromPacket(packet: LooseObject | null): LooseObject[] {
-  return rekeyProcessLifecycleRecords(
-    packet?.packetEvidence?.processLifecycle,
-    String(packet?.packetEvidence?.packetId || ""),
-  );
-}
-
-function rekeyProcessLifecycleRecords(value: unknown, packetId: string): LooseObject[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => {
-    const record = item && typeof item === "object" && !Array.isArray(item) ? item : {};
-    const identity =
-      record.identity && typeof record.identity === "object" && !Array.isArray(record.identity)
-        ? record.identity
-        : {};
-    return buildProcessLifecycleRecord({
-      packetId,
-      processId: String(identity.processId || ""),
-      event: String(record.event || "") as ProcessLifecycleEvent,
-      at: String(record.at || ""),
-      ...(record.termination ? { termination: record.termination } : {}),
-    });
-  });
-}
-
-function terminalReconciliationRecords(records: LooseObject[]): LooseObject[] {
-  const latest = new Map<string, LooseObject>();
-  for (const record of records) {
-    const packetId = String(record.identity?.packetId || "");
-    const processId = String(record.identity?.processId || "");
-    latest.set(`${packetId}\0${processId}`, record);
-  }
-  return [...latest.values()]
-    .filter((record) => record.event === "termination-failed")
-    .map((record) =>
-      buildProcessLifecycleRecord({
-        packetId: String(record.identity.packetId),
-        processId: String(record.identity.processId),
-        event: "terminated",
-        termination: { proven: true, reason: "operator_verified_absent" },
-      }),
-    );
-}
-
 async function taskArtifactsForRun(run: LooseObject) {
   const {
     paths: taskManifestPaths,
@@ -7619,54 +6257,6 @@ async function realPathOrResolved(target: string): Promise<string> {
   } catch {
     return path.resolve(target);
   }
-}
-
-function promotionStateForLoggedDecision({
-  status,
-  metric,
-  metrics = {},
-  packetPromotion = null,
-}: LooseObject) {
-  if (status === "keep") {
-    if (packetPromotion?.label) return packetPromotion;
-    if (promotionGradeValue({ metrics }) === true) {
-      return {
-        label: "promotion_eligible",
-        reasons: ["Logged keep carries explicit promotion-grade metadata."],
-      };
-    }
-    return finiteMetric(metric) == null
-      ? {
-          label: "blocked",
-          reasons: ["Kept decisions require a finite metric before promotion can be assessed."],
-        }
-      : {
-          label: "exploratory",
-          reasons: [
-            "Logged keep is exploratory until repeat, holdout, breadth, or promotion-gate metadata is recorded.",
-          ],
-        };
-  }
-  if (status === "discard") {
-    return {
-      label: "invalidated",
-      reasons: ["Logged as discard; metric evidence is retained but not promotable."],
-    };
-  }
-  if (status === "measure") {
-    return {
-      label: "measurement",
-      reasons: ["Logged as measure; metric evidence is trend-only and not finalizer evidence."],
-    };
-  }
-  return {
-    label: "blocked",
-    reasons: [
-      status === "checks_failed"
-        ? "Correctness checks failed; packet evidence is blocked from promotion."
-        : "Crash evidence is retained without sentinel metrics and is blocked from promotion.",
-    ],
-  };
 }
 
 async function nextExperiment(args: any) {
