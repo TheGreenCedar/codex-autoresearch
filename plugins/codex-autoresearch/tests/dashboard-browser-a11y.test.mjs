@@ -43,7 +43,6 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
     browser = await launchBrowser(browserExecutable);
     const client = await CdpClient.connect(browser.wsUrl);
     try {
-      const readyStartedAt = Date.now();
       const page = await openPage(client, server.url);
       await client.send(
         "Emulation.setDeviceMetricsOverride",
@@ -52,7 +51,7 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       );
       await waitForPageReady(client, page.sessionId);
       await waitForSelector(client, page.sessionId, "#trend-chart-range");
-      const readyMs = Date.now() - readyStartedAt;
+      const readyMs = await evaluate(client, page.sessionId, "Math.round(performance.now())");
       assert.ok(readyMs <= 2_000, `${readyMs}ms dashboard readiness`);
       await waitForFunction(
         client,
