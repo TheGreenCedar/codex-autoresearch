@@ -14,7 +14,9 @@ The CLI, terminal report, compact state, and dashboard must tell the same story.
 | Finalization | Is the work previewed, local, pushed, in CI, merged, or safe to clean up? |
 | Readout | What single action should the person or Codex take next? |
 
-`state --compact`, `state --report`, `recommend-next --compact`, and the dashboard decision envelope should agree on those answers. Field names are listed in [Concepts](concepts.md#state-fields).
+`state --compact`, `state --report`, `recommend-next --compact`, doctor, finalization preview, and the dashboard project the same validated `resolvedDecision` authority. The status, strongest blocker, next action, safe command, runtime provenance, and finalization pressure must agree. Field names are listed in [Concepts](concepts.md#state-fields).
+
+Default projections are deliberately bounded so a long session remains readable: compact state is capped at 10 KiB and 200 lines, default state at 20 KiB and 260 lines, and doctor/report at 8 KiB and 100 lines. A synthetic 100-run regression fixture enforces those ceilings and requires compact state to remain smaller than default state. Use explicit `--json-full` only for complete state or doctor diagnostics.
 
 ## Goal contract
 

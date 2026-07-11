@@ -444,7 +444,7 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
     assert.doesNotMatch(worktreeStatus, /autoresearch-mutation\.lock|\.recovery-/);
     assert.doesNotMatch(committedPaths, /autoresearch-mutation\.lock|\.recovery-/);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const warningCodes = JSON.parse(state.stdout).warningDetails.map((warning) => warning.code);
     assert.ok(!warningCodes.includes("stale_benchmark_artifacts"));
@@ -553,7 +553,7 @@ test("doctor and dashboard stay quiet about empty commit paths until keep loggin
     await git(dir, ["commit", "-m", "initial"]);
 
     await runCli(["init", "--cwd", dir, "--name", "warning", "--metric-name", "seconds"]);
-    const doctor = await runCli(["doctor", "--cwd", dir]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.ok(
@@ -562,7 +562,7 @@ test("doctor and dashboard stay quiet about empty commit paths until keep loggin
       ),
     );
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.ok(

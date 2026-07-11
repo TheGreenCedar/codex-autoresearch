@@ -20,7 +20,7 @@ test("spawned CLI contract covers source launcher startup and env workdir resolu
     });
     assert.equal(init.code, 0, init.stderr);
 
-    const state = await runSpawnedCli(["state"], { cwd: pluginRoot, env });
+    const state = await runSpawnedCli(["state", "--json-full"], { cwd: pluginRoot, env });
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.config.name, "spawned");
@@ -161,7 +161,7 @@ test("state recommend-next and dashboard share workflow friction readout", async
       Array.isArray(signals) && signals.some((signal) => signal?.kind === "verification_churn");
     assert.equal(hasVerificationChurn(fullState.workflowFriction), true);
     assert.equal(hasVerificationChurn(compactState.workflowFriction), true);
-    assert.equal(hasVerificationChurn(compactState.decisionEnvelope?.workflowFriction), true);
+    assert.equal(Object.hasOwn(compactState, "decisionEnvelope"), false);
     assert.match((recommendNext.frictionSignals || []).join("\n"), /ran 10 times/);
     assert.equal(
       hasVerificationChurn(exported.viewModel?.decisionEnvelope?.workflowFriction),

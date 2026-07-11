@@ -167,6 +167,29 @@ test("fresh packet logging outranks generic preflight repair", () => {
   assert.equal(status.strongestAction?.kind, "log-decision");
 });
 
+test("stale watchdog intervention is the shared authority over generic preflight repair", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      config: { bestDirection: "lower", metricName: "seconds" },
+      current: [{ run: 1, metric: 10, status: "keep" }],
+      results: [{ run: 1, metric: 10, status: "keep" }],
+      preflight: {
+        status: "blocked",
+        blockers: ["No benchmark command is configured."],
+        nextCommand: "node scripts/autoresearch.mjs setup-plan --cwd .",
+      },
+    },
+    watchdog: {
+      stale: true,
+      recommendation: "Intervene after the stale progress window.",
+    },
+  });
+
+  assert.equal(envelope.loopContract.strongestAction.kind, "preflight");
+  assert.equal(envelope.canonicalNextAction.kind, "watchdog");
+  assert.match(envelope.nextAction, /Intervene/);
+});
+
 test("probe-failed runtime provenance remains non-blocking", () => {
   const status = buildLoopContractStatus({
     runtimeProvenance: {
@@ -961,9 +984,7 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
     compactState,
   });
   const action = response.action as { kind?: string };
-  const decisionEnvelope = response.decisionEnvelope as {
-    finalizationReadiness?: { available?: boolean };
-  };
+  const resolvedDecision = response.resolvedDecision;
 
   assert.equal(action.kind, "decision-capsule");
   assert.equal(
@@ -972,17 +993,15 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   );
   assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
   assert.match(response.whySafe, /compact state/);
-  assert.match(response.whySafe, /shared decision envelope/);
-  assert.equal(response.compactState, compactState);
-  assert.equal(response.decisionEnvelope, compactState.decisionEnvelope);
-  assert.equal(response.resumeAudit, compactState.resumeAudit);
-  assert.deepEqual(response.runtimeProvenance, compactState.runtimeProvenance);
-  assert.deepEqual(response.loopContract, compactState.loopContract);
-  assert.deepEqual(response.laneLifecycle, compactState.laneLifecycle);
-  assert.deepEqual(response.packetDiagnostics, compactState.packetDiagnostics);
+  assert.match(response.whySafe, /shared resolved decision/);
+  assert.notEqual(response.compactState, compactState);
+  assert.equal(Object.hasOwn(response, "decisionEnvelope"), false);
+  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
+  assert.deepEqual(resolvedDecision.runtimeProvenance, compactState.runtimeProvenance);
+  assert.deepEqual(resolvedDecision.loopContract, compactState.loopContract);
   assert.deepEqual(response.portfolioRecommendation, compactState.portfolioRecommendation);
   assert.deepEqual(response.sessionDecisionCapsule, compactState.sessionDecisionCapsule);
-  assert.equal(decisionEnvelope.finalizationReadiness?.available, false);
+  assert.equal(resolvedDecision.finalizationPressure?.available, false);
 });
 
 test("compact recommend-next uses blocker metadata fallback instead of next", () => {

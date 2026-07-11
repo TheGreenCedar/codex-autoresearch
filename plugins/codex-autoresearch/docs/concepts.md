@@ -73,9 +73,9 @@ Most sessions need only the blocker and next command printed by `state --report`
 | --- | --- |
 | `goalFrame`, `goalContract` | Are the durable goal, current prompt, benchmark, and final claim still aligned? |
 | `operatorHandoff`, `operatorChecklist` | What is the shortest safe continuation after a pause or handoff? |
-| `loopContract` | Is another packet allowed? |
+| `resolvedDecision.loopContract` | Is another packet allowed? |
 | `sessionDecisionCapsule` | Did imported session evidence constrain the next action? |
-| `decisionEnvelope`, `resumeAudit` | Do segment, drift, and readiness checks agree on one action? |
+| `resolvedDecision` | Do segment, drift, readiness, finalization pressure, and the safe command agree on one action? |
 | `runtimeProvenance`, `runtimeDriftSummary` | Did this proof come from the runtime you think it did? |
 | `gateQuality`, `preflight`, `resourcePreflight` | Are benchmark, Git, runtime, process, and budget checks healthy? |
 | `sourceCleanliness` | Are source files dirty, or only session artifacts? |
@@ -90,3 +90,5 @@ Most sessions need only the blocker and next command printed by `state --report`
 | `qualityRound` | Is the current checklist closed, and should discovery start another round? |
 
 Cross-surface ownership is documented in [Control plane](control-plane.md).
+
+In 2.7, bounded state, doctor, and recommendation output emits `resolvedDecision` instead of repeating `resumeAudit`, top-level `canonicalNextAction`, and top-level `loopContract`. The terminal report projects the same authority into scalar status, blocker, action, and command fields. Readers still accept the older `decisionEnvelope` and `resumeAudit` shapes as migration inputs. Use `state --json-full` or `doctor --json-full` only when the complete machine diagnostic is necessary.

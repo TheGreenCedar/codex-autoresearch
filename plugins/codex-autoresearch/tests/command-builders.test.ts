@@ -361,6 +361,26 @@ test("recommend-next authority uses full envelope when dashboard-only blockers e
       },
     },
     compact: {
+      resolvedDecision: {
+        version: 1,
+        status: "ready",
+        strongestBlocker: null,
+        nextAction: "Run the next packet.",
+        command: "node scripts/autoresearch.mjs next --cwd . --compact",
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+        },
+        loopContract: {
+          ok: true,
+          canRunNextPacket: true,
+          blockers: [],
+          warnings: [],
+        },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
       decisionEnvelope: {
         canonicalNextAction: {
           kind: "next-packet",
@@ -423,7 +443,7 @@ test("compact recommend-next preserves finalization readiness as canonical autho
     },
   });
 
-  assert.equal((response.decisionEnvelope as any).finalizationReadiness.available, true);
+  assert.equal(response.resolvedDecision.finalizationPressure?.available, true);
   assert.equal((response.action as any).kind, "current-tree-finalization");
   assert.equal(
     response.commands.primary,
@@ -491,12 +511,47 @@ test("compact state response preserves stable compact fields and optional loop f
   assert.equal(response.ok, true);
   assert.equal(response.runs, 3);
   assert.equal(response.kept, 1);
-  assert.equal(response.nextAction, "Clean up stale lanes.");
-  assert.equal(response.shouldContinue, true);
-  assert.equal(response.canRunNextPacket, false);
-  assert.deepEqual(response.runtimeProvenance, { status: "fresh" });
-  assert.deepEqual(response.loopContract, { canRunNextPacket: false });
-  assert.deepEqual(response.laneLifecycle, { staleLanes: ["scout"] });
-  assert.deepEqual(response.packetDiagnostics, { unresolved: true });
-  assert.deepEqual(response.watchdogSummary, { stale: true });
+  assert.equal(response.resolvedDecision.nextAction, "Clean up stale lanes.");
+  assert.equal(response.resolvedDecision.status, "unknown");
+  assert.deepEqual(response.resolvedDecision.runtimeProvenance, { status: "fresh" });
+  assert.deepEqual(response.resolvedDecision.loopContract, { canRunNextPacket: false });
+  assert.equal(Object.hasOwn(response, "loopContract"), false);
+  assert.equal(Object.hasOwn(response, "laneLifecycle"), false);
+  assert.equal(Object.hasOwn(response, "packetDiagnostics"), false);
+  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
+});
+
+test("compact recommend-next rejects unsafe commands and enforces Unicode byte and line budgets", () => {
+  const response = buildCompactRecommendNextResponse({
+    workDir: `C:/${"😀".repeat(8_000)}`,
+    compactState: {
+      workDir: `C:/${"😀".repeat(8_000)}`,
+      goal: "界".repeat(20_000),
+      resolvedDecision: {
+        version: 1,
+        status: "ready",
+        strongestBlocker: null,
+        nextAction: "Run the next packet.",
+        command: "<command-placeholder>",
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node -e \"require('child_process').execSync('whoami')\"",
+        },
+        loopContract: { canRunNextPacket: true },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
+      commands: {
+        primary: "node -e \"require('child_process').execSync('whoami')\"",
+        state: "<state-command>",
+      },
+    },
+  });
+  const serialized = JSON.stringify(response, null, 2);
+  assert.ok(Buffer.byteLength(serialized, "utf8") <= 5_200);
+  assert.ok(serialized.split("\n").length <= 120);
+  assert.equal((response.commands as Record<string, unknown>).primary, undefined);
+  assert.doesNotMatch(serialized, /child_process|command-placeholder|state-command/);
 });

@@ -298,9 +298,23 @@ test("state reports corrupt JSONL with repair-first ledger guidance", async () =
     assert.equal(payload.ok, false);
     assert.equal(payload.code, "ledger_jsonl_invalid");
     assert.match(payload.ledgerPath, /autoresearch\.jsonl$/);
-    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
-    assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
-    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+    assert.equal(payload.parseErrors.length, 1);
+    assert.equal(payload.parseErrors[0].line, 2);
+    assert.match(payload.resolvedDecision.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+    for (const alias of [
+      "resumeAudit",
+      "decisionEnvelope",
+      "canonicalNextAction",
+      "loopContract",
+    ]) {
+      assert.equal(Object.hasOwn(payload, alias), false, alias);
+    }
+
+    const full = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(full.code, 0, full.stderr);
+    const fullPayload = JSON.parse(full.stdout);
+    assert.equal(fullPayload.resolvedDecision.status, "blocked");
+    assert.equal(Object.hasOwn(fullPayload, "decisionEnvelope"), false);
 
     const report = await runCli(["state", "--cwd", dir, "--report", "--json"]);
     assert.equal(report.code, 0, report.stderr);
@@ -341,7 +355,7 @@ test("new config segment preserves previous durable goal when omitted", async ()
       "utf8",
     );
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.config.goal, "Reduce simplification candidates without weakening checks.");
@@ -353,7 +367,7 @@ test("new config segment preserves previous durable goal when omitted", async ()
       description: "Baseline simplification scan",
       promotionGrade: null,
     });
-    assert.equal(payload.decisionEnvelope.goalAdvice.present, true);
+    assert.equal(payload.goalContract.status, "warning");
   });
 });
 

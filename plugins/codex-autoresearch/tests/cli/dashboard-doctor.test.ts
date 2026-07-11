@@ -108,7 +108,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
       }),
     ]);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.ok(statePayload.memory.families.length >= 2);
@@ -250,6 +250,7 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
       "--command",
       command,
       "--check-benchmark",
+      "--json-full",
     ]);
     assert.equal(result.code, 0, result.stderr);
 
@@ -283,7 +284,14 @@ test("doctor and next report missing future benchmark commands for manual sessio
     ]);
     assert.equal(log.code, 0, log.stderr);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--explain"]);
+    const doctor = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--check-benchmark",
+      "--explain",
+      "--json-full",
+    ]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, false);
@@ -310,7 +318,7 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
   await withTempDir("doctor-runtime-drift-summary", async (dir) => {
     await runCli(["init", "--cwd", dir, "--name", "doctor drift", "--metric-name", "seconds"]);
 
-    const result = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    const result = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout);
@@ -335,9 +343,12 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
       await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
         await writeInstalledRuntimeFixture(homeDir, status);
 
-        const result = await runCli(["doctor", "--cwd", dir, "--check-installed", "--explain"], {
-          env: isolatedRuntimeEnv(homeDir),
-        });
+        const result = await runCli(
+          ["doctor", "--cwd", dir, "--check-installed", "--explain", "--json-full"],
+          {
+            env: isolatedRuntimeEnv(homeDir),
+          },
+        );
         assert.equal(result.code, 0, result.stderr);
 
         const payload = JSON.parse(result.stdout);
@@ -345,16 +356,12 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
         assert.equal(payload.runtimeAuthority.trustScope, "installed-plugin", status);
         assert.equal(payload.runtimeAuthority.blocking, true, status);
         assert.equal(payload.runtimeAuthority.installedRuntime.status, status);
-        assert.equal(payload.canonicalNextAction.kind, "runtime-authority", status);
-        assert.equal(payload.canonicalNextAction.safeAction, "doctor", status);
-        assert.equal(payload.canonicalNextAction.toolName, "doctor", status);
-        assert.match(payload.canonicalNextAction.command || "", /\bdoctor\b/, status);
-        assert.match(payload.canonicalNextAction.command || "", /--explain\b/, status);
-        assert.doesNotMatch(
-          payload.canonicalNextAction.command || "",
-          /(?:^|\s)next(?:\s|$)/,
-          status,
-        );
+        const canonicalAction = payload.resolvedDecision.canonicalNextAction;
+        assert.equal(canonicalAction.kind, "runtime-authority", status);
+        assert.equal(canonicalAction.safeAction, "doctor", status);
+        assert.match(canonicalAction.command || "", /\bdoctor\b/, status);
+        assert.match(canonicalAction.command || "", /--explain\b/, status);
+        assert.doesNotMatch(canonicalAction.command || "", /(?:^|\s)next(?:\s|$)/, status);
         assert.match(
           payload.issues.join("\n"),
           new RegExp(`${status} installed plugin runtime`, "i"),
@@ -390,13 +397,13 @@ test("state and doctor use checksCommand from config for gate quality", async ()
     );
     await writeFile(path.join(dir, "autoresearch.jsonl"), "");
 
-    const state = await runCli(["state", "--cwd", dir, "--json"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.gateQuality.posture, "correctness");
     assert.equal(statePayload.commandAuthority?.checksCommand, displayedChecksCommand);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.gateQuality.posture, "correctness");
@@ -430,7 +437,7 @@ test("setup state and doctor expose gate quality and preflight readiness", async
 
     await runCli(["init", "--cwd", dir, "--name", "gate preflight", "--metric-name", "seconds"]);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.gateQuality.posture, "advisory-missing");
@@ -444,7 +451,7 @@ test("setup state and doctor expose gate quality and preflight readiness", async
     assert.equal(compactPayload.preflight.status, "blocked");
     assert.match(compactPayload.preflight.blockers.join("\n"), /benchmark command/i);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, false);
@@ -511,9 +518,9 @@ test("recommend-next compact operator checklist uses bounded recovery for empty 
     const command = payload.operatorChecklist.command || "";
 
     assert.equal(payload.action.kind, "setup");
-    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "setup");
-    assert.equal(payload.loopContract.blockers[0].kind, "setup");
-    assert.equal(payload.loopContract.canRunNextPacket, false);
+    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "setup");
+    assert.match(payload.resolvedDecision.loopContract.blockers[0], /setup/i);
+    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
     assert.match(payload.nextAction, /setup/i);
     assert.match(payload.operatorChecklist.blocker, /setup/i);
     assert.match(command, /autoresearch\.mjs\b.*\b(setup-plan|state)\b/);
@@ -530,17 +537,17 @@ test("state and recommend-next suppress portfolio guidance while benchmark setup
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.portfolioRecommendation, null);
-    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
-    assert.equal(statePayload.decisionEnvelope.loopContract.blockers[0].kind, "preflight");
-    assert.equal(statePayload.canRunNextPacket, false);
+    assert.equal(Object.hasOwn(statePayload, "portfolioRecommendation"), false);
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "preflight");
+    assert.match(statePayload.resolvedDecision.loopContract.blockers[0], /benchmark command/i);
+    assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.portfolioRecommendation, null);
-    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "preflight");
-    assert.equal(recommendPayload.loopContract.blockers[0].kind, "preflight");
+    assert.equal(Object.hasOwn(recommendPayload, "portfolioRecommendation"), false);
+    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "preflight");
+    assert.match(recommendPayload.resolvedDecision.loopContract.blockers[0], /benchmark command/i);
   });
 });
 

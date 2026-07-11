@@ -69,17 +69,23 @@ test("partial-results records diagnostic measure evidence from a failed packet a
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.canonicalNextAction.kind, "partial-salvage");
-    assert.equal(statePayload.nextAction, statePayload.canonicalNextAction.reason);
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "partial-salvage");
+    assert.equal(
+      statePayload.resolvedDecision.nextAction,
+      statePayload.resolvedDecision.canonicalNextAction.reason,
+    );
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.action.kind, "partial-salvage");
-    assert.equal(recommendPayload.nextAction, statePayload.canonicalNextAction.reason);
     assert.equal(
-      recommendPayload.decisionEnvelope.canonicalNextAction.kind,
-      statePayload.canonicalNextAction.kind,
+      recommendPayload.nextAction,
+      statePayload.resolvedDecision.canonicalNextAction.reason,
+    );
+    assert.equal(
+      recommendPayload.resolvedDecision.canonicalNextAction.kind,
+      statePayload.resolvedDecision.canonicalNextAction.kind,
     );
 
     const record = await runCli([
@@ -260,7 +266,7 @@ test("state surfaces active runner progress while next is still executing", asyn
     let progress = null;
     const started = Date.now();
     while (Date.now() - started < 30000) {
-      const state = await runCli(["state", "--cwd", dir, "--compact"]);
+      const state = await runCli(["state", "--cwd", dir, "--json-full"]);
       assert.equal(state.code, 0, state.stderr);
       const payload = JSON.parse(state.stdout);
       progress = payload.experimentEconomics?.progress || null;
@@ -525,11 +531,11 @@ test("unproven process-tree termination blocks state, next, and standalone run",
       `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran')`,
     )}`;
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.loopContract.canRunNextPacket, false);
-    assert.equal(statePayload.loopContract.blockers[0].kind, "termination-failed");
+    assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
+    assert.equal(statePayload.resolvedDecision.loopContract.blockers[0].kind, "termination-failed");
     assert.equal(statePayload.experimentEconomics.progress.exitState, "termination_failed");
 
     const next = await runCli(["next", "--cwd", dir, "--command", command]);
@@ -693,8 +699,8 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
     }
     await writeLedger(dir, records);
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
-    const doctor = await runCli(["doctor", "--cwd", dir, "--json"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(doctor.code, 0, doctor.stderr);
@@ -732,12 +738,12 @@ test("unknown packet runner rejection retains a termination-failed brake", async
     assert.equal(progress.termination.proven, false);
     assert.equal(progress.termination.reason, "runner_rejected_before_outcome");
 
-    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.resourcePreflight.canStart, false);
     assert.equal(payload.resourcePreflight.residue[0].status, "termination-failed");
-    assert.equal(payload.loopContract.canRunNextPacket, false);
+    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
   });
 });
 

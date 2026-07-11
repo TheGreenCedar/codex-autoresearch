@@ -29,6 +29,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     packetEnvModeFromArgs,
     parseMetricLines,
     publicState,
+    projectDoctorReadModel,
     redactCommandDisplay,
     redactEvidenceObject,
     revalidateRecipeCatalogProvenance,
@@ -46,7 +47,8 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
 
   async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
     const { sessionCwd, workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-    const state: CommandRecord = await publicState({ ...args, compact: false });
+    const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
+    const state: CommandRecord = await publicState({ ...args, compact: false, jsonFull: true });
     const primaryMetricName =
       args.metric_name ||
       args.metricName ||
@@ -158,7 +160,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
             scaffoldHealth: state.scaffoldHealth,
           },
           nextAction: "Run the next experiment, then log keep or discard with ASI.",
-          finalization: state.decisionEnvelope?.finalizationReadiness || null,
+          finalization: state.resolvedDecision?.finalizationPressure || null,
         }),
         continuationCommands(workDir),
       ),
@@ -307,7 +309,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
       state,
       git: {
         inside: inGit,
-        clean: state.decisionEnvelope?.dirtySourceDrift?.dirty === true ? false : true,
+        clean: state.sourceCleanliness?.sourceDirty !== true,
       },
       benchmarkContract: {
         ok: benchmarkContractChanged === false,
@@ -339,7 +341,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
       continuation: loopContinuation(workDir, continuationState, config, "doctor"),
     };
     if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
-    return result;
+    return projectDoctorReadModel(result, { full: jsonFull });
   }
 
   async function catalogTrustCheck(config: CommandRecord, sessionCwd: string) {
@@ -461,7 +463,7 @@ export function createDoctorCommandService(deps: DoctorCommandServiceDeps) {
     if (
       blocker &&
       shouldSuppressPreflightGateBlockerForCapsule(
-        { sessionDecisionCapsule: state.decisionEnvelope?.sessionDecisionCapsule },
+        { sessionDecisionCapsule: state.sessionDecisionCapsule },
         blocker,
       )
     ) {

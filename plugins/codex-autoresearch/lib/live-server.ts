@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { ServerResponse } from "node:http";
-import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
+import { DASHBOARD_PAYLOAD_VERSION } from "./types/dashboard-wire.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { DashboardLedgerBounds } from "./dashboard-ledger-bounds.js";

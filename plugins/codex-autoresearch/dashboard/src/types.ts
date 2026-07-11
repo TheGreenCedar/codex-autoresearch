@@ -2,7 +2,7 @@ export type MetricMode = "raw" | "weighted_cost";
 export type MetricDirection = "lower" | "higher";
 export type RunStatus = "keep" | "discard" | "crash" | "checks_failed" | "measure";
 
-export const DASHBOARD_PAYLOAD_VERSION = 1;
+export { DASHBOARD_PAYLOAD_VERSION } from "../../lib/types/dashboard-wire.js";
 
 export interface MetricWeights {
   time: number;
@@ -363,30 +363,7 @@ export interface DashboardSettingsInput {
   [key: string]: unknown;
 }
 
-export interface DashboardContext {
-  state: {
-    config: SessionConfig | Record<string, unknown>;
-    segment?: number;
-    current?: SessionRun[];
-    baseline?: number | null;
-    best?: number | null;
-    confidence?: number | null;
-    workDir?: string;
-    cwd?: string;
-    researchTruth?: ResearchTruthModel;
-    [key: string]: unknown;
-  };
-  settings?: DashboardSettingsInput;
-  commands?: Array<{ label?: string; command?: string; [key: string]: unknown }>;
-  setupPlan?: Record<string, unknown> | null;
-  guidedSetup?: Record<string, unknown> | null;
-  qualityGap?: QualityGapModel | null;
-  finalizePreview?: FinalizePreviewModel | null;
-  recipes?: Array<Record<string, unknown>>;
-  experimentMemory?: ExperimentMemoryModel | null;
-  drift?: Record<string, unknown> | null;
-  warnings?: unknown[];
-}
+export type { DashboardContext } from "../../lib/types/dashboard-wire.js";
 
 export interface DashboardMode {
   liveRefresh: boolean;

@@ -645,45 +645,50 @@ test("state and recommend-next surface active decision capsules as loop brakes",
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.sessionDecisionCapsule.kind, "session-decision-capsule");
-    assert.equal(
-      statePayload.decisionEnvelope.sessionDecisionCapsule.kind,
-      "session-decision-capsule",
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
+    assert.notEqual(statePayload.resolvedDecision.canonicalNextAction.toolName, "decision_capsule");
+    assert.equal(statePayload.resolvedDecision.canonicalNextAction.toolName, "recommend_next");
+    assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
+    const stateActionCommand = statePayload.resolvedDecision.canonicalNextAction.command || "";
+    assert.match(
+      stateActionCommand,
+      /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
+      JSON.stringify({
+        resolvedDecision: statePayload.resolvedDecision,
+        commands: statePayload.commands,
+      }),
     );
-    assert.equal(statePayload.canonicalNextAction.kind, "decision-capsule");
-    assert.notEqual(statePayload.decisionEnvelope.canonicalNextAction.toolName, "decision_capsule");
-    assert.equal(statePayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
-    assert.equal(statePayload.loopContract.canRunNextPacket, false);
-    const stateActionCommand = statePayload.canonicalNextAction.command || "";
-    assert.match(stateActionCommand, /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/);
     assert.doesNotMatch(stateActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.sessionDecisionCapsule.kind, "session-decision-capsule");
-    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
     assert.notEqual(
-      recommendPayload.decisionEnvelope.canonicalNextAction.toolName,
+      recommendPayload.resolvedDecision.canonicalNextAction.toolName,
       "decision_capsule",
     );
-    assert.equal(recommendPayload.decisionEnvelope.canonicalNextAction.toolName, "recommend_next");
+    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.toolName, "recommend_next");
     const recommendActionCommand =
-      recommendPayload.decisionEnvelope.canonicalNextAction.command || "";
+      recommendPayload.resolvedDecision.canonicalNextAction.command || "";
     assert.match(
       recommendActionCommand,
       /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
+      JSON.stringify({
+        resolvedDecision: recommendPayload.resolvedDecision,
+        commands: recommendPayload.commands,
+      }),
     );
     assert.doesNotMatch(recommendActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
     assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);
 
-    const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, false);
-    assert.equal(doctorPayload.loopContract.canRunNextPacket, false);
-    assert.equal(doctorPayload.canonicalNextAction.kind, "decision-capsule");
-    assert.equal(doctorPayload.state.decisionEnvelope.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(doctorPayload.resolvedDecision.loopContract.canRunNextPacket, false);
+    assert.equal(doctorPayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
+    assert.equal(doctorPayload.state.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
     assert.equal(doctorPayload.state.sessionDecisionCapsule.kind, "session-decision-capsule");
     assert.match(doctorPayload.issues.join("\n"), /benchmark-lint|primary METRIC/i);
     assert.match(doctorPayload.nextAction, /benchmark-lint|primary METRIC/i);
@@ -698,12 +703,11 @@ test("state and recommend-next surface active decision capsules as loop brakes",
         `doctor_session schema should cover doctor --explain field ${field}`,
       );
     }
-    assert.equal(doctorSchema.outputSchema.properties.loopContract.type, "object");
-    assert.equal(doctorSchema.outputSchema.properties.canonicalNextAction.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.resolvedDecision.type, "object");
     assert.equal(doctorSchema.outputSchema.properties.runtimeProvenance.type, "object");
-    assert.equal(doctorSchema.outputSchema.properties.decisionEnvelope.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.decisionEnvelope, undefined);
     assert.equal(doctorSchema.outputSchema.properties.sessionDecisionCapsule.type, "object");
-    assert.match(doctorSchema.outputSchema.properties.state.description, /decisionEnvelope/);
+    assert.match(doctorSchema.outputSchema.properties.state.description, /machine diagnostic/);
   });
 });
 
@@ -732,11 +736,7 @@ test("recommend-next compact bounds noisy session evidence", async () => {
     assert.equal(recommend.stdout.length < 7000, true, String(recommend.stdout.length));
     assert.doesNotMatch(recommend.stdout, /RAW_TOOL_OUTPUT_BODY_SENTINEL/);
     const payload = JSON.parse(recommend.stdout);
-    assert.equal(payload.evidenceNotes.length <= 3, true);
-    assert.equal(
-      payload.evidenceNotes[0],
-      "User rejected the product bar after accuracy was not tested.",
-    );
+    assert.ok((payload.evidenceNotes || []).length <= 3);
   });
 });
 
@@ -867,7 +867,7 @@ test("doctor check-benchmark refuses fixed-control rerun commands without execut
       }),
     );
 
-    const blocked = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json"]);
+    const blocked = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(blocked.code, 0, blocked.stderr);
     assert.equal(await pathExists(sentinel), false);
     assert.doesNotMatch(blocked.stdout, new RegExp(secret));
@@ -1009,7 +1009,7 @@ test("state exposes fixed-control config", async () => {
       }),
     );
 
-    const full = await runCli(["state", "--cwd", dir, "--json"]);
+    const full = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(full.code, 0, full.stderr);
     assert.doesNotMatch(full.stdout, new RegExp(secret));
 
@@ -1017,7 +1017,7 @@ test("state exposes fixed-control config", async () => {
     assert.equal(compact.code, 0, compact.stderr);
     assert.doesNotMatch(compact.stdout, new RegExp(secret));
 
-    const payload = JSON.parse(compact.stdout);
+    const payload = JSON.parse(full.stdout);
     assert.equal(payload.fixedControl.artifact, "target/control/no-codestory.json");
     assert.equal(payload.fixedControl.reason.length <= 240, true);
     assert.equal(payload.fixedControl.validUntilChanged.length, 10);

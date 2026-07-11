@@ -93,7 +93,7 @@ test("ledger-doctor --json returns bounded structured health for malformed JSONL
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, false);
-    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.parseErrors.length, 1);
     assert.equal(payload.ledgerHealth.parseErrors[0].line, 2);
     assert.equal(payload.ledgerHealth.bounded.truncated, false);
     assert.match(payload.ledgerHealth.warnings.join("\n"), /Malformed JSONL lines: 2/);
@@ -121,7 +121,7 @@ test("wrong-shaped ledger evidence stays diagnostic and blocks accepted state", 
     assert.equal(payload.code, "ledger_jsonl_invalid");
     assert.equal(payload.runs, 2);
     assert.equal(payload.kept, 0);
-    assert.equal(payload.ledgerHealth.parseErrorCount, 1);
+    assert.equal(payload.parseErrors.length, 1);
     assert.deepEqual(
       {
         file: payload.parseErrors[0].file,
@@ -158,7 +158,7 @@ test("doctor routes corrupt ledgers to ledger-doctor guidance", async () => {
       ].join("\n"),
     );
 
-    const result = await runCli(["doctor", "--cwd", dir, "--json"]);
+    const result = await runCli(["doctor", "--cwd", dir, "--json-full"]);
 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
@@ -284,18 +284,18 @@ test("state --json includes ledgerHealth and does not repair duplicates", async 
     const ledgerPath = path.join(dir, "autoresearch.jsonl");
     const before = await readFile(ledgerPath, "utf8");
 
-    const result = await runCli(["state", "--cwd", dir, "--json"]);
+    const result = await runCli(["state", "--cwd", dir, "--json-full"]);
 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ledgerHealth.ok, false);
     assert.deepEqual(payload.ledgerHealth.duplicateRuns, [1]);
     assert.match(payload.ledgerHealth.warnings.join("\n"), /Duplicate run numbers: 1/);
-    assert.equal(payload.decisionEnvelope.loopContract.canRunNextPacket, false);
-    assert.equal(payload.decisionEnvelope.canonicalNextAction.kind, "ledger-integrity");
-    assert.match(payload.decisionEnvelope.canonicalNextAction.command, /ledger-doctor\b.*--json/);
+    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
+    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "ledger-integrity");
+    assert.match(payload.resolvedDecision.canonicalNextAction.command, /ledger-doctor\b.*--json/);
     assert.match(
-      payload.decisionEnvelope.loopContract.blockers[0].reason,
+      payload.resolvedDecision.loopContract.blockers[0].reason,
       /Duplicate run numbers: 1/,
     );
 
@@ -319,7 +319,7 @@ test("state --json exposes bounded ledgerHealth for large gaps without repairing
     const ledgerPath = path.join(dir, "autoresearch.jsonl");
     const before = await readFile(ledgerPath, "utf8");
 
-    const result = await runCli(["state", "--cwd", dir, "--json"]);
+    const result = await runCli(["state", "--cwd", dir, "--json-full"]);
 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
@@ -354,7 +354,7 @@ test("state exposes missing product claim coverage for shippable retrieval work"
       ].join("\n") + "\n",
     );
 
-    const result = await runCli(["state", "--cwd", dir]);
+    const result = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const coverage = payload.productClaimCoverage;

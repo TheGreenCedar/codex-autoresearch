@@ -14,6 +14,8 @@ node scripts/autoresearch.mjs doctor --cwd <project> --explain
 
 Read the blocker and next command before the supporting detail. A normal result may send you to another experiment, but it may also ask you to repair a stale packet, separate dirty files, refresh the runtime, start a new segment, or preview finalization. Follow that action before reaching for `next` out of habit.
 
+State and doctor default to bounded, human-sized JSON. Pass `--json-full` only when a tool or maintainer needs the complete machine diagnostic. Bounded readouts expose the shared decision under `resolvedDecision`; older `decisionEnvelope` and `resumeAudit` fields are accepted as migration inputs but are not repeated as decision aliases.
+
 The main session files are `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md`. Research sessions also have an active folder under `autoresearch.research/<slug>/`. Read them before changing the project.
 
 For a compact handoff to another Codex session, use:

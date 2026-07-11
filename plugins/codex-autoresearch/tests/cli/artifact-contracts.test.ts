@@ -68,7 +68,7 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
     assert.equal(logPayload.experiment.artifacts.manifest, "out/manifest.json");
     assert.equal(logPayload.experiment.taskArtifacts.acceptedTasks[0].id, "task-1");
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(
@@ -220,7 +220,7 @@ test("external catalog recipes require trust and record provenance", async () =>
 
     catalog.recipes[0].benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
-    const doctor = await runCli(["doctor", "--cwd", dir]);
+    const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.catalogTrust.skipped, true);
@@ -229,7 +229,13 @@ test("external catalog recipes require trust and record provenance", async () =>
       false,
     );
 
-    const revalidatedDoctor = await runCli(["doctor", "--cwd", dir, "--revalidate-catalog"]);
+    const revalidatedDoctor = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--revalidate-catalog",
+      "--json-full",
+    ]);
     assert.equal(revalidatedDoctor.code, 0, revalidatedDoctor.stderr);
     const revalidatedPayload = JSON.parse(revalidatedDoctor.stdout);
     assert.equal(revalidatedPayload.ok, false);
@@ -261,11 +267,17 @@ test("doctor skips remote catalog requests unless revalidation is explicit", asy
       )}\n`,
     );
 
-    const defaultDoctor = await runCli(["doctor", "--cwd", dir]);
+    const defaultDoctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(defaultDoctor.code, 0, defaultDoctor.stderr);
     assert.equal(JSON.parse(defaultDoctor.stdout).catalogTrust.skipped, true);
 
-    const revalidated = await runCli(["doctor", "--cwd", dir, "--revalidate-catalog"]);
+    const revalidated = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--revalidate-catalog",
+      "--json-full",
+    ]);
     assert.equal(revalidated.code, 0, revalidated.stderr);
     const payload = JSON.parse(revalidated.stdout);
     assert.equal(payload.ok, false);
@@ -322,7 +334,7 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
     ]);
     assert.equal(logged.code, 0, logged.stderr);
     assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
@@ -393,7 +405,7 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
       ]);
       assert.equal(logged.code, 0, logged.stderr);
       assert.equal(JSON.parse(logged.stdout).experiment.artifacts.manifest, "<outside-workdir>");
-      const state = await runCli(["state", "--cwd", dir]);
+      const state = await runCli(["state", "--cwd", dir, "--json-full"]);
       assert.equal(state.code, 0, state.stderr);
       const statePayload = JSON.parse(state.stdout);
       assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 0);
@@ -446,7 +458,7 @@ test("accepted logged artifacts become current evidence in state registry", asyn
     ]);
     assert.equal(logged.code, 0, logged.stderr);
 
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.evidenceRegistry.currentArtifacts.length, 1);
@@ -804,6 +816,7 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
         "--command",
         command,
         "--check-benchmark",
+        "--json-full",
       ]);
       assert.equal(doctor.code, 0, doctor.stderr);
       const doctorPayload = JSON.parse(doctor.stdout);
@@ -819,6 +832,7 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
         "--check-benchmark",
         "--packet-env-mode",
         "inherit",
+        "--json-full",
       ]);
       assert.equal(inheritedDoctor.code, 0, inheritedDoctor.stderr);
       const inheritedDoctorPayload = JSON.parse(inheritedDoctor.stdout);
@@ -842,7 +856,7 @@ test("working directories outside cwd require per-command authorization", async 
       `${JSON.stringify({ workingDir: "../target" }, null, 2)}\n`,
     );
 
-    const blocked = await runCli(["state", "--cwd", session]);
+    const blocked = await runCli(["state", "--cwd", session, "--json-full"]);
     assert.notEqual(blocked.code, 0);
     assert.match(blocked.stderr, /--allow-outside-workdir/);
 
@@ -894,7 +908,7 @@ test("state separates development best from promotion-grade best", async () => {
       ]);
       assert.equal(logged.code, 0, logged.stderr);
     }
-    const state = await runCli(["state", "--cwd", dir]);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.best, 0.9);

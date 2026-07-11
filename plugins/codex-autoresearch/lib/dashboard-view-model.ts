@@ -14,7 +14,7 @@ import {
   dashboardReadOnlyCommand,
   stripDashboardGuidanceCommandFields,
 } from "./dashboard-command-safety.js";
-import type { DashboardContext } from "../dashboard/src/types.js";
+import { parseDashboardContext, type DashboardContext } from "./types/dashboard-wire.js";
 
 export { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 export { buildMissionControl } from "./dashboard-view-model/mission-control.js";
@@ -62,7 +62,7 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory = null,
     drift = null,
     warnings = [],
-  } = normalizeDashboardContext(context);
+  } = normalizeDashboardContext(parseDashboardContext(context));
   const current = (state.current || []) as RunLike[];
   const ledgerSummary = (state.dashboardLedgerSummary as LooseObject) || null;
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
@@ -460,13 +460,28 @@ function normalizeDecisionEnvelope({
   setupState = null,
   warnings = [],
   watchdog = null,
-}: LooseObject) {
+}: LooseObject): LooseObject {
   const supplied = firstRecord(
     state?.decisionEnvelope,
     state?.resumeAudit,
     settings.decisionEnvelope,
     settings.resumeAudit,
   );
+  const resolved = recordOrNull(state?.resolvedDecision);
+  if (resolved) {
+    return sanitizeDashboardDecisionEnvelope({
+      ...supplied,
+      canonicalNextAction: resolved.canonicalNextAction || supplied.canonicalNextAction || null,
+      loopContract: resolved.loopContract || supplied.loopContract || null,
+      runtimeProvenance: resolved.runtimeProvenance || supplied.runtimeProvenance || null,
+      runtimeAuthority: resolved.runtimeAuthority || supplied.runtimeAuthority || null,
+      finalizationReadiness:
+        resolved.finalizationPressure || supplied.finalizationReadiness || finalizePreview || null,
+      nextAction: resolved.nextAction || supplied.nextAction || "",
+      resolvedStatus: resolved.status || "unknown",
+      strongestBlocker: resolved.strongestBlocker || null,
+    });
+  }
   if (Object.keys(supplied).length) return sanitizeDashboardDecisionEnvelope(supplied);
 
   const current = Array.isArray(state?.current) ? state.current : [];

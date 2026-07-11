@@ -2,6 +2,8 @@ export type CommandShell = "bash" | "powershell";
 
 const BASH_SAFE_ARG = /^[A-Za-z0-9_./:@%+=,-]+$/;
 const POWERSHELL_SAFE_ARG = /^[A-Za-z0-9_./:@%+=,\\:-]+$/;
+const POWERSHELL_NATIVE_PREFIX = "& { $PSNativeCommandArgumentPassing = 'Legacy'; ";
+const POWERSHELL_NATIVE_SUFFIX = " }";
 
 export function defaultCommandShell(platform = process.platform): CommandShell {
   return platform === "win32" ? "powershell" : "bash";
@@ -35,9 +37,21 @@ export function renderShellCommand(
   const command =
     shell === "powershell" && args[0].startsWith("'") ? `& ${args.join(" ")}` : args.join(" ");
   if (shell === "powershell") {
-    return `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${command} }`;
+    return `${POWERSHELL_NATIVE_PREFIX}${command}${POWERSHELL_NATIVE_SUFFIX}`;
   }
   return command;
+}
+
+export function renderedPowerShellCommandBody(value: unknown): string | null {
+  const command = String(value || "").trim();
+  if (
+    !command.startsWith(POWERSHELL_NATIVE_PREFIX) ||
+    !command.endsWith(POWERSHELL_NATIVE_SUFFIX)
+  ) {
+    return null;
+  }
+  const body = command.slice(POWERSHELL_NATIVE_PREFIX.length, -POWERSHELL_NATIVE_SUFFIX.length);
+  return body.startsWith("& '") ? body.slice(2) : body;
 }
 
 function escapePowerShellNativeQuotes(text: string): string {
