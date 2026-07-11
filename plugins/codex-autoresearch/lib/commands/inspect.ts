@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "../types/json.js";
 import type { ShellRunResult } from "../runner.js";
 import { runShell } from "../runner.js";
 import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
@@ -6,7 +7,6 @@ import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import { currentState, finiteMetric } from "../session-core.js";
 import { parseMetricLines } from "../runner.js";
 
-type LooseObject = Record<string, any>;
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
 type BenchmarkCommandSource = {
   command: string;
@@ -26,26 +26,26 @@ const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 export interface InspectRuntime {
   fixedControlBlockForCommand?: (
     command: unknown,
-    config: LooseObject,
-    args?: LooseObject,
+    config: UnknownRecord,
+    args?: UnknownRecord,
   ) => FixedControlBlock | null;
   resolveBenchmarkCommand: (
-    args: LooseObject,
+    args: UnknownRecord,
     workDir: string,
-    config: LooseObject,
+    config: UnknownRecord,
   ) => Promise<BenchmarkCommandSource>;
 }
 
 export async function benchmarkLint(
-  args: LooseObject,
+  args: UnknownRecord,
   runtime: InspectRuntime,
-): Promise<LooseObject> {
+): Promise<UnknownRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const metricName = validateMetricName(
     args.metric_name || args.metricName || state.config.metricName || "metric",
   );
-  let sample = args.sample || "";
+  let sample = String(args.sample || "");
   let commandResult: InspectShellRunResult | null = null;
   const timeoutSeconds = numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
   if (!sample) {
@@ -123,7 +123,7 @@ export async function benchmarkLint(
     ok: issues.length === 0,
     workDir,
     metricName,
-    checkedCommand: commandResult?.command || args.command || "",
+    checkedCommand: commandResult?.command || String(args.command || ""),
     parsedMetrics,
     emitsPrimary,
     metricParsing,
@@ -148,18 +148,18 @@ export async function benchmarkLint(
 }
 
 async function benchmarkCommandSource(
-  args: LooseObject,
+  args: UnknownRecord,
   workDir: string,
-  config: LooseObject,
+  config: UnknownRecord,
   runtime: InspectRuntime,
 ): Promise<BenchmarkCommandSource> {
   return await runtime.resolveBenchmarkCommand(args, workDir, config);
 }
 
 export async function benchmarkInspect(
-  args: LooseObject,
+  args: UnknownRecord,
   runtime: InspectRuntime,
-): Promise<LooseObject> {
+): Promise<UnknownRecord> {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const command = String(args.command || "").trim();
@@ -255,7 +255,7 @@ export async function benchmarkInspect(
   };
 }
 
-export async function checksInspect(args: LooseObject): Promise<LooseObject> {
+export async function checksInspect(args: UnknownRecord): Promise<UnknownRecord> {
   const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
   const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
@@ -346,7 +346,14 @@ function blockedBenchmarkLint({
   separatorCommand,
   state,
   workDir,
-}: LooseObject): LooseObject {
+}: {
+  block: FixedControlBlock;
+  config: UnknownRecord;
+  metricName: string;
+  separatorCommand: boolean;
+  state: ReturnType<typeof currentState>;
+  workDir: string;
+}): UnknownRecord {
   const issue = block.issue || block.message || "Blocked.";
   const parsedMetrics = {};
   const researchIntegrity = buildResearchIntegrity({
@@ -402,7 +409,7 @@ function inspectionBase({
   hints,
   outputPreview,
   outputTruncated,
-}: LooseObject): LooseObject {
+}: UnknownRecord): UnknownRecord {
   return {
     ok,
     workDir,

@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "../types/json.js";
 import type { ProcessRunResult } from "../runner.js";
 import { runProcess, runShell, tailText } from "../runner.js";
 import { normalizeBoundedLaneRecommendation } from "../lane-briefs.js";
@@ -12,37 +13,39 @@ import { buildDashboardSettings } from "./dashboard.js";
 import { currentState } from "../session-core.js";
 import { appendJsonl, readJsonl } from "../session-records.js";
 
-type LooseObject = Record<string, any>;
-
 export interface LaneRunnerRuntime {
   assertNoDirtyPathsOutsideWriteScope: (workDir: string, writeScope: string[]) => Promise<void>;
   assertWriteScopeIntegrity: (
     workDir: string,
     writeScope: string[],
-    before: LooseObject,
+    before: UnknownRecord,
   ) => Promise<void>;
   buildParallelOrchestrationContext: (options: {
     workDir: string;
-    state: LooseObject;
-    config: LooseObject;
-    settings?: LooseObject;
-  }) => LooseObject;
+    state: UnknownRecord;
+    config: UnknownRecord;
+    settings?: UnknownRecord;
+  }) => UnknownRecord & { parallelLanes: UnknownRecord[] };
   commandLooksUnsafeForWriteScope: (command: string) => boolean;
-  latestLaneResults: (workDir: string, segment?: number | null) => LooseObject[];
+  latestLaneResults: (workDir: string, segment?: number | null) => UnknownRecord[];
   normalizeLaneMode: (value: unknown, fallback: string) => string;
-  normalizeParallelLane: (lane: LooseObject, index: number, config: LooseObject) => LooseObject;
+  normalizeParallelLane: (
+    lane: UnknownRecord,
+    index: number,
+    config: UnknownRecord,
+  ) => UnknownRecord;
   normalizeRelativePaths: (paths: unknown, optionName?: string) => string[];
   resolveLaneWorktree: (workDir: string, worktreePath: string) => Promise<string>;
   runShell?: typeof runShell;
   synthesizeLaneDecision: (options: {
     workDir: string;
-    laneResults: LooseObject[];
-    fallbackLane?: LooseObject | null;
-  }) => LooseObject;
-  writeScopeSnapshot: (workDir: string) => Promise<LooseObject>;
+    laneResults: UnknownRecord[];
+    fallbackLane?: UnknownRecord | null;
+  }) => UnknownRecord;
+  writeScopeSnapshot: (workDir: string) => Promise<UnknownRecord>;
 }
 
-export async function laneRunner(args: LooseObject, runtime: LaneRunnerRuntime) {
+export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime) {
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const settings = buildDashboardSettings(config);
@@ -56,9 +59,10 @@ export async function laneRunner(args: LooseObject, runtime: LaneRunnerRuntime) 
     args.lane_id || args.laneId || args.lane || lanes[0]?.id || "read-only-scout",
   );
   const lane =
-    lanes.find((candidate: LooseObject) => candidate.id === laneId || candidate.label === laneId) ||
-    runtime.normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
-  const mode = runtime.normalizeLaneMode(args.mode, lane.mode);
+    lanes.find(
+      (candidate: UnknownRecord) => candidate.id === laneId || candidate.label === laneId,
+    ) || runtime.normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
+  const mode = runtime.normalizeLaneMode(args.mode, String(lane.mode || "read_only_scout"));
   const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
   const command = String(args.command || "").trim();
   const humanApproval = boolOption(
@@ -132,12 +136,12 @@ export async function laneRunner(args: LooseObject, runtime: LaneRunnerRuntime) 
     mode === "read_only_scout" && command && !dryRun
       ? await hardenedScoutStatus(workDir, timeBudgetSeconds)
       : null;
-  let writeScopeBefore: LooseObject | null = null;
+  let writeScopeBefore: UnknownRecord | null = null;
   if (mode === "implementation" && !worktreePath && writeScope.length > 0 && command && !dryRun) {
     await runtime.assertNoDirtyPathsOutsideWriteScope(workDir, writeScope);
     writeScopeBefore = await runtime.writeScopeSnapshot(workDir);
   }
-  let commandResult: LooseObject | null = null;
+  let commandResult: UnknownRecord | null = null;
   if (command && !dryRun) {
     const result = scoutCommand
       ? await runHardenedScoutGit(scoutCommand, runCwd, timeBudgetSeconds)
@@ -157,7 +161,7 @@ export async function laneRunner(args: LooseObject, runtime: LaneRunnerRuntime) 
       ),
     };
     if (commandResult.terminationFailed) {
-      const pid = commandResult.termination?.pid;
+      const pid = (commandResult.termination as UnknownRecord | null)?.pid;
       const recovery = `Verify PID ${pid || "unknown"} and its descendants are absent, then remove only the retained progress marker before running another command.`;
       return {
         ok: false,
@@ -202,13 +206,14 @@ export async function laneRunner(args: LooseObject, runtime: LaneRunnerRuntime) 
     mode === "big_idea"
       ? normalizeBoundedLaneRecommendation({
           summary: explicitSummary,
-          recommendation: explicitRecommendation || lane.nextActionHint,
+          recommendation: explicitRecommendation || String(lane.nextActionHint || ""),
           evidence: args.evidence,
           risks: args.risks,
           fallbackSummary:
-            lane.brief?.objective || "Distant architecture hypothesis recorded for human review.",
+            String((lane.brief as UnknownRecord | undefined)?.objective || "") ||
+            "Distant architecture hypothesis recorded for human review.",
           fallbackRecommendation:
-            lane.nextActionHint ||
+            String(lane.nextActionHint || "") ||
             "Ask the operator to approve or reject this architecture direction before implementation.",
         })
       : null;

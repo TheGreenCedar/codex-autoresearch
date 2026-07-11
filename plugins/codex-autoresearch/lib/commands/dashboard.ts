@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "../types/json.js";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import {
@@ -24,7 +25,6 @@ import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
 import { createSessionReadCache } from "../session-core.js";
 
-type LooseObject = Record<string, any>;
 type DashboardCommandListOptions = {
   researchSlug?: string;
   scriptPath: string;
@@ -34,24 +34,33 @@ type DashboardCommandListOptions = {
 
 export interface DashboardRuntime {
   buildDriftReport?: typeof buildDriftReport;
-  dashboardCommands: (workDir: string, ...extra: unknown[]) => LooseObject[];
+  dashboardCommands: (workDir: string, ...extra: unknown[]) => UnknownRecord[];
   dashboardViewModel: (
     workDir: string,
-    config: LooseObject,
-    context?: LooseObject,
-  ) => Promise<LooseObject>;
-  serveAutoresearch: (options: LooseObject) => Promise<LooseObject>;
+    config: UnknownRecord,
+    context?: UnknownRecord,
+  ) => Promise<UnknownRecord>;
+  serveAutoresearch: (options: UnknownRecord) => Promise<{
+    debugLedger?: boolean;
+    port: number;
+    server: { on: (event: string, listener: () => void) => unknown };
+    url: string;
+    workDir: string;
+  }>;
   resolveWorkDir?: (value: unknown) => {
-    config: LooseObject;
+    config: UnknownRecord;
     sessionPaths: ReturnType<typeof resolveSessionPaths>;
     workDir: string;
   };
 }
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
-const liveDashboardServers = new Set<LooseObject>();
+const liveDashboardServers = new Set<unknown>();
 
-export function buildDashboardSettings(config: LooseObject, extra: LooseObject = {}): LooseObject {
+export function buildDashboardSettings(
+  config: UnknownRecord,
+  extra: UnknownRecord = {},
+): UnknownRecord {
   return {
     autonomyMode: config.autonomyMode || "guarded",
     checksPolicy: config.checksPolicy || "always",
@@ -67,7 +76,13 @@ export function operationProgress({
   startedAt,
   status = "completed",
   outputTail = "",
-}: LooseObject): LooseObject {
+}: {
+  label: string;
+  outputTail?: string;
+  stage: string;
+  startedAt: number;
+  status?: string;
+}): UnknownRecord {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   return {
     mode: "synchronous",
@@ -95,7 +110,7 @@ export function buildDashboardCommands({
   scriptPath,
   shellQuote,
   workDir,
-}: DashboardCommandListOptions): LooseObject[] {
+}: DashboardCommandListOptions): UnknownRecord[] {
   const cwd = shellQuote(workDir);
   const script = shellQuote(scriptPath);
   const slug = shellQuote(researchSlug);
@@ -139,7 +154,7 @@ export function buildDashboardCommands({
   ];
 }
 
-export async function exportDashboard(args: LooseObject, runtime: DashboardRuntime) {
+export async function exportDashboard(args: UnknownRecord, runtime: DashboardRuntime) {
   const startedAt = Date.now();
   const { workDir, config } = resolveDashboardWorkDir(args, runtime);
   emitProgress(args, "export", `reading session ledger from ${workDir}`);
@@ -219,7 +234,7 @@ export async function exportDashboard(args: LooseObject, runtime: DashboardRunti
   const summary = recordOrNull(viewModel.summary);
   const nextBestAction = recordOrNull(viewModel.nextBestAction);
   const readout = recordOrNull(viewModel.readout);
-  const result: LooseObject = {
+  const result: UnknownRecord = {
     ok: true,
     workDir,
     output,
@@ -235,7 +250,7 @@ export async function exportDashboard(args: LooseObject, runtime: DashboardRunti
   return result;
 }
 
-export async function serveDashboard(args: LooseObject, runtime: DashboardRuntime) {
+export async function serveDashboard(args: UnknownRecord, runtime: DashboardRuntime) {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
   const { workDir, sessionPaths } = resolveDashboardWorkDir(args, runtime);
@@ -243,7 +258,7 @@ export async function serveDashboard(args: LooseObject, runtime: DashboardRuntim
   const debugLedger = boolOption(args.debugLedger ?? args.debug_ledger, false);
   const liveReadCache = createSessionReadCache({ invalidateOnLedgerChange: true });
   let liveUrl = "";
-  let dashboardServerRegistry: LooseObject | null = null;
+  let dashboardServerRegistry: UnknownRecord | null = null;
   if (!args.port && debugLedger !== true) {
     const reusableRegistry = await findReusableServeRegistry(workDir, {
       expectedVersion: PLUGIN_VERSION,
@@ -251,11 +266,13 @@ export async function serveDashboard(args: LooseObject, runtime: DashboardRuntim
       debugLedger,
       sessionPaths,
     });
-    dashboardServerRegistry = reusableRegistry.available ? reusableRegistry : null;
+    dashboardServerRegistry = reusableRegistry.available
+      ? ({ ...reusableRegistry } as UnknownRecord)
+      : null;
     if (reusableRegistry.reusable) {
       return reusedServeDashboardResult({
         workDir,
-        lookup: reusableRegistry,
+        lookup: { ...reusableRegistry },
         startedAt,
       });
     }
@@ -303,7 +320,7 @@ export async function serveDashboard(args: LooseObject, runtime: DashboardRuntim
         viewModel: {},
       });
     },
-    viewModel: async (refreshContext: LooseObject = {}) => {
+    viewModel: async (refreshContext: UnknownRecord = {}) => {
       const { config } = resolveDashboardWorkDir(args, runtime);
       return runtime.dashboardViewModel(workDir, config, {
         deliveryMode: "live-server",
@@ -350,7 +367,10 @@ export async function serveDashboard(args: LooseObject, runtime: DashboardRuntim
     previous: registrySummary,
     timeoutMs: 1000,
   });
-  dashboardServerRegistry = mergeRegistryHealthSummary(registrySummary, dashboardHealth);
+  dashboardServerRegistry = mergeRegistryHealthSummary(
+    { ...registrySummary },
+    { ...dashboardHealth },
+  );
   serveResult.server.on("close", () => {
     liveDashboardServers.delete(serveResult.server);
   });
@@ -414,11 +434,13 @@ function reusedServeDashboardResult({
   startedAt,
 }: {
   workDir: string;
-  lookup: LooseObject;
+  lookup: Awaited<ReturnType<typeof findReusableServeRegistry>>;
   startedAt: number;
-}): LooseObject {
-  const url = String(lookup.dashboardUrl || lookup.health?.url || "");
-  const healthUrl = String(lookup.healthUrl || lookup.health?.healthUrl || "");
+}): UnknownRecord {
+  const health = recordOrNull(lookup.health);
+  const record = recordOrNull(lookup.record);
+  const url = String(lookup.dashboardUrl || health?.url || "");
+  const healthUrl = String(lookup.healthUrl || health?.healthUrl || "");
   return {
     ok: true,
     workDir,
@@ -428,7 +450,7 @@ function reusedServeDashboardResult({
     mode: "live",
     registryReused: true,
     detached: true,
-    pid: lookup.health?.pid ?? lookup.pid ?? null,
+    pid: health?.pid ?? lookup.pid ?? null,
     cwd: lookup.cwd || workDir,
     version: lookup.version || "",
     startedAt: lookup.startedAt || "",
@@ -436,7 +458,7 @@ function reusedServeDashboardResult({
     healthUrl,
     registryPath: lookup.registryPath || "",
     recoveryCommand: lookup.recoveryCommand || "",
-    dashboardHealth: lookup.health || null,
+    dashboardHealth: health,
     checkedAt: lookup.checkedAt || new Date().toISOString(),
     registry: {
       path: lookup.registryPath || "",
@@ -445,10 +467,10 @@ function reusedServeDashboardResult({
     },
     debugLedger: {
       enabled:
-        lookup.health?.dashboard?.debugLedger === true || lookup.record?.debugLedger === true,
+        recordOrNull(health?.dashboard)?.debugLedger === true || record?.debugLedger === true,
       endpoint: url ? new URL("autoresearch.jsonl", url).toString() : "",
       guidance:
-        lookup.record?.debugLedger === true
+        record?.debugLedger === true
           ? "Reused dashboard was started with --debug-ledger; raw ledger endpoint is available for local debugging."
           : "Raw ledger endpoint remains disabled on the reused dashboard; restart with --debug-ledger only for local debugging.",
     },
@@ -473,21 +495,21 @@ function reusedServeDashboardResult({
   };
 }
 
-function emitProgress(args: LooseObject, stage: string, message: string): void {
+function emitProgress(args: UnknownRecord, stage: string, message: string): void {
   if (args.progress !== true && args.progress_stderr !== true && args.progressStderr !== true) {
     return;
   }
   process.stderr.write(`[autoresearch:${stage}] ${message}\n`);
 }
 
-function recordOrNull(value: unknown): LooseObject | null {
+function recordOrNull(value: unknown): UnknownRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as LooseObject)
+    ? (value as UnknownRecord)
     : null;
 }
 
-function sanitizePublicShowcaseViewModel(value: LooseObject): LooseObject {
-  return sanitizePublicShowcaseValue(value) as LooseObject;
+function sanitizePublicShowcaseViewModel(value: UnknownRecord): UnknownRecord {
+  return sanitizePublicShowcaseValue(value) as UnknownRecord;
 }
 
 function sanitizePublicShowcaseValue(value: unknown): unknown {
@@ -497,8 +519,8 @@ function sanitizePublicShowcaseValue(value: unknown): unknown {
       .map((item) => sanitizePublicShowcaseValue(item));
   }
   if (!value || typeof value !== "object") return value;
-  const out: LooseObject = {};
-  for (const [key, child] of Object.entries(value as LooseObject)) {
+  const out: UnknownRecord = {};
+  for (const [key, child] of Object.entries(value as UnknownRecord)) {
     if (containsShowcaseOnlyWarning(child)) continue;
     out[key] = sanitizePublicShowcaseValue(child);
   }
@@ -511,7 +533,7 @@ function containsShowcaseOnlyWarning(value: unknown): boolean {
   }
   if (Array.isArray(value)) return value.some((item) => containsShowcaseOnlyWarning(item));
   if (!value || typeof value !== "object") return false;
-  return Object.values(value as LooseObject).some((item) => containsShowcaseOnlyWarning(item));
+  return Object.values(value as UnknownRecord).some((item) => containsShowcaseOnlyWarning(item));
 }
 
 async function dashboardServerRegistryStatus(workDir: string, expectedVersion: string) {
@@ -524,10 +546,10 @@ async function dashboardServerRegistryStatus(workDir: string, expectedVersion: s
       timeoutMs: 500,
     }),
   );
-  return mergeRegistryHealthSummary(previous, health);
+  return mergeRegistryHealthSummary({ ...previous }, { ...health });
 }
 
-function mergeRegistryHealthSummary(summary: LooseObject, health: LooseObject): LooseObject {
+function mergeRegistryHealthSummary(summary: UnknownRecord, health: UnknownRecord): UnknownRecord {
   const liveness = health.liveness === "alive" ? "alive" : health.liveness || "unknown";
   const stale =
     health.stale === false && liveness === "alive"
@@ -539,7 +561,7 @@ function mergeRegistryHealthSummary(summary: LooseObject, health: LooseObject): 
           : null;
   return {
     ...summary,
-    healthUrl: health.healthUrl || summary.record?.healthUrl || "",
+    healthUrl: health.healthUrl || recordOrNull(summary.record)?.healthUrl || "",
     checkedAt: new Date().toISOString(),
     expectedVersion: health.version || "",
     liveness,
@@ -551,7 +573,7 @@ function mergeRegistryHealthSummary(summary: LooseObject, health: LooseObject): 
   };
 }
 
-function unavailableRuntimeDrift(error: unknown): LooseObject {
+function unavailableRuntimeDrift(error: unknown): UnknownRecord {
   return {
     ok: null,
     status: "unavailable",
@@ -571,7 +593,7 @@ function resolveOutputInside(workDir: string, output?: unknown): string {
   return resolved.absolutePath;
 }
 
-function resolveDashboardWorkDir(args: LooseObject, runtime: DashboardRuntime) {
+function resolveDashboardWorkDir(args: UnknownRecord, runtime: DashboardRuntime) {
   const value = args.working_dir || args.cwd || "";
   return runtime.resolveWorkDir
     ? runtime.resolveWorkDir(value)

@@ -1,3 +1,4 @@
+import type { UnknownRecord } from "../types/json.js";
 import path from "node:path";
 import { readoutFallbackCommand } from "../action-metadata.js";
 import { boolOption, positiveIntegerOption } from "../cli/args.js";
@@ -9,11 +10,9 @@ import { resolvePackageRoot } from "../runtime-paths.js";
 import { parseSessionForensics } from "../session-forensics.js";
 import type { SessionDecisionCapsule } from "../session-decision-capsule.js";
 
-type LooseObject = Record<string, any>;
-
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
-export async function sessionForensics(args: LooseObject): Promise<LooseObject> {
+export async function sessionForensics(args: UnknownRecord): Promise<UnknownRecord> {
   const { workDir } = resolveAuthorizedWorkDir(args.working_dir || args.cwd);
   const apply = boolOption(args.apply, false);
   const dryRun = boolOption(args.dryRun, !apply);
@@ -50,7 +49,7 @@ export async function sessionForensics(args: LooseObject): Promise<LooseObject> 
     sourcePath: displaySessionJsonl,
   };
   const contextSignal = publicParsed.productSignals.find(
-    (signal: any) => signal.kind === "context_distillation_required",
+    (signal) => signal.kind === "context_distillation_required",
   );
   const decisionCapsule = publicParsed.decisionCapsule;
   const commands = sessionForensicsCommands({
@@ -182,26 +181,25 @@ function renderDecisionCapsuleCommandHint(
 }
 
 export function commandForDecisionCapsule(
-  decisionCapsule: LooseObject,
+  decisionCapsule: SessionDecisionCapsule | UnknownRecord,
   commands: Record<string, string>,
 ): string {
-  const triggeredBy: string[] = Array.isArray(decisionCapsule?.enforcement?.triggeredBy)
-    ? decisionCapsule.enforcement.triggeredBy.map((value: unknown) => String(value))
+  const capsule = decisionCapsule as unknown as UnknownRecord;
+  const enforcement = capsule.enforcement as UnknownRecord | undefined;
+  const triggeredBy: string[] = Array.isArray(enforcement?.triggeredBy)
+    ? enforcement.triggeredBy.map((value: unknown) => String(value))
     : [];
   if (triggeredBy.some((value) => /contextDistillation/i.test(value))) {
     return commands.applyForensics || commands.state;
   }
-  const rendered = renderCapsuleCommandHint(
-    decisionCapsule?.enforcement?.commandHint,
-    commands.state,
-  );
+  const rendered = renderCapsuleCommandHint(enforcement?.commandHint, commands.state);
   const safeRendered = readoutFallbackCommand(rendered);
   if (safeRendered) return safeRendered;
   if (triggeredBy.some((value) => /benchmarkContract/i.test(value))) return commands.benchmarkLint;
   if (triggeredBy.some((value) => /benchmarkOverfit|product|goal|metric/i.test(value))) {
     return commands.state;
   }
-  if (decisionCapsule?.enforcement?.mode === "bounded-next") return commands.state;
+  if (enforcement?.mode === "bounded-next") return commands.state;
   return commands.recommendNext || commands.state;
 }
 
@@ -220,11 +218,11 @@ function renderCapsuleCommandHint(commandHint: unknown, stateCommand: string): s
   return /<[^>]+>/.test(text) ? "" : text;
 }
 
-function compactSignals(signals: unknown, limit = 12): LooseObject[] {
+function compactSignals(signals: unknown, limit = 12): UnknownRecord[] {
   if (!Array.isArray(signals)) return [];
-  const byKind = new Map<string, LooseObject>();
+  const byKind = new Map<string, UnknownRecord>();
   for (const raw of signals) {
-    const signal = raw && typeof raw === "object" ? (raw as LooseObject) : {};
+    const signal = raw && typeof raw === "object" ? (raw as UnknownRecord) : {};
     const kind = String(signal.kind || "unknown");
     const existing = byKind.get(kind);
     if (existing) {

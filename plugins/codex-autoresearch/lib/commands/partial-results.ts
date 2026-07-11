@@ -19,17 +19,16 @@ import {
 import { appendJsonl } from "../session-records.js";
 import type { UnknownRecord } from "../types/json.js";
 
-type LooseObject = UnknownRecord;
-type LastRunPacket = LooseObject & { packetEvidence?: LooseObject };
+type LastRunPacket = UnknownRecord & { packetEvidence?: UnknownRecord };
 type SessionState = ReturnType<typeof currentState>;
 
 export interface PartialResultsIo {
-  assertFreshLastRunPacket: (workDir: string, packet: LooseObject) => Promise<void>;
+  assertFreshLastRunPacket: (workDir: string, packet: UnknownRecord) => Promise<void>;
   deleteLastRunPacket: (workDir: string) => Promise<unknown>;
   readLastRunPacket: (workDir: string) => Promise<LastRunPacket | null>;
 }
 
-export async function partialResultsCommand(args: LooseObject, io: PartialResultsIo) {
+export async function partialResultsCommand(args: UnknownRecord, io: PartialResultsIo) {
   const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const artifact = args.artifact ? String(args.artifact) : "";
@@ -111,7 +110,7 @@ function partialResultPacketFromArtifact({
   };
 }
 
-function lastRunConfigSnapshot(config: LooseObject = {}) {
+function lastRunConfigSnapshot(config: UnknownRecord = {}) {
   return {
     name: config.name || null,
     metricName: config.metricName || "metric",
@@ -132,7 +131,7 @@ async function recordPartialResultCandidate(
     state: SessionState;
     lastRun: LastRunPacket;
     candidate: PartialResultCandidate;
-    args: LooseObject;
+    args: UnknownRecord;
   },
   io: PartialResultsIo,
 ) {
@@ -149,7 +148,7 @@ async function recordPartialResultCandidate(
   });
   const evidenceClaim = buildPartialResultEvidenceClaim(candidate);
   const evidenceIndex = await mergeEvidenceClaims(workDir, researchSlug, [evidenceClaim]);
-  const experiment: LooseObject = {
+  const experiment: UnknownRecord = {
     run: state.results.length + 1,
     commit: "",
     metric,
