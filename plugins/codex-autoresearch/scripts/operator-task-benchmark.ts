@@ -185,10 +185,11 @@ const observationValidators: Record<
     }
   },
   "invalid-cli": (observations) => {
+    const diagnostic = String(observations.diagnostic || "");
     if (
       observations.exitCode !== 1 ||
-      !/^Unknown command: not-a-real-command\b/.test(String(observations.diagnostic || "")) ||
-      /\n\s+at\s/.test(String(observations.diagnostic || ""))
+      !/^Unknown command: not-a-real-command\b/.test(diagnostic) ||
+      diagnostic.split("\n").some((line) => line.trimStart().startsWith("at "))
     ) {
       failCase("invalid-cli", "Invalid public CLI input was not rejected with a diagnostic.");
     }

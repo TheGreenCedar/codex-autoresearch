@@ -269,8 +269,7 @@ function markdownAnchors(content: string): Set<string> {
   for (const line of content.split(/\r?\n/)) {
     const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
     if (!heading) continue;
-    const base = heading
-      .replace(/<[^>]+>/g, "")
+    const base = stripMarkupTags(heading)
       .toLowerCase()
       .replace(/[`*_~]/g, "")
       .replace(/[^\p{L}\p{N}\s-]/gu, "")
@@ -281,6 +280,21 @@ function markdownAnchors(content: string): Set<string> {
     anchors.add(count === 0 ? base : `${base}-${count}`);
   }
   return anchors;
+}
+
+function stripMarkupTags(value: string): string {
+  let result = "";
+  let insideTag = false;
+  for (const character of value) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">" && insideTag) {
+      insideTag = false;
+    } else if (!insideTag) {
+      result += character;
+    }
+  }
+  return result;
 }
 
 async function exists(file: string): Promise<boolean> {
