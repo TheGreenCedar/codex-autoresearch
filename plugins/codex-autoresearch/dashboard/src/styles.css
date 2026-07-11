@@ -2813,9 +2813,19 @@ p {
   }
 
   .tool-button {
+    min-height: 44px;
     width: 100%;
     max-width: 100%;
     white-space: normal;
+  }
+
+  .modal-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .chart-navigator input[type="range"] {
+    min-height: 44px;
   }
 
   .dashboard-toolbar .header-actions {
