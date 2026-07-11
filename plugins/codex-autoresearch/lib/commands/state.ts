@@ -1,4 +1,4 @@
-import type { UnknownRecord } from "../types/json.js";
+import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import { withCanonicalActionCommand } from "../action-metadata.js";
 import { readActiveProgressSnapshot } from "../active-progress-store.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
@@ -827,12 +827,6 @@ async function dashboardHealthForWorkDir(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function recordOrNull(value: unknown): UnknownRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
 }
 
 function recordOrEmpty(value: unknown): UnknownRecord {

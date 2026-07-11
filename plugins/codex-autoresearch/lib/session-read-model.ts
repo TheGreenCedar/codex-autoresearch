@@ -14,7 +14,11 @@ import { buildGoalContract } from "./goal-frame.js";
 import { planFailureRecoveryLanes } from "./lane-orchestration-controller.js";
 import { buildResourcePreflight, resourceBudgetFromConfig } from "./process-governor.js";
 import { STATUS_VALUES } from "./run-status.js";
-import { type UnknownRecord, unknownRecordOrEmpty } from "./types/json.js";
+import {
+  type UnknownRecord,
+  unknownRecordOrEmpty,
+  unknownRecordOrNull as recordOrNull,
+} from "./types/json.js";
 import { normalizeSessionState, type SessionState } from "./types/session.js";
 
 type ReadModelRecord = UnknownRecord;
@@ -1148,12 +1152,6 @@ function describeValue(value: unknown): string {
     stringValue(record.code) ||
     stringValue(record.kind)
   );
-}
-
-function recordOrNull(value: unknown): ReadModelRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as ReadModelRecord)
-    : null;
 }
 
 function finiteNumber(value: unknown): number | null {

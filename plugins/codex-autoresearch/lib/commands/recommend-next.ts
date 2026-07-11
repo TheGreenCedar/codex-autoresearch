@@ -1,4 +1,5 @@
 import { actionToolNameForKind, resolveActionCommand } from "../action-metadata.js";
+import { unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import {
   assertProjectionBudget,
   projectionBudget,
@@ -252,10 +253,6 @@ export function selectRecommendNextRuntimeAuthority({
 
 function copyIfProvided<T extends object>(target: T, key: string, value: unknown) {
   if (value !== undefined) (target as JsonObject)[key] = value;
-}
-
-function recordOrNull(value: unknown): JsonObject | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
 }
 
 function stringOrEmpty(value: unknown): string {

@@ -1,4 +1,5 @@
 import { firstSafeCommand } from "./safe-command-resolver.js";
+import { unknownRecordOrNull as recordOrNull } from "./types/json.js";
 
 export type PreflightStatus = "blocked" | "ready" | "unknown";
 
@@ -165,12 +166,6 @@ function warningDetails(value: unknown): Array<{ severity: string; message: stri
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(cleanString).filter(Boolean) : [];
-}
-
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function cleanString(value: unknown): string {

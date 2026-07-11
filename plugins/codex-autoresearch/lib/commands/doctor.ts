@@ -1,4 +1,4 @@
-import type { UnknownRecord } from "../types/json.js";
+import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import { withCanonicalActionCommand } from "../action-metadata.js";
 import {
   missingBenchmarkCommandMessage,
@@ -477,12 +477,6 @@ function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
   return arrayValue(recordOrEmpty(scaffoldHealth).checks).some(
     (check) => recordOrEmpty(check).severity === "blocker",
   );
-}
-
-function recordOrNull(value: unknown): UnknownRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
 }
 
 function recordOrEmpty(value: unknown): UnknownRecord {

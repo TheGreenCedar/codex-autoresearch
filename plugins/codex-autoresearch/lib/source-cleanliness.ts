@@ -1,4 +1,4 @@
-type LooseObject = Record<string, unknown>;
+import { unknownRecordOrNull as recordOrNull } from "./types/json.js";
 
 export interface SourceCleanliness {
   status: "clean" | "source-dirty" | "session-artifacts-dirty" | "unknown";
@@ -72,12 +72,6 @@ export function buildSourceCleanliness({
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map(stringValue).filter(Boolean);
-}
-
-function recordOrNull(value: unknown): LooseObject | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as LooseObject)
-    : null;
 }
 
 function stringValue(value: unknown): string {

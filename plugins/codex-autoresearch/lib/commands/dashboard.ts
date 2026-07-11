@@ -1,4 +1,4 @@
-import type { UnknownRecord } from "../types/json.js";
+import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import {
@@ -516,12 +516,6 @@ function emitProgress(args: UnknownRecord, stage: string, message: string): void
     return;
   }
   process.stderr.write(`[autoresearch:${stage}] ${message}\n`);
-}
-
-function recordOrNull(value: unknown): UnknownRecord | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
 }
 
 function sanitizePublicShowcaseViewModel(value: UnknownRecord): UnknownRecord {
