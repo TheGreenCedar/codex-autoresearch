@@ -1115,6 +1115,19 @@ test("resolved operational commands allow evaluator text as a trusted CLI argume
   assert.equal(resolved.command, command);
 });
 
+test("resolved operational command parsing is linear and fails closed on unterminated quotes", () => {
+  const command = `node "${"\\!".repeat(20_000)}`;
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
+        loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
+      },
+    },
+  });
+  assert.equal(resolved.command, "");
+});
+
 test("resolved operational commands accept only the trusted generated PowerShell wrapper", () => {
   const command = renderShellCommand(
     ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "next", "--cwd", "."],

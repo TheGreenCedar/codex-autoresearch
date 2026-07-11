@@ -1093,20 +1093,24 @@ function usesInterpreterEvaluationMode(command: string): boolean {
   const executable = invocation.executable.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
   const firstArgument = firstCommandArgument(invocation.args);
   if (/^(?:node|python(?:3)?|powershell|pwsh|(?:ba|z|k)?sh)(?:\.exe)?$/.test(executable || "")) {
-    return firstArgument.startsWith("-");
+    return !firstArgument || firstArgument.startsWith("-");
   }
   return (
     (executable === "cmd" || executable === "cmd.exe") &&
-    (firstArgument.startsWith("/") || firstArgument.startsWith("-"))
+    (!firstArgument || firstArgument.startsWith("/") || firstArgument.startsWith("-"))
   );
 }
 
-function firstCommandArgument(args: string): string {
-  const token = args.match(/^(?:"(?:\\.|[^"])*"|'(?:''|[^'])*'|\S+)/)?.[0] || "";
-  const quote = token[0];
-  return quote && quote === token[token.length - 1] && (quote === "'" || quote === '"')
-    ? token.slice(1, -1)
-    : token;
+function firstCommandArgument(args: string): string | null {
+  const text = args.trimStart();
+  if (!text) return null;
+  const quote = text[0];
+  if (quote === "'" || quote === '"') {
+    const end = text.indexOf(quote, 1);
+    return end < 0 ? null : text.slice(1, end);
+  }
+  const separator = text.search(/\s/);
+  return separator < 0 ? text : text.slice(0, separator);
 }
 
 function firstCommandInvocation(command: string): { executable: string; args: string } | null {
