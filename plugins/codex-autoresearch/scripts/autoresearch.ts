@@ -8,12 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { buildWatchdogSummary } from "../lib/watchdog-summary.js";
-import { verifyDashboardHealthSummary } from "../lib/dashboard-health.js";
 import { buildDecisionGuidanceContext } from "../lib/decision-guidance.js";
-import {
-  buildServeRegistryHealthInput,
-  readServeRegistry,
-} from "../lib/dashboard-server-registry.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES, type DashboardLedgerFold } from "../lib/dashboard-ledger.js";
@@ -32,7 +27,12 @@ import {
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { createDoctorCommandService } from "../lib/commands/doctor.js";
-import { createStateCommandService } from "../lib/commands/state.js";
+import {
+  compactPublicState as compactStateResponse,
+  finalizationPressureForWorkDir as buildFinalizationPressureForWorkDir,
+  publicState as readPublicState,
+  type StateRuntime,
+} from "../lib/commands/state.js";
 import {
   clearFilesWithWarnings,
   clearPendingLogTransactionWithWarning,
@@ -79,14 +79,11 @@ import { inspectRuntimeDrift } from "../lib/runtime-drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import { createCoalescingProgressWriter } from "../lib/active-progress-writer.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
-import { buildTerminalReport } from "../lib/terminal-report.js";
 import {
-  buildCheapFinalizationPressure,
   buildSessionReadModel,
   buildSessionReadModelState,
   projectDoctorReadModel,
   resolveSessionDecision,
-  statusCountsFromState,
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../lib/loop-governance.js";
@@ -114,7 +111,6 @@ import {
   artifactEvidenceList,
   artifactList,
   defaultEvidenceStatusForRun,
-  isAcceptedCurrentRun,
 } from "../lib/evidence-registry.js";
 import { isPathInside, resolvePathInsideRootSync } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
@@ -122,7 +118,6 @@ import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { displayGitPath, parseNulPathList, parsePorcelainV1Z } from "../lib/git-paths.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
 import {
-  fixedControlStateSummary,
   fixedControlViolationForCommand,
   fixedControlViolationSummary,
   normalizeFixedControlConfig,
@@ -333,66 +328,12 @@ const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const EMPTY_COMMIT_PATHS_WARNING_CODE = "empty_commit_paths_in_git_repo";
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 
-const stateCommandService = createStateCommandService({
-  analyzeExperimentEconomics,
-  analyzeLedgerHealth,
-  analyzeWorkflowFriction,
-  boolOption,
-  buildCheapFinalizationPressure,
-  buildDecisionEnvelope,
-  buildFinalizePreview,
-  buildLaneLifecycle,
-  buildParallelOrchestrationContext,
-  buildResearchIntegrity,
-  buildScaffoldHealth,
-  buildServeRegistryHealthInput,
-  buildSessionReadModel,
-  buildSessionReadModelState,
-  buildSourceCleanliness,
-  buildTerminalReport,
-  classifyPacketDiagnostics,
-  commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
-  continuationCommands,
-  createSessionReadCache,
-  currentQualityGapSummary,
-  dashboardCommands,
-  dashboardSettings,
-  decisionGuidance,
-  discoverLastRunPartialResults,
-  errorMessage,
-  fixedControlStateSummary,
-  isAcceptedCurrentRun,
-  iterationLimitInfo,
-  lastRunPacketFreshness,
-  listBuiltInRecipes,
-  loadSessionRecords,
-  loadSessionState,
-  loopContinuation,
-  operatorWarningsForWorkDir,
-  pendingLogTransactionCode: PENDING_LOG_TRANSACTION_CODE,
-  pluginRoot: PLUGIN_ROOT,
-  pluginVersion: PLUGIN_VERSION,
-  readActiveProgressSnapshot,
-  readLastRunPacket,
-  readLedgerRecordsTolerant,
-  readServeRegistry,
-  recommendPortfolioDirection,
-  redactCommandDisplay,
-  redactEvidenceObject,
-  replacementNextCommandForLastRun,
-  resolveWorkDir,
-  runtimeProvenance,
-  statusCountsFromState,
-  verifyDashboardHealthSummary,
-  withCanonicalActionCommand,
-  withResolvedSessionDecision,
-});
 async function publicState(args: LooseObject): Promise<LooseObject> {
-  return await stateCommandService.publicState(args);
+  return await readPublicState(args, stateRuntime());
 }
 
 function compactPublicState(state: LooseObject): LooseObject {
-  return stateCommandService.compactPublicState(state);
+  return compactStateResponse(state);
 }
 
 async function finalizationPressureForWorkDir(args: {
@@ -401,7 +342,27 @@ async function finalizationPressureForWorkDir(args: {
   qualityGap: LooseObject | null;
   warningDetails: LooseObject[];
 }): Promise<LooseObject> {
-  return await stateCommandService.finalizationPressureForWorkDir(args);
+  return await buildFinalizationPressureForWorkDir(args, stateRuntime());
+}
+
+function stateRuntime(): StateRuntime {
+  return {
+    buildFinalizePreview,
+    buildParallelOrchestrationContext,
+    commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY,
+    dashboardCommands,
+    decisionGuidance,
+    discoverLastRunPartialResults,
+    lastRunPacketFreshness,
+    operatorWarningsForWorkDir,
+    pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
+    readActiveProgressSnapshot,
+    readLastRunPacket,
+    replacementNextCommandForLastRun,
+    runtimeProvenance,
+    withCanonicalActionCommand,
+  };
 }
 
 const doctorCommandService = createDoctorCommandService({

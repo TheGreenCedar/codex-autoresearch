@@ -1,5 +1,40 @@
 import type { UnknownRecord } from "../types/json.js";
-import { projectFullState, projectStateReadModel } from "../session-read-model.js";
+import {
+  buildCheapFinalizationPressure,
+  buildSessionReadModel,
+  buildSessionReadModelState,
+  projectFullState,
+  projectStateReadModel,
+  statusCountsFromState,
+  withResolvedSessionDecision,
+} from "../session-read-model.js";
+import { analyzeExperimentEconomics } from "../experiment-economics.js";
+import { analyzeLedgerHealth, readLedgerRecordsTolerant } from "../ledger-health.js";
+import { analyzeWorkflowFriction } from "../workflow-friction.js";
+import { boolOption } from "../cli/args.js";
+import {
+  buildDecisionEnvelope,
+  createSessionReadCache,
+  iterationLimitInfo,
+  loadSessionRecords,
+  loadSessionState,
+} from "../session-core.js";
+import { isAcceptedCurrentRun } from "../evidence-registry.js";
+import { buildLaneLifecycle } from "../lane-lifecycle.js";
+import { buildScaffoldHealth, buildResearchIntegrity } from "../truth-signals.js";
+import { buildServeRegistryHealthInput, readServeRegistry } from "../dashboard-server-registry.js";
+import { buildSourceCleanliness } from "../source-cleanliness.js";
+import { buildTerminalReport } from "../terminal-report.js";
+import { classifyPacketDiagnostics } from "../packet-diagnostics.js";
+import { currentQualityGapSummary } from "../research-gaps.js";
+import { buildDashboardSettings } from "./dashboard.js";
+import { continuationCommands, loopContinuation } from "./continuation.js";
+import { fixedControlStateSummary } from "../fixed-control.js";
+import { listBuiltInRecipes } from "../recipes.js";
+import { recommendPortfolioDirection } from "../portfolio-advisor.js";
+import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
+import { verifyDashboardHealthSummary } from "../dashboard-health.js";
+import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 
 export interface CompactStateBuilderInput extends UnknownRecord {
   workDir: string;
@@ -22,367 +57,349 @@ function decisionSetupState(state: CommandRecord): CommandRecord | null {
 
 type CommandRecord = UnknownRecord & Record<string, any>;
 
-export type StateCommandServiceDeps = Record<string, any>;
+export interface StateRuntime {
+  buildFinalizePreview: (args: CommandRecord) => Promise<CommandRecord>;
+  buildParallelOrchestrationContext: (args: any) => any;
+  commandExecutionBoundary: CommandRecord;
+  dashboardCommands: (workDir: string) => CommandRecord[];
+  decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
+  discoverLastRunPartialResults: (workDir: string, state: any, lastRun: any) => Promise<any>;
+  lastRunPacketFreshness: (workDir: string, lastRun: CommandRecord) => Promise<CommandRecord>;
+  operatorWarningsForWorkDir: (workDir: string, state: CommandRecord) => Promise<CommandRecord[]>;
+  pluginRoot: string;
+  pluginVersion: string;
+  readActiveProgressSnapshot: (
+    workDir: string,
+    config?: CommandRecord,
+  ) => Promise<CommandRecord | null>;
+  readLastRunPacket: (workDir: string) => Promise<CommandRecord | null>;
+  replacementNextCommandForLastRun: (
+    workDir: string,
+    lastRun: CommandRecord | null,
+  ) => Promise<string>;
+  runtimeProvenance: () => CommandRecord;
+  withCanonicalActionCommand: (envelope: CommandRecord, commands: unknown) => CommandRecord;
+}
 
-export function createStateCommandService(deps: StateCommandServiceDeps) {
+export async function publicState(
+  args: CommandRecord,
+  runtime: StateRuntime,
+): Promise<CommandRecord> {
   const {
-    analyzeExperimentEconomics,
-    analyzeLedgerHealth,
-    analyzeWorkflowFriction,
-    boolOption,
-    buildCheapFinalizationPressure,
-    buildDecisionEnvelope,
-    buildFinalizePreview,
-    buildLaneLifecycle,
     buildParallelOrchestrationContext,
-    buildScaffoldHealth,
-    buildServeRegistryHealthInput,
-    buildSessionReadModel,
-    buildSessionReadModelState,
-    buildSourceCleanliness,
-    buildResearchIntegrity,
-    buildTerminalReport,
-    classifyPacketDiagnostics,
-    continuationCommands,
-    createSessionReadCache,
-    currentQualityGapSummary,
     dashboardCommands,
-    dashboardSettings,
     decisionGuidance,
     discoverLastRunPartialResults,
-    errorMessage,
-    fixedControlStateSummary,
-    isAcceptedCurrentRun,
-    iterationLimitInfo,
     lastRunPacketFreshness,
-    listBuiltInRecipes,
-    loadSessionRecords,
-    loadSessionState,
-    loopContinuation,
     operatorWarningsForWorkDir,
     readActiveProgressSnapshot,
     readLastRunPacket,
-    readLedgerRecordsTolerant,
-    readServeRegistry,
-    recommendPortfolioDirection,
-    redactCommandDisplay,
-    redactEvidenceObject,
     replacementNextCommandForLastRun,
-    resolveWorkDir,
     runtimeProvenance,
-    statusCountsFromState,
-    verifyDashboardHealthSummary,
     withCanonicalActionCommand,
-  } = deps;
-  const COMMAND_EXECUTION_BOUNDARY = deps.commandExecutionBoundary;
-  const PLUGIN_ROOT = deps.pluginRoot;
-  const PLUGIN_VERSION = deps.pluginVersion;
+  } = runtime;
+  const COMMAND_EXECUTION_BOUNDARY = runtime.commandExecutionBoundary;
+  const PLUGIN_ROOT = runtime.pluginRoot;
+  const PLUGIN_VERSION = runtime.pluginVersion;
 
-  async function publicState(args: CommandRecord): Promise<CommandRecord> {
-    const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-    const compact = boolOption(args.compact, false);
-    const report = boolOption(args.report, false);
-    const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
-    const bounded = boolOption(args.bounded, false);
-    const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
-    const readCache = args.readCache || createSessionReadCache();
-    if (compact || report) {
-      let compactState: CommandRecord;
-      try {
-        compactState = await publicCompactState({
-          workDir,
-          config,
-          codexGoalObjective,
-          readCache,
-        });
-      } catch (error) {
-        if (!isStrictLedgerParseError(error)) throw error;
-        compactState = repairFirstStateForInvalidLedger({
-          workDir,
-          config,
-          codexGoalObjective,
-          error,
-          compact: true,
-        });
-      }
-      if (!report) return compactState;
-      const response: CommandRecord = {
-        ok: compactState.ok !== false,
-        workDir,
-        report: buildTerminalReport(compactState),
-      };
-      if (compact) response.compactState = compactState;
-      return response;
-    }
-
-    let state: ReturnType<typeof loadSessionState>;
-    let records: ReturnType<typeof loadSessionRecords>;
+  const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const compact = boolOption(args.compact, false);
+  const report = boolOption(args.report, false);
+  const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
+  const bounded = boolOption(args.bounded, false);
+  const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
+  const readCache = args.readCache || createSessionReadCache();
+  if (compact || report) {
+    let compactState: CommandRecord;
     try {
-      state = loadSessionState(workDir, readCache);
-      records = loadSessionRecords(workDir, readCache);
+      compactState = await publicCompactState(
+        { workDir, config, codexGoalObjective, readCache },
+        runtime,
+      );
     } catch (error) {
       if (!isStrictLedgerParseError(error)) throw error;
-      const repairState = repairFirstStateForInvalidLedger({
-        workDir,
-        config,
-        codexGoalObjective,
-        error,
-        compact: false,
-      });
-      return jsonFull || !bounded
-        ? projectFullState(repairState)
-        : projectStateReadModel(repairState, "default");
+      compactState = repairFirstStateForInvalidLedger(
+        { workDir, config, codexGoalObjective, error, compact: true },
+        runtime,
+      );
     }
-    const ledgerHealth = analyzeLedgerHealth(records);
-    const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
-    const researchIntegrity = buildResearchIntegrity({ state, config });
-    const warningDetails = await operatorWarningsForWorkDir(workDir, state);
-    const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-    const activeProgress = await readActiveProgressSnapshot(workDir, config);
-    const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
-    const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
-    const qualityGap = await currentQualityGapSummary(workDir);
-    const finalization = await finalizationPressureForWorkDir({
+    if (!report) return compactState;
+    const response: CommandRecord = {
+      ok: compactState.ok !== false,
       workDir,
-      state,
-      qualityGap,
-      warningDetails,
-    });
-    const settings = dashboardSettings(config);
-    const orchestration = buildParallelOrchestrationContext({
-      workDir,
-      state,
-      config,
-      settings,
-      records,
-    });
-    const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-    const laneLifecycle = buildLaneLifecycle({
-      state,
-      records,
-      fanoutPlan,
-      parallelLanes,
-      laneResults: orchestration.laneResults,
-      workDir,
-      pluginRoot: PLUGIN_ROOT,
-    });
-    const packetDiagnostics = lastRun
-      ? classifyPacketDiagnostics({
-          packetEvidence: lastRun.packetEvidence || {},
-          run: lastRun.run || {},
-          decision: lastRun.decision || {},
-          metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
-          metricName: state.config.metricName,
-          command: continuationCommands(workDir).partialResults,
-        })
-      : classifyPacketDiagnostics();
-    const currentRuntimeProvenance = runtimeProvenance();
-    const dashboardHealth = await dashboardHealthForWorkDir(workDir);
-    const sourceCleanliness = buildSourceCleanliness({ warningDetails });
-    const guidance = await decisionGuidance({
-      workDir,
-      config,
-      state,
-      scaffoldHealth,
-      warningDetails,
-    });
-    const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
-    const publicPreflight = publicCommandPayload(guidance.preflight);
-    const stateWithQualityGap = {
-      ...buildSessionReadModelState({
-        state,
-        qualityGap,
-        laneLifecycle,
-        packetDiagnostics,
-        runtimeProvenance: currentRuntimeProvenance,
-        runtimeDriftSummary: guidance.runtimeDriftSummary,
-        dashboardHealth,
-        sourceCleanliness,
-        gateQuality: guidance.gateQuality,
-        preflight: publicPreflight,
-      }),
-      runtimeAuthority: guidance.runtimeAuthority,
-      ledgerHealth,
+      report: buildTerminalReport(compactState),
     };
-    const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
-      id: recipe.id,
-      title: recipe.title,
-      tags: recipe.tags || [],
-    }));
-    const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
-    const workflowFriction = analyzeWorkflowFriction({
-      state: stateWithQualityGap,
-      lastRun,
-      warningDetails,
-      recipes: recipeSummaries,
-    });
-    const experimentEconomics = analyzeExperimentEconomics({
-      state: stateWithQualityGap,
-      lastRun,
-      progress:
-        activeProgress ||
-        (await readActiveProgressSnapshot(workDir, config)) ||
-        lastRun?.packetEvidence?.progressSnapshot ||
-        null,
-    });
-    const readModel = buildSessionReadModel({
-      workDir,
-      config,
-      state,
-      records,
-      codexGoalObjective,
-      parallelLanes,
-      workflowFriction,
-      finalization,
-      commands: continuationCommands(workDir),
-      processProgress: activeProgress,
-      qualityGap,
-      laneLifecycle,
-      packetDiagnostics,
-      runtimeProvenance: currentRuntimeProvenance,
-      runtimeDriftSummary: guidance.runtimeDriftSummary,
-      dashboardHealth,
-      sourceCleanliness,
-      gateQuality: guidance.gateQuality,
-      preflight: publicPreflight,
-    });
-    const controlPlane = readModel.controlPlane;
-    const statusCounts = readModel.statusCounts;
-    const continuation = loopContinuation(workDir, state, config, "state");
-    const stateCommands = {
-      ...continuation.commands,
-      ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
-    };
-    const decisionInput = {
-      state: {
-        ...stateWithQualityGap,
-        ...controlPlane,
-        limit: iterationLimitInfo(state, config),
-      },
-      nextAction: continuation.nextAction,
-      lastRunFreshness,
-      warningDetails,
-      scaffoldHealth,
-      researchIntegrity,
-      qualityGap,
-      finalization,
-      experimentEconomics,
-      salvageCandidates: partialResults.candidates,
-      workflowFriction,
-      experimentMemory: memory,
-      setupState: decisionSetupState(state),
-      watchdog: watchdogSummary,
-    };
-    const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-    const portfolioRecommendation =
-      preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-        ? null
-        : recommendPortfolioDirection({
-            runtimeDrift: guidance.runtimeDriftSummary,
-            gateQuality: guidance.gateQuality,
-            preflight: publicPreflight,
-            laneLifecycle,
-            laneResults: laneLifecycle.latestResults,
-            packetDiagnostics,
-            experimentMemory: memory,
-            best: state.best,
-            current: state.current,
-          });
-    const decisionEnvelope = withCanonicalActionCommand(
-      portfolioRecommendation
-        ? buildDecisionEnvelope({
-            ...decisionInput,
-            state: { ...decisionInput.state, portfolioRecommendation },
-          })
-        : preliminaryDecisionEnvelope,
-      stateCommands,
+    if (compact) response.compactState = compactState;
+    return response;
+  }
+
+  let state: ReturnType<typeof loadSessionState>;
+  let records: ReturnType<typeof loadSessionRecords>;
+  try {
+    state = loadSessionState(workDir, readCache);
+    records = loadSessionRecords(workDir, readCache);
+  } catch (error) {
+    if (!isStrictLedgerParseError(error)) throw error;
+    const repairState = repairFirstStateForInvalidLedger(
+      { workDir, config, codexGoalObjective, error, compact: false },
+      runtime,
     );
-    const resolvedReadModel = deps.withResolvedSessionDecision(readModel, {
-      state: {
-        decisionEnvelope,
-        blockers: decisionEnvelope.loopContract?.blockers || [],
-      },
-      decisionEnvelope,
-      commands: stateCommands,
-      runtimeProvenance: currentRuntimeProvenance,
-      finalization,
-    });
-    const fullState = {
-      ok: true,
-      workDir,
-      config: publicSessionConfig(state.config),
-      segment: state.segment,
-      runs: state.current.length,
-      totalRuns: state.results.length,
-      kept: statusCounts.keep,
-      discarded: statusCounts.discard,
-      measured: statusCounts.measure,
-      crashed: statusCounts.crash,
-      checksFailed: statusCounts.checks_failed,
-      baseline: state.baseline,
-      best: state.best,
-      historicalBest: state.historicalBest,
-      development: state.development,
-      promotion: state.promotion,
-      evidenceRegistry: state.evidenceRegistry,
-      productClaimCoverage: state.productClaimCoverage,
-      sessionDecisionCapsule: state.sessionDecisionCapsule || null,
-      confidence: state.confidence,
-      scaffoldHealth,
-      researchIntegrity,
-      runtimeProvenance: currentRuntimeProvenance,
-      runtimeDriftSummary: guidance.runtimeDriftSummary,
-      runtimeAuthority: guidance.runtimeAuthority,
-      dashboardHealth,
-      sourceCleanliness,
-      ledgerHealth,
-      gateQuality: guidance.gateQuality,
-      fixedControl: fixedControlStateSummary(config.fixedControl),
-      commandAuthority: publicCommandAuthority,
-      preflight: publicPreflight,
-      limit: iterationLimitInfo(state, config),
-      settings: {
-        autonomyMode: config.autonomyMode || "guarded",
-        checksPolicy: config.checksPolicy || "always",
-        keepPolicy: config.keepPolicy || "primary-only",
-        dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
-        commitPaths: config.commitPaths || [],
-      },
-      commands: dashboardCommands(workDir),
-      warnings: warningDetails.map((warning: any) => warning.message),
-      warningDetails,
-      fanoutPlan,
-      fanoutProvenance,
-      parallelLanes,
+    return jsonFull || !bounded
+      ? projectFullState(repairState)
+      : projectStateReadModel(repairState, "default");
+  }
+  const ledgerHealth = analyzeLedgerHealth(records);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
+  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
+  const qualityGap = await currentQualityGapSummary(workDir);
+  const finalization = await finalizationPressureForWorkDir(
+    { workDir, state, qualityGap, warningDetails },
+    runtime,
+  );
+  const settings = buildDashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
+    records,
+  });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records,
+    fanoutPlan,
+    parallelLanes,
+    laneResults: orchestration.laneResults,
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance();
+  const dashboardHealth = await dashboardHealthForWorkDir(workDir, PLUGIN_VERSION);
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+  });
+  const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
+  const publicPreflight = publicCommandPayload(guidance.preflight);
+  const stateWithQualityGap = {
+    ...buildSessionReadModelState({
+      state,
+      qualityGap,
       laneLifecycle,
       packetDiagnostics,
-      metricSemanticsWarning: state.metricSemanticsWarning || null,
-      commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
-      portfolioRecommendation,
-      finalizationPressure: finalization,
-      qualityRound: decisionEnvelope.qualityRound || null,
+      runtimeProvenance: currentRuntimeProvenance,
+      runtimeDriftSummary: guidance.runtimeDriftSummary,
+      dashboardHealth,
+      sourceCleanliness,
+      gateQuality: guidance.gateQuality,
+      preflight: publicPreflight,
+    }),
+    runtimeAuthority: guidance.runtimeAuthority,
+    ledgerHealth,
+  };
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails,
+    recipes: recipeSummaries,
+  });
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress:
+      activeProgress ||
+      (await readActiveProgressSnapshot(workDir, config)) ||
+      lastRun?.packetEvidence?.progressSnapshot ||
+      null,
+  });
+  const readModel = buildSessionReadModel({
+    workDir,
+    config,
+    state,
+    records,
+    codexGoalObjective,
+    parallelLanes,
+    workflowFriction,
+    finalization,
+    commands: continuationCommands(workDir),
+    processProgress: activeProgress,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: publicPreflight,
+  });
+  const controlPlane = readModel.controlPlane;
+  const statusCounts = readModel.statusCounts;
+  const continuation = loopContinuation(workDir, state, config, "state");
+  const stateCommands = {
+    ...continuation.commands,
+    ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
+  };
+  const decisionInput = {
+    state: {
+      ...stateWithQualityGap,
       ...controlPlane,
-      watchdogSummary,
-      memory,
-      experimentEconomics,
-      partialResults,
-      workflowFriction,
-      continuation,
-      resolvedDecision: resolvedReadModel.resolvedDecision,
-      resumeAudit: decisionEnvelope,
+      limit: iterationLimitInfo(state, config),
+    },
+    nextAction: continuation.nextAction,
+    lastRunFreshness,
+    warningDetails,
+    scaffoldHealth,
+    researchIntegrity,
+    qualityGap,
+    finalization,
+    experimentEconomics,
+    salvageCandidates: partialResults.candidates,
+    workflowFriction,
+    experimentMemory: memory,
+    setupState: decisionSetupState(state),
+    watchdog: watchdogSummary,
+  };
+  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
+  const portfolioRecommendation =
+    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
+      ? null
+      : recommendPortfolioDirection({
+          runtimeDrift: guidance.runtimeDriftSummary,
+          gateQuality: guidance.gateQuality,
+          preflight: publicPreflight,
+          laneLifecycle,
+          laneResults: laneLifecycle.latestResults,
+          packetDiagnostics,
+          experimentMemory: memory,
+          best: state.best,
+          current: state.current,
+        });
+  const decisionEnvelope = withCanonicalActionCommand(
+    portfolioRecommendation
+      ? buildDecisionEnvelope({
+          ...decisionInput,
+          state: { ...decisionInput.state, portfolioRecommendation },
+        })
+      : preliminaryDecisionEnvelope,
+    stateCommands,
+  );
+  const resolvedReadModel = withResolvedSessionDecision(readModel, {
+    state: {
       decisionEnvelope,
-    };
-    if (compact) return compactPublicState(fullState);
-    return jsonFull || !bounded
-      ? projectFullState(fullState)
-      : projectStateReadModel(fullState, "default");
-  }
+      blockers: decisionEnvelope.loopContract?.blockers || [],
+    },
+    decisionEnvelope,
+    commands: stateCommands,
+    runtimeProvenance: currentRuntimeProvenance,
+    finalization,
+  });
+  const fullState = {
+    ok: true,
+    workDir,
+    config: publicSessionConfig(state.config),
+    segment: state.segment,
+    runs: state.current.length,
+    totalRuns: state.results.length,
+    kept: statusCounts.keep,
+    discarded: statusCounts.discard,
+    measured: statusCounts.measure,
+    crashed: statusCounts.crash,
+    checksFailed: statusCounts.checks_failed,
+    baseline: state.baseline,
+    best: state.best,
+    historicalBest: state.historicalBest,
+    development: state.development,
+    promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    confidence: state.confidence,
+    scaffoldHealth,
+    researchIntegrity,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    runtimeAuthority: guidance.runtimeAuthority,
+    dashboardHealth,
+    sourceCleanliness,
+    ledgerHealth,
+    gateQuality: guidance.gateQuality,
+    fixedControl: fixedControlStateSummary(config.fixedControl),
+    commandAuthority: publicCommandAuthority,
+    preflight: publicPreflight,
+    limit: iterationLimitInfo(state, config),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+      dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
+      commitPaths: config.commitPaths || [],
+    },
+    commands: dashboardCommands(workDir),
+    warnings: warningDetails.map((warning: any) => warning.message),
+    warningDetails,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    laneLifecycle,
+    packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
+    commandExecutionBoundary: commandExecutionBoundaryForState(
+      { state, lastRun },
+      COMMAND_EXECUTION_BOUNDARY,
+    ),
+    portfolioRecommendation,
+    finalizationPressure: finalization,
+    qualityRound: decisionEnvelope.qualityRound || null,
+    ...controlPlane,
+    watchdogSummary,
+    memory,
+    experimentEconomics,
+    partialResults,
+    workflowFriction,
+    continuation,
+    resolvedDecision: resolvedReadModel.resolvedDecision,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+  };
+  if (compact) return compactPublicState(fullState);
+  return jsonFull || !bounded
+    ? projectFullState(fullState)
+    : projectStateReadModel(fullState, "default");
+}
 
-  function isStrictLedgerParseError(error: unknown): boolean {
-    return /^Corrupt autoresearch\.jsonl at line \d+\b/i.test(errorMessage(error));
-  }
+function isStrictLedgerParseError(error: unknown): boolean {
+  return /^Corrupt autoresearch\.jsonl at line \d+\b/i.test(errorMessage(error));
+}
 
-  function repairFirstStateForInvalidLedger({
+function repairFirstStateForInvalidLedger(
+  {
     workDir,
     config,
     codexGoalObjective,
@@ -394,73 +411,77 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     codexGoalObjective?: unknown;
     error: unknown;
     compact: boolean;
-  }): CommandRecord {
-    const ledger = readLedgerRecordsTolerant(workDir);
-    const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
-      parseErrors: ledger.parseErrors,
-    });
-    const commands = continuationCommands(workDir);
-    const ledgerHealth = {
-      ...rawLedgerHealth,
-      command: commands.ledgerDoctor,
-    };
-    const runtime = runtimeProvenance();
-    const decisionEnvelope = withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state: {
-          config,
-          current: [],
-          results: [],
-          ledgerHealth,
-          runtimeProvenance: runtime,
-        },
-        nextAction: "Run ledger-doctor before another Autoresearch packet.",
-      }),
-      commands,
-    );
-    const response = {
-      ok: false,
-      code: "ledger_jsonl_invalid",
-      workDir,
-      config: publicSessionConfig(config),
-      segment: 0,
-      runs: ledger.records.length,
-      totalRuns: ledger.records.length,
-      kept: 0,
-      discarded: 0,
-      measured: 0,
-      crashed: 0,
-      checksFailed: 0,
-      baseline: null,
-      best: null,
-      historicalBest: null,
-      development: null,
-      promotion: null,
-      confidence: null,
-      ledgerPath: ledger.ledgerPath,
-      ledgerHealth,
-      parseErrors: ledgerHealth.parseErrors,
-      warnings: ledgerHealth.warnings,
-      error: errorMessage(error),
-      commands,
-      continuation: {
-        shouldContinue: false,
-        nextAction: "Run ledger-doctor before another packet.",
-        commands,
+  },
+  runtime: StateRuntime,
+): CommandRecord {
+  const { runtimeProvenance, withCanonicalActionCommand } = runtime;
+  const ledger = readLedgerRecordsTolerant(workDir);
+  const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
+    parseErrors: ledger.parseErrors,
+  });
+  const commands = continuationCommands(workDir);
+  const ledgerHealth = {
+    ...rawLedgerHealth,
+    command: commands.ledgerDoctor,
+  };
+  const runtimeFacts = runtimeProvenance();
+  const decisionEnvelope = withCanonicalActionCommand(
+    buildDecisionEnvelope({
+      state: {
+        config,
+        current: [],
+        results: [],
+        ledgerHealth,
+        runtimeProvenance: runtimeFacts,
       },
+      nextAction: "Run ledger-doctor before another Autoresearch packet.",
+    }),
+    commands,
+  );
+  const response = {
+    ok: false,
+    code: "ledger_jsonl_invalid",
+    workDir,
+    config: publicSessionConfig(config),
+    segment: 0,
+    runs: ledger.records.length,
+    totalRuns: ledger.records.length,
+    kept: 0,
+    discarded: 0,
+    measured: 0,
+    crashed: 0,
+    checksFailed: 0,
+    baseline: null,
+    best: null,
+    historicalBest: null,
+    development: null,
+    promotion: null,
+    confidence: null,
+    ledgerPath: ledger.ledgerPath,
+    ledgerHealth,
+    parseErrors: ledgerHealth.parseErrors,
+    warnings: ledgerHealth.warnings,
+    error: errorMessage(error),
+    commands,
+    continuation: {
+      shouldContinue: false,
       nextAction: "Run ledger-doctor before another packet.",
-      blockers: ledgerHealth.warnings,
-      runtimeProvenance: runtime,
-      codexGoalObjective,
-      resumeAudit: decisionEnvelope,
-      decisionEnvelope,
-      canonicalNextAction: decisionEnvelope.canonicalNextAction,
-      loopContract: decisionEnvelope.loopContract,
-    };
-    return compact ? compactPublicState(response) : projectFullState(response);
-  }
+      commands,
+    },
+    nextAction: "Run ledger-doctor before another packet.",
+    blockers: ledgerHealth.warnings,
+    runtimeProvenance: runtimeFacts,
+    codexGoalObjective,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+    canonicalNextAction: decisionEnvelope.canonicalNextAction,
+    loopContract: decisionEnvelope.loopContract,
+  };
+  return compact ? compactPublicState(response) : projectFullState(response);
+}
 
-  async function publicCompactState({
+async function publicCompactState(
+  {
     workDir,
     config,
     codexGoalObjective,
@@ -470,114 +491,77 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     config: CommandRecord;
     codexGoalObjective?: unknown;
     readCache?: unknown;
-  }): Promise<CommandRecord> {
-    const effectiveReadCache = (readCache || createSessionReadCache()) as any;
-    const state = loadSessionState(workDir, effectiveReadCache);
-    const records = loadSessionRecords(workDir, effectiveReadCache);
-    const ledgerHealth = analyzeLedgerHealth(records);
-    const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-    const activeProgress = await readActiveProgressSnapshot(workDir, config);
-    const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
-    const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
-    const qualityGap = await currentQualityGapSummary(workDir);
-    const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
-    const researchIntegrity = buildResearchIntegrity({ state, config });
-    const warningDetails = await operatorWarningsForWorkDir(workDir, state);
-    const settings = dashboardSettings(config);
-    const orchestration = buildParallelOrchestrationContext({
-      workDir,
+  },
+  runtime: StateRuntime,
+): Promise<CommandRecord> {
+  const {
+    buildParallelOrchestrationContext,
+    decisionGuidance,
+    discoverLastRunPartialResults,
+    lastRunPacketFreshness,
+    operatorWarningsForWorkDir,
+    pluginRoot: PLUGIN_ROOT,
+    pluginVersion: PLUGIN_VERSION,
+    readActiveProgressSnapshot,
+    readLastRunPacket,
+    replacementNextCommandForLastRun,
+    runtimeProvenance,
+    withCanonicalActionCommand,
+  } = runtime;
+  const effectiveReadCache = (readCache || createSessionReadCache()) as any;
+  const state = loadSessionState(workDir, effectiveReadCache);
+  const records = loadSessionRecords(workDir, effectiveReadCache);
+  const ledgerHealth = analyzeLedgerHealth(records);
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const activeProgress = await readActiveProgressSnapshot(workDir, config);
+  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
+  const qualityGap = await currentQualityGapSummary(workDir);
+  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const researchIntegrity = buildResearchIntegrity({ state, config });
+  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
+  const settings = buildDashboardSettings(config);
+  const orchestration = buildParallelOrchestrationContext({
+    workDir,
+    state,
+    config,
+    settings,
+    records,
+  });
+  const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
+  const laneLifecycle = buildLaneLifecycle({
+    state,
+    records,
+    fanoutPlan,
+    parallelLanes,
+    laneResults: orchestration.laneResults,
+    workDir,
+    pluginRoot: PLUGIN_ROOT,
+  });
+  const packetDiagnostics = lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRun.packetEvidence || {},
+        run: lastRun.run || {},
+        decision: lastRun.decision || {},
+        metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
+        metricName: state.config.metricName,
+        command: continuationCommands(workDir).partialResults,
+      })
+    : classifyPacketDiagnostics();
+  const currentRuntimeProvenance = runtimeProvenance();
+  const dashboardHealth = await dashboardHealthForWorkDir(workDir, PLUGIN_VERSION);
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
+  const guidance = await decisionGuidance({
+    workDir,
+    config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+  });
+  const publicPreflight = publicCommandPayload(guidance.preflight);
+  const stateWithQualityGap = {
+    ...buildSessionReadModelState({
       state,
-      config,
-      settings,
-      records,
-    });
-    const { memory, fanoutPlan, fanoutProvenance, parallelLanes, watchdogSummary } = orchestration;
-    const laneLifecycle = buildLaneLifecycle({
-      state,
-      records,
-      fanoutPlan,
-      parallelLanes,
-      laneResults: orchestration.laneResults,
-      workDir,
-      pluginRoot: PLUGIN_ROOT,
-    });
-    const packetDiagnostics = lastRun
-      ? classifyPacketDiagnostics({
-          packetEvidence: lastRun.packetEvidence || {},
-          run: lastRun.run || {},
-          decision: lastRun.decision || {},
-          metrics: lastRun.decision?.metrics || lastRun.run?.parsedMetrics || {},
-          metricName: state.config.metricName,
-          command: continuationCommands(workDir).partialResults,
-        })
-      : classifyPacketDiagnostics();
-    const currentRuntimeProvenance = runtimeProvenance();
-    const dashboardHealth = await dashboardHealthForWorkDir(workDir);
-    const sourceCleanliness = buildSourceCleanliness({ warningDetails });
-    const guidance = await decisionGuidance({
-      workDir,
-      config,
-      state,
-      scaffoldHealth,
-      warningDetails,
-    });
-    const publicPreflight = publicCommandPayload(guidance.preflight);
-    const stateWithQualityGap = {
-      ...buildSessionReadModelState({
-        state,
-        qualityGap,
-        laneLifecycle,
-        packetDiagnostics,
-        runtimeProvenance: currentRuntimeProvenance,
-        runtimeDriftSummary: guidance.runtimeDriftSummary,
-        dashboardHealth,
-        sourceCleanliness,
-        gateQuality: guidance.gateQuality,
-        preflight: publicPreflight,
-      }),
-      runtimeAuthority: guidance.runtimeAuthority,
-      ledgerHealth,
-    };
-    const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
-    const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
-      id: recipe.id,
-      title: recipe.title,
-      tags: recipe.tags || [],
-    }));
-    const workflowFriction = analyzeWorkflowFriction({
-      state: stateWithQualityGap,
-      lastRun,
-      warningDetails,
-      recipes: recipeSummaries,
-    });
-    const experimentEconomics = analyzeExperimentEconomics({
-      state: stateWithQualityGap,
-      lastRun,
-      progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
-    });
-    const statusCounts = statusCountsFromState(state);
-    const continuation = loopContinuation(workDir, state, config, "state");
-    const compactCommands = {
-      ...continuation.commands,
-      ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
-    };
-    const finalization = await finalizationPressureForWorkDir({
-      workDir,
-      state,
-      qualityGap,
-      warningDetails,
-    });
-    const readModel = buildSessionReadModel({
-      workDir,
-      config,
-      state,
-      records,
-      codexGoalObjective,
-      parallelLanes,
-      workflowFriction,
-      finalization,
-      commands: continuationCommands(workDir),
-      processProgress: activeProgress,
       qualityGap,
       laneLifecycle,
       packetDiagnostics,
@@ -587,118 +571,173 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
       sourceCleanliness,
       gateQuality: guidance.gateQuality,
       preflight: publicPreflight,
-    });
-    const controlPlane = readModel.controlPlane;
-    const decisionInput = {
-      state: {
-        ...stateWithQualityGap,
-        ...controlPlane,
-        limit: iterationLimitInfo(state, config),
-      },
-      nextAction: continuation.nextAction,
-      lastRunFreshness,
-      warningDetails,
-      scaffoldHealth,
-      researchIntegrity,
-      qualityGap,
-      finalization,
-      experimentEconomics,
-      salvageCandidates: partialResults.candidates,
-      workflowFriction,
-      experimentMemory: memory,
-      setupState: decisionSetupState(state),
-      watchdog: watchdogSummary,
-    };
-    const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-    const portfolioRecommendation =
-      preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-        ? null
-        : recommendPortfolioDirection({
-            runtimeDrift: guidance.runtimeDriftSummary,
-            gateQuality: guidance.gateQuality,
-            preflight: publicPreflight,
-            laneLifecycle,
-            laneResults: laneLifecycle.latestResults,
-            packetDiagnostics,
-            experimentMemory: memory,
-            best: state.best,
-            current: state.current,
-          });
-    const decisionEnvelope = withCanonicalActionCommand(
-      portfolioRecommendation
-        ? buildDecisionEnvelope({
-            ...decisionInput,
-            state: { ...decisionInput.state, portfolioRecommendation },
-          })
-        : preliminaryDecisionEnvelope,
-      compactCommands,
-    );
-    return compactPublicState({
-      ok: true,
-      workDir,
-      config: publicSessionConfig(state.config),
-      segment: state.segment,
-      runs: state.current.length,
-      totalRuns: state.results.length,
-      kept: statusCounts.keep,
-      discarded: statusCounts.discard,
-      measured: statusCounts.measure,
-      crashed: statusCounts.crash,
-      checksFailed: statusCounts.checks_failed,
-      baseline: state.baseline,
-      best: state.best,
-      historicalBest: state.historicalBest,
-      development: state.development,
-      promotion: state.promotion,
-      evidenceRegistry: state.evidenceRegistry,
-      productClaimCoverage: state.productClaimCoverage,
-      sessionDecisionCapsule: state.sessionDecisionCapsule || null,
-      confidence: state.confidence,
-      scaffoldHealth,
-      researchIntegrity,
-      runtimeProvenance: currentRuntimeProvenance,
-      runtimeDriftSummary: guidance.runtimeDriftSummary,
-      runtimeAuthority: guidance.runtimeAuthority,
-      dashboardHealth,
-      sourceCleanliness,
-      ledgerHealth,
-      gateQuality: guidance.gateQuality,
-      fixedControl: fixedControlStateSummary(config.fixedControl),
-      preflight: publicPreflight,
-      limit: iterationLimitInfo(state, config),
-      settings: {
-        autonomyMode: config.autonomyMode || "guarded",
-        checksPolicy: config.checksPolicy || "always",
-        keepPolicy: config.keepPolicy || "primary-only",
-        dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
-        commitPaths: config.commitPaths || [],
-      },
-      commands: compactCommands,
-      warnings: warningDetails.map((warning: any) => warning.message),
-      warningDetails,
-      qualityGap,
-      memory,
-      fanoutPlan,
-      fanoutProvenance,
-      parallelLanes,
-      watchdogSummary,
-      laneLifecycle,
-      packetDiagnostics,
-      metricSemanticsWarning: state.metricSemanticsWarning || null,
-      commandExecutionBoundary: commandExecutionBoundaryForState({ state, lastRun }),
-      portfolioRecommendation,
-      experimentEconomics,
-      partialResults,
-      workflowFriction,
+    }),
+    runtimeAuthority: guidance.runtimeAuthority,
+    ledgerHealth,
+  };
+  const partialResults = await discoverLastRunPartialResults(workDir, state, lastRun);
+  const recipeSummaries = listBuiltInRecipes().map((recipe: any) => ({
+    id: recipe.id,
+    title: recipe.title,
+    tags: recipe.tags || [],
+  }));
+  const workflowFriction = analyzeWorkflowFriction({
+    state: stateWithQualityGap,
+    lastRun,
+    warningDetails,
+    recipes: recipeSummaries,
+  });
+  const experimentEconomics = analyzeExperimentEconomics({
+    state: stateWithQualityGap,
+    lastRun,
+    progress: activeProgress || lastRun?.packetEvidence?.progressSnapshot || null,
+  });
+  const statusCounts = statusCountsFromState(state);
+  const continuation = loopContinuation(workDir, state, config, "state");
+  const compactCommands = {
+    ...continuation.commands,
+    ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
+  };
+  const finalization = await finalizationPressureForWorkDir(
+    { workDir, state, qualityGap, warningDetails },
+    runtime,
+  );
+  const readModel = buildSessionReadModel({
+    workDir,
+    config,
+    state,
+    records,
+    codexGoalObjective,
+    parallelLanes,
+    workflowFriction,
+    finalization,
+    commands: continuationCommands(workDir),
+    processProgress: activeProgress,
+    qualityGap,
+    laneLifecycle,
+    packetDiagnostics,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    dashboardHealth,
+    sourceCleanliness,
+    gateQuality: guidance.gateQuality,
+    preflight: publicPreflight,
+  });
+  const controlPlane = readModel.controlPlane;
+  const decisionInput = {
+    state: {
+      ...stateWithQualityGap,
       ...controlPlane,
-      codexGoalObjective,
-      resumeAudit: decisionEnvelope,
-      decisionEnvelope,
-      continuation,
-    });
-  }
+      limit: iterationLimitInfo(state, config),
+    },
+    nextAction: continuation.nextAction,
+    lastRunFreshness,
+    warningDetails,
+    scaffoldHealth,
+    researchIntegrity,
+    qualityGap,
+    finalization,
+    experimentEconomics,
+    salvageCandidates: partialResults.candidates,
+    workflowFriction,
+    experimentMemory: memory,
+    setupState: decisionSetupState(state),
+    watchdog: watchdogSummary,
+  };
+  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
+  const portfolioRecommendation =
+    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
+      ? null
+      : recommendPortfolioDirection({
+          runtimeDrift: guidance.runtimeDriftSummary,
+          gateQuality: guidance.gateQuality,
+          preflight: publicPreflight,
+          laneLifecycle,
+          laneResults: laneLifecycle.latestResults,
+          packetDiagnostics,
+          experimentMemory: memory,
+          best: state.best,
+          current: state.current,
+        });
+  const decisionEnvelope = withCanonicalActionCommand(
+    portfolioRecommendation
+      ? buildDecisionEnvelope({
+          ...decisionInput,
+          state: { ...decisionInput.state, portfolioRecommendation },
+        })
+      : preliminaryDecisionEnvelope,
+    compactCommands,
+  );
+  return compactPublicState({
+    ok: true,
+    workDir,
+    config: publicSessionConfig(state.config),
+    segment: state.segment,
+    runs: state.current.length,
+    totalRuns: state.results.length,
+    kept: statusCounts.keep,
+    discarded: statusCounts.discard,
+    measured: statusCounts.measure,
+    crashed: statusCounts.crash,
+    checksFailed: statusCounts.checks_failed,
+    baseline: state.baseline,
+    best: state.best,
+    historicalBest: state.historicalBest,
+    development: state.development,
+    promotion: state.promotion,
+    evidenceRegistry: state.evidenceRegistry,
+    productClaimCoverage: state.productClaimCoverage,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    confidence: state.confidence,
+    scaffoldHealth,
+    researchIntegrity,
+    runtimeProvenance: currentRuntimeProvenance,
+    runtimeDriftSummary: guidance.runtimeDriftSummary,
+    runtimeAuthority: guidance.runtimeAuthority,
+    dashboardHealth,
+    sourceCleanliness,
+    ledgerHealth,
+    gateQuality: guidance.gateQuality,
+    fixedControl: fixedControlStateSummary(config.fixedControl),
+    preflight: publicPreflight,
+    limit: iterationLimitInfo(state, config),
+    settings: {
+      autonomyMode: config.autonomyMode || "guarded",
+      checksPolicy: config.checksPolicy || "always",
+      keepPolicy: config.keepPolicy || "primary-only",
+      dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
+      commitPaths: config.commitPaths || [],
+    },
+    commands: compactCommands,
+    warnings: warningDetails.map((warning: any) => warning.message),
+    warningDetails,
+    qualityGap,
+    memory,
+    fanoutPlan,
+    fanoutProvenance,
+    parallelLanes,
+    watchdogSummary,
+    laneLifecycle,
+    packetDiagnostics,
+    metricSemanticsWarning: state.metricSemanticsWarning || null,
+    commandExecutionBoundary: commandExecutionBoundaryForState(
+      { state, lastRun },
+      runtime.commandExecutionBoundary,
+    ),
+    portfolioRecommendation,
+    experimentEconomics,
+    partialResults,
+    workflowFriction,
+    ...controlPlane,
+    codexGoalObjective,
+    resumeAudit: decisionEnvelope,
+    decisionEnvelope,
+    continuation,
+  });
+}
 
-  async function finalizationPressureForWorkDir({
+export async function finalizationPressureForWorkDir(
+  {
     workDir,
     state,
     qualityGap,
@@ -708,92 +747,95 @@ export function createStateCommandService(deps: StateCommandServiceDeps) {
     state: CommandRecord;
     qualityGap: CommandRecord | null;
     warningDetails: CommandRecord[];
-  }): Promise<CommandRecord> {
-    const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
-    if (!hasFinalizationEvidence(state)) return cheap;
-    return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
-      ...cheap,
-      ok: false,
-      ready: false,
-      warnings: [...(cheap.warnings || []), error.message],
-      nextAction:
-        cheap.nextAction || "Fix finalization preview errors before relying on review readiness.",
-    }));
-  }
+  },
+  runtime: StateRuntime,
+): Promise<CommandRecord> {
+  const { buildFinalizePreview } = runtime;
+  const cheap = buildCheapFinalizationPressure({ state, qualityGap, warningDetails });
+  if (!hasFinalizationEvidence(state)) return cheap;
+  return await buildFinalizePreview({ cwd: workDir }).catch((error: any) => ({
+    ...cheap,
+    ok: false,
+    ready: false,
+    warnings: [...(Array.isArray(cheap.warnings) ? cheap.warnings : []), error.message],
+    nextAction:
+      cheap.nextAction || "Fix finalization preview errors before relying on review readiness.",
+  }));
+}
 
-  function hasFinalizationEvidence(state: CommandRecord): boolean {
-    const runs = Array.isArray(state.results)
-      ? state.results
-      : Array.isArray(state.current)
-        ? state.current
-        : [];
-    return runs.some((run: CommandRecord) => isAcceptedCurrentRun(run));
-  }
+function hasFinalizationEvidence(state: CommandRecord): boolean {
+  const runs = Array.isArray(state.results)
+    ? state.results
+    : Array.isArray(state.current)
+      ? state.current
+      : [];
+  return runs.some((run: CommandRecord) => isAcceptedCurrentRun(run));
+}
 
-  function publicSessionConfig(config: unknown): CommandRecord {
-    const record = config && typeof config === "object" ? { ...(config as CommandRecord) } : {};
-    const output = redactEvidenceObject(record) as CommandRecord;
-    for (const field of [
-      "benchmarkCommand",
-      "benchmark_command",
-      "checksCommand",
-      "checks_command",
-    ]) {
-      if (typeof record[field] === "string") {
-        output[field] = redactCommandDisplay(record[field]);
-      }
+function publicSessionConfig(config: unknown): CommandRecord {
+  const record = config && typeof config === "object" ? { ...(config as CommandRecord) } : {};
+  const output = redactEvidenceObject(record) as CommandRecord;
+  for (const field of [
+    "benchmarkCommand",
+    "benchmark_command",
+    "checksCommand",
+    "checks_command",
+  ]) {
+    if (typeof record[field] === "string") {
+      output[field] = redactCommandDisplay(record[field]);
     }
-    if (Object.hasOwn(record, "fixedControl")) {
-      output.fixedControl = fixedControlStateSummary(record.fixedControl);
-    }
-    return output;
   }
-
-  function publicCommandPayload<T>(value: T): T {
-    return redactEvidenceObject(value) as T;
+  if (Object.hasOwn(record, "fixedControl")) {
+    output.fixedControl = fixedControlStateSummary(record.fixedControl);
   }
+  return output;
+}
 
-  function compactPublicState(state: CommandRecord): CommandRecord {
-    return projectStateReadModel(state, "compact");
-  }
+function publicCommandPayload<T>(value: T): T {
+  return redactEvidenceObject(value) as T;
+}
 
-  function commandExecutionBoundaryForState({
+export function compactPublicState(state: CommandRecord): CommandRecord {
+  return projectStateReadModel(state, "compact");
+}
+
+function commandExecutionBoundaryForState(
+  {
     state,
     lastRun,
   }: {
     state: CommandRecord;
     lastRun?: CommandRecord | null;
-  }): CommandRecord | null {
-    const boundary =
-      lastRun?.packetEvidence?.commandExecutionBoundary ||
-      [...(Array.isArray(state.current) ? state.current : [])]
-        .reverse()
-        .map((run: CommandRecord) => run.commandExecutionBoundary)
-        .find(Boolean);
-    if (!boundary) return null;
-    return {
-      mode: String(boundary),
-      note: COMMAND_EXECUTION_BOUNDARY.note,
-      recommendation: COMMAND_EXECUTION_BOUNDARY.recommendation,
-    };
-  }
-
-  async function dashboardHealthForWorkDir(workDir: string): Promise<CommandRecord> {
-    const record = await readServeRegistry(workDir);
-    return verifyDashboardHealthSummary(
-      buildServeRegistryHealthInput(workDir, record, {
-        expectedVersion: PLUGIN_VERSION,
-        timeoutMs: 500,
-      }),
-    );
-  }
-
+  },
+  commandExecutionBoundary: CommandRecord,
+): CommandRecord | null {
+  const boundary =
+    lastRun?.packetEvidence?.commandExecutionBoundary ||
+    [...(Array.isArray(state.current) ? state.current : [])]
+      .reverse()
+      .map((run: CommandRecord) => run.commandExecutionBoundary)
+      .find(Boolean);
+  if (!boundary) return null;
   return {
-    publicState,
-    publicCompactState,
-    compactPublicState,
-    publicSessionConfig,
-    dashboardHealthForWorkDir,
-    finalizationPressureForWorkDir,
+    mode: String(boundary),
+    note: commandExecutionBoundary.note,
+    recommendation: commandExecutionBoundary.recommendation,
   };
+}
+
+async function dashboardHealthForWorkDir(
+  workDir: string,
+  pluginVersion: string,
+): Promise<CommandRecord> {
+  const record = await readServeRegistry(workDir);
+  return verifyDashboardHealthSummary(
+    buildServeRegistryHealthInput(workDir, record, {
+      expectedVersion: pluginVersion,
+      timeoutMs: 500,
+    }),
+  ) as unknown as CommandRecord;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
