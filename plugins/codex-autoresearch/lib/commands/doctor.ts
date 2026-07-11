@@ -1,10 +1,18 @@
 import type { UnknownRecord } from "../types/json.js";
+import { withCanonicalActionCommand } from "../action-metadata.js";
+import { resolveBenchmarkCommandSource } from "../benchmark/command-input.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import { boolOption, enumOption, numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { decisionGuidance } from "../decision-guidance.js";
+import { buildDriftReport, runtimeProvenance } from "../drift-doctor.js";
+import { fixedControlBlockForCommand } from "../fixed-control.js";
+import { insideGitRepo } from "../git-private-state.js";
+import { latestBenchmarkContractEntry } from "../operator-warnings.js";
 import { benchmarkContractDiagnostics } from "../packet-diagnostics.js";
+import { PLUGIN_VERSION } from "../plugin-version.js";
+import { resolvePackageRoot } from "../runtime-paths.js";
 import { buildDecisionEnvelope, currentState, finiteMetric, listOption } from "../session-core.js";
-import { buildDriftReport } from "../drift-doctor.js";
 import { continuationCommands, loopContinuation } from "./continuation.js";
 import { inspectRuntimeDrift } from "../runtime-drift-doctor.js";
 import { parseMetricLines, runShell } from "../runner.js";
@@ -12,49 +20,13 @@ import { projectDoctorReadModel } from "../session-read-model.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
 import { shouldSuppressPreflightGateBlockerForCapsule } from "../loop-governance.js";
-import type { FixedControlBlock } from "../fixed-control.js";
 import { buildRunProgress } from "./run.js";
+import { publicState } from "./state.js";
 
 type CommandRecord = UnknownRecord;
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
-export interface DoctorRuntime {
-  decisionGuidance: (args: CommandRecord) => Promise<CommandRecord>;
-  fixedControlBlockForCommand: (
-    command: unknown,
-    config: CommandRecord,
-    args?: CommandRecord,
-  ) => FixedControlBlock | null;
-  insideGitRepo: (workDir: string) => Promise<boolean>;
-  latestBenchmarkContractEntry: (workDir: string, state: CommandRecord) => CommandRecord | null;
-  pluginRoot: string;
-  pluginVersion: string;
-  publicState: (args: CommandRecord) => Promise<CommandRecord>;
-  resolveBenchmarkCommandSource: (
-    args: CommandRecord,
-    workDir: string,
-    options: CommandRecord,
-  ) => Promise<CommandRecord>;
-  runtimeProvenance: (drift?: CommandRecord) => CommandRecord;
-  withCanonicalActionCommand: (envelope: CommandRecord, commands: unknown) => CommandRecord;
-}
-
-export async function doctorSession(
-  args: CommandRecord,
-  runtime: DoctorRuntime,
-): Promise<CommandRecord> {
-  const {
-    decisionGuidance,
-    fixedControlBlockForCommand,
-    insideGitRepo,
-    latestBenchmarkContractEntry,
-    publicState,
-    resolveBenchmarkCommandSource,
-    runtimeProvenance,
-    withCanonicalActionCommand,
-  } = runtime;
-  const PLUGIN_ROOT = runtime.pluginRoot;
-  const PLUGIN_VERSION = runtime.pluginVersion;
-
+export async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
   const { sessionCwd, workDir, config } = resolveAuthorizedWorkDir(
     String(args.working_dir || args.cwd || ""),
   );

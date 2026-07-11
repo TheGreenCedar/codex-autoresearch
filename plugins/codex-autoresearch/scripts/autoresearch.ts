@@ -24,7 +24,7 @@ import {
   buildRecommendNextResponse,
   selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
-import { doctorSession as runDoctorSession, type DoctorRuntime } from "../lib/commands/doctor.js";
+import { doctorSession as runDoctorSession } from "../lib/commands/doctor.js";
 import { runExperiment } from "../lib/commands/run.js";
 import {
   compactPublicState as compactStateResponse,
@@ -145,7 +145,6 @@ import {
 } from "../lib/parallel-orchestration.js";
 import {
   benchmarkIntegrityPreflight,
-  latestBenchmarkContractEntry,
   operatorWarningsForWorkDir,
 } from "../lib/operator-warnings.js";
 import {
@@ -285,22 +284,7 @@ async function finalizationPressureForWorkDir(args: {
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
-  return await runDoctorSession(args, doctorRuntime());
-}
-
-function doctorRuntime(): DoctorRuntime {
-  return {
-    decisionGuidance,
-    fixedControlBlockForCommand,
-    insideGitRepo,
-    latestBenchmarkContractEntry,
-    pluginRoot: PLUGIN_ROOT,
-    pluginVersion: PLUGIN_VERSION,
-    publicState,
-    resolveBenchmarkCommandSource,
-    runtimeProvenance,
-    withCanonicalActionCommand,
-  };
+  return await runDoctorSession(args);
 }
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "runtimeDriftSummary",
