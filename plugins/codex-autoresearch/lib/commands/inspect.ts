@@ -1,5 +1,10 @@
 import type { ShellRunResult } from "../runner.js";
+import { runShell } from "../runner.js";
 import { buildResearchIntegrity, commandDiagnostics } from "../truth-signals.js";
+import { numberOption } from "../cli/args.js";
+import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { currentState, finiteMetric } from "../session-core.js";
+import { parseMetricLines } from "../runner.js";
 
 type LooseObject = Record<string, any>;
 type InspectShellRunResult = ShellRunResult & { separatorCommand?: boolean };
@@ -15,319 +20,323 @@ type FixedControlBlock = {
   issue?: string;
   message?: string;
 };
+const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 
-export interface InspectCommandDeps {
-  currentState: (workDir: string) => LooseObject;
-  defaultBenchmarkCommand: (workDir: string) => Promise<string>;
+export interface InspectRuntime {
   fixedControlBlockForCommand?: (
     command: unknown,
     config: LooseObject,
     args?: LooseObject,
   ) => FixedControlBlock | null;
-  finiteMetric: (value: unknown) => number | null;
-  headText: (text: string, maxLines?: number, maxBytes?: number) => string;
-  metricParseSource: (result: LooseObject) => string;
-  numberOption: (value: unknown, fallback: number) => number;
-  parseMetricLines: (output: string) => Record<string, number>;
-  resolveBenchmarkCommand?: (
+  resolveBenchmarkCommand: (
     args: LooseObject,
     workDir: string,
     config: LooseObject,
   ) => Promise<BenchmarkCommandSource>;
-  resolveWorkDir: (value: string) => { workDir: string; config: LooseObject };
-  runShell: (
-    command: string,
-    cwd: string,
-    timeoutSeconds: number,
-    options?: LooseObject,
-  ) => Promise<ShellRunResult>;
-  validateMetricName: (name: string) => string;
 }
 
-export function createInspectCommands(deps: InspectCommandDeps) {
-  async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
-    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    const state = deps.currentState(workDir);
-    const metricName = deps.validateMetricName(
-      args.metric_name || args.metricName || state.config.metricName || "metric",
-    );
-    let sample = args.sample || "";
-    let commandResult: InspectShellRunResult | null = null;
-    const timeoutSeconds = deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
-    if (!sample) {
-      const commandSource = await benchmarkCommandSource(args, workDir, config);
-      const separatorCommand = commandSource.separatorCommand === true;
-      const command = commandSource.command;
-      if (command) {
-        const fixedControlBlock = deps.fixedControlBlockForCommand?.(command, config, args);
-        if (fixedControlBlock) {
-          return blockedBenchmarkLint({
-            block: fixedControlBlock,
-            config,
-            metricName,
-            separatorCommand,
-            state,
-            workDir,
-          });
-        }
-        commandResult = await deps.runShell(command, workDir, timeoutSeconds, {
-          retainMetricNames: [metricName],
+export async function benchmarkLint(
+  args: LooseObject,
+  runtime: InspectRuntime,
+): Promise<LooseObject> {
+  const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const state = currentState(workDir);
+  const metricName = validateMetricName(
+    args.metric_name || args.metricName || state.config.metricName || "metric",
+  );
+  let sample = args.sample || "";
+  let commandResult: InspectShellRunResult | null = null;
+  const timeoutSeconds = numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60);
+  if (!sample) {
+    const commandSource = await benchmarkCommandSource(args, workDir, config, runtime);
+    const separatorCommand = commandSource.separatorCommand === true;
+    const command = commandSource.command;
+    if (command) {
+      const fixedControlBlock = runtime.fixedControlBlockForCommand?.(command, config, args);
+      if (fixedControlBlock) {
+        return blockedBenchmarkLint({
+          block: fixedControlBlock,
+          config,
+          metricName,
+          separatorCommand,
+          state,
+          workDir,
         });
-        sample = deps.metricParseSource(commandResult);
-        commandResult.separatorCommand = separatorCommand;
       }
+      commandResult = await runShell(command, workDir, timeoutSeconds, {
+        retainMetricNames: [metricName],
+      });
+      sample = metricParseSource(commandResult);
+      commandResult.separatorCommand = separatorCommand;
     }
-    const parsedMetrics = deps.parseMetricLines(sample);
-    const parsedMetricCount = metricCount(parsedMetrics);
-    const emitsPrimary = deps.finiteMetric(parsedMetrics[metricName]) != null;
-    const issues: string[] = [];
-    const warnings: string[] = [];
-    if (!sample) {
-      issues.push("No sample output, command, or default autoresearch script was available.");
-    } else if (!parsedMetricCount) {
-      issues.push("No METRIC name=value lines were parsed.");
-    } else if (!emitsPrimary) {
-      issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
-    }
-    if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) {
-      issues.push(
-        `Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`,
-      );
-      if (commandResult.timedOut && !parsedMetricCount) {
-        warnings.push(
-          "Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.",
-        );
-      }
-      if (commandResult.terminationFailed) {
-        warnings.push(
-          "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
-        );
-      }
-    }
-    if (parsedMetricCount > 20) {
-      warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
-    }
-    const researchIntegrity = buildResearchIntegrity({
-      state,
-      config: { ...state.config, ...config },
-      parsedMetrics,
-      metricName,
-      sample,
-    });
-    const metricParsing = {
-      ok: issues.length === 0,
-      emitsPrimary,
-      parsedMetricCount,
-      issues,
-    };
-    const diagnostics = commandDiagnostics({
-      command: commandResult?.command || args.command || "",
-      result: commandResult,
-      separatorCommand: commandResult?.separatorCommand,
-    });
-    return {
-      ok: issues.length === 0,
-      workDir,
-      metricName,
-      checkedCommand: commandResult?.command || args.command || "",
-      parsedMetrics,
-      emitsPrimary,
-      metricParsing,
-      researchIntegrity,
-      commandDiagnostics: diagnostics,
-      issues,
-      warnings: [...warnings, ...researchIntegrity.warnings],
-      timeoutSeconds: commandResult ? timeoutSeconds : null,
-      termination: commandResult?.termination || null,
-      terminationFailed: commandResult?.terminationFailed === true,
-      contractCheckHint:
-        "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
-      example: `METRIC ${metricName}=1.23`,
-      nextAction: issues.length
-        ? commandResult?.terminationFailed
-          ? "Verify the reported PID and descendants are absent before another benchmark command."
-          : commandResult?.timedOut
-            ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.`
-            : `Update the benchmark so it prints METRIC ${metricName}=<number>.`
-        : "Benchmark output satisfies the metric contract.",
-    };
   }
-
-  async function benchmarkCommandSource(
-    args: LooseObject,
-    workDir: string,
-    config: LooseObject,
-  ): Promise<BenchmarkCommandSource> {
-    if (deps.resolveBenchmarkCommand) {
-      return await deps.resolveBenchmarkCommand(args, workDir, config);
-    }
-    const separatorCommand = !args.command && Array.isArray(args._) && args._.length > 1;
-    return {
-      command:
-        args.command ||
-        (separatorCommand ? args._.slice(1).join(" ") : "") ||
-        (await deps.defaultBenchmarkCommand(workDir)),
-      separatorCommand,
-      source: args.command ? "command" : separatorCommand ? "separator" : "default",
-    };
+  const parsedMetrics = parseMetricLines(sample);
+  const parsedMetricCount = metricCount(parsedMetrics);
+  const emitsPrimary = finiteMetric(parsedMetrics[metricName]) != null;
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  if (!sample) {
+    issues.push("No sample output, command, or default autoresearch script was available.");
+  } else if (!parsedMetricCount) {
+    issues.push("No METRIC name=value lines were parsed.");
+  } else if (!emitsPrimary) {
+    issues.push(`Primary metric METRIC ${metricName}=<number> was not emitted.`);
   }
-
-  async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
-    const { workDir, config } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    const state = deps.currentState(workDir);
-    const command = String(args.command || "").trim();
-    const timeoutSeconds = Math.max(
-      1,
-      deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 5),
+  if (commandResult && (commandResult.exitCode !== 0 || commandResult.timedOut)) {
+    issues.push(
+      `Benchmark command failed during lint: exit ${commandResult.exitCode ?? "none"}${commandResult.timedOut ? " (timed out)" : ""}.`,
     );
-    const warnings = benchmarkInspectWarnings(command);
-    if (!command) {
-      return {
-        ...inspectionBase({
-          ok: true,
-          workDir,
-          ranCommand: false,
-          command: "",
-          timeoutSeconds: null,
-          exitCode: null,
-          timedOut: false,
-          warnings,
-          hints: benchmarkInspectHints(state.config.metricName || ""),
-          outputPreview: "",
-          outputTruncated: false,
-        }),
-        parsedMetrics: {},
-        nextAction:
-          "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet.",
-      };
-    }
-    const fixedControlBlock = deps.fixedControlBlockForCommand?.(command, config, args);
-    if (fixedControlBlock) {
-      const warning = fixedControlBlock.issue || fixedControlBlock.message || "Blocked.";
-      return {
-        ...inspectionBase({
-          ok: false,
-          workDir,
-          ranCommand: false,
-          command: "",
-          timeoutSeconds: null,
-          exitCode: null,
-          timedOut: false,
-          warnings: [warning],
-          hints: benchmarkInspectHints(state.config.metricName || ""),
-          outputPreview: "",
-          outputTruncated: false,
-        }),
-        code: fixedControlBlock.code,
-        fixedControlViolation: fixedControlBlock.fixedControlViolation,
-        parsedMetrics: {},
-        nextAction: fixedControlBlock.message || warning,
-      };
-    }
-    const result = await deps.runShell(command, workDir, timeoutSeconds, {
-      retainMetricNames: [state.config.metricName].filter(Boolean),
-    });
-    const output = deps.metricParseSource(result) || result.fullOutput || result.output || "";
-    const parsedMetrics = deps.parseMetricLines(output);
-    const parsedMetricCount = metricCount(parsedMetrics);
-    const timedOutBeforeMetric = result.timedOut && parsedMetricCount === 0;
-    if (timedOutBeforeMetric) {
+    if (commandResult.timedOut && !parsedMetricCount) {
       warnings.push(
-        "The inspect command timed out before any METRIC output. Use a benchmark-specific list/dry-run/artifact mode before running the full packet.",
+        "Lint timed out before METRIC output. Prefer linting a generated wrapper, artifact/sample mode, or rerun with --timeout-seconds only after bounding the workload.",
       );
     }
-    if (result.exitCode !== 0 && !result.timedOut) {
-      warnings.push(
-        `The inspect command exited ${result.exitCode}; verify the command is a bounded probe.`,
-      );
-    }
-    if (result.terminationFailed) {
+    if (commandResult.terminationFailed) {
       warnings.push(
         "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
       );
     }
+  }
+  if (parsedMetricCount > 20) {
+    warnings.push("Benchmark emits many metrics; keep the primary metric obvious and stable.");
+  }
+  const researchIntegrity = buildResearchIntegrity({
+    state,
+    config: { ...state.config, ...config },
+    parsedMetrics,
+    metricName,
+    sample,
+  });
+  const metricParsing = {
+    ok: issues.length === 0,
+    emitsPrimary,
+    parsedMetricCount,
+    issues,
+  };
+  const diagnostics = commandDiagnostics({
+    command: commandResult?.command || args.command || "",
+    result: commandResult,
+    separatorCommand: commandResult?.separatorCommand,
+  });
+  return {
+    ok: issues.length === 0,
+    workDir,
+    metricName,
+    checkedCommand: commandResult?.command || args.command || "",
+    parsedMetrics,
+    emitsPrimary,
+    metricParsing,
+    researchIntegrity,
+    commandDiagnostics: diagnostics,
+    issues,
+    warnings: [...warnings, ...researchIntegrity.warnings],
+    timeoutSeconds: commandResult ? timeoutSeconds : null,
+    termination: commandResult?.termination || null,
+    terminationFailed: commandResult?.terminationFailed === true,
+    contractCheckHint:
+      "Use --sample for pure parser checks, or lint the generated autoresearch wrapper after setup when the raw workload is expensive.",
+    example: `METRIC ${metricName}=1.23`,
+    nextAction: issues.length
+      ? commandResult?.terminationFailed
+        ? "Verify the reported PID and descendants are absent before another benchmark command."
+        : commandResult?.timedOut
+          ? `Bound the benchmark or use a sample/artifact-mode lint before running full packets; then prove METRIC ${metricName}=<number>.`
+          : `Update the benchmark so it prints METRIC ${metricName}=<number>.`
+      : "Benchmark output satisfies the metric contract.",
+  };
+}
+
+async function benchmarkCommandSource(
+  args: LooseObject,
+  workDir: string,
+  config: LooseObject,
+  runtime: InspectRuntime,
+): Promise<BenchmarkCommandSource> {
+  return await runtime.resolveBenchmarkCommand(args, workDir, config);
+}
+
+export async function benchmarkInspect(
+  args: LooseObject,
+  runtime: InspectRuntime,
+): Promise<LooseObject> {
+  const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const state = currentState(workDir);
+  const command = String(args.command || "").trim();
+  const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 5));
+  const warnings = benchmarkInspectWarnings(command);
+  if (!command) {
     return {
       ...inspectionBase({
-        ok: !result.timedOut && result.exitCode === 0,
+        ok: true,
         workDir,
-        ranCommand: true,
-        command: result.command,
-        timeoutSeconds,
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        termination: result.termination,
-        terminationFailed: result.terminationFailed,
+        ranCommand: false,
+        command: "",
+        timeoutSeconds: null,
+        exitCode: null,
+        timedOut: false,
         warnings,
         hints: benchmarkInspectHints(state.config.metricName || ""),
-        outputPreview: deps.headText(output || result.fullOutput || result.output || "", 30, 12000),
-        outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+        outputPreview: "",
+        outputTruncated: false,
       }),
-      parsedMetrics,
-      nextAction: result.terminationFailed
-        ? "Verify the reported PID and descendants are absent before another inspect command."
-        : result.timedOut || result.exitCode !== 0
-          ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract."
-          : "If this is bounded and representative, run benchmark-lint or the first compact next packet.",
+      parsedMetrics: {},
+      nextAction:
+        "Run benchmark-inspect with the benchmark's list/artifact command before any expensive full packet.",
     };
   }
-
-  async function checksInspect(args: LooseObject): Promise<LooseObject> {
-    const { workDir } = deps.resolveWorkDir(args.working_dir || args.cwd);
-    const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
-    const timeoutSeconds = Math.max(
-      1,
-      deps.numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
-    );
-    if (!command) {
-      return {
-        ...inspectionBase({
-          ok: true,
-          workDir,
-          ranCommand: false,
-          command: "",
-          timeoutSeconds: null,
-          exitCode: null,
-          timedOut: false,
-          warnings: ["No checks command was provided."],
-          hints: checksInspectHints(),
-          outputPreview: "",
-          outputTruncated: false,
-        }),
-        failedTests: [],
-        nextAction:
-          "Run checks-inspect with the exact correctness command before treating a failed suite as evidence.",
-      };
-    }
-    const result = await deps.runShell(command, workDir, timeoutSeconds);
-    const output = result.fullOutput || result.output || "";
-    const failedTests = extractFailedTests(output);
-    const warnings = checksInspectWarnings(command, output, result, failedTests);
+  const fixedControlBlock = runtime.fixedControlBlockForCommand?.(command, config, args);
+  if (fixedControlBlock) {
+    const warning = fixedControlBlock.issue || fixedControlBlock.message || "Blocked.";
     return {
       ...inspectionBase({
-        ok: !result.timedOut && result.exitCode === 0,
+        ok: false,
         workDir,
-        ranCommand: true,
-        command: result.command,
-        timeoutSeconds,
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        termination: result.termination,
-        terminationFailed: result.terminationFailed,
-        warnings,
-        hints: checksInspectHints(),
-        outputPreview: deps.headText(output, 50, 16000),
-        outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+        ranCommand: false,
+        command: "",
+        timeoutSeconds: null,
+        exitCode: null,
+        timedOut: false,
+        warnings: [warning],
+        hints: benchmarkInspectHints(state.config.metricName || ""),
+        outputPreview: "",
+        outputTruncated: false,
       }),
-      failedTests,
-      nextAction: result.terminationFailed
-        ? "Verify the reported PID and descendants are absent before another checks command."
-        : result.timedOut || result.exitCode !== 0
-          ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed."
-          : "Checks command completed cleanly; include it as verification evidence before logging or finalizing.",
+      code: fixedControlBlock.code,
+      fixedControlViolation: fixedControlBlock.fixedControlViolation,
+      parsedMetrics: {},
+      nextAction: fixedControlBlock.message || warning,
     };
   }
+  const result = await runShell(command, workDir, timeoutSeconds, {
+    retainMetricNames: [state.config.metricName].filter(Boolean),
+  });
+  const output = metricParseSource(result) || result.fullOutput || result.output || "";
+  const parsedMetrics = parseMetricLines(output);
+  const parsedMetricCount = metricCount(parsedMetrics);
+  const timedOutBeforeMetric = result.timedOut && parsedMetricCount === 0;
+  if (timedOutBeforeMetric) {
+    warnings.push(
+      "The inspect command timed out before any METRIC output. Use a benchmark-specific list/dry-run/artifact mode before running the full packet.",
+    );
+  }
+  if (result.exitCode !== 0 && !result.timedOut) {
+    warnings.push(
+      `The inspect command exited ${result.exitCode}; verify the command is a bounded probe.`,
+    );
+  }
+  if (result.terminationFailed) {
+    warnings.push(
+      "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+    );
+  }
+  return {
+    ...inspectionBase({
+      ok: !result.timedOut && result.exitCode === 0,
+      workDir,
+      ranCommand: true,
+      command: result.command,
+      timeoutSeconds,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      termination: result.termination,
+      terminationFailed: result.terminationFailed,
+      warnings,
+      hints: benchmarkInspectHints(state.config.metricName || ""),
+      outputPreview: headText(output || result.fullOutput || result.output || "", 30, 12000),
+      outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+    }),
+    parsedMetrics,
+    nextAction: result.terminationFailed
+      ? "Verify the reported PID and descendants are absent before another inspect command."
+      : result.timedOut || result.exitCode !== 0
+        ? "Switch to a bounded list/dry-run/artifact command, then lint the metric contract."
+        : "If this is bounded and representative, run benchmark-lint or the first compact next packet.",
+  };
+}
 
-  return { benchmarkLint, benchmarkInspect, checksInspect };
+export async function checksInspect(args: LooseObject): Promise<LooseObject> {
+  const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const command = String(args.command || args.checks_command || args.checksCommand || "").trim();
+  const timeoutSeconds = Math.max(1, numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60));
+  if (!command) {
+    return {
+      ...inspectionBase({
+        ok: true,
+        workDir,
+        ranCommand: false,
+        command: "",
+        timeoutSeconds: null,
+        exitCode: null,
+        timedOut: false,
+        warnings: ["No checks command was provided."],
+        hints: checksInspectHints(),
+        outputPreview: "",
+        outputTruncated: false,
+      }),
+      failedTests: [],
+      nextAction:
+        "Run checks-inspect with the exact correctness command before treating a failed suite as evidence.",
+    };
+  }
+  const result = await runShell(command, workDir, timeoutSeconds);
+  const output = result.fullOutput || result.output || "";
+  const failedTests = extractFailedTests(output);
+  const warnings = checksInspectWarnings(command, output, result, failedTests);
+  return {
+    ...inspectionBase({
+      ok: !result.timedOut && result.exitCode === 0,
+      workDir,
+      ranCommand: true,
+      command: result.command,
+      timeoutSeconds,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      termination: result.termination,
+      terminationFailed: result.terminationFailed,
+      warnings,
+      hints: checksInspectHints(),
+      outputPreview: headText(output, 50, 16000),
+      outputTruncated: Boolean(result.outputTruncated || result.fullOutputTruncated),
+    }),
+    failedTests,
+    nextAction: result.terminationFailed
+      ? "Verify the reported PID and descendants are absent before another checks command."
+      : result.timedOut || result.exitCode !== 0
+        ? "Fix command-shape problems first, then separate touched-path failures from broader suite failures before logging checks_failed."
+        : "Checks command completed cleanly; include it as verification evidence before logging or finalizing.",
+  };
+}
+
+function validateMetricName(name: unknown): string {
+  const value = String(name || "");
+  if (!METRIC_NAME_PATTERN.test(value) || DENIED_METRIC_NAMES.has(value)) {
+    throw new Error(
+      `Metric name must match the METRIC parser grammar: one non-empty token without whitespace or "=". Got ${value}`,
+    );
+  }
+  return value;
+}
+
+function metricParseSource(result: InspectShellRunResult | null): string {
+  if (!result) return "";
+  const retained = result.retainedMetricOutput || "";
+  if (result.metricOutput) {
+    return [
+      result.metricOutput,
+      result.metricOutputTruncated && result.fullOutput ? result.fullOutput : "",
+      retained,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [result.fullOutput || result.output || "", retained].filter(Boolean).join("\n");
+}
+
+function headText(text: string, maxLines: number, maxBytes: number): string {
+  const bytes = Buffer.from(text, "utf8");
+  const bounded = bytes.length > maxBytes ? bytes.subarray(0, maxBytes).toString("utf8") : text;
+  return bounded.split(/\r?\n/).slice(0, maxLines).join("\n");
 }
 
 function blockedBenchmarkLint({

@@ -304,10 +304,8 @@ const OUTPUT_MAX_BYTES = 8192;
 type DashboardViewModelModule = typeof import("../lib/dashboard-view-model.js");
 type FinalizePreviewModule = typeof import("../lib/finalize-preview.js");
 type PartialResultsModule = typeof import("../lib/partial-results.js");
-type InspectCommandsModule = typeof import("../lib/commands/inspect.js");
 type LaneRunnerCommandModule = typeof import("../lib/commands/lane-runner.js");
 type LiveServerModule = typeof import("../lib/live-server.js");
-type InspectCommandHandlers = ReturnType<InspectCommandsModule["createInspectCommands"]>;
 
 async function buildDashboardViewModelLazy(
   ...args: Parameters<DashboardViewModelModule["buildDashboardViewModel"]>
@@ -484,44 +482,31 @@ const { exportDashboard, serveDashboard } = createDashboardCommands({
   writeFile: fsp.writeFile,
 });
 
-let inspectCommandHandlers: InspectCommandHandlers | null = null;
-
-async function getInspectCommandHandlers(): Promise<InspectCommandHandlers> {
-  if (!inspectCommandHandlers) {
-    const { createInspectCommands } = await import("../lib/commands/inspect.js");
-    inspectCommandHandlers = createInspectCommands({
-      currentState,
-      defaultBenchmarkCommand,
-      fixedControlBlockForCommand,
-      finiteMetric,
-      headText,
-      metricParseSource,
-      numberOption,
-      parseMetricLines,
-      resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
-        await resolveBenchmarkCommandSource(args, workDir, {
-          fallbackToDefault: true,
-          requireCommand: false,
-          config,
-        }),
-      resolveWorkDir,
-      runShell,
-      validateMetricName,
-    });
-  }
-  return inspectCommandHandlers;
-}
-
 async function benchmarkLint(args: LooseObject): Promise<LooseObject> {
-  return await (await getInspectCommandHandlers()).benchmarkLint(args);
+  const { benchmarkLint: runBenchmarkLint } = await import("../lib/commands/inspect.js");
+  return await runBenchmarkLint(args, inspectRuntime());
 }
 
 async function benchmarkInspect(args: LooseObject): Promise<LooseObject> {
-  return await (await getInspectCommandHandlers()).benchmarkInspect(args);
+  const { benchmarkInspect: runBenchmarkInspect } = await import("../lib/commands/inspect.js");
+  return await runBenchmarkInspect(args, inspectRuntime());
 }
 
 async function checksInspect(args: LooseObject): Promise<LooseObject> {
-  return await (await getInspectCommandHandlers()).checksInspect(args);
+  const { checksInspect: runChecksInspect } = await import("../lib/commands/inspect.js");
+  return await runChecksInspect(args);
+}
+
+function inspectRuntime() {
+  return {
+    fixedControlBlockForCommand,
+    resolveBenchmarkCommand: async (args: LooseObject, workDir: string, config: LooseObject) =>
+      await resolveBenchmarkCommandSource(args, workDir, {
+        fallbackToDefault: true,
+        requireCommand: false,
+        config,
+      }),
+  };
 }
 
 async function partialResultsCommand(args: LooseObject): Promise<LooseObject> {
