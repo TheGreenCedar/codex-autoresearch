@@ -56,13 +56,8 @@ test("dashboard styles latest rejected evidence as rejected, not kept", async ()
 
   assert.equal(metricDetails.getAttribute("data-status"), "discard");
   assert.match(getById("metric-details-selected").textContent || "", /Rejected/);
-  assert.match(dashboardCss, /\.latest-halo-ui\.discard/);
+  assert.match(dashboardCss, /\.chart-point\.discard/);
   assert.match(dashboardCss, /\.experiment-modal\.status-discard/);
-  assert.ok(
-    dashboardCss.lastIndexOf(".dark-theme .latest-halo-ui.discard") >
-      dashboardCss.lastIndexOf(".dark-theme .latest-halo-ui {"),
-    "Dark theme discard halo rule must outrank the generic dark halo.",
-  );
   dom.window.close();
 });
 
@@ -103,7 +98,7 @@ test("dashboard renders structured ASI evidence without object coercion", async 
   dom.window.close();
 });
 
-test("dashboard renders the full run log without blank scroll space", async () => {
+test("dashboard pages the full run log without duplicate history markup", async () => {
   const entries = [
     dashboardConfigEntry({ name: "long log path", metricName: "seconds", metricUnit: "s" }),
     ...Array.from({ length: 100 }, (_, index) => ({
@@ -122,15 +117,16 @@ test("dashboard renders the full run log without blank scroll space", async () =
   const renderedRows = ledgerHtml.match(/ledger-row/g) || [];
 
   assert.equal(getById("ledger").hidden, false);
-  assert.match(getById("ledger-note").textContent, /100 runs \/ newest first/);
-  assert.equal(renderedRows.length, 100);
+  assert.match(getById("ledger-note").textContent, /20 shown of 100 runs \/ page 1 of 5/);
+  assert.equal(renderedRows.length, 20);
   assert.equal(getById("ledger-scroll").querySelector("table")?.tagName, "TABLE");
   assert.equal(getById("ledger-body").tagName, "TBODY");
   assert.match(ledgerHtml, /#100/);
-  assert.match(ledgerHtml, /#1<\/td>/);
+  assert.doesNotMatch(ledgerHtml, /#1<\/td>/);
+  assert.equal(getById("ledger").querySelectorAll("table").length, 1);
 });
 
-test("dashboard renders the newest 100 of 5,000 rows and loads older rows in batches", async () => {
+test("dashboard renders 20 of 5,000 rows and pages to older runs", async () => {
   const entries = [
     dashboardConfigEntry({ name: "large ledger", metricName: "seconds", metricUnit: "s" }),
     ...Array.from({ length: 5_000 }, (_, index) => ({
@@ -143,18 +139,84 @@ test("dashboard renders the newest 100 of 5,000 rows and loads older rows in bat
   ];
   const { dom, getById } = await runDashboard(entries, emptyCommandMeta());
 
-  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 100);
-  assert.match(getById("ledger-note").textContent || "", /4900 older runs available/);
-  const loadOlder = [...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Load 100 older",
+  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 20);
+  assert.match(getById("ledger-note").textContent || "", /page 1 of 250/);
+  const olderRuns = [...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Older runs",
   );
-  assert.ok(loadOlder);
-  loadOlder.click();
+  assert.ok(olderRuns);
+  olderRuns.click();
   await waitFor(
-    () => getById("ledger-body").querySelectorAll("tr").length === 200,
-    "Ledger did not load the next 100 older rows.",
+    () => getById("ledger-note").textContent?.includes("page 2 of 250") === true,
+    "Ledger did not show the next 20 older rows.",
   );
-  assert.match(getById("ledger-note").textContent || "", /4800 older runs available/);
+  assert.equal(getById("ledger-body").querySelectorAll("tr").length, 20);
+  assert.match(getById("ledger-body").textContent || "", /#4980/);
+});
+
+test("dashboard does not resurrect a stale page after same-segment shrink and regrowth", async () => {
+  const entriesFor = (count: number) => [
+    dashboardConfigEntry({ name: "resizing ledger", metricName: "seconds", metricUnit: "s" }),
+    ...Array.from({ length: count }, (_, index) => ({
+      type: "run",
+      run: index + 1,
+      metric: count - index,
+      status: "keep",
+      description: `Run ${index + 1}`,
+    })),
+  ];
+  const payloads = [100, 25, 100].map((count) => ({
+    ledgerEntries: entriesFor(count),
+    ledgerBounds: { truncated: false, omittedEntries: 0, maxEntries: 5_000 },
+    summary: { segment: 0, baseline: count, best: 1, runs: count },
+  }));
+  const { dom, getById } = await runDashboard(
+    entriesFor(100),
+    emptyCommandMeta({
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      liveActionsAvailable: false,
+      refreshMs: 60_000,
+      viewModel: payloads[0],
+    }),
+    {
+      beforeParse(window) {
+        window.__ledgerRefreshIndex = 0;
+        window.fetch = async () => ({
+          ok: true,
+          json: async () => payloads[Math.min(window.__ledgerRefreshIndex++, 2)],
+        });
+        window.setInterval = () => 1;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+  const olderRuns = () =>
+    [...dom.window.document.querySelectorAll<HTMLButtonElement>(".ledger-pagination button")].find(
+      (button) => button.textContent?.trim() === "Older runs",
+    );
+  for (const page of [2, 3, 4]) {
+    olderRuns()?.click();
+    await waitFor(
+      () => getById("ledger-note").textContent?.includes(`page ${page} of 5`) === true,
+      `Ledger did not reach page ${page}.`,
+    );
+  }
+
+  getById("refresh-now").click();
+  await waitFor(
+    () => getById("ledger-note").textContent?.includes("page 2 of 2") === true,
+    "Ledger did not clamp after shrink.",
+  );
+  await waitFor(
+    () => (getById("refresh-now") as HTMLButtonElement).disabled === false,
+    "Shrink refresh did not settle.",
+  );
+  getById("refresh-now").click();
+  await waitFor(
+    () => getById("ledger-note").textContent?.includes("page 2 of 5") === true,
+    "Ledger resurrected the stale page after regrowth.",
+  );
 });
 
 test("dashboard rejects malformed injected ledger entries", async () => {
@@ -168,7 +230,7 @@ test("dashboard rejects malformed injected ledger entries", async () => {
   );
 
   assert.match(getById("payload-failure-reason").textContent || "", /invalid status/);
-  assert.equal(queryById("ledger-body"), null);
+  assert.equal(queryById("ledger-body") === null, true);
 });
 
 test("dashboard rejects unknown explicit ledger entry types before rendering evidence", async () => {
@@ -181,7 +243,7 @@ test("dashboard rejects unknown explicit ledger entry types before rendering evi
   );
 
   assert.match(getById("payload-failure-reason").textContent || "", /invalid auxiliary/);
-  assert.equal(queryById("ledger-body"), null);
+  assert.equal(queryById("ledger-body") === null, true);
 });
 
 test("dashboard labels bounded static export ledgers as partial", async () => {
@@ -213,11 +275,11 @@ test("dashboard labels bounded static export ledgers as partial", async () => {
 
   assert.match(
     getById("ledger-note").textContent,
-    /12 runs \/ newest first \/ 101 older ledger entries omitted from snapshot \/ summary uses the full streamed ledger/,
+    /12 shown of 12 runs \/ page 1 of 1 \/ newest first \/ 101 older ledger entries omitted from snapshot \/ summary uses the full streamed ledger/,
   );
   assert.equal(getById("runs-value").textContent, "113 (110 kept)");
   assert.match(
     getById("ledger-scroll").querySelector("table")?.getAttribute("aria-label") || "",
-    /12 shown, 101 older ledger entries omitted from snapshot/,
+    /12 shown of 12 runs, 101 older ledger entries omitted from snapshot/,
   );
 });

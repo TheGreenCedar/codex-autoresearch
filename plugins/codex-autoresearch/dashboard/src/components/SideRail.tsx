@@ -1,6 +1,6 @@
 const NAV_ITEMS = [
-  ["#trend-panel", "1", "Metric"],
-  ["#decision-rail", "2", "Move"],
+  ["#decision-rail", "1", "Move"],
+  ["#trend-panel", "2", "Metric"],
   ["#codex-brief", "3", "Brief"],
   ["#ledger", "4", "Ledger"],
 ] as const;

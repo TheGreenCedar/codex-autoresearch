@@ -14,8 +14,6 @@ interface MeasuredRun {
   value: number;
 }
 
-export const DASHBOARD_CHART_MAX_POINTS = 500;
-
 export function buildChart(session: SessionSegment, readout: DashboardReadout): ChartModel {
   const definition = readout.metricDefinition;
   const measured = measuredRuns(readout, definition);
@@ -24,7 +22,7 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     return emptyChart(readout);
   }
   const bestRun = readout.bestRun;
-  const chartRuns = chartRunsFor(session, definition, bestRun ? [bestRun] : []);
+  const chartRuns = chartRunsFor(session, definition);
   const values = measured.map((item) => item.value);
   const { domain } = metricDomain(values, readout);
   const latest = chartRuns.at(-1);
@@ -36,7 +34,7 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     definition,
     latest,
   });
-  const plottedCrashCount = points.filter((point) => point.heldMetric).length;
+  const candidateCrashCount = points.filter((point) => point.run.status === "crash").length;
   const improvesLower = definition.bestDirection !== "higher";
   const winZoneBounds = chartWinZoneBounds(improvesLower, domain, readout.best);
   const latestPoint = points.at(-1);
@@ -48,7 +46,7 @@ export function buildChart(session: SessionSegment, readout: DashboardReadout): 
     finiteMetricRunCount,
     latest,
     latestPoint,
-    plottedCrashCount,
+    candidateCrashCount,
     readout,
     session,
   });
@@ -72,39 +70,13 @@ function measuredRuns(
     .filter((item): item is MeasuredRun => finiteMetric(item.value));
 }
 
-function chartRunsFor(
-  session: SessionSegment,
-  definition: WeightedMetricDefinition,
-  anchors: SessionRun[] = [],
-): SessionRun[] {
-  return downsampleChartRuns(
-    session.runs.filter(
-      (run) => run.status === "crash" || finiteMetric(metricValueForRun(run, definition)),
-    ),
-    anchors,
+function chartRunsFor(session: SessionSegment, definition: WeightedMetricDefinition): SessionRun[] {
+  return session.runs.filter(
+    (run) =>
+      run.status === "crash" ||
+      run.status === "checks_failed" ||
+      finiteMetric(metricValueForRun(run, definition)),
   );
-}
-
-function downsampleChartRuns(runs: SessionRun[], anchors: SessionRun[]): SessionRun[] {
-  if (runs.length <= DASHBOARD_CHART_MAX_POINTS) return runs;
-  const selected = new Set<SessionRun>();
-  const runSet = new Set(runs);
-  const add = (run: SessionRun | null | undefined) => {
-    if (run && runSet.has(run)) selected.add(run);
-  };
-  add(runs[0]);
-  add(runs.at(-1));
-  for (const anchor of anchors) add(anchor);
-  const remainingSlots = Math.max(1, DASHBOARD_CHART_MAX_POINTS - selected.size);
-  const step = Math.max(1, Math.ceil((runs.length - selected.size) / remainingSlots));
-  for (
-    let index = 1;
-    index < runs.length - 1 && selected.size < DASHBOARD_CHART_MAX_POINTS;
-    index += step
-  ) {
-    selected.add(runs[index]);
-  }
-  return runs.filter((run) => selected.has(run));
 }
 
 function buildChartPoints({
@@ -120,11 +92,10 @@ function buildChartPoints({
   definition: WeightedMetricDefinition;
   latest: SessionRun | undefined;
 }) {
+  const failureMetrics = heldFailureMetrics(allRuns, definition);
   return chartRuns.map((run) => {
-    const heldMetric = run.status === "crash";
-    const chartMetric = heldMetric
-      ? heldCrashMetric(allRuns, run, definition)
-      : metricValueForRun(run, definition);
+    const heldMetric = holdsNearestMetric(run, definition);
+    const chartMetric = heldMetric ? failureMetrics.get(run) : metricValueForRun(run, definition);
     const safeMetric = finiteMetric(chartMetric) ? chartMetric : 0;
     return {
       run,
@@ -144,7 +115,7 @@ function chartSummaryParts({
   finiteMetricRunCount,
   latest,
   latestPoint,
-  plottedCrashCount,
+  candidateCrashCount,
   readout,
   session,
 }: {
@@ -155,7 +126,7 @@ function chartSummaryParts({
   finiteMetricRunCount: number;
   latest: SessionRun | undefined;
   latestPoint: { chartMetric: number } | undefined;
-  plottedCrashCount: number;
+  candidateCrashCount: number;
   readout: DashboardReadout;
   session: SessionSegment;
 }): string[] {
@@ -167,7 +138,7 @@ function chartSummaryParts({
     ];
   }
   return [
-    `${chartRuns.length} plotted runs out of ${session.runs.length} logged runs`,
+    `${chartRuns.length} chart-eligible runs out of ${session.runs.length} logged runs`,
     latest
       ? `latest plotted #${latest.run} at ${formatMetricValue(latestPoint?.chartMetric ?? null, definition)}`
       : "",
@@ -176,18 +147,18 @@ function chartSummaryParts({
       : finiteMetric(readout.best)
         ? `Best value ${formatMetricValue(readout.best, definition)} is outside the visible ledger window`
         : "",
-    crashSummary(crashRuns.length, plottedCrashCount),
+    crashSummary(crashRuns.length, candidateCrashCount),
   ].filter(Boolean);
 }
 
-function crashSummary(visibleCrashCount: number, plottedCrashCount: number): string {
+function crashSummary(visibleCrashCount: number, candidateCrashCount: number): string {
   if (!visibleCrashCount) return "";
-  if (visibleCrashCount !== plottedCrashCount) {
-    return `${visibleCrashCount} crash run${visibleCrashCount === 1 ? "" : "s"} in visible history; ${plottedCrashCount} plotted after downsampling at the nearest successful metric level`;
+  if (visibleCrashCount !== candidateCrashCount) {
+    return `${visibleCrashCount} crash run${visibleCrashCount === 1 ? "" : "s"} in available history; ${candidateCrashCount} chart-eligible at the nearest successful metric level`;
   }
-  return `${plottedCrashCount} crash run${
-    plottedCrashCount === 1 ? " is" : "s are"
-  } plotted at the nearest successful metric level`;
+  return `${candidateCrashCount} crash run${
+    candidateCrashCount === 1 ? " is" : "s are"
+  } available to the adaptive chart at the nearest successful metric level`;
 }
 
 function chartNote({
@@ -239,23 +210,35 @@ function chartWinZoneBounds(improvesLower: boolean, domain: [number, number], be
   return improvesLower ? { y1: domain[0], y2: best } : { y1: best, y2: domain[1] };
 }
 
-function heldCrashMetric(
+function heldFailureMetrics(
   runs: SessionRun[],
-  crashRun: SessionRun,
   definition: WeightedMetricDefinition,
-): number | null {
-  const index = runs.indexOf(crashRun);
-  for (let offset = index - 1; offset >= 0; offset -= 1) {
-    const candidate = metricValueForRun(runs[offset], definition);
-    if (runs[offset]?.status !== "crash" && finiteMetric(candidate)) return candidate;
+): Map<SessionRun, number | null> {
+  const metrics = new Map<SessionRun, number | null>();
+  let nearest: number | null = null;
+  for (const run of runs) {
+    const candidate = metricValueForRun(run, definition);
+    if (!isFailedRun(run) && finiteMetric(candidate)) nearest = candidate;
+    else if (holdsNearestMetric(run, definition)) metrics.set(run, nearest);
   }
-  for (let offset = index + 1; offset < runs.length; offset += 1) {
-    const candidate = metricValueForRun(runs[offset], definition);
-    if (runs[offset]?.status !== "crash" && finiteMetric(candidate)) return candidate;
+  nearest = null;
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index]!;
+    const candidate = metricValueForRun(run, definition);
+    if (!isFailedRun(run) && finiteMetric(candidate)) nearest = candidate;
+    else if (holdsNearestMetric(run, definition) && metrics.get(run) == null)
+      metrics.set(run, nearest);
   }
-  return readNumber(metricValueForRun(crashRun, definition));
+  return metrics;
 }
 
-function readNumber(value: number | null): number {
-  return Number.isFinite(value) ? Number(value) : 0;
+function holdsNearestMetric(run: SessionRun, definition: WeightedMetricDefinition): boolean {
+  return (
+    run.status === "crash" ||
+    (run.status === "checks_failed" && !finiteMetric(metricValueForRun(run, definition)))
+  );
+}
+
+function isFailedRun(run: SessionRun): boolean {
+  return run.status === "crash" || run.status === "checks_failed";
 }

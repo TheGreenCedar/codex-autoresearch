@@ -227,7 +227,7 @@ test("production dashboard renders a payload-unavailable state instead of demo e
   assert.equal(getById("payload-failure-title").textContent, "Dashboard Payload Unavailable");
   assert.match(getById("payload-failure-reason").textContent || "", /data injection is missing/);
   assert.match(getById("payload-failure-recovery").textContent || "", /export --cwd <project>/);
-  assert.equal(queryById("trend-panel"), null);
+  assert.equal(queryById("trend-panel") === null, true);
   assert.doesNotMatch(getById("dashboard-root").textContent || "", /Indexing Pipeline Speed/);
 });
 
@@ -249,7 +249,7 @@ test("static and served bootstrap failures show mode-specific recovery", async (
     const { dom, getById, queryById } = await runDashboard(entries, meta);
     assert.match(getById("dashboard-root").textContent || "", new RegExp(mode));
     assert.match(getById("payload-failure-recovery").textContent || "", recovery);
-    assert.equal(queryById("trend-panel"), null);
+    assert.equal(queryById("trend-panel") === null, true);
     dom.window.close();
   }
 });

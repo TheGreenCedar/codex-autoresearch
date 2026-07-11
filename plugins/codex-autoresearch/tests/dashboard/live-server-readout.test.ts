@@ -106,7 +106,7 @@ test("served dashboard live refresh starts by default and can be stopped", async
   );
   assert.match(
     getById("ledger-note").textContent,
-    /2 runs \/ newest first \/ 25 older ledger entries omitted from snapshot/,
+    /2 shown of 2 runs \/ page 1 of 1 \/ newest first \/ 25 older ledger entries omitted from snapshot/,
   );
   assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -119,6 +119,120 @@ test("served dashboard live refresh starts by default and can be stopped", async
     () => dom.window.__clearedLiveInterval === 1,
     "Live toggle did not clear the interval.",
   );
+  dom.window.close();
+});
+
+test("manual refresh exposes busy, last-good, focus, and error state without overlap", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "refresh state", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+  ];
+  const refreshedEntries = [
+    ...entries,
+    { type: "run", run: 2, metric: 4, status: "keep", description: "Improved" },
+  ];
+  const liveViewModel = {
+    summary: { segment: 0, baseline: 5, best: 4, runs: 2 },
+    ledgerEntries: refreshedEntries,
+  };
+  let fetchCount = 0;
+  let resolveManualRefresh: ((value: unknown) => void) | null = null;
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      refreshMs: 60_000,
+      generatedAt: "2026-07-11T05:00:00.000Z",
+      viewModel: { summary: { segment: 0, baseline: 5, best: 5, runs: 1 } },
+    },
+    {
+      beforeParse(window) {
+        window.fetch = async () => {
+          fetchCount += 1;
+          if (fetchCount === 1) return { ok: true, json: async () => liveViewModel };
+          return new Promise((resolve) => {
+            resolveManualRefresh = resolve;
+          });
+        };
+        window.setInterval = () => 42;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+  const refresh = getById("refresh-now") as HTMLButtonElement;
+  await waitFor(() => fetchCount === 1, "Initial live refresh did not run.");
+  await waitFor(
+    () => getById("runs-value").textContent === "2 (2 kept)" && refresh.disabled === false,
+    "Initial live refresh did not settle.",
+  );
+
+  refresh.focus();
+  refresh.click();
+  await waitFor(
+    () => fetchCount === 2,
+    `Manual refresh did not fetch again (count=${fetchCount}, disabled=${refresh.disabled}).`,
+  );
+  await waitFor(() => refresh.disabled, "Manual refresh did not disable while in flight.");
+  assert.equal(dom.window.document.querySelector("main")?.getAttribute("aria-busy"), "true");
+  assert.match(getById("live-title").textContent || "", /Refreshing/);
+  assert.match(getById("live-detail").textContent || "", /Last validated/);
+  refresh.click();
+  assert.equal(fetchCount, 2, "Disabled refresh started an overlapping request.");
+
+  resolveManualRefresh?.({ ok: true, json: async () => liveViewModel });
+  await waitFor(() => refresh.disabled === false, "Manual refresh did not settle.");
+  assert.equal(dom.window.document.activeElement === refresh, true);
+  assert.equal(dom.window.document.querySelector("main")?.getAttribute("aria-busy"), "false");
+  assert.doesNotMatch(getById("last-good-status").textContent || "", /Initial snapshot/);
+
+  dom.window.fetch = async () => ({
+    ok: false,
+    status: 503,
+    statusText: "Service Unavailable",
+  });
+  refresh.click();
+  await waitFor(
+    () => getById("live-region").getAttribute("role") === "alert",
+    "Refresh error was not exposed as an alert.",
+  );
+  assert.match(getById("live-detail").textContent || "", /last known valid readout, validated/i);
+  assert.equal(getById("runs-value").textContent, "2 (2 kept)");
+  assert.equal(dom.window.document.activeElement === refresh, true);
+  dom.window.close();
+});
+
+test("live dashboard exposes missing fetch as an alert while retaining the readout", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "missing fetch", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+  ];
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      refreshMs: 60_000,
+      generatedAt: "2026-07-11T05:00:00.000Z",
+      viewModel: { summary: { segment: 0, baseline: 5, best: 5, runs: 1 } },
+    },
+    {
+      beforeParse(window) {
+        Object.defineProperty(window, "fetch", { configurable: true, value: undefined });
+        window.setInterval = () => 42;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => getById("live-region").getAttribute("role") === "alert",
+    "Missing fetch was not exposed as an alert.",
+  );
+  assert.equal(getById("live-title").textContent, "Snapshot refresh unavailable");
+  assert.match(getById("live-detail").textContent || "", /last known valid readout/i);
+  assert.equal(dom.window.document.querySelector("main")?.getAttribute("aria-busy"), "false");
+  assert.equal(getById("runs-value").textContent, "1 (1 kept)");
   dom.window.close();
 });
 
@@ -716,7 +830,7 @@ test("live dashboard view model returns retry when refresh keeps changing files"
   }
 });
 
-test("served dashboard ignores stale live refresh responses that resolve out of order", async () => {
+test("served dashboard coalesces overlapping refreshes and accepts the next refresh", async () => {
   const entries = [
     {
       type: "config",
@@ -774,16 +888,31 @@ test("served dashboard ignores stale live refresh responses that resolve out of 
   );
 
   await waitFor(() => dom.window.__refreshResolvers?.[1], "Initial live refresh did not start.");
+  await waitFor(
+    () => (getById("refresh-now") as HTMLButtonElement).disabled,
+    "Refresh control did not expose its busy state.",
+  );
   getById("refresh-now").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => dom.window.__refreshResolvers?.[2], "Manual live refresh did not start.");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(dom.window.__refreshFetches, ["view-model.json"]);
 
+  dom.window.__refreshResolvers[1]();
+  await waitFor(
+    () => getById("runs-value").textContent === "2 (2 kept)",
+    "Initial refresh response did not update the dashboard.",
+  );
+  await waitFor(
+    () => !(getById("refresh-now") as HTMLButtonElement).disabled,
+    "Refresh control did not settle.",
+  );
+
+  getById("refresh-now").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => dom.window.__refreshResolvers?.[2], "Next manual refresh did not start.");
   dom.window.__refreshResolvers[2]();
   await waitFor(
     () => getById("runs-value").textContent === "3 (3 kept)",
-    "Latest refresh response did not update the dashboard.",
+    "Next refresh response did not update the dashboard.",
   );
-  dom.window.__refreshResolvers[1]();
-  await new Promise((resolve) => setTimeout(resolve, 50));
 
   assert.equal(getById("runs-value").textContent, "3 (3 kept)");
   assert.deepEqual(dom.window.__refreshFetches, ["view-model.json", "view-model.json"]);
@@ -1096,7 +1225,7 @@ test("dashboard readout uses the selected segment baseline", async () => {
   });
 
   assert.equal(getById("baseline-value").textContent, "100s");
-  assert.equal(queryById("segment-tab-0"), null);
+  assert.equal(queryById("segment-tab-0") === null, true);
   const select = getById("segment-select") as HTMLSelectElement;
   assert.equal(select.value, "1");
   assert.match(select.options[0]?.textContent || "", /S1 - first segment/);
@@ -1119,9 +1248,9 @@ test("dashboard readout uses the selected segment baseline", async () => {
   dom.window.close();
 });
 
-test("dashboard defaults to audit view and can switch to operate", async () => {
+test("dashboard defaults to operate view and can switch to audit", async () => {
   const entries = [
-    dashboardConfigEntry({ name: "audit default", metricName: "seconds", metricUnit: "s" }),
+    dashboardConfigEntry({ name: "operate default", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
   ];
 
@@ -1134,21 +1263,21 @@ test("dashboard defaults to audit view and can switch to operate", async () => {
   });
   const toggle = getById("view-toggle") as HTMLButtonElement;
 
-  assert.equal(toggle.getAttribute("aria-pressed"), "true");
-  assert.ok(getById("workspace-grid"));
-  assert.ok(getById("research-truth-meter"));
-  assert.ok(getById("strategy-memory"));
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.equal(queryById("workspace-grid") === null, true);
+  assert.equal(queryById("research-truth-meter") === null, true);
+  assert.equal(queryById("strategy-memory") === null, true);
   assert.ok(getById("codex-brief"));
 
   toggle.click();
   await waitFor(
-    () => queryById("workspace-grid") == null,
-    "Operate view did not collapse audit context.",
+    () => queryById("workspace-grid") != null,
+    "Audit view did not expose audit context.",
   );
-  assert.equal(queryById("research-truth-meter"), null);
-  assert.equal(queryById("strategy-memory"), null);
-  assert.equal(toggle.getAttribute("aria-pressed"), "false");
-  assert.match(dom.window.location.search, /view=operate/);
+  assert.ok(getById("research-truth-meter"));
+  assert.ok(getById("strategy-memory"));
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.match(dom.window.location.search, /view=audit/);
   dom.window.close();
 });
 

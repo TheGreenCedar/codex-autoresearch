@@ -32,7 +32,7 @@ test.afterEach(() => {
   dashboard.closeDashboardWindows();
 });
 
-test("dashboard chart does not place interactive point buttons under an image role", async () => {
+test("dashboard chart exposes one range while keeping the plotted SVG decorative", async () => {
   const entries = [
     dashboardConfigEntry({ name: "chart semantics", metricName: "seconds", metricUnit: "s" }),
     { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
@@ -42,29 +42,22 @@ test("dashboard chart does not place interactive point buttons under an image ro
   const { dom, getById } = await runDashboard(entries, emptyCommandMeta(), chartLayoutOptions());
   const chart = getById("trend-chart");
   await waitFor(
-    () => chart.querySelectorAll(".chart-point-button").length === 2,
-    "Chart points did not render.",
+    () => chart.querySelector("#trend-chart-range") != null,
+    "Chart range did not render.",
   );
-  const buttons = [...dom.window.document.querySelectorAll(".chart-point-button")];
+  const range = chart.querySelector<HTMLInputElement>("#trend-chart-range");
 
+  assert.ok(range);
   assert.equal(chart.getAttribute("role"), null);
   assert.equal(chart.getAttribute("aria-labelledby"), "trend-chart-title trend-chart-desc");
-  assert.match(
-    getById("chart-keyboard-help").textContent || "",
-    /arrow keys move through history/i,
-  );
-  assert.equal(
-    buttons.filter((button) => button.getAttribute("aria-current") === "true").length,
-    1,
-  );
-  assert.equal(buttons.filter((button) => (button as HTMLButtonElement).tabIndex === 0).length, 1);
-  for (const button of buttons) {
-    assert.equal(button.closest('[role="img"]'), null);
-    assert.equal(button.getAttribute("aria-describedby"), "chart-keyboard-help");
-    assert.doesNotMatch(button.getAttribute("aria-describedby") || "", /trend-chart-selected/);
-    assert.match(button.getAttribute("aria-label") || "", /Open details for run/);
-  }
-  assert.match(getById("trend-chart-selected").textContent || "", /Selected chart point:/);
+  assert.match(getById("chart-keyboard-help").textContent || "", /slider to move/i);
+  assert.equal(chart.querySelectorAll(".chart-point-button, .chart-data-list").length, 0);
+  assert.equal(chart.querySelectorAll('input[type="range"]').length, 1);
+  assert.equal(chart.querySelector(".chart-visual")?.getAttribute("aria-hidden"), "true");
+  assert.equal(range.getAttribute("aria-describedby"), "chart-keyboard-help trend-chart-desc");
+  assert.equal(range.getAttribute("aria-haspopup"), "dialog");
+  assert.match(range.getAttribute("aria-valuetext") || "", /run 2/i);
+  assert.equal(chart.querySelectorAll(".chart-open-details").length, 1);
   dom.window.close();
 });
 
@@ -79,16 +72,14 @@ test("dashboard restores chart focus after the experiment modal unmounts", async
     chartLayoutOptions(),
   );
   await waitFor(
-    () => dom.window.document.querySelectorAll(".chart-point-button").length === 2,
-    "Chart points did not render.",
+    () => dom.window.document.querySelector("#trend-chart-range") != null,
+    "Chart range did not render.",
   );
-  const opener = dom.window.document.querySelector<HTMLButtonElement>(
-    '.chart-point-button[tabindex="0"]',
-  );
+  const opener = dom.window.document.querySelector<HTMLInputElement>("#trend-chart-range");
   assert.ok(opener);
   const openerRun = opener.dataset.chartRun;
   opener.focus();
-  opener.click();
+  opener.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await waitFor(
     () => dom.window.document.activeElement?.classList.contains("modal-close") === true,
     "Modal close button did not receive focus.",
@@ -100,7 +91,7 @@ test("dashboard restores chart focus after the experiment modal unmounts", async
   );
   await waitFor(
     () => dom.window.document.activeElement?.getAttribute("data-chart-run") === openerRun,
-    "Chart point opener did not regain focus.",
+    "Chart range did not regain focus.",
   );
 });
 
@@ -115,7 +106,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     liveActionsAvailable: false,
   });
   assert.ok(staticDashboard.dom.window.document.querySelector(".side-status .status-dot"));
-  assert.equal(staticDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.equal(
+    staticDashboard.dom.window.document.querySelector(".side-status .live-dot") === null,
+    true,
+  );
   assert.match(
     staticDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Static/,
@@ -128,7 +122,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     showcaseMode: true,
   });
   assert.ok(demoDashboard.dom.window.document.querySelector(".side-status .status-dot"));
-  assert.equal(demoDashboard.dom.window.document.querySelector(".side-status .live-dot"), null);
+  assert.equal(
+    demoDashboard.dom.window.document.querySelector(".side-status .live-dot") === null,
+    true,
+  );
   assert.match(
     demoDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Demo/,
@@ -141,7 +138,10 @@ test("dashboard side rail distinguishes live and static status affordances", asy
     liveActionsAvailable: false,
   });
   assert.ok(liveDashboard.dom.window.document.querySelector(".side-status .live-dot"));
-  assert.equal(liveDashboard.dom.window.document.querySelector(".side-status .status-dot"), null);
+  assert.equal(
+    liveDashboard.dom.window.document.querySelector(".side-status .status-dot") === null,
+    true,
+  );
   assert.match(
     liveDashboard.dom.window.document.querySelector(".side-status")?.textContent || "",
     /Live/,
@@ -209,10 +209,7 @@ test("dashboard contrast tokens cover reported a11y targets", () => {
     extractCssBlock(css, ".legend-swatch.checks_failed"),
     /background:\s*var\(--amber-dark\)/,
   );
-  assert.match(
-    extractCssBlock(css, ".chart-point-button:focus-visible .chart-point-dot"),
-    /0 0 0 6px var\(--amber-dark\)/,
-  );
+  assert.match(css, /input:focus-visible[\s\S]*outline:\s*3px solid var\(--focus\)/);
 });
 
 test("dashboard surfaces generated suspicious research reasons", async () => {
@@ -243,8 +240,8 @@ test("dashboard surfaces generated suspicious research reasons", async () => {
     viewModel,
   });
 
-  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning"), null);
-  assert.equal(dom.window.document.getElementById("decision-suspicious-perfect"), null);
+  assert.equal(dom.window.document.getElementById("suspicious-perfect-warning") === null, true);
+  assert.equal(dom.window.document.getElementById("decision-suspicious-perfect") === null, true);
   assert.match(String(viewModel.researchTruth.suspiciousReasons[0]), /no breadth evidence/);
 });
 
@@ -276,23 +273,17 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
   const hrefs = [...dom.window.document.querySelectorAll(".skip-links a")].map((item) =>
     item.getAttribute("href"),
   );
-  assert.deepEqual(hrefs, [
-    "#trend-panel",
-    "#decision-rail",
-    "#codex-brief",
-    "#strategy-memory",
-    "#ledger",
-  ]);
+  assert.deepEqual(hrefs, ["#decision-rail", "#trend-panel", "#codex-brief", "#ledger"]);
   const sideLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.textContent?.trim(),
   );
-  assert.deepEqual(sideLabels, ["1Metric", "2Move", "3Brief", "4Ledger"]);
+  assert.deepEqual(sideLabels, ["1Move", "2Metric", "3Brief", "4Ledger"]);
   const sideAriaLabels = [...dom.window.document.querySelectorAll(".side-nav a")].map((item) =>
     item.getAttribute("aria-label"),
   );
   assert.deepEqual(sideAriaLabels, [
-    "Dashboard section: Metric",
     "Dashboard section: Move",
+    "Dashboard section: Metric",
     "Dashboard section: Brief",
     "Dashboard section: Ledger",
   ]);
@@ -303,7 +294,7 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     true,
   );
   assert.ok(dom.window.document.getElementById("dashboard-toolbar"));
-  assert.equal(dom.window.document.querySelector(".masthead"), null);
+  assert.equal(dom.window.document.querySelector(".masthead") === null, true);
   const decisionRail = dom.window.document.getElementById("decision-rail");
   const trendPanel = dom.window.document.getElementById("trend-panel");
   const scoreStrip = dom.window.document.querySelector(".score-strip");
@@ -312,16 +303,16 @@ test("dashboard exposes keyboard skip path through primary surfaces", async () =
     dom.window.document.getElementById("next-action-title")?.textContent,
     "Do this first",
   );
-  assert.equal(dom.window.document.getElementById("decision-next-command"), null);
+  assert.ok(dom.window.document.getElementById("decision-next-command"));
   assert.ok(trendPanel);
   assert.ok(scoreStrip);
   assert.equal(
     Boolean(
-      trendPanel.compareDocumentPosition(decisionRail) &
+      decisionRail.compareDocumentPosition(trendPanel) &
       dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     ),
     true,
-    "Operate view should show the Packet trend before the next action.",
+    "Operate view should show the next action before the Packet trend.",
   );
   assert.equal(
     Boolean(
@@ -446,7 +437,7 @@ test("dashboard keeps navigation targets visible when the ledger is empty", asyn
     dom.window.document.querySelector(".ledger-empty")?.textContent?.trim(),
     "No ledger yet. First safe move: capture a baseline measurement.",
   );
-  assert.equal(dom.window.document.getElementById("ledger-scroll"), null);
+  assert.equal(dom.window.document.getElementById("ledger-scroll") === null, true);
 
   const links = [
     ...dom.window.document.querySelectorAll(".skip-links a, .side-nav a"),
@@ -483,7 +474,7 @@ test("dashboard uses calm read-only and empty-ledger copy", async () => {
     ledgerEmpty?.textContent?.trim(),
     "No ledger yet. First safe move: capture a baseline measurement.",
   );
-  assert.equal(skipLabels[0], "Packet trend");
+  assert.equal(skipLabels[0], "Next action");
   assert.equal(skipLabels.includes("Run chart"), false);
   dom.window.close();
 });
