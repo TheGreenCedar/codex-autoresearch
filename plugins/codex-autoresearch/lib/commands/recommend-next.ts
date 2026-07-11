@@ -1,4 +1,5 @@
-import { resolveActionCommand } from "../action-metadata.js";
+import { actionToolNameForKind, resolveActionCommand } from "../action-metadata.js";
+import { unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import {
   assertProjectionBudget,
   projectionBudget,
@@ -170,6 +171,9 @@ export function buildCompactRecommendNextResponse({
     runtimeProvenance: compact.runtimeProvenance,
   });
   const canonicalNextAction = recordOrNull(resolvedDecision.canonicalNextAction);
+  if (canonicalNextAction && !canonicalNextAction.toolName) {
+    canonicalNextAction.toolName = actionToolNameForKind(canonicalNextAction.kind);
+  }
   const commands = recordOrNull(compact.commands) || {};
   const explicitCommand = stringOrEmpty(canonicalNextAction?.command);
   const primaryCommand = resolveActionCommand(canonicalNextAction?.kind, commands, {
@@ -197,7 +201,7 @@ export function buildCompactRecommendNextResponse({
       resolvedDecision,
       operatorReadout: compact.operatorReadout,
       portfolioRecommendation: compact.portfolioRecommendation,
-      sessionDecisionCapsule: compact.sessionDecisionCapsule,
+      sessionDecisionCapsule: handoff.sessionDecisionCapsule,
       evidenceNotes: handoff.evidenceNotes,
       frictionSignals: handoff.frictionSignals,
     }),
@@ -251,16 +255,13 @@ function copyIfProvided<T extends object>(target: T, key: string, value: unknown
   if (value !== undefined) (target as JsonObject)[key] = value;
 }
 
-function recordOrNull(value: unknown): JsonObject | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
-}
-
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 function compactRecommendNextHandoff(compact: JsonObject): {
   compactState: JsonObject;
+  sessionDecisionCapsule: JsonObject | null;
   evidenceNotes: string[];
   frictionSignals: string[];
 } {
@@ -291,8 +292,37 @@ function compactRecommendNextHandoff(compact: JsonObject): {
       blockers: Array.isArray(compact.blockers) ? compact.blockers.slice(0, 3) : [],
       compatibility: compact.compatibility || null,
     },
+    sessionDecisionCapsule: compactSessionCapsuleForHandoff(capsule),
     evidenceNotes,
     frictionSignals,
+  };
+}
+
+function compactSessionCapsuleForHandoff(capsule: JsonObject | null): JsonObject | null {
+  if (!capsule) return null;
+  const enforcement = recordOrNull(capsule.enforcement);
+  return {
+    kind: capsule.kind || null,
+    status: capsule.status || null,
+    enforcement: enforcement
+      ? {
+          mode: enforcement.mode || null,
+          canRunNextPacket: enforcement.canRunNextPacket ?? null,
+          allowBoundedNext: enforcement.allowBoundedNext ?? null,
+          blocksFinalization: enforcement.blocksFinalization ?? null,
+          commandHint: enforcement.commandHint || "",
+          triggeredBy: enforcement.triggeredBy || [],
+        }
+      : null,
+    evidence: Array.isArray(capsule.evidence) ? capsule.evidence.slice(0, 3) : [],
+    nextExperiment: capsule.nextExperiment || "",
+    wrongNextActions: Array.isArray(capsule.wrongNextActions)
+      ? capsule.wrongNextActions.slice(0, 3)
+      : [],
+    doNotRepeat: Array.isArray(capsule.doNotRepeat) ? capsule.doNotRepeat.slice(0, 3) : [],
+    commandBudgetWarnings: Array.isArray(capsule.commandBudgetWarnings)
+      ? capsule.commandBudgetWarnings.slice(0, 3)
+      : [],
   };
 }
 

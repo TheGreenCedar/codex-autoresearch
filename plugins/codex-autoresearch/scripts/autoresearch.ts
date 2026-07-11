@@ -2101,9 +2101,8 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
     });
     const response = buildCompactRecommendNextResponse({
       workDir,
-      compactState: compactStateForRecommendHandoff(compact),
+      compactState: compact,
     });
-    withCanonicalDecisionEnvelopeToolName(response as LooseObject);
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
       const action = (response.action || {}) as LooseObject;
       const canonicalNextAction = (compact.resolvedDecision?.canonicalNextAction ||
@@ -2231,97 +2230,10 @@ async function recommendNext(args: LooseObject): Promise<LooseObject> {
   });
 }
 
-function withCanonicalDecisionEnvelopeToolName(response: LooseObject): LooseObject {
-  const action = compactRecord(compactRecord(response.resolvedDecision)?.canonicalNextAction);
-  if (action && !action.toolName) {
-    action.toolName = guidedToolNameForCanonicalKind(String(action.kind || ""));
-  }
-  return response;
-}
-
-function compactStateForRecommendHandoff(compact: LooseObject): LooseObject {
-  const resolvedDecision =
-    compactRecord(compact.resolvedDecision) ||
-    resolveSessionDecision({
-      state: compact,
-      decisionEnvelope: compact.decisionEnvelope || compact.resumeAudit,
-      commands: compact.commands,
-      runtimeProvenance: compact.runtimeProvenance,
-    });
-  const canonicalNextAction = compactRecord(resolvedDecision.canonicalNextAction);
-  return {
-    ok: compact.ok,
-    workDir: compact.workDir,
-    name: compact.name,
-    goal: compact.goal,
-    metric: compact.metric,
-    direction: compact.direction,
-    segment: compact.segment,
-    runs: compact.runs,
-    kept: compact.kept,
-    discarded: compact.discarded,
-    measured: compact.measured,
-    baseline: compact.baseline,
-    best: compact.best,
-    historicalBest: compact.historicalBest,
-    resolvedDecision,
-    nextAction: resolvedDecision.nextAction || compact.nextAction,
-    blockers: compact.blockers,
-    commands: compactRecommendCommands(compactRecord(compact.commands), canonicalNextAction),
-    sessionDecisionCapsule: compactSessionCapsuleForHandoff(compact.sessionDecisionCapsule),
-    portfolioRecommendation: compact.portfolioRecommendation,
-    operatorReadout: compact.operatorReadout,
-    workflowFriction: compact.workflowFriction,
-    compatibility: compact.compatibility,
-  };
-}
-
-function compactRecommendCommands(
-  commands: LooseObject | null,
-  canonicalNextAction: LooseObject | null,
-): LooseObject {
-  if (!commands) return {};
-  const compactCommands: LooseObject = {};
-  const primary = canonicalNextAction?.command || commands.stateCompact || commands.state;
-  if (primary) compactCommands.primary = primary;
-  if (commands.stateCompact) compactCommands.stateCompact = commands.stateCompact;
-  if (commands.state) compactCommands.state = commands.state;
-  return compactCommands;
-}
-
 function compactRecord(value: unknown): LooseObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as LooseObject)
     : null;
-}
-
-function compactSessionCapsuleForHandoff(value: unknown): LooseObject | null {
-  const capsule = compactRecord(value);
-  if (!capsule) return null;
-  const enforcement = compactRecord(capsule.enforcement);
-  return {
-    kind: capsule.kind || null,
-    status: capsule.status || null,
-    enforcement: enforcement
-      ? {
-          mode: enforcement.mode || null,
-          canRunNextPacket: enforcement.canRunNextPacket ?? null,
-          allowBoundedNext: enforcement.allowBoundedNext ?? null,
-          blocksFinalization: enforcement.blocksFinalization ?? null,
-          commandHint: enforcement.commandHint || "",
-          triggeredBy: enforcement.triggeredBy || [],
-        }
-      : null,
-    evidence: Array.isArray(capsule.evidence) ? capsule.evidence.slice(0, 3) : [],
-    nextExperiment: capsule.nextExperiment || "",
-    wrongNextActions: Array.isArray(capsule.wrongNextActions)
-      ? capsule.wrongNextActions.slice(0, 3)
-      : [],
-    doNotRepeat: Array.isArray(capsule.doNotRepeat) ? capsule.doNotRepeat.slice(0, 3) : [],
-    commandBudgetWarnings: Array.isArray(capsule.commandBudgetWarnings)
-      ? capsule.commandBudgetWarnings.slice(0, 3)
-      : [],
-  };
 }
 
 function recommendNextChecklistSource(

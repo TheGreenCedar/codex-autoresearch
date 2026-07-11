@@ -1,4 +1,5 @@
 import { readoutFallbackCommand, resolveActionCommand } from "./action-metadata.js";
+import { unknownRecordOrNull as recordOrNull } from "./types/json.js";
 import {
   assertProjectionBudget,
   TERMINAL_REPORT_MAX_BYTES,
@@ -550,10 +551,6 @@ function describeValue(value: unknown): string {
 
 function firstNonEmpty(values: string[]): string {
   return values.find((value) => value.trim())?.trim() || "";
-}
-
-function recordOrNull(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function arrayValue(value: unknown): unknown[] {

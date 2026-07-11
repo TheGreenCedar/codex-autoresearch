@@ -1000,7 +1000,16 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   assert.deepEqual(resolvedDecision.runtimeProvenance, compactState.runtimeProvenance);
   assert.deepEqual(resolvedDecision.loopContract, compactState.loopContract);
   assert.deepEqual(response.portfolioRecommendation, compactState.portfolioRecommendation);
-  assert.deepEqual(response.sessionDecisionCapsule, compactState.sessionDecisionCapsule);
+  assert.deepEqual(response.sessionDecisionCapsule, {
+    kind: null,
+    status: "active",
+    enforcement: null,
+    evidence: [],
+    nextExperiment: "",
+    wrongNextActions: [],
+    doNotRepeat: [],
+    commandBudgetWarnings: [],
+  });
   assert.equal(resolvedDecision.finalizationPressure?.available, false);
 });
 

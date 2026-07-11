@@ -8,7 +8,7 @@ import {
 } from "./dashboard-ledger-bounds.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "./runtime-paths.js";
-import { type UnknownRecord, unknownRecordOrNull } from "./types/json.js";
+import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "./types/json.js";
 import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
 
 type LooseObject = UnknownRecord;
@@ -56,7 +56,7 @@ export function compactDashboardTransportViewModel(value: LooseObject): LooseObj
 }
 
 export function dashboardHtml(entries: LooseObject[], meta: LooseObject = {}) {
-  const settings = unknownRecordOrNull(meta.settings);
+  const settings = recordOrNull(meta.settings);
   const offlineExport = ["static-export", "showcase"].includes(
     String(meta.deliveryMode || settings?.deliveryMode || ""),
   );
@@ -296,10 +296,4 @@ function transportArraySlice(value: unknown[], key: string, limit: number): unkn
 function isRunLikeRecord(value: unknown): boolean {
   const record = recordOrNull(value);
   return Boolean(record && ("run" in record || "metric" in record || "status" in record));
-}
-
-function recordOrNull(value: unknown): LooseObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as LooseObject)
-    : null;
 }

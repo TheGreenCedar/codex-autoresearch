@@ -1,4 +1,5 @@
 import { finiteMetric } from "./session-core.js";
+import { unknownRecordOrNull as recordOrNull } from "./types/json.js";
 
 export type PortfolioRecommendationKind =
   | "trust-blocker"
@@ -181,12 +182,6 @@ function recommendation(input: PortfolioRecommendation): PortfolioRecommendation
     ...input,
     evidence: uniqueStrings(input.evidence).slice(0, 6),
   };
-}
-
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function arrayValue(value: unknown): unknown[] {

@@ -86,7 +86,6 @@ const SESSION_ARTIFACT_DIRS = new Map([
 
 const DEMO_SESSION_PREFIX = "examples/demo-session/";
 const ALLOWED_PACKAGE_SESSION_ARTIFACTS = new Set([
-  "examples/demo-session/autoresearch-dashboard.html",
   "examples/demo-session/autoresearch.checks.ps1",
   "examples/demo-session/autoresearch.config.json",
   "examples/demo-session/autoresearch.ideas.md",

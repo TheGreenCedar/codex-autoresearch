@@ -99,12 +99,6 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/au
 
 Automation does not prove spoken output, physical-device behavior, or accessibility compliance. Before release, record the date, OS, browser and version, fixture and delivery mode, screen reader and version, and pass/fail/needs-follow-up plus the actual announcement for chart help, changed selection, modal context, and restored focus. Record Windows High Contrast, 200% and 400% zoom/reflow, and one touch-device or realistic touch-emulation result separately. Link that evidence from the release issue; do not turn an unrecorded or partial pass into a compliance claim.
 
-The checked-in `examples/demo-session/autoresearch-dashboard.html` is a legacy fixture, not the normal review target. Routine checks use ignored exports under `tmp/`. Refresh the legacy file only when the fixture itself intentionally changes:
-
-```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
-```
-
 ## Package shape and runtime hydration
 
 `dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.
