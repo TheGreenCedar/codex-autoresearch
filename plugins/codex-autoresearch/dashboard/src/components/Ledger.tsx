@@ -42,6 +42,12 @@ export function Ledger({ session, readout, ledgerBounds }: LedgerProps) {
       {session.runs.length ? (
         <div className="ledger-scroll" id="ledger-scroll">
           <table aria-label={tableLabel}>
+            <colgroup>
+              <col className="ledger-run-column" />
+              <col className="ledger-status-column" />
+              <col className="ledger-metric-column" />
+              <col className="ledger-description-column" />
+            </colgroup>
             <thead className="ledger-header">
               <tr>
                 <th scope="col">Run</th>
@@ -145,16 +151,18 @@ function LedgerRow({ run, readout }: { run: SessionRun; readout: DashboardReadou
         {best ? <span className="best-label">Best kept</span> : null}
       </td>
       <td className="ledger-cell metric-cell">
-        <strong>
-          {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
-        </strong>
-        <span>
-          {formatDelta(
-            breakdown?.metricValue ?? null,
-            readout.baseline,
-            readout.metricDefinition.bestDirection,
-          )}
-        </span>
+        <div className="metric-stack">
+          <strong>
+            {formatMetricValue(breakdown?.metricValue ?? null, readout.metricDefinition)}
+          </strong>
+          <span>
+            {formatDelta(
+              breakdown?.metricValue ?? null,
+              readout.baseline,
+              readout.metricDefinition.bestDirection,
+            )}
+          </span>
+        </div>
       </td>
       <td className="ledger-cell run-desc">
         <strong>{run.description || "No description"}</strong>

@@ -4,15 +4,15 @@ The repository root is a wrapper. The product package is `plugins/codex-autorese
 
 ## Repository map
 
-| Surface | Purpose |
-| --- | --- |
-| root `README.md` | Public product front door |
-| root `CHANGELOG.md` | User-facing release history |
-| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Codex execution contract |
-| `plugins/codex-autoresearch/docs/` | User and maintainer documentation |
-| `plugins/codex-autoresearch/lib/`, `scripts/` | Authored runtime source |
-| `plugins/codex-autoresearch/dashboard/src/` | Dashboard source |
-| `plugins/codex-autoresearch/tests/` | Product contracts and regression tests |
+| Surface                                                         | Purpose                                |
+| --------------------------------------------------------------- | -------------------------------------- |
+| root `README.md`                                                | Public product front door              |
+| root `CHANGELOG.md`                                             | User-facing release history            |
+| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Codex execution contract               |
+| `plugins/codex-autoresearch/docs/`                              | User and maintainer documentation      |
+| `plugins/codex-autoresearch/lib/`, `scripts/`                   | Authored runtime source                |
+| `plugins/codex-autoresearch/dashboard/src/`                     | Dashboard source                       |
+| `plugins/codex-autoresearch/tests/`                             | Product contracts and regression tests |
 
 Audience and voice rules live in [Documentation style](STYLE.md).
 
@@ -93,7 +93,7 @@ Tests do not prove that the dashboard is understandable. Serve or export the dem
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
 
-`npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures an ignored screenshot under `tmp/`, and checks modal focus restoration, one chart Tab stop with arrow-key navigation, live refresh, mobile layout, reduced motion, 100-row ledger pagination, accessible names, dialog semantics, and ARIA references. It is not a manual screen-reader validation.
+`npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures current desktop and mobile screenshots under `tmp/`, and checks decision-first viewport bounds, operate/audit agreement, refresh focus and failure state, static-share safety, keyboard disclosures, ledger geometry, modal focus restoration, chart keyboard navigation, mobile layout, reduced motion, pagination, accessible names, dialog semantics, and ARIA references. It is not a manual screen-reader validation.
 
 The checked-in `examples/demo-session/autoresearch-dashboard.html` is a legacy fixture, not the normal review target. Routine checks use ignored exports under `tmp/`. Refresh the legacy file only when the fixture itself intentionally changes:
 
