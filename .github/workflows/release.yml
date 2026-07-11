@@ -69,6 +69,23 @@ jobs:
           CODEX_AUTORESEARCH_BROWSER: /usr/bin/google-chrome
         run: npm run test:dashboard:browser
 
+      - name: Install cross-browser dashboard engines
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run cross-browser dashboard gate
+        if: runner.os == 'Linux'
+        run: npm run test:dashboard:cross-browser
+
+      - name: Upload cross-browser dashboard evidence
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dashboard-cross-browser-release-${{ github.run_attempt }}
+          path: plugins/codex-autoresearch/tmp/dashboard-cross-browser/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Run CLI smoke test
         run: node scripts/autoresearch.mjs --help
 
