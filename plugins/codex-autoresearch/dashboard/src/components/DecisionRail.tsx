@@ -156,11 +156,12 @@ function operatorDecisionFor({
 }) {
   const actionRecord = action as Record<string, unknown>;
   const primaryCommand = recordFrom(actionRecord.primaryCommand);
+  const blocker = cleanText(envelope.strongestBlocker);
   return {
     title: String(summary.title || action.title || "Review the next safe step"),
-    status: operatorStatus(envelope.resolvedStatus, summary.kind),
+    status: operatorStatus(envelope.resolvedStatus, blocker),
     blocker:
-      cleanText(envelope.strongestBlocker) ||
+      blocker ||
       (String(envelope.resolvedStatus || "").toLowerCase() === "blocked"
         ? "Review the blocking evidence before continuing."
         : "No blocker reported."),
@@ -176,12 +177,11 @@ function operatorDecisionFor({
   };
 }
 
-function operatorStatus(value: unknown, kind: unknown) {
+function operatorStatus(value: unknown, blocker: string) {
   const status = cleanText(value).toLowerCase();
-  if (status === "blocked") return "Blocked";
+  if (status === "blocked" || blocker) return "Blocked";
   if (status === "ready") return "Ready to continue";
   if (status === "complete") return "Ready for review";
-  if (!["", "continue", "baseline"].includes(cleanText(kind).toLowerCase())) return "Blocked";
   return "Needs review";
 }
 

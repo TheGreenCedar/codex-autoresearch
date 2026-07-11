@@ -73,6 +73,7 @@ export function useLiveDashboard({
   const refreshLiveData = useCallback(
     async (source: "auto" | "manual" = "manual") => {
       if (typeof fetch !== "function") {
+        setRefreshState("error");
         setLiveStatus(refreshUnavailableStatus());
         return;
       }

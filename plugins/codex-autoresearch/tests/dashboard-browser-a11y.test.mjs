@@ -174,12 +174,23 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       assert.equal(initialLedger.rows, 100);
       assert.equal(initialLedger.loadText, "Load 100 older");
       assert.equal(initialLedger.tabbablePoints, 1);
+      await evaluate(
+        client,
+        page.sessionId,
+        `(() => {
+          const metric = document.querySelector('#ledger-body tr .metric-stack');
+          metric.querySelector('strong').textContent = '12345678901234567890.123456789s';
+          metric.querySelector('span').textContent = '+12345678901234567890.1%';
+        })()`,
+      );
       const ledgerGeometry = await evaluate(
         client,
         page.sessionId,
         `(() => [...document.querySelectorAll('#ledger-body tr')].slice(0, 20).map((row) => {
           const cells = row.querySelectorAll('td');
-          const metric = cells[2].querySelector('.metric-stack').getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(cells[2].querySelector('.metric-stack'));
+          const metric = range.getBoundingClientRect();
           const description = cells[3].getBoundingClientRect();
           return { metricRight: metric.right, descriptionLeft: description.left };
         }))()`,

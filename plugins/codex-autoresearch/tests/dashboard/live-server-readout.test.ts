@@ -202,6 +202,40 @@ test("manual refresh exposes busy, last-good, focus, and error state without ove
   dom.window.close();
 });
 
+test("live dashboard exposes missing fetch as an alert while retaining the readout", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "missing fetch", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+  ];
+  const { dom, getById } = await runDashboard(
+    entries,
+    {
+      deliveryMode: "live-server",
+      liveRefreshAvailable: true,
+      refreshMs: 60_000,
+      generatedAt: "2026-07-11T05:00:00.000Z",
+      viewModel: { summary: { segment: 0, baseline: 5, best: 5, runs: 1 } },
+    },
+    {
+      beforeParse(window) {
+        Object.defineProperty(window, "fetch", { configurable: true, value: undefined });
+        window.setInterval = () => 42;
+        window.clearInterval = () => {};
+      },
+    },
+  );
+
+  await waitFor(
+    () => getById("live-region").getAttribute("role") === "alert",
+    "Missing fetch was not exposed as an alert.",
+  );
+  assert.equal(getById("live-title").textContent, "Snapshot refresh unavailable");
+  assert.match(getById("live-detail").textContent || "", /last known valid readout/i);
+  assert.equal(dom.window.document.querySelector("main")?.getAttribute("aria-busy"), "false");
+  assert.equal(getById("runs-value").textContent, "1 (1 kept)");
+  dom.window.close();
+});
+
 test("served dashboard empty bootstrap renders live view-model instead of demo data", async () => {
   const liveEntries = [
     {

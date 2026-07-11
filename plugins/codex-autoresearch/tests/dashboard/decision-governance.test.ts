@@ -951,6 +951,28 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
   ]);
 });
 
+test("dashboard does not fabricate a blocked status from an unknown canonical decision", async () => {
+  const entries = [
+    dashboardConfigEntry({ name: "unknown decision", metricName: "seconds", metricUnit: "s" }),
+    { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline", confidence: 1 },
+  ];
+  const { getById } = await runDashboard(entries, {
+    deliveryMode: "static-export",
+    liveRefreshAvailable: false,
+    viewModel: {
+      decisionEnvelope: { resolvedStatus: "unknown" },
+      decisionEnvelopeSummary: {
+        kind: "finalize-preview",
+        title: "Preview finalization",
+        detail: "Review the accepted evidence before promotion.",
+      },
+    },
+  });
+
+  assert.equal(getById("decision-status").textContent, "Needs review");
+  assert.equal(getById("decision-blocker").textContent, "No blocker reported.");
+});
+
 test("mobile audit dashboard keeps the canonical next action before chart content", async () => {
   const viewModel = {
     nextBestAction: {
