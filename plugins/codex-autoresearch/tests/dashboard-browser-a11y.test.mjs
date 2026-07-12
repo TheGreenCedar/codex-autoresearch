@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dashboardHtml, serveHtml } from "./dashboard-browser-fixture.mjs";
@@ -32,6 +34,18 @@ test("dashboard geometry evidence rejects an empty demo", () => {
     () => validateDashboardGeometryEvidence(emptyDashboardGeometryObservations(true)),
     (error) => error?.code === "V27_DASHBOARD_GEOMETRY_EMPTY",
   );
+});
+
+test("Chrome startup recognizes a DevTools endpoint split across stderr chunks", async () => {
+  const browser = new EventEmitter();
+  browser.stderr = new PassThrough();
+  const endpoint = waitForDevToolsEndpoint(browser);
+
+  browser.stderr.write("DevTools listen");
+  browser.stderr.write("ing on ws://127.0.0.1:9222/devtools/browser/test\n");
+
+  assert.equal(await endpoint, "ws://127.0.0.1:9222/devtools/browser/test");
+  browser.stderr.destroy();
 });
 
 test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
@@ -1097,6 +1111,7 @@ async function launchBrowser(executable) {
 function waitForDevToolsEndpoint(browser) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let stderrTail = "";
     const timeout = setTimeout(() => {
       finish(reject, new Error("Timed out waiting for Chrome DevTools endpoint."));
     }, 15000);
@@ -1119,7 +1134,8 @@ function waitForDevToolsEndpoint(browser) {
       finish(reject, error);
     };
     const onData = (chunk) => {
-      const match = String(chunk).match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      stderrTail = `${stderrTail}${String(chunk)}`.slice(-8192);
+      const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
       if (match) finish(resolve, match[1]);
     };
 
