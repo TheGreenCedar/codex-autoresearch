@@ -8,6 +8,12 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.7.1 - 2026-07-11
+
+### Fixed
+
+- Source-shaped marketplace installs now accept the packaged operator-task benchmark launchers during verified release hydration. The package gate also checks every explicit source and compiled launcher against the bootstrap archive allowlist, closing the gap that made the v2.7.0 artifact valid but unusable from a fresh marketplace cache.
+
 ## 2.7.0 - 2026-07-11
 
 ### Highlights

@@ -535,6 +535,26 @@ test("runtime archive validation accepts only regular package files and director
   }
 });
 
+test("runtime archive validation accepts every explicitly packaged launcher", async () => {
+  const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as {
+    files?: unknown;
+  };
+  const packagedLaunchers = Array.isArray(packageJson.files)
+    ? packageJson.files.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && /^(?:dist\/)?scripts\/[^/*]+\.mjs$/.test(entry),
+      )
+    : [];
+
+  assert.ok(packagedLaunchers.includes("dist/scripts/operator-task-benchmark.mjs"));
+  assert.ok(packagedLaunchers.includes("scripts/operator-task-benchmark.mjs"));
+  assert.doesNotThrow(() =>
+    validateRuntimeArchiveEntries(
+      packagedLaunchers.map((name) => ({ name: `package/${name}`, type: "-" })),
+    ),
+  );
+});
+
 test("runtime archive preflight rejects malicious tar fixtures before extraction", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "autoresearch-runtime-tar-"));
   try {

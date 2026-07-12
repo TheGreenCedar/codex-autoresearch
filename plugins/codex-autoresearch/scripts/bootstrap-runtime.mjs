@@ -352,13 +352,15 @@ function isExpectedRuntimeArchiveFile(name) {
   if (name === "assets/template.html") return true;
   if (/^dist\/lib\/.+\.mjs$/.test(name)) return true;
   if (
-    /^dist\/scripts\/(?:autoresearch|check|check-runner|finalize-autoresearch)\.mjs$/.test(name)
+    /^dist\/scripts\/(?:autoresearch|check|check-runner|finalize-autoresearch|operator-task-benchmark)\.mjs$/.test(
+      name,
+    )
   ) {
     return true;
   }
   if (/^docs\/.+\.md$/.test(name)) return true;
   if (
-    /^scripts\/(?:autoresearch|bootstrap-runtime|check|directory-swap|finalize-autoresearch|release-integrity)\.mjs$/.test(
+    /^scripts\/(?:autoresearch|bootstrap-runtime|check|directory-swap|finalize-autoresearch|operator-task-benchmark|release-integrity)\.mjs$/.test(
       name,
     )
   ) {
