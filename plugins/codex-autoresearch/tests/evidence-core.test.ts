@@ -291,6 +291,49 @@ test("termination wrapper rejects an invalid hook result", async () => {
   assert.deepEqual(result.remainingPids, [4242]);
 });
 
+test("termination wrapper aborts a timed-out hook before it can mutate later", async () => {
+  let observedAbort = false;
+  let mutatedAfterTimeout = false;
+  const result = await terminateAfterTimeout(
+    4242,
+    async (pid, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          observedAbort = true;
+          resolve();
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      if (!signal?.aborted) mutatedAfterTimeout = true;
+      return {
+        attempted: true,
+        escalated: false,
+        method: "none",
+        pid: pid ?? null,
+        platform: process.platform,
+        proven: false,
+        reason: "hook_finished",
+        remainingPids: pid ? [pid] : [],
+        trackedPids: pid ? [pid] : [],
+      };
+    },
+    10,
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(result.reason, "termination_handler_timeout");
+  assert.equal(observedAbort, true);
+  assert.equal(mutatedAfterTimeout, false);
+});
+
 test("Windows identity-query failure keeps every candidate PID unproven", async () => {
   const requested: number[][] = [];
   const result = await verifyWindowsProcessIdentities(

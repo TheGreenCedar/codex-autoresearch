@@ -12,6 +12,7 @@ const PROCESS_OUTPUT_CAPTURE_BYTES = 32768;
 const METRIC_LINE_MAX_CHARS = 4096;
 const PROCESS_TREE_GRACE_MS = 500;
 const PROCESS_TREE_VERIFY_MS = 3000;
+const WINDOWS_PROCESS_QUERY_MS = 10_000;
 const PROCESS_TREE_PID_LIMIT = 256;
 const PROCESS_TREE_HANDLER_TIMEOUT_MS = 20_000;
 
@@ -27,7 +28,10 @@ type WindowsProcessIdentitySnapshot = {
   proven: boolean;
   reason: string;
 };
-type WindowsProcessIdentityQuery = (pids: number[]) => Promise<WindowsProcessIdentitySnapshot>;
+type WindowsProcessIdentityQuery = (
+  pids: number[],
+  signal?: AbortSignal,
+) => Promise<WindowsProcessIdentitySnapshot>;
 type WindowsProcessIdentityVerification = {
   pids: number[];
   proven: boolean;
@@ -46,7 +50,10 @@ export interface ProcessTreeTermination {
   trackedPids: number[];
 }
 
-export type ProcessTreeTerminator = (pid?: number) => Promise<ProcessTreeTermination>;
+export type ProcessTreeTerminator = (
+  pid?: number,
+  signal?: AbortSignal,
+) => Promise<ProcessTreeTermination>;
 
 export interface MetricParseOptions {
   maxMetrics?: number;
@@ -676,13 +683,17 @@ function retainedMetricText(lines: Map<string, string>): string {
   return [...lines.values()].map((line) => `${line}\n`).join("");
 }
 
-export async function terminateProcessTree(pid?: number): Promise<ProcessTreeTermination> {
+export async function terminateProcessTree(
+  pid?: number,
+  signal?: AbortSignal,
+): Promise<ProcessTreeTermination> {
   if (!Number.isSafeInteger(pid) || Number(pid) <= 0) {
     return terminationResult(pid, false, false, "none", "missing_root_pid");
   }
+  if (signal?.aborted) return abortedTermination(pid);
   return process.platform === "win32"
-    ? await terminateWindowsTree(Number(pid))
-    : await terminatePosixProcessGroup(Number(pid));
+    ? await terminateWindowsTree(Number(pid), signal)
+    : await terminatePosixProcessGroup(Number(pid), signal);
 }
 
 export async function terminateAfterTimeout(
@@ -691,9 +702,10 @@ export async function terminateAfterTimeout(
   timeoutMs = PROCESS_TREE_HANDLER_TIMEOUT_MS,
 ): Promise<ProcessTreeTermination> {
   const boundedMs = Math.max(1, Number(timeoutMs) || PROCESS_TREE_HANDLER_TIMEOUT_MS);
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
   const handled = Promise.resolve()
-    .then(() => terminate(pid))
+    .then(() => terminate(pid, controller.signal))
     .then((result) =>
       validTerminationResult(result)
         ? result
@@ -701,21 +713,31 @@ export async function terminateAfterTimeout(
     )
     .catch(() => terminationResult(pid, true, false, "none", "termination_handler_failed"));
   const timedOut = new Promise<ProcessTreeTermination>((resolve) => {
-    timer = setTimeout(
-      () => resolve(terminationResult(pid, true, false, "none", "termination_handler_timeout")),
-      boundedMs,
-    );
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(terminationResult(pid, true, false, "none", "termination_handler_timeout"));
+    }, boundedMs);
   });
   const result = await Promise.race([handled, timedOut]);
   if (timer) clearTimeout(timer);
   return result;
 }
 
-async function terminatePosixProcessGroup(pid: number): Promise<ProcessTreeTermination> {
-  const initial = await posixProcessTreeSnapshot(pid);
+async function terminatePosixProcessGroup(
+  pid: number,
+  signal?: AbortSignal,
+): Promise<ProcessTreeTermination> {
+  if (signal?.aborted) return abortedTermination(pid, "posix-process-group");
+  const initial = await posixProcessTreeSnapshot(pid, signal);
+  if (signal?.aborted) return abortedTermination(pid, "posix-process-group");
   const graceful = signalProcessGroup(pid, "SIGTERM");
   signalTrackedPosix(initial.entries, "SIGTERM");
-  const gracefulRemaining = await waitForPidsGone(initial.trackedPids, PROCESS_TREE_GRACE_MS);
+  const gracefulRemaining = await waitForPidsGone(
+    initial.trackedPids,
+    PROCESS_TREE_GRACE_MS,
+    signal,
+  );
+  if (signal?.aborted) return abortedTermination(pid, "posix-process-group");
   if (
     initial.proven &&
     graceful !== "failed" &&
@@ -733,12 +755,14 @@ async function terminatePosixProcessGroup(pid: number): Promise<ProcessTreeTermi
       [],
     );
   }
-  const second = await posixProcessTreeSnapshot(pid);
+  const second = await posixProcessTreeSnapshot(pid, signal);
+  if (signal?.aborted) return abortedTermination(pid, "posix-process-group");
   const entries = mergeProcessEntries(initial.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
   const forced = signalProcessGroup(pid, "SIGKILL");
   signalTrackedPosix(entries, "SIGKILL");
-  const remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
+  const remainingPids = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS, signal);
+  if (signal?.aborted) return abortedTermination(pid, "posix-process-group");
   const proven =
     initial.proven &&
     second.proven &&
@@ -757,13 +781,21 @@ async function terminatePosixProcessGroup(pid: number): Promise<ProcessTreeTermi
   );
 }
 
-async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination> {
-  let snapshot = await windowsProcessTreeSnapshot(pid);
+async function terminateWindowsTree(
+  pid: number,
+  signal?: AbortSignal,
+): Promise<ProcessTreeTermination> {
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
+  let snapshot = await windowsProcessTreeSnapshot(pid, [], true, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   if (!snapshot.proven && pidState(pid) !== "gone") {
-    snapshot = await windowsProcessTreeSnapshot(pid);
+    snapshot = await windowsProcessTreeSnapshot(pid, [], true, signal);
+    if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   }
-  const gracefulCode = await taskkill(pid, false);
-  let remainingPids = await waitForPidsGone(snapshot.trackedPids, PROCESS_TREE_GRACE_MS);
+  const gracefulCode = await taskkill(pid, false, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
+  let remainingPids = await waitForPidsGone(snapshot.trackedPids, PROCESS_TREE_GRACE_MS, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   if (snapshot.proven && remainingPids.length === 0) {
     return terminationResult(
       pid,
@@ -776,7 +808,8 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
       [],
     );
   }
-  const refreshed = await windowsProcessTreeSnapshot(pid, snapshot.entries, false);
+  const refreshed = await windowsProcessTreeSnapshot(pid, snapshot.entries, false, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   const originalRoot = snapshot.entries.find((entry) => entry.pid === pid);
   const refreshedRoot = refreshed.entries.find((entry) => entry.pid === pid);
   const rootIdentityChanged = Boolean(
@@ -793,18 +826,34 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
       };
   const entries = mergeProcessEntries(snapshot.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
-  const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true);
-  const forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS);
+  const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
+  const forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   if (forcedRemaining.length > 0) {
-    const preForceVerification = await verifyWindowsProcessIdentities(entries, forcedRemaining);
+    const preForceVerification = await verifyWindowsProcessIdentities(
+      entries,
+      forcedRemaining,
+      windowsProcessIdentities,
+      signal,
+    );
+    if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
     if (preForceVerification.proven && preForceVerification.pids.length > 0) {
-      await taskkillPids(preForceVerification.pids, true);
+      await taskkillPids(preForceVerification.pids, true, signal);
+      if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
     }
   }
-  const finalCandidates = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS);
+  const finalCandidates = await waitForPidsGone(trackedPids, PROCESS_TREE_VERIFY_MS, signal);
+  if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   let finalVerification: WindowsProcessIdentityVerification | null = null;
   if (finalCandidates.length > 0) {
-    finalVerification = await verifyWindowsProcessIdentities(entries, finalCandidates);
+    finalVerification = await verifyWindowsProcessIdentities(
+      entries,
+      finalCandidates,
+      windowsProcessIdentities,
+      signal,
+    );
+    if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   }
   const identityVerification = authoritativeWindowsIdentityVerification(
     finalCandidates,
@@ -833,11 +882,15 @@ async function terminateWindowsTree(pid: number): Promise<ProcessTreeTermination
   );
 }
 
-async function posixProcessTreeSnapshot(pid: number): Promise<ProcessTreeSnapshot> {
+async function posixProcessTreeSnapshot(
+  pid: number,
+  signal?: AbortSignal,
+): Promise<ProcessTreeSnapshot> {
   const result = await execFileResult(
     "ps",
     ["-axo", "pid=,ppid=,pgid=,lstart="],
     PROCESS_TREE_VERIFY_MS,
+    signal,
   );
   if (result.code !== 0) {
     return {
@@ -920,6 +973,7 @@ async function windowsProcessTreeSnapshot(
   pid: number,
   seeds: ProcessIdentity[] = [],
   requireRoot = true,
+  signal?: AbortSignal,
 ): Promise<ProcessTreeSnapshot> {
   const fallbackPids = [...new Set([pid, ...seeds.map((entry) => entry.pid)])].slice(
     0,
@@ -928,7 +982,7 @@ async function windowsProcessTreeSnapshot(
   const script = [
     "& {",
     "param([int]$RootProcessId, [string]$SeedsBase64, [int]$RequireRoot)",
-    "$all = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)",
+    "$all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop)",
     "$rootPresent = @($all | Where-Object { [int]$_.ProcessId -eq $RootProcessId }).Count -gt 0",
     "if ($RequireRoot -eq 1 -and -not $rootPresent) { throw 'root_missing' }",
     "$seeds = @((ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($SeedsBase64)))))",
@@ -962,7 +1016,8 @@ async function windowsProcessTreeSnapshot(
       ).toString("base64"),
       requireRoot ? "1" : "0",
     ],
-    PROCESS_TREE_VERIFY_MS,
+    WINDOWS_PROCESS_QUERY_MS,
+    signal,
   );
   if (result.code !== 0) {
     return {
@@ -1010,7 +1065,10 @@ async function windowsProcessTreeSnapshot(
   }
 }
 
-async function windowsProcessIdentities(pids: number[]): Promise<WindowsProcessIdentitySnapshot> {
+async function windowsProcessIdentities(
+  pids: number[],
+  signal?: AbortSignal,
+): Promise<WindowsProcessIdentitySnapshot> {
   if (pids.length === 0) {
     return {
       identities: new Map(),
@@ -1022,13 +1080,14 @@ async function windowsProcessIdentities(pids: number[]): Promise<WindowsProcessI
     "& {",
     "param([string]$IdsJson)",
     "$ids = @((ConvertFrom-Json $IdsJson) | ForEach-Object { [int]$_ })",
-    "@(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress",
+    "@(Get-CimInstance Win32_Process -Property ProcessId, CreationDate -ErrorAction Stop | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; started = $_.CreationDate.ToUniversalTime().ToString('o') } }) | ConvertTo-Json -Compress",
     "}",
   ].join("\n");
   const result = await execFileResult(
     "powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, JSON.stringify(pids)],
-    PROCESS_TREE_VERIFY_MS,
+    WINDOWS_PROCESS_QUERY_MS,
+    signal,
   );
   if (result.code !== 0) {
     return {
@@ -1078,9 +1137,10 @@ export async function verifyWindowsProcessIdentities(
   entries: Array<Pick<ProcessIdentity, "pid" | "started">>,
   pids: number[],
   query: WindowsProcessIdentityQuery = windowsProcessIdentities,
+  signal?: AbortSignal,
 ): Promise<WindowsProcessIdentityVerification> {
   const candidates = [...new Set(pids)];
-  const snapshot = await query(candidates);
+  const snapshot = await query(candidates, signal);
   if (!snapshot.proven) {
     return { pids: candidates, proven: false, reason: snapshot.reason };
   }
@@ -1110,15 +1170,20 @@ export function authoritativeWindowsIdentityVerification(
   };
 }
 
-function taskkill(pid: number, force: boolean): Promise<number | null> {
-  return taskkillPids([pid], force);
+function taskkill(pid: number, force: boolean, signal?: AbortSignal): Promise<number | null> {
+  return taskkillPids([pid], force, signal);
 }
 
-function taskkillPids(pids: number[], force: boolean): Promise<number | null> {
+function taskkillPids(
+  pids: number[],
+  force: boolean,
+  signal?: AbortSignal,
+): Promise<number | null> {
   return execFileResult(
     "taskkill",
     [...pids.flatMap((pid) => ["/pid", String(pid)]), "/t", ...(force ? ["/f"] : [])],
     force ? PROCESS_TREE_VERIFY_MS : PROCESS_TREE_GRACE_MS,
+    signal,
   ).then((result) => result.code);
 }
 
@@ -1126,19 +1191,28 @@ function execFileResult(
   command: string,
   args: string[],
   timeout: number,
+  signal?: AbortSignal,
 ): Promise<{ code: number | null; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      { maxBuffer: 64 * 1024, timeout, windowsHide: true },
-      (error, stdout) => {
-        resolve({
-          code: error ? (typeof error.code === "number" ? error.code : null) : 0,
-          stdout: String(stdout || ""),
-        });
-      },
-    );
+    if (signal?.aborted) {
+      resolve({ code: null, stdout: "" });
+      return;
+    }
+    try {
+      execFile(
+        command,
+        args,
+        { maxBuffer: 64 * 1024, signal, timeout, windowsHide: true },
+        (error, stdout) => {
+          resolve({
+            code: error ? (typeof error.code === "number" ? error.code : null) : 0,
+            stdout: String(stdout || ""),
+          });
+        },
+      );
+    } catch {
+      resolve({ code: null, stdout: "" });
+    }
   });
 }
 
@@ -1151,10 +1225,14 @@ function signalProcessGroup(pid: number, signal: NodeJS.Signals): "sent" | "gone
   }
 }
 
-async function waitForPidsGone(pids: number[], timeoutMs: number): Promise<number[]> {
+async function waitForPidsGone(
+  pids: number[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<number[]> {
   const deadline = Date.now() + timeoutMs;
   let remaining = pids.filter((pid) => pidState(pid) !== "gone");
-  while (remaining.length > 0 && Date.now() < deadline) {
+  while (remaining.length > 0 && Date.now() < deadline && !signal?.aborted) {
     await new Promise((resolve) => setTimeout(resolve, 25));
     remaining = remaining.filter((pid) => pidState(pid) !== "gone");
   }
@@ -1204,6 +1282,13 @@ function terminationResult(
     remainingPids: remainingPids.slice(0, PROCESS_TREE_PID_LIMIT),
     trackedPids: trackedPids.slice(0, PROCESS_TREE_PID_LIMIT),
   };
+}
+
+function abortedTermination(
+  pid: number | undefined,
+  method: ProcessTreeTermination["method"] = "none",
+): ProcessTreeTermination {
+  return terminationResult(pid, true, false, method, "termination_handler_aborted");
 }
 
 function validTerminationResult(value: unknown): value is ProcessTreeTermination {
