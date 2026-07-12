@@ -8,6 +8,27 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.7.0 - 2026-07-11
+
+### Highlights
+
+- Reworked Autoresearch around one canonical operator decision shared by state, doctor, terminal reports, recommendations, finalization, and the read-only dashboard.
+- Hardened packet execution, process-tree termination, Git path handling, ledger streaming, runtime replacement, installed-cache discovery, and finalization revalidation for hostile and interrupted workflows.
+- Rebuilt the dashboard evidence path for bounded long histories, decision-first desktop/mobile use, explicit payload failures, keyboard and touch navigation, cross-browser release checks, and a populated 100-run public demo.
+- Replaced the self-referential perfection gate with six portable operator tasks plus a real-browser geometry task. These checks prove named workflows and release contracts; they do not claim permanent or universal product quality.
+
+### Migration and compatibility
+
+- The plugin remains CLI/skill-only. Removed MCP launchers, MCP configuration, dashboard control-plane behavior, old dashboard/finalizer subskills, and tracked generated dashboard bundles are not restored by this release.
+- Removed compatibility commands `init`, `run`, and `integrations` fail before mutation with their exact replacement commands. Their migration aliases are scheduled for removal after 2026-10-01.
+- The dashboard is a read-only live readout or static export. Setup, packet execution, logging, and finalization stay in the CLI.
+- Source checkouts rebuild or hydrate their local runtime; installed behavior is authoritative only after canonical cache version and entrypoint-fingerprint proof.
+
+### Verification and known limits
+
+- The release candidate is gated on Node 24, full package checks, hostile workflow regressions, package/extracted-launcher smoke, Chrome geometry evidence, and sequential Chromium, Firefox, and WebKit checks on Linux, plus Ubuntu, Windows, macOS, workflow-policy, and CodeQL CI.
+- Automated keyboard, modal focus, forced-colors, reduced-motion, zoom/reflow, and emulated-touch checks are included. Manual Narrator and physical-device evidence remain follow-up proof rather than a broader accessibility certification.
+
 ### Fixed
 
 - Runtime hydration and preserved research-directory restoration now stage and verify complete replacements before moving active targets, retain ownership-marked rollback directories until every rename succeeds, restore originals in reverse order on failure, and refuse unsafe stale or reparse-point cleanup.
@@ -18,6 +39,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 - Autoresearch and finalizer CLI parsing now rejects unknown root and command options, validates explicit boolean values, supports root and command `-h`/`--help`, preserves camel/kebab aliases plus repeated list and `--` passthrough behavior, and reports expected usage failures without stack traces unless `--debug` is explicit.
 - Dashboard exports and live readouts now reject missing, malformed, or version-incompatible payloads instead of substituting polished demo evidence. Demo data requires an explicit development/showcase marker, failure states show safe recovery guidance and provenance, and failed live refreshes visibly retain only the last validated readout.
 - Timed-out benchmark and checks commands now await bounded process-tree shutdown, escalate stubborn descendants, and verify termination before releasing packet state. Unproven cleanup is retained as a `termination_failed` trust blocker with safe PID evidence, partial output and artifacts, and no sentinel metric.
+- Windows process-tree proof now asks CIM only for process identity and parentage fields, keeping fail-closed timeout cleanup responsive on hosts with many active Codex and MCP processes.
 - Installed-runtime checks now honor `CODEX_HOME`, resolve the canonical `publisher/plugin/version` cache from plugin metadata, report the selected path and provenance, distinguish source-shaped packages from hydrated runtimes, and fail closed when multiple cache versions lack active-launcher proof. The obsolete combined marketplace namespace remains a labelled fallback only.
 - Finalization now revalidates accepted-current evidence immediately before review-branch creation, uses validated Git hash prefixes consistently, ignores same-commit audit-only rows, and rejects stale plans when kept membership, exclusions, evidence status, ledger ordering, or product-claim inputs change.
 - Read-only scout lanes now parse commands without a shell and execute only a strict Git read-only argv allowlist. Interpreters, shells, mutation-capable Git forms, network/process-spawning surfaces, and the old `--allow-non-git-command` escape are refused before execution; Git porcelain is reported only as best-effort post-run detection, not containment.
