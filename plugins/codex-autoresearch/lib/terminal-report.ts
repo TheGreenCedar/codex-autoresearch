@@ -1,4 +1,11 @@
 import { readoutFallbackCommand, resolveActionCommand } from "./action-metadata.js";
+import { unknownRecordOrNull as recordOrNull } from "./types/json.js";
+import {
+  assertProjectionBudget,
+  TERMINAL_REPORT_MAX_BYTES,
+  TERMINAL_REPORT_MAX_LINES,
+  TERMINAL_REPORT_MAX_TOKENS,
+} from "./session-read-model.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -10,7 +17,8 @@ export interface TerminalReportDashboard {
 }
 
 export interface TerminalReportSummary {
-  status: "blocked" | "ready" | "ready-with-warnings" | "unknown";
+  status: "blocked" | "ready" | "complete" | "unknown";
+  warningPosture: "warnings" | "clear";
   blocker: string;
   nextAction: string;
   nextCommand: string;
@@ -80,17 +88,24 @@ export interface TerminalReport {
 
 export function buildTerminalReport(stateInput: unknown): TerminalReport {
   const state = recordOrNull(stateInput) || {};
+  const resolvedDecision = recordOrNull(state.resolvedDecision);
   const commands = recordOrNull(state.commands) || {};
   const preflight = recordOrNull(state.preflight);
   const gateQuality = recordOrNull(state.gateQuality);
   const runtime = recordOrNull(state.runtimeDriftSummary);
-  const runtimeAuthority = recordOrNull(state.runtimeAuthority);
+  const runtimeAuthority =
+    recordOrNull(resolvedDecision?.runtimeAuthority) || recordOrNull(state.runtimeAuthority);
   const packet = recordOrNull(state.packetDiagnostics);
   const portfolio = recordOrNull(state.portfolioRecommendation);
   const envelope = recordOrNull(state.decisionEnvelope);
-  const loopContract = recordOrNull(envelope?.loopContract) || recordOrNull(state.loopContract);
+  const loopContract =
+    recordOrNull(resolvedDecision?.loopContract) ||
+    recordOrNull(envelope?.loopContract) ||
+    recordOrNull(state.loopContract);
   const canonicalNextAction =
-    recordOrNull(envelope?.canonicalNextAction) || recordOrNull(state.canonicalNextAction);
+    recordOrNull(resolvedDecision?.canonicalNextAction) ||
+    recordOrNull(envelope?.canonicalNextAction) ||
+    recordOrNull(state.canonicalNextAction);
   const cleanliness = cleanlinessSummary(state);
   const metric = metricSummary(state, envelope);
   const freshness = freshnessSummary(state, envelope);
@@ -111,6 +126,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
         "Installed plugin runtime verification is blocked by runtime authority."
       : "";
   const blocker = firstNonEmpty([
+    stringValue(resolvedDecision?.strongestBlocker),
     ...loopBlockers,
     loopBlockers.length ? stringValue(recordOrNull(loopContract?.strongestAction)?.reason) : "",
     loopBlockers.length ? stringValue(canonicalNextAction?.reason) : "",
@@ -121,19 +137,22 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
   ]);
   const packetRecommendation = stringValue(packet?.recommendation);
   const nextAction =
+    stringValue(resolvedDecision?.nextAction) ||
     authoritativeNextAction ||
     blocker ||
     stringValue(canonicalNextAction?.reason) ||
     stringValue(state.nextAction) ||
     packetRecommendation ||
     "Read state and choose the next safe Autoresearch action.";
-  const nextCommand = selectNextCommand({
-    blocked: Boolean(blocker),
-    preflight,
-    commands,
-    canonicalNextAction,
-    packet,
-  });
+  const nextCommand =
+    readoutFallbackCommand(resolvedDecision?.command) ||
+    selectNextCommand({
+      blocked: Boolean(blocker),
+      preflight,
+      commands,
+      canonicalNextAction,
+      packet,
+    });
   const dashboard = dashboardSummary(state, commands);
   const commandExecutionBoundary = commandExecutionBoundarySummary(state);
   const gate = {
@@ -175,13 +194,17 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     runtime,
     runtimeAuthority,
   });
-  const status = blocker
+  const resolvedStatus = stringValue(resolvedDecision?.status);
+  const status: TerminalReportSummary["status"] = blocker
     ? "blocked"
-    : nextCommand
-      ? warning
-        ? "ready-with-warnings"
-        : "ready"
-      : "unknown";
+    : resolvedStatus === "blocked" ||
+        resolvedStatus === "ready" ||
+        resolvedStatus === "complete" ||
+        resolvedStatus === "unknown"
+      ? resolvedStatus
+      : nextCommand
+        ? "ready"
+        : "unknown";
   const workDir = stringValue(state.workDir);
 
   const lines = [
@@ -222,10 +245,11 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
     }`,
   ].filter(Boolean);
 
-  return {
+  const report: TerminalReport = {
     text: lines.join("\n"),
     json: {
       status,
+      warningPosture: warning ? "warnings" : "clear",
       blocker,
       nextAction,
       nextCommand,
@@ -244,6 +268,16 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
       lines,
     },
   };
+  assertProjectionBudget(
+    report,
+    {
+      bytes: TERMINAL_REPORT_MAX_BYTES,
+      lines: TERMINAL_REPORT_MAX_LINES,
+      tokens: TERMINAL_REPORT_MAX_TOKENS,
+    },
+    "terminal report",
+  );
+  return report;
 }
 
 function commandExecutionBoundarySummary(state: JsonRecord) {
@@ -517,10 +551,6 @@ function describeValue(value: unknown): string {
 
 function firstNonEmpty(values: string[]): string {
   return values.find((value) => value.trim())?.trim() || "";
-}
-
-function recordOrNull(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function arrayValue(value: unknown): unknown[] {

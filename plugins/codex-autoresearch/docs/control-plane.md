@@ -14,7 +14,9 @@ The CLI, terminal report, compact state, and dashboard must tell the same story.
 | Finalization | Is the work previewed, local, pushed, in CI, merged, or safe to clean up? |
 | Readout | What single action should the person or Codex take next? |
 
-`state --compact`, `state --report`, `recommend-next --compact`, and the dashboard decision envelope should agree on those answers. Field names are listed in [Concepts](concepts.md#state-fields).
+`state --compact`, `state --report`, `recommend-next --compact`, doctor, finalization preview, and the dashboard project the same validated `resolvedDecision` authority. The status, strongest blocker, next action, safe command, runtime provenance, and finalization pressure must agree. Field names are listed in [Concepts](concepts.md#state-fields).
+
+Default projections are deliberately bounded so a long session remains readable: compact state is capped at 10 KiB and 200 lines, default state at 20 KiB and 260 lines, and doctor/report at 8 KiB and 100 lines. A synthetic 100-run regression fixture enforces those ceilings and requires compact state to remain smaller than default state. Use explicit `--json-full` only for complete state or doctor diagnostics.
 
 ## Goal contract
 
@@ -30,7 +32,7 @@ A `big_idea` lane may record advice without approval. Turning it into implementa
 
 ## Resource contract
 
-Packet and lane work checks active process count, wall-clock budget, repeated command heads, output size, polling, and stale process residue.
+Packet and lane work checks active process count, wall-clock budget, repeated command heads, output size, polling, and the latest typed process lifecycle state. Historical prose about stale or orphaned PIDs is compatibility context only; it cannot create a blocker. Malformed lifecycle rows and terminal rows with unproven termination fail closed.
 
 When output is already large, use compact state, bounded file reads, `partial-results`, or an evidence index. Reprinting the same wall of output is not progress.
 

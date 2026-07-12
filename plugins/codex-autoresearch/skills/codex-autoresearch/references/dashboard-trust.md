@@ -8,6 +8,10 @@ Use `serve --cwd <project>` for the live loopback readout and `export --cwd <pro
 
 Keep the dashboard read-only. Run setup, packets, logging, gap work, export, and finalization through the CLI.
 
+Treat a payload-unavailable screen as a trust blocker. Follow its safe `export` or `serve` recovery guidance; do not describe the missing readout as evidence. Demo data is valid only when an explicit showcase marker is visible. If live refresh fails, report that the dashboard is showing its last validated readout rather than current state.
+
+Read the focused operate view first: status, blocker, action, and safe command come from the canonical decision. Use audit for deeper evidence, not a different answer. A static export is a file artifact, so share the HTML itself; never copy or present its local `file://` location as a usable readout URL.
+
 ## Check the proof before the claim
 
 Read these fields before calling a result current or promotable:

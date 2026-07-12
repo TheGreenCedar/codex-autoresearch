@@ -4,15 +4,15 @@ The repository root is a wrapper. The product package is `plugins/codex-autorese
 
 ## Repository map
 
-| Surface | Purpose |
-| --- | --- |
-| root `README.md` | Public product front door |
-| root `CHANGELOG.md` | User-facing release history |
-| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Codex execution contract |
-| `plugins/codex-autoresearch/docs/` | User and maintainer documentation |
-| `plugins/codex-autoresearch/lib/`, `scripts/` | Authored runtime source |
-| `plugins/codex-autoresearch/dashboard/src/` | Dashboard source |
-| `plugins/codex-autoresearch/tests/` | Product contracts and regression tests |
+| Surface                                                         | Purpose                                |
+| --------------------------------------------------------------- | -------------------------------------- |
+| root `README.md`                                                | Public product front door              |
+| root `CHANGELOG.md`                                             | User-facing release history            |
+| `plugins/codex-autoresearch/skills/codex-autoresearch/SKILL.md` | Codex execution contract               |
+| `plugins/codex-autoresearch/docs/`                              | User and maintainer documentation      |
+| `plugins/codex-autoresearch/lib/`, `scripts/`                   | Authored runtime source                |
+| `plugins/codex-autoresearch/dashboard/src/`                     | Dashboard source                       |
+| `plugins/codex-autoresearch/tests/`                             | Product contracts and regression tests |
 
 Audience and voice rules live in [Documentation style](STYLE.md).
 
@@ -45,10 +45,12 @@ When behavior, commands, dashboard wording, safety rules, finalization, packagin
 - CHANGELOG for shipped user impact and migration notes
 - SKILL for Codex behavior
 - nearest topic doc
-- CLI help and tool schemas for command contracts
-- tests and `scripts/perfection-benchmark.mjs` where drift should fail the product gate
+- `lib/command-table.ts` for command identity, schemas, safety, help, handler binding, and compatibility lifecycle; the CLI/tool/dashboard surfaces derive from it
+- focused contract tests and `scripts/operator-task-benchmark.mjs` where externally observed drift should fail the product gate
 
 Rewrite stale guidance instead of appending a second version. Removed invocation paths need a migration note.
+
+Do not add a command independently to help, handlers, schemas, or dashboard safety. Add its typed definition and implementation, then extend the schema-driven command-surface test. `lib/tool-schemas.ts` and `lib/tool-registry.ts` are compatibility facades, not second registries. Retained compatibility commands require an exact migration error, replacement, and removal date.
 
 ## Verification
 
@@ -75,9 +77,23 @@ npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
+Compiled tests are organized by domain under `tests/cli/`, `tests/dashboard/`, `tests/finalize/`, `tests/process/`, and `tests/product/`. Package scripts use Node's native file-level concurrency with explicit 120-second test bounds; the outer CLI, dashboard, finalizer, process, and core groups remain serial to avoid cross-surface resource contention. The Windows process-lifecycle domain uses a native single-file lane so identity and termination probes do not compete with other process-heavy integration tests. Add new coverage to the narrowest domain file rather than rebuilding a catch-all suite or a custom scheduler.
+
+Session read-model budgets are reviewed product contracts. The 100-run fixture caps compact state at 10 KiB/200 lines, default state at 20 KiB/260 lines, and doctor/report at 8 KiB/100 lines; compact must remain smaller than default and must not repeat exact object subtrees. Change a ceiling only with measured before/after output and a reason the additional data belongs on the default surface. Full state and doctor detail is opt-in through `--json-full`.
+
 For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
 
+## Product evidence gate
+
+`npm run check` executes six portable operator tasks through `scripts/operator-task-benchmark.mjs`: decision consistency across public readouts, invalid CLI rejection, installed-cache discovery, hostile-path finalization safety, bounded default output, and long-history retention. Each task emits one machine-readable `EVIDENCE` record, followed by one reconciled `EVIDENCE_SUMMARY`. The independent `METRIC operator_task_failures=<count>` ceiling is zero; `--fail-on-failure` makes any failed case fail the product phase.
+
+Dashboard geometry is the seventh operator task. It requires a real browser, so the required Chrome dashboard gate emits its own `EVIDENCE` and `EVIDENCE_SUMMARY` records instead of hiding a browser dependency inside the portable package check. Focused contract-integrity tests separately protect version and manifest agreement, package contents, documentation links, release wiring, and session-artifact invariants. Tests also feed each portable validator intentionally faulty raw observations and require the case-specific failure code, proving that representative defects are rejected rather than converted into a qualitative score.
+
+This evidence is not proof of perfection, broad UX quality, manual screen-reader behavior, physical-device behavior, undiscovered defects, or every possible session. Ordinary qualitative research still uses `quality_gap`; `quality_gap=0` remains valid only for the accepted checklist in the current research round. The product gate uses `operator_task_failures` for its explicitly bounded cases.
+
 ## Dashboard review
+
+`npm run test:dashboard` includes a 100,000-record streaming-ledger gate. Its intentionally broad CI ceilings are 96 MiB sampled peak heap delta, 15 seconds wall time, 2.5 MB serialized response, and exactly 5,000 retained rows; the test prints the measured values for review.
 
 Tests do not prove that the dashboard is understandable. Serve or export the demo and inspect it after dashboard source, view-model, copy, or asset changes:
 
@@ -85,13 +101,11 @@ Tests do not prove that the dashboard is understandable. Serve or export the dem
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
 
-`npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures an ignored screenshot under `tmp/`, and checks modal focus restoration, one chart Tab stop with arrow-key navigation, live refresh, mobile layout, reduced motion, 100-row ledger pagination, accessible names, dialog semantics, and ARIA references. It is not a manual screen-reader validation.
+`npm run test:dashboard:browser` is a separate local real-browser check and a required Ubuntu Chrome step in normal and release CI. It drives an installed Chrome or Edge through DevTools, captures current desktop and mobile screenshots under `tmp/`, and checks decision-first viewport bounds, operate/audit agreement, refresh focus and failure state, static-share safety, keyboard disclosures, ledger geometry, modal focus restoration, chart keyboard navigation, mobile layout, reduced motion, pagination, accessible names, dialog semantics, and ARIA references. Its long-history fixture also enforces at most 1,200 mobile DOM elements, 20 buttons, 10 mobile or 48 desktop plotted points, one chart range control, 20 ledger rows per page, at most 10 nodes of DOM growth from 100 to 5,000 runs, a 2.5 MB response, 2-second readiness, 200 ms interactions, and 12 px operational text. It is not a manual screen-reader validation.
 
-The checked-in `examples/demo-session/autoresearch-dashboard.html` is a legacy fixture, not the normal review target. Routine checks use ignored exports under `tmp/`. Refresh the legacy file only when the fixture itself intentionally changes:
+`npm run test:dashboard:cross-browser` is the smaller release gate for the same built fixture in Playwright Chromium, Firefox, and WebKit. It runs the browsers sequentially, covers served and static modes, live refresh, chart keyboard selection, modal focus restoration, computed reduced-motion styles, forced colors, 200%/400% equivalent reflow, emulated touch taps and target geometry, and long-ledger pagination, then replaces the screenshots under `tmp/dashboard-cross-browser/` with evidence from the current run. Install its package-locked engines with `npx playwright install chromium firefox webkit`; CI installs their Linux system dependencies and uploads the ignored screenshots.
 
-```bash
-node scripts/autoresearch.mjs export --cwd examples/demo-session --output autoresearch-dashboard.html --showcase
-```
+Automation does not prove spoken output, physical-device behavior, or accessibility compliance. Before release, record the date, OS, browser and version, fixture and delivery mode, screen reader and version, and pass/fail/needs-follow-up plus the actual announcement for chart help, changed selection, modal context, and restored focus. Record Windows High Contrast, 200% and 400% zoom/reflow, and one touch-device or realistic touch-emulation result separately. Link that evidence from the release issue; do not turn an unrecorded or partial pass into a compliance claim.
 
 ## Package shape and runtime hydration
 
@@ -99,7 +113,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output autore
 
 `npm run check` builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
-If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. There is no unverified fallback.
+If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. Hydration stages and verifies both the runtime and dashboard beside their targets, retains ownership-marked rollback directories until both installs succeed, and restores the prior pair if either install fails. There is no unverified fallback.
 
 A release tarball must:
 

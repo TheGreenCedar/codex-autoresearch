@@ -14,6 +14,8 @@ node scripts/autoresearch.mjs doctor --cwd <project> --explain
 
 Read the blocker and next command before the supporting detail. A normal result may send you to another experiment, but it may also ask you to repair a stale packet, separate dirty files, refresh the runtime, start a new segment, or preview finalization. Follow that action before reaching for `next` out of habit.
 
+State and doctor default to bounded, human-sized JSON. Pass `--json-full` only when a tool or maintainer needs the complete machine diagnostic. Bounded readouts expose the shared decision under `resolvedDecision`; older `decisionEnvelope` and `resumeAudit` fields are accepted as migration inputs but are not repeated as decision aliases.
+
 The main session files are `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.ideas.md`. Research sessions also have an active folder under `autoresearch.research/<slug>/`. Read them before changing the project.
 
 For a compact handoff to another Codex session, use:
@@ -39,7 +41,7 @@ Then run one packet:
 node scripts/autoresearch.mjs next --cwd <project>
 ```
 
-`next` is the command that writes a reusable last-run packet. `run` is only a raw probe, so a later `log --from-last` cannot reuse it.
+`next` is the command that writes a reusable last-run packet. Use `benchmark-inspect` for a bounded diagnostic probe. The old `run` name now fails fast with that migration and is scheduled for removal after 2026-10-01.
 
 After the command finishes, inspect the metric, the checks, the diff, and `git status`. Then record the decision from the saved packet:
 
@@ -49,13 +51,13 @@ node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --de
 
 The five statuses have deliberately narrow meanings:
 
-| Status | When it fits |
-| --- | --- |
-| `measure` | A baseline, environment check, no-change result, or diagnostic. It never commits or reverts work. |
-| `keep` | The metric is finite, required checks passed, and the scoped change is worth preserving. |
-| `discard` | The packet measured successfully, but the change is not worth keeping. Logging may clean the configured or explicit experiment paths. |
-| `crash` | The benchmark failed before it produced usable metric evidence. Logging may clean the configured or explicit experiment paths. |
-| `checks_failed` | A metric exists, but the correctness check failed. Logging may clean the configured or explicit experiment paths. |
+| Status          | When it fits                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `measure`       | A baseline, environment check, no-change result, or diagnostic. It never commits or reverts work.                                     |
+| `keep`          | The metric is finite, required checks passed, and the scoped change is worth preserving.                                              |
+| `discard`       | The packet measured successfully, but the change is not worth keeping. Logging may clean the configured or explicit experiment paths. |
+| `crash`         | The benchmark failed before it produced usable metric evidence. Logging may clean the configured or explicit experiment paths.        |
+| `checks_failed` | A metric exists, but the correctness check failed. Logging may clean the configured or explicit experiment paths.                     |
 
 Pass `--revert-paths` when the cleanup scope should be narrower than configured commit paths. Check `git status --short --branch` before logging any status that may mutate Git.
 
@@ -63,7 +65,7 @@ Use `--from-last` rather than copying a metric out of the terminal. If inline JS
 
 Detailed output stores that structured experiment note in the `asi` field. It should say what Codex expected, what the evidence showed, why a rejected path should stay rejected, and what experiment would be sensible next. A useful note prevents the next session from rediscovering the same dead end.
 
-Every log returns a continuation. If `continuation.shouldContinue` is true, another loop action is expected. If `continuation.forbidFinalAnswer` is true, Codex should not report the goal as finished. A repair, budget stop, segment change, or finalization action takes priority over another experiment.
+Every log returns a continuation. If `continuation.shouldContinue` is true, the session is still active and another loop action is expected; it does not authorize another packet. Read `loopContract.canRunNextPacket` (also exposed as `canRunNextPacket` in compact state) before running one. If `continuation.forbidFinalAnswer` is true, Codex should not report the goal as finished. A repair, budget stop, segment change, or finalization action takes priority over another experiment.
 
 ## Repair the layer that failed
 
@@ -123,7 +125,7 @@ node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <sl
 
 Closing the checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
 
-When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Start with read-only work. An implementation lane needs a worktree or an explicit write scope, and a large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
+When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Scout commands run only when their parsed argv matches the strict Git read-only allowlist; Git porcelain is post-run detection, not containment. An implementation lane needs a separate worktree or an explicit write scope, neither of which contains arbitrary process or outside-root effects. A large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
 
 ## Use the dashboard when it helps
 
@@ -132,5 +134,7 @@ node scripts/autoresearch.mjs serve --cwd <project>
 ```
 
 The printed loopback URL shows live state. `export` writes a static snapshot that is useful for review but cannot prove the current packet is fresh. Neither form runs experiments or changes the session.
+
+The live readout opens in the focused operate view: read status, blocker, next action, and safe command first. Switch to audit only when you need the deeper evidence trail; both views project the same decision. During refresh, the existing evidence remains visible with its last validated time. A refresh failure leaves that last known good readout in place. Static exports provide file-sharing guidance instead of presenting a local `file://` path as a shareable URL.
 
 Once accepted work is starting to pile up, stop adding packets and move to [Finish](finish.md).

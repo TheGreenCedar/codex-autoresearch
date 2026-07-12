@@ -1,21 +1,31 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { ProcessTreeTermination } from "./runner.js";
 
 type LooseObject = Record<string, any>;
 
 export interface RunnerProgressSnapshot {
+  generation: number;
   packetId: string;
   commandClass: string;
   startedAt: string;
   lastOutputAt: string | null;
   timeoutSeconds: number | null;
   timeoutPhase: "none" | "benchmark" | "checks" | "unknown";
-  exitState: "running" | "completed" | "failed" | "timed_out" | "crashed";
+  exitState: "running" | "completed" | "failed" | "timed_out" | "termination_failed" | "crashed";
   artifactRoot: string;
   latestArtifactRow: string;
   elapsedSeconds: number;
   staleProgressReason: string;
   finalArtifactSummary: string;
+  termination: ProcessTreeTermination | null;
+  terminationFailed: boolean;
+}
+
+export interface ProgressStalenessInput {
+  exitState?: unknown;
+  lastOutputAt?: unknown;
+  startedAt?: unknown;
 }
 
 export function commandClassFor(command: unknown): string {
@@ -52,6 +62,7 @@ export function createProgressSnapshot({
   artifactRoot = "",
 }: LooseObject = {}): RunnerProgressSnapshot {
   return {
+    generation: 0,
     packetId: packetId || progressId(command, startedAt),
     commandClass: commandClass || commandClassFor(command),
     startedAt: isoTime(startedAt),
@@ -64,6 +75,8 @@ export function createProgressSnapshot({
     elapsedSeconds: 0,
     staleProgressReason: "",
     finalArtifactSummary: "",
+    termination: null,
+    terminationFailed: false,
   };
 }
 
@@ -86,6 +99,8 @@ export function finishProgressSnapshot(
     exitCode = null,
     timedOut = false,
     crashed = false,
+    terminationFailed = false,
+    termination = null,
     timeoutPhase = "",
     completedAt = new Date().toISOString(),
     artifacts = [],
@@ -94,13 +109,15 @@ export function finishProgressSnapshot(
   const artifactCount = Array.isArray(artifacts)
     ? artifacts.filter((artifact) => artifact && artifact.quarantined !== true).length
     : 0;
-  const exitState = timedOut
-    ? "timed_out"
-    : crashed
-      ? "crashed"
-      : exitCode === 0
-        ? "completed"
-        : "failed";
+  const exitState = terminationFailed
+    ? "termination_failed"
+    : timedOut
+      ? "timed_out"
+      : crashed
+        ? "crashed"
+        : exitCode === 0
+          ? "completed"
+          : "failed";
   return {
     ...snapshot,
     timeoutPhase: timedOut ? normalizeTimeoutPhase(timeoutPhase) : "none",
@@ -110,11 +127,13 @@ export function finishProgressSnapshot(
       artifactCount > 0
         ? `${artifactCount} artifact${artifactCount === 1 ? "" : "s"} linked`
         : "No linked artifacts",
+    termination: termination || snapshot.termination || null,
+    terminationFailed: Boolean(terminationFailed),
   };
 }
 
 export function staleProgressReason(
-  snapshot: RunnerProgressSnapshot,
+  snapshot: ProgressStalenessInput,
   { now = new Date().toISOString(), staleAfterSeconds = 300 }: LooseObject = {},
 ): string {
   const last = snapshot.lastOutputAt || snapshot.startedAt;
@@ -159,6 +178,8 @@ export function progressSnapshotFromRun({
     timedOut: run.timedOut,
     crashed: run.exitCode == null && !run.timedOut,
     timeoutPhase: run.timeoutPhase || (run.timedOut ? "benchmark" : "none"),
+    terminationFailed: run.terminationFailed,
+    termination: run.termination || null,
     completedAt: finishedAt,
     artifacts,
   });

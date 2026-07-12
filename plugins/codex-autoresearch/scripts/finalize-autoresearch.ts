@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
+import { parseNameStatusZ } from "../lib/git-paths.js";
 import {
+  FINALIZATION_EVIDENCE_COMPONENT_KEYS,
   assertGeneratedPlanMetadata,
+  buildFinalizationEvidenceState,
+  commitReferencesMatch,
   finalizationPlanFingerprint,
+  isFinalizationEvidenceTransition,
+  normalizeFinalizationEvidenceFingerprint,
   readAutoresearchLedger,
+  type FinalizationEvidenceFingerprint,
 } from "../lib/finalization-plan.js";
 import { buildFinalizationProductClaimCoverageFromLedger } from "../lib/product-claim-coverage.js";
 import {
@@ -17,12 +26,17 @@ import {
   REPORT_DIRNAME,
   isAutoresearchSessionArtifact,
 } from "../lib/session-artifacts.js";
-import { parseCliArgs, type ParsedCliArgs } from "../lib/cli/args.js";
+import {
+  CliUsageError,
+  cliDebugRequested,
+  parseFinalizerCliArgs,
+  type ParsedAutoresearchArgs,
+} from "../lib/cli/options.js";
 
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
 type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
-type CliArgs = ParsedCliArgs & LooseObject;
+type CliArgs = ParsedAutoresearchArgs & LooseObject;
 type RunEntry = LooseObject & {
   commit?: string;
   description?: string;
@@ -66,6 +80,7 @@ type ExcludedCommit = {
   subject?: string;
 };
 type FinalizePlan = LooseObject & {
+  accepted_evidence_fingerprint?: FinalizationEvidenceFingerprint;
   base: string;
   excluded_commits?: ExcludedCommit[];
   final_tree: string;
@@ -81,11 +96,13 @@ type FinalizePlan = LooseObject & {
 };
 type BranchResult = {
   branch: string;
+  createdThisRun: boolean;
   deleted?: boolean;
   runway?: LooseObject;
   skipped?: boolean;
   stat: string;
 };
+type RecoveryFailure = { error: unknown; label: string };
 type OverlapAnalysis = {
   files: string[];
   groups: string[];
@@ -105,6 +122,10 @@ function usage() {
 Usage:
   node scripts/finalize-autoresearch.mjs plan --cwd <repo> --output groups.json [--goal short-slug] [--trunk main] [--collapse-overlap]
   node scripts/finalize-autoresearch.mjs --cwd <repo> groups.json
+
+Options:
+  -h, --help  Show this help.
+  --debug     Include a stack trace when finalization fails.
 
 groups.json:
 {
@@ -149,16 +170,22 @@ async function run(
     });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
     });
     child.on("error", (error: Error) =>
       resolve({ code: -1, stdout, stderr: String(error.message || error) }),
     );
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      resolve({ code, stdout, stderr });
+    });
   });
   if (!allowFailure && result.code !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
@@ -178,9 +205,8 @@ function cleanLines(text: string): string[] {
 }
 
 function validateRepoRelativePath(file: unknown, cwd: string): string {
-  const normalized = String(file || "")
-    .trim()
-    .replace(/\\/g, "/");
+  const value = String(file ?? "");
+  const normalized = process.platform === "win32" ? value.replace(/\\/g, "/") : value;
   if (!normalized) throw new Error("Unsafe finalizer file path: empty path.");
   if (normalized.includes("\0"))
     throw new Error(`Unsafe finalizer file path contains NUL: ${file}`);
@@ -284,18 +310,45 @@ async function branchExists(branch: string, cwd: string): Promise<boolean> {
 }
 
 async function isDirty(cwd: string): Promise<boolean> {
-  const result = await git(["status", "--porcelain"], cwd);
-  return result.stdout.trim().length > 0;
+  const result = await git(["status", "--porcelain=v1", "-z"], cwd);
+  return result.stdout.length > 0;
 }
 
 async function restoreSourceBranch(sourceBranch: string, cwd: string): Promise<void> {
-  await git(["switch", sourceBranch], cwd, true);
-  await git(["reset", "--hard", "HEAD"], cwd, true);
+  await git(["switch", sourceBranch], cwd);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function withRecoveryFailures(error: unknown, failures: RecoveryFailure[]): Error {
+  const original =
+    error instanceof Error
+      ? error
+      : new Error(error == null ? "Finalization operation failed." : String(error));
+  if (!failures.length) return original;
+  const recovery = failures
+    .map((failure) => `${failure.label}: ${errorMessage(failure.error)}`)
+    .join("\n");
+  return new Error(`${original.message}\nFinalizer recovery failed:\n${recovery}`, {
+    cause: original,
+  });
+}
+
+async function restoreSourceBranchIfNeeded(sourceBranch: string, cwd: string): Promise<void> {
+  if ((await currentBranch(cwd)) !== sourceBranch) {
+    await restoreSourceBranch(sourceBranch, cwd);
+  }
 }
 
 async function changedFiles(fromRef: string, toRef: string, cwd: string): Promise<string[]> {
-  const result = await git(["diff", "--name-only", fromRef, toRef], cwd);
-  return normalizePlanFiles(cleanLines(result.stdout), cwd);
+  const result = await git(["diff", "--name-status", "-z", "-M", fromRef, toRef], cwd);
+  return normalizePlanFiles(gitChangedPaths(result.stdout), cwd);
+}
+
+function gitChangedPaths(output: string): string[] {
+  return [...new Set(parseNameStatusZ(output).flatMap((entry) => entry.paths))];
 }
 
 function planExcludesSessionArtifacts(config: FinalizePlan): boolean {
@@ -463,18 +516,12 @@ function markdownEscape(text: string): string {
 function runEvidenceForCommit(entries: RunEntry[], hash: string): RunEntry | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const run = entries[index];
-    const commit = String(run.commit || "");
-    if (commitMatchesHash(commit, hash)) {
+    if (!isFinalizationEvidenceTransition(run)) continue;
+    if (commitReferencesMatch(run.commit, hash)) {
       return isAcceptedCurrentRun(run) ? run : null;
     }
   }
   return null;
-}
-
-function commitMatchesHash(commit: unknown, hash: string): boolean {
-  if (!commit) return false;
-  const text = String(commit);
-  return hash.startsWith(text) || text.startsWith(hash.slice(0, 12));
 }
 
 async function readAutoresearchJsonl(cwd: string): Promise<RunEntry[]> {
@@ -505,8 +552,8 @@ async function commitParent(hash: string, base: string, cwd: string): Promise<st
 function parseCommitStatus(entries: RunEntry[], hash: string): RunEntry | null {
   const matching: RunEntry[] = [];
   for (const entry of entries) {
-    const commit = String(entry.commit || "");
-    if (commitMatchesHash(commit, hash)) matching.push(entry);
+    if (isFinalizationEvidenceTransition(entry) && commitReferencesMatch(entry.commit, hash))
+      matching.push(entry);
   }
   return matching.at(-1) || null;
 }
@@ -596,9 +643,15 @@ function renderReviewSummaryHeader({
     "",
     "## Review Branches",
     "",
-    "| # | Branch | Title | Files |",
-    "|---:|---|---|---|",
+    "| # | Branch | Provenance | Title | Files |",
+    "|---:|---|---|---|---|",
   ];
+}
+
+function branchProvenance(result?: BranchResult): string {
+  if (!result || (result.skipped && !result.createdThisRun)) return "not created";
+  if (result.skipped) return "created then removed";
+  return result.createdThisRun ? "created" : "reused";
 }
 
 function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): string[] {
@@ -609,7 +662,7 @@ function renderBranchRows(groups: CollectedGroup[], results: BranchResult[]): st
     const branch = result?.branch || "(not created)";
     const suffix = result?.skipped ? " (skipped empty)" : "";
     lines.push(
-      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${markdownEscape(group.title || "")} | ${markdownEscape(group.files.join(", ") || "(none)")} |`,
+      `| ${i + 1} | \`${markdownEscape(branch)}\`${suffix} | ${branchProvenance(result)} | ${markdownEscape(group.title || "")} | ${markdownEscape(group.files.join(", ") || "(none)")} |`,
     );
   }
   return lines;
@@ -743,10 +796,10 @@ function renderRunwayTextForConfig(
         ]),
     "",
     `Final file set: ${[...fileSet].sort().join(", ") || "(none)"}`,
-    `Review branches created: ${
+    `Review branches: ${
       results
         .filter((result) => result && !result.skipped)
-        .map((result) => result.branch)
+        .map((result) => `${result.branch} (${branchProvenance(result)})`)
         .join(", ") || "(none)"
     }`,
   ];
@@ -799,7 +852,8 @@ async function createBranchForGroup(
   cwd: string,
 ): Promise<BranchResult> {
   const branch = branchName(config, group, index);
-  if (!group.files.length) return { branch, skipped: true, deleted: true, stat: "" };
+  if (!group.files.length)
+    return { branch, createdThisRun: false, skipped: true, deleted: true, stat: "" };
   if (await branchExists(branch, cwd)) {
     return await reuseExistingBranchForGroup(config, group, branch, cwd);
   }
@@ -810,16 +864,32 @@ async function createBranchForGroup(
     await git(["add", "-A"], cwd);
     const diff = await git(["diff", "--cached", "--quiet"], cwd, true);
     if (diff.code === 0) {
-      await git(["switch", "--detach", config.base], cwd, true);
-      await git(["branch", "-D", branch], cwd, true);
-      return { branch, skipped: true, deleted: true, stat: "" };
+      await git(["switch", "--detach", config.base], cwd);
+      await git(["branch", "-D", branch], cwd);
+      return { branch, createdThisRun: true, skipped: true, deleted: true, stat: "" };
     }
     await git(["commit", "-m", group.title || "Autoresearch change", "-m", group.body || ""], cwd);
-    return { branch, skipped: false, deleted: false, stat: await branchStat(branch, cwd) };
+    return {
+      branch,
+      createdThisRun: true,
+      skipped: false,
+      deleted: false,
+      stat: await branchStat(branch, cwd),
+    };
   } catch (error) {
-    await git(["switch", "--detach", config.base], cwd, true);
-    await git(["branch", "-D", branch], cwd, true);
-    throw error;
+    const failures: RecoveryFailure[] = [];
+    for (const [label, args] of [
+      ["Created branch worktree cleanup failed", ["reset", "--hard", "HEAD"]],
+      ["Base restoration failed", ["switch", "--detach", config.base]],
+      ["Created branch cleanup failed", ["branch", "-D", branch]],
+    ] as Array<[string, string[]]>) {
+      try {
+        await git(args, cwd);
+      } catch (recoveryError) {
+        failures.push({ error: recoveryError, label });
+      }
+    }
+    throw withRecoveryFailures(error, failures);
   }
 }
 
@@ -861,6 +931,7 @@ async function reuseExistingBranchForGroup(
   }
   return {
     branch,
+    createdThisRun: false,
     skipped: false,
     deleted: false,
     runway,
@@ -900,7 +971,7 @@ async function existingBranchMatchesPlannedGroup(
       return diff.code === 0;
     },
     async () => {
-      await git(["switch", "--detach", config.base], cwd, true);
+      await git(["switch", "--detach", config.base], cwd);
     },
   );
 }
@@ -909,7 +980,7 @@ async function verifyUnion(
   config: FinalizePlan,
   groups: CollectedGroup[],
   sourceBranch: string,
-  createdBranches: string[],
+  reviewBranches: string[],
   cwd: string,
 ): Promise<void> {
   let nonSession: string[] = [];
@@ -923,8 +994,8 @@ async function verifyUnion(
       }
       await git(["add", "-A"], cwd);
       await git(["commit", "--allow-empty", "-m", "verify: union of autoresearch groups"], cwd);
-      const diff = await git(["diff", "--name-only", "HEAD", config.final_tree], cwd);
-      nonSession = cleanLines(diff.stdout).filter(
+      const diff = await git(["diff", "--name-status", "-z", "-M", "HEAD", config.final_tree], cwd);
+      nonSession = gitChangedPaths(diff.stdout).filter(
         (file) => !isAutoresearchSessionArtifact(file, "finalization"),
       );
     },
@@ -934,7 +1005,7 @@ async function verifyUnion(
   );
   if (nonSession.length > 0) {
     throw new Error(
-      `Union of groups differs from final tree:\n${nonSession.join("\n")}\nCreated branches were left intact:\n${createdBranches.join("\n")}`,
+      `Union of groups differs from final tree:\n${nonSession.join("\n")}\nReview branches were left intact:\n${reviewBranches.join("\n")}`,
     );
   }
 }
@@ -946,32 +1017,55 @@ async function withTemporaryVerificationBranch<T>(
   runOnBranch: (verifyBranch: string) => Promise<T>,
   restoreAfter: () => Promise<void>,
 ): Promise<T> {
-  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/${suffix}`;
-  if (await branchExists(verifyBranch, cwd)) {
-    await git(["branch", "-D", verifyBranch], cwd, true);
-  }
+  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/${suffix}-${randomUUID()}`;
+  const failures: RecoveryFailure[] = [];
+  let createdThisRun = false;
+  let result!: T;
+  let runError: unknown;
   try {
     await git(["switch", "--detach", config.base], cwd);
     await git(["switch", "-c", verifyBranch], cwd);
-    return await runOnBranch(verifyBranch);
-  } finally {
+    createdThisRun = true;
+    result = await runOnBranch(verifyBranch);
+  } catch (error) {
+    runError = error;
+  }
+
+  if (runError && createdThisRun) {
     try {
-      await restoreAfter();
-    } finally {
-      await git(["branch", "-D", verifyBranch], cwd, true);
+      await git(["reset", "--hard", "HEAD"], cwd);
+    } catch (error) {
+      failures.push({ error, label: "Temporary branch worktree cleanup failed" });
     }
   }
+  try {
+    await restoreAfter();
+  } catch (error) {
+    failures.push({ error, label: "Verification state restoration failed" });
+  }
+  if (createdThisRun) {
+    try {
+      await git(["branch", "-D", verifyBranch], cwd);
+    } catch (error) {
+      failures.push({ error, label: "Temporary branch cleanup failed" });
+    }
+  }
+  if (runError || failures.length) throw withRecoveryFailures(runError, failures);
+  return result;
 }
 
 async function verifyNoSessionArtifacts(
-  createdBranches: string[],
+  reviewBranches: string[],
   cwd: string,
   excludeSessionArtifacts = true,
 ): Promise<void> {
   if (!excludeSessionArtifacts) return;
-  for (const branch of createdBranches) {
-    const result = await git(["diff-tree", "--no-commit-id", "--name-only", "-r", branch], cwd);
-    const sessionFiles = cleanLines(result.stdout).filter((file) =>
+  for (const branch of reviewBranches) {
+    const result = await git(
+      ["diff-tree", "--no-commit-id", "--name-status", "-z", "-M", "-r", branch],
+      cwd,
+    );
+    const sessionFiles = gitChangedPaths(result.stdout).filter((file) =>
       isAutoresearchSessionArtifact(file, "finalization"),
     );
     if (sessionFiles.length > 0) {
@@ -990,8 +1084,12 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
   const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
-  const keptRuns = entries.filter(isAcceptedCurrentRun);
-  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(entries);
+  const evidenceState = buildFinalizationEvidenceState(
+    history.map((item) => item.hash),
+    entries,
+  );
+  const keptRuns = evidenceState.acceptedRuns;
+  const productClaimCoverage = evidenceState.productClaimCoverage;
   const productGradeIssue = productGradeFinalizationIssue(productClaimCoverage);
   const groups: PlanGroup[] = [];
   const excludedCommits: ExcludedCommit[] = [];
@@ -1032,6 +1130,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
     excluded_commits: excludedCommits,
     excluded_commit_count: excludedCommits.length,
     overlap_files: overlapAnalysis.files,
+    accepted_evidence_fingerprint: evidenceState.fingerprint,
     overlap_count: overlapAnalysis.files.length,
     collapse_overlap_recommended: overlapAnalysis.files.length > 0,
     warnings: buildPlanWarnings({ excludedCommits, overlapAnalysis }),
@@ -1128,11 +1227,11 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   return plan;
 }
 
-async function main() {
-  const cli = parseCliArgs(process.argv.slice(2)) as CliArgs;
+async function main(argv: string[]) {
+  const cli = parseFinalizerCliArgs(argv) as CliArgs;
   const command = cli._[0];
   const file = command;
-  if (!file || file === "--help" || file === "-h") {
+  if (!file || cli.help) {
     console.log(usage());
     return;
   }
@@ -1203,7 +1302,16 @@ async function main() {
     },
   );
 
-  const created: string[] = [];
+  await withPhase(
+    "evidence revalidation",
+    "Regenerate the finalizer plan from the current accepted evidence, then retry.",
+    async () => {
+      await assertPlanAcceptedEvidenceCurrent(config, cwd);
+    },
+  );
+
+  const createdBranches: string[] = [];
+  const reviewBranches: string[] = [];
   const results: BranchResult[] = [];
   let summaryPath = "";
   try {
@@ -1214,7 +1322,8 @@ async function main() {
         for (let i = 0; i < groups.length; i += 1) {
           const result = await createBranchForGroup(config, groups[i], i, cwd);
           results.push(result);
-          if (!result.skipped) created.push(result.branch);
+          if (!result.skipped) reviewBranches.push(result.branch);
+          if (result.createdThisRun && !result.skipped) createdBranches.push(result.branch);
           console.log(`${String(i + 1).padStart(2, "0")}. ${groups[i].title}`);
           console.log(`    branch: ${result.branch}${result.skipped ? " (skipped empty)" : ""}`);
           console.log(`    files: ${groups[i].files.join(", ") || "(none)"}`);
@@ -1222,11 +1331,23 @@ async function main() {
       },
     );
   } catch (error) {
-    for (const branch of created) {
-      await git(["branch", "-D", branch], cwd, true);
+    const failures: RecoveryFailure[] = [];
+    try {
+      await restoreSourceBranchIfNeeded(sourceBranch, cwd);
+    } catch (recoveryError) {
+      failures.push({ error: recoveryError, label: "Source branch restoration failed" });
     }
-    await restoreSourceBranch(sourceBranch, cwd);
-    throw error;
+    for (const branch of createdBranches) {
+      try {
+        await git(["branch", "-D", branch], cwd);
+      } catch (recoveryError) {
+        failures.push({
+          error: recoveryError,
+          label: `Created branch cleanup failed (${branch})`,
+        });
+      }
+    }
+    throw withRecoveryFailures(error, failures);
   }
 
   summaryPath = await reviewSummaryPath(config, cwd);
@@ -1245,17 +1366,16 @@ async function main() {
       "union verification",
       "Inspect the generated review summary and the listed file differences before changing groups.json.",
       async () => {
-        await verifyUnion(config, groups, sourceBranch, created, cwd);
+        await verifyUnion(config, groups, sourceBranch, reviewBranches, cwd);
       },
     );
     await withPhase(
       "session artifact verification",
       "Remove autoresearch.* files from review branches, then rerun finalization.",
       async () => {
-        await verifyNoSessionArtifacts(created, cwd, planExcludesSessionArtifacts(config));
+        await verifyNoSessionArtifacts(reviewBranches, cwd, planExcludesSessionArtifacts(config));
       },
     );
-    await restoreSourceBranch(sourceBranch, cwd);
     await writeReviewSummary(summaryPath, {
       config,
       groups,
@@ -1264,23 +1384,31 @@ async function main() {
       status: "verified",
     });
   } catch (error) {
-    await restoreSourceBranch(sourceBranch, cwd);
+    const failures: RecoveryFailure[] = [];
+    try {
+      await restoreSourceBranchIfNeeded(sourceBranch, cwd);
+    } catch (recoveryError) {
+      failures.push({ error: recoveryError, label: "Source branch restoration failed" });
+    }
+    const failure = withRecoveryFailures(error, failures);
     await writeReviewSummary(summaryPath, {
       config,
       groups,
       results,
       sourceBranch,
       status: "failed",
-      error,
+      error: failure,
     });
     console.error("");
     console.error(`Review summary: ${summaryPath}`);
-    throw error;
+    throw failure;
   }
 
   console.log("");
-  console.log("Created review branches:");
-  for (const branch of created) console.log(`  ${branch}`);
+  console.log("Review branches:");
+  for (const result of results.filter((result) => !result.skipped)) {
+    console.log(`  ${result.branch} (${branchProvenance(result)})`);
+  }
   console.log("");
   if (productGradeFinalizationIssue(config.product_claim_coverage)) {
     console.log("Experimental review branch only: product-grade proof is missing.");
@@ -1304,10 +1432,38 @@ function planFingerprint(plan: FinalizePlan): string {
   return finalizationPlanFingerprint(plan);
 }
 
+async function assertPlanAcceptedEvidenceCurrent(config: FinalizePlan, cwd: string): Promise<void> {
+  if (!config.accepted_evidence_fingerprint) return;
+  const planned = normalizeFinalizationEvidenceFingerprint(config.accepted_evidence_fingerprint);
+  const history = await commitHistory(config.base, cwd);
+  const entries = await readAutoresearchJsonl(cwd);
+  const current = buildFinalizationEvidenceState(
+    history.map((item) => item.hash),
+    entries,
+  ).fingerprint;
+  if (planned.fingerprint === current.fingerprint && planned.schema_version === 1) return;
+  const labels: Record<string, string> = {
+    accepted_commit_membership: "accepted commit membership",
+    excluded_commit_statuses: "excluded commit status",
+    evidence_statuses: "evidence status",
+    accepted_ledger_order: "accepted ledger ordering",
+    product_claim_coverage_inputs: "product-claim coverage inputs",
+  };
+  const changed = FINALIZATION_EVIDENCE_COMPONENT_KEYS.filter(
+    (key) => planned.components[key] !== current.components[key],
+  ).map((key) => labels[key]);
+  if (planned.schema_version !== 1) changed.unshift("fingerprint schema");
+  if (!changed.length) changed.push("canonical evidence fingerprint");
+  throw new Error(
+    `Stale finalization plan: accepted-current evidence changed in ${changed.join(", ")}. No review branches were created. Regenerate the finalizer plan from the current ledger and retry.`,
+  );
+}
+
 async function hydratePlanProductClaimCoverage(
   config: FinalizePlan,
   cwd: string,
 ): Promise<FinalizePlan> {
+  if (config.accepted_evidence_fingerprint && config.product_claim_coverage) return config;
   const entries = await readAutoresearchJsonl(cwd);
   const derived = buildFinalizationProductClaimCoverageFromLedger(entries);
   const productGradeIssue = productGradeFinalizationIssue(derived);
@@ -1412,8 +1568,14 @@ function posixQuote(value: unknown): string {
   return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
-main().catch((error: unknown) => {
+const argv = process.argv.slice(2);
+let debug = false;
+try {
+  debug = cliDebugRequested(argv, true);
+  await main(argv);
+} catch (error: unknown) {
   const failure = error as FinalizePhaseError;
-  console.error(failure.stack || failure.message || String(failure));
+  const message = debug && failure.stack ? failure.stack : failure.message || String(failure);
+  console.error(error instanceof CliUsageError ? `${message}\n\n${usage()}` : message);
   process.exitCode = 1;
-});
+}

@@ -3,7 +3,7 @@ import { redactEvidenceObject } from "./evidence-redaction.js";
 import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
 import { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 import { buildMissionControl } from "./dashboard-view-model/mission-control.js";
-import { buildWatchdogSummary } from "./dashboard-view-model/watchdog-summary.js";
+import { buildWatchdogSummary } from "./watchdog-summary.js";
 import {
   actionMetadataForKind,
   fallbackCommandForKind,
@@ -14,11 +14,11 @@ import {
   dashboardReadOnlyCommand,
   stripDashboardGuidanceCommandFields,
 } from "./dashboard-command-safety.js";
-import type { DashboardContext } from "../dashboard/src/types.js";
+import { parseDashboardContext, type DashboardContext } from "./types/dashboard-wire.js";
 
 export { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 export { buildMissionControl } from "./dashboard-view-model/mission-control.js";
-export { buildWatchdogSummary } from "./dashboard-view-model/watchdog-summary.js";
+export { buildWatchdogSummary } from "./watchdog-summary.js";
 
 type LooseObject = Record<string, any>;
 type Direction = "lower" | "higher" | string;
@@ -62,8 +62,9 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory = null,
     drift = null,
     warnings = [],
-  } = normalizeDashboardContext(context);
+  } = normalizeDashboardContext(parseDashboardContext(context));
   const current = (state.current || []) as RunLike[];
+  const ledgerSummary = (state.dashboardLedgerSummary as LooseObject) || null;
   const scaffoldHealth = (state.scaffoldHealth as LooseObject) || null;
   const researchIntegrity = (state.researchIntegrity as LooseObject) || null;
   const kept = acceptedCurrentRuns(current);
@@ -297,10 +298,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
       metricUnit: state.config.metricUnit,
       direction: state.config.bestDirection,
       segment: state.segment,
-      runs: current.length,
-      kept: kept.length,
-      measured: measurements.length,
-      failed: failures.length,
+      runs: ledgerSummary?.currentRunCount ?? current.length,
+      kept: ledgerSummary?.acceptedRunCount ?? kept.length,
+      measured: ledgerSummary?.measurementRunCount ?? measurements.length,
+      failed: ledgerSummary?.failedRunCount ?? failures.length,
       baseline: state.baseline,
       best: state.best,
       development: state.development || null,
@@ -310,7 +311,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
       statusCounts: Object.fromEntries(
         [...STATUS_VALUES].map((status) => [
           status,
-          current.filter((run) => run.status === status).length,
+          ledgerSummary?.statusCounts?.[status] ??
+            current.filter((run) => run.status === status).length,
         ]),
       ),
       settings,
@@ -319,9 +321,15 @@ export function buildDashboardViewModel(context: DashboardContext) {
       bestKept: bestKept ? compactRun(bestKept) : null,
       latestFailure: latestFailure ? compactRun(latestFailure) : null,
       measurementRuns: measurementReadout.runs,
-      measurementRunCount: measurements.length,
-      measurementRunsOmitted: measurementReadout.omitted,
-      measurementRunsTruncated: measurementReadout.truncated,
+      measurementRunCount: ledgerSummary?.measurementRunCount ?? measurements.length,
+      measurementRunsOmitted: Math.max(
+        0,
+        Number(ledgerSummary?.measurementRunCount ?? measurements.length) -
+          measurementReadout.runs.length,
+      ),
+      measurementRunsTruncated:
+        Number(ledgerSummary?.measurementRunCount ?? measurements.length) >
+        measurementReadout.runs.length,
       nextAction: actionRail[0]?.detail || nextAction,
       confidenceText:
         state.confidence == null
@@ -452,13 +460,28 @@ function normalizeDecisionEnvelope({
   setupState = null,
   warnings = [],
   watchdog = null,
-}: LooseObject) {
+}: LooseObject): LooseObject {
   const supplied = firstRecord(
     state?.decisionEnvelope,
     state?.resumeAudit,
     settings.decisionEnvelope,
     settings.resumeAudit,
   );
+  const resolved = recordOrNull(state?.resolvedDecision);
+  if (resolved) {
+    return sanitizeDashboardDecisionEnvelope({
+      ...supplied,
+      canonicalNextAction: resolved.canonicalNextAction || supplied.canonicalNextAction || null,
+      loopContract: resolved.loopContract || supplied.loopContract || null,
+      runtimeProvenance: resolved.runtimeProvenance || supplied.runtimeProvenance || null,
+      runtimeAuthority: resolved.runtimeAuthority || supplied.runtimeAuthority || null,
+      finalizationReadiness:
+        resolved.finalizationPressure || supplied.finalizationReadiness || finalizePreview || null,
+      nextAction: resolved.nextAction || supplied.nextAction || "",
+      resolvedStatus: resolved.status || "unknown",
+      strongestBlocker: resolved.strongestBlocker || null,
+    });
+  }
   if (Object.keys(supplied).length) return sanitizeDashboardDecisionEnvelope(supplied);
 
   const current = Array.isArray(state?.current) ? state.current : [];
@@ -550,7 +573,7 @@ function summarizeDecisionEnvelope({
     measurements,
     envelope,
   });
-  if (canonicalSummary && canonicalSummary.kind !== "next-packet") return canonicalSummary;
+  if (canonicalSummary) return canonicalSummary;
 
   let summary = {
     kind: "continue",

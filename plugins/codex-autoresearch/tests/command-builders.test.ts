@@ -11,11 +11,28 @@ import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { buildDashboardCommands, buildDashboardSettings } from "../lib/commands/dashboard.js";
-import { createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { commandHandlerAdapterBindings, createCliCommandHandlers } from "../lib/cli-handlers.js";
+import { renderCliHelp } from "../lib/cli/help.js";
 import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/cli/args.js";
+import {
+  actionPolicyRequiresSessionLock,
+  commandRequiresSessionMutationLock,
+  commandTable,
+  compatibilityErrorForCli,
+} from "../lib/command-table.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
-import { assertRunResourcePreflight, buildActiveRunPacketId } from "../lib/process-governor.js";
-import { actionPolicyForTool, commandActionAliases, toolMetadata } from "../lib/tool-registry.js";
+import {
+  assertRunResourcePreflight,
+  buildActiveRunPacketId,
+  buildProcessLifecycleRecord,
+} from "../lib/process-governor.js";
+import {
+  actionPolicyForTool,
+  commandActionAliases,
+  toolMetadata,
+  toolRegistry,
+} from "../lib/tool-registry.js";
+import { toolSchemas } from "../lib/tool-schemas.js";
 
 test("command rendering quotes hostile benchmark args for the selected shell", () => {
   const benchmark =
@@ -71,12 +88,12 @@ test("run command helper blocks packets when resource budgets are exhausted", ()
         command: "node benchmark.js",
         config: {},
         entries: [
-          {
-            type: "process_manager",
-            status: "stale",
-            timestamp: "2026-06-01T00:00:00.000Z",
-            reason: "stale active_process residue after reboot",
-          },
+          buildProcessLifecycleRecord({
+            packetId: "packet-2-active",
+            processId: "benchmark",
+            event: "started",
+            at: "2026-06-01T00:00:00.000Z",
+          }),
         ],
       }),
     /Resource preflight blocked packet start:/,
@@ -89,10 +106,149 @@ test("tool registry owns command aliases and static safety metadata", () => {
   assert.equal(commandActionAliases.liveDashboard, "serve dashboard");
   assert.equal(toolMetadata("doctor_session")?.conditionallyMutating, true);
   assert.equal(toolMetadata("doctor_session")?.openWorld, true);
-  assert.equal(
-    actionPolicyForTool("integrations", { subcommand: "sync-recipes" }),
-    "artifact_write",
+  assert.equal(actionPolicyForTool("integrations", { subcommand: "sync-recipes" }), "read");
+});
+
+test("command table derives schemas, registry, handlers, help, and compatibility migrations", async () => {
+  const dependencies = Object.fromEntries(
+    commandTable.map((command) => [command.handler, async (args: unknown) => args]),
   );
+  const handlers = createCliCommandHandlers({
+    ...dependencies,
+    doctorHooks: async (args: unknown) => args,
+    interactiveSetup: async (args: unknown) => args,
+    parseJsonOption,
+  } as any);
+  const tableCliNames = commandTable.map((command) => command.cliCommand).sort();
+  const tableToolNames = commandTable.map((command) => command.name).sort();
+
+  assert.equal(new Set(tableCliNames).size, commandTable.length);
+  assert.equal(new Set(tableToolNames).size, commandTable.length);
+  assert.deepEqual(Object.keys(handlers).sort(), tableCliNames);
+  assert.deepEqual(Object.keys(toolRegistry).sort(), tableToolNames);
+  assert.deepEqual(toolSchemas.map((schema) => schema.name).sort(), tableToolNames);
+  assert.deepEqual(
+    toolSchemas.map((schema) => [schema.name, Object.keys(schema.outputSchema.properties)]),
+    commandTable.map((command) => [command.name, [...command.outputFields]]),
+  );
+  for (const command of commandTable) {
+    const help = renderCliHelp({ command: command.cliCommand });
+    assert.match(help, new RegExp(`Command: ${command.cliCommand}`));
+    assert.match(help, new RegExp(command.help[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+
+  assert.throws(
+    () => handlers.state({ _: ["state"], cwd: ".", typoOption: true }),
+    /Unknown argument for read_state: typoOption/,
+  );
+  const qualityGap = await handlers["quality-gap"]({
+    _: ["quality-gap"],
+    cwd: ".",
+    json: true,
+  });
+  assert.equal(qualityGap.result.json, true);
+  assert.deepEqual(
+    commandTable.filter((command) => command.compatibility).map((command) => command.cliCommand),
+    ["init", "run", "integrations"],
+  );
+  for (const command of ["init", "run", "integrations"]) {
+    const migrationError = compatibilityErrorForCli(command);
+    assert.match(migrationError || "", /scheduled for removal after 2026-10-01/);
+    assert.match(renderCliHelp({ command }), /Migration: .*migrate/i);
+    const definition = commandTable.find((entry) => entry.cliCommand === command)!;
+    const schema = toolSchemas.find((entry) => entry.name === definition.name)!;
+    assert.deepEqual(definition.outputFields, []);
+    assert.equal(schema.description, definition.compatibility!.error);
+    assert.match(String(schema.annotations.safety), /Fails before dispatch, locking, or mutation/);
+  }
+});
+
+test("table lock policy covers every mutating and conditional command", () => {
+  const conditionalArgs: Record<string, Record<string, unknown>> = {
+    guide: { startDashboard: true },
+    "session-forensics": { apply: true },
+    "research-fanout": { yes: true },
+    "lane-runner": { command: "git status --short" },
+    "partial-results": { record: "candidate-1" },
+    "ledger-doctor": { repair: true },
+    "gap-candidates": { modelCommand: "node model.mjs" },
+    "benchmark-inspect": { command: "node bench.mjs" },
+    "benchmark-lint": { command: "node bench.mjs" },
+    "checks-inspect": { command: "npm test" },
+    doctor: { checkBenchmark: true },
+  };
+  assert.deepEqual(
+    Object.keys(conditionalArgs).sort(),
+    commandTable
+      .filter((command) => command.conditionallyMutating)
+      .map((command) => command.cliCommand)
+      .sort(),
+  );
+
+  for (const command of commandTable) {
+    const defaultMutates = actionPolicyRequiresSessionLock(command.actionPolicy);
+    if (defaultMutates && command.sessionLock !== "none") {
+      assert.equal(
+        commandRequiresSessionMutationLock(command.cliCommand),
+        true,
+        `${command.cliCommand} should lock by default`,
+      );
+    }
+    if (command.sessionLock === "none") {
+      assert.equal(commandRequiresSessionMutationLock(command.cliCommand), false);
+    }
+    if (command.inputSchema.properties?.dry_run) {
+      assert.equal(commandRequiresSessionMutationLock(command.cliCommand, { dryRun: true }), false);
+    }
+  }
+  for (const [command, args] of Object.entries(conditionalArgs)) {
+    const definition = commandTable.find((entry) => entry.cliCommand === command)!;
+    assert.equal(
+      commandRequiresSessionMutationLock(command, args),
+      definition.sessionLock === "none" ? false : true,
+      `${command} conditional lock policy drifted`,
+    );
+  }
+  assert.equal(commandRequiresSessionMutationLock("guide", { startDashboard: true }), false);
+});
+
+test("handler adapters invoke the binding declared by each table entry", async () => {
+  const calls: string[] = [];
+  const dependencies = Object.fromEntries(
+    commandTable
+      .filter((command) => !command.compatibility)
+      .map((command) => [
+        command.handler,
+        async (...args: unknown[]) => {
+          calls.push(command.handler);
+          return command.handler === "measureQualityGap"
+            ? { binding: command.handler, metricOutput: "METRIC quality_gap=0" }
+            : { args, binding: command.handler };
+        },
+      ]),
+  );
+  const handlers = createCliCommandHandlers({
+    ...dependencies,
+    doctorHooks: async () => ({ hooks: true }),
+    interactiveSetup: async () => ({ interactive: true }),
+    parseJsonOption,
+  } as any);
+
+  assert.deepEqual([...commandHandlerAdapterBindings].sort(), [
+    "checksInspect",
+    "doctorSession",
+    "logExperiment",
+    "measureQualityGap",
+    "publicState",
+    "recipeCommand",
+    "serveDashboard",
+    "setupSession",
+  ]);
+  for (const command of commandTable.filter((entry) => !entry.compatibility)) {
+    calls.length = 0;
+    await handlers[command.cliCommand]({ _: [command.cliCommand], cwd: "." });
+    assert.deepEqual(calls, [command.handler], `${command.cliCommand} bypassed its table binding`);
+  }
 });
 
 test("dashboard command helper builds read-only continuation commands", () => {
@@ -227,23 +383,12 @@ test("recommend-next response preserves stable fields and optional governance fi
   assert.deepEqual(response.packetDiagnostics, { unresolved: true });
 });
 
-test("integrations handler prefers normalized subcommand argument", async () => {
-  const calls: Array<{ subcommand: string | undefined; catalog?: string }> = [];
-  const handlers = createCliCommandHandlers({
-    integrationsCommand: async (subcommand: string | undefined, args: Record<string, unknown>) => {
-      calls.push({ subcommand, catalog: String(args.catalog || "") });
-      return { ok: true, subcommand };
-    },
-  });
-
-  const response = await handlers.integrations({
-    _: ["integrations"],
-    subcommand: "doctor",
-    catalog: "recipes.json",
-  });
-
-  assert.deepEqual(calls, [{ subcommand: "doctor", catalog: "recipes.json" }]);
-  assert.deepEqual(response.result, { ok: true, subcommand: "doctor" });
+test("compatibility handlers fail with their exact migration error", async () => {
+  const handlers = createCliCommandHandlers({} as any);
+  await assert.rejects(
+    handlers.integrations({ _: ["integrations"], subcommand: "doctor" }),
+    /integrations is a compatibility command scheduled for removal after 2026-10-01/,
+  );
 });
 
 test("recommend-next authority prefers dashboard runtime drift over compact source-only state", () => {
@@ -357,6 +502,26 @@ test("recommend-next authority uses full envelope when dashboard-only blockers e
       },
     },
     compact: {
+      resolvedDecision: {
+        version: 1,
+        status: "ready",
+        strongestBlocker: null,
+        nextAction: "Run the next packet.",
+        command: "node scripts/autoresearch.mjs next --cwd . --compact",
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+        },
+        loopContract: {
+          ok: true,
+          canRunNextPacket: true,
+          blockers: [],
+          warnings: [],
+        },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
       decisionEnvelope: {
         canonicalNextAction: {
           kind: "next-packet",
@@ -419,7 +584,8 @@ test("compact recommend-next preserves finalization readiness as canonical autho
     },
   });
 
-  assert.equal((response.decisionEnvelope as any).finalizationReadiness.available, true);
+  assert.equal(response.resolvedDecision.finalizationPressure?.available, true);
+  assert.equal(response.resolvedDecision.canonicalNextAction?.toolName, "finalize_current_tree");
   assert.equal((response.action as any).kind, "current-tree-finalization");
   assert.equal(
     response.commands.primary,
@@ -475,8 +641,10 @@ test("compact state response preserves stable compact fields and optional loop f
     discarded: 1,
     measured: 1,
     nextAction: "Clean up stale lanes.",
+    shouldContinue: true,
+    canRunNextPacket: false,
     runtimeProvenance: { status: "fresh" },
-    loopContract: { mayRunPacket: false },
+    loopContract: { canRunNextPacket: false },
     laneLifecycle: { staleLanes: ["scout"] },
     packetDiagnostics: { unresolved: true },
     watchdogSummary: { stale: true },
@@ -485,10 +653,47 @@ test("compact state response preserves stable compact fields and optional loop f
   assert.equal(response.ok, true);
   assert.equal(response.runs, 3);
   assert.equal(response.kept, 1);
-  assert.equal(response.nextAction, "Clean up stale lanes.");
-  assert.deepEqual(response.runtimeProvenance, { status: "fresh" });
-  assert.deepEqual(response.loopContract, { mayRunPacket: false });
-  assert.deepEqual(response.laneLifecycle, { staleLanes: ["scout"] });
-  assert.deepEqual(response.packetDiagnostics, { unresolved: true });
-  assert.deepEqual(response.watchdogSummary, { stale: true });
+  assert.equal(response.resolvedDecision.nextAction, "Clean up stale lanes.");
+  assert.equal(response.resolvedDecision.status, "unknown");
+  assert.deepEqual(response.resolvedDecision.runtimeProvenance, { status: "fresh" });
+  assert.deepEqual(response.resolvedDecision.loopContract, { canRunNextPacket: false });
+  assert.equal(Object.hasOwn(response, "loopContract"), false);
+  assert.equal(Object.hasOwn(response, "laneLifecycle"), false);
+  assert.equal(Object.hasOwn(response, "packetDiagnostics"), false);
+  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
+});
+
+test("compact recommend-next rejects unsafe commands and enforces Unicode byte and line budgets", () => {
+  const response = buildCompactRecommendNextResponse({
+    workDir: `C:/${"😀".repeat(8_000)}`,
+    compactState: {
+      workDir: `C:/${"😀".repeat(8_000)}`,
+      goal: "界".repeat(20_000),
+      resolvedDecision: {
+        version: 1,
+        status: "ready",
+        strongestBlocker: null,
+        nextAction: "Run the next packet.",
+        command: "<command-placeholder>",
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node -e \"require('child_process').execSync('whoami')\"",
+        },
+        loopContract: { canRunNextPacket: true },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
+      commands: {
+        primary: "node -e \"require('child_process').execSync('whoami')\"",
+        state: "<state-command>",
+      },
+    },
+  });
+  const serialized = JSON.stringify(response, null, 2);
+  assert.ok(Buffer.byteLength(serialized, "utf8") <= 5_200);
+  assert.ok(serialized.split("\n").length <= 120);
+  assert.equal((response.commands as Record<string, unknown>).primary, undefined);
+  assert.doesNotMatch(serialized, /child_process|command-placeholder|state-command/);
 });

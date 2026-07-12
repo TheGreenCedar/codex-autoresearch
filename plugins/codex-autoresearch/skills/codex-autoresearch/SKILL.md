@@ -38,6 +38,7 @@ For an existing session:
 1. Read [loop operations](references/loop-operations.md).
 2. Read `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, and the active `autoresearch.research/<slug>/` folder when present.
 3. Run `state --report`, `recommend-next --compact --operator-checklist`, and `doctor --explain`.
+   These defaults are bounded and share one `resolvedDecision`; use `state --json-full` or `doctor --json-full` only for complete machine diagnostics.
 4. Keep `goalFrame.authoritativeGoal` authoritative unless the user deliberately replaces it. If a new request would change the benchmark, metric, edit scope, or final claim, treat it as a possible replacement and resolve that choice before packet work.
 5. Follow the printed blocker or command. If the CLI, report, and dashboard disagree, stop mutation and diagnose the shared state.
 
@@ -64,7 +65,7 @@ The ASI file must contain the real hypothesis, evidence, rollback reason when re
 
 ## Run one packet at a time
 
-Use `next` for a reusable packet. Treat `run` as a raw probe that `log --from-last` cannot reuse.
+Use `next` for a reusable packet. Use `benchmark-inspect` for a bounded diagnostic probe; the old `run` name fails fast with that migration and is scheduled for removal after 2026-10-01.
 
 After `next`:
 
@@ -86,9 +87,11 @@ When accepted work was committed outside Autoresearch, verify the commit and log
 Obey these brakes:
 
 - Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
+- Treat `termination_failed` as a hard stop. Preserve partial packet evidence, verify the reported PID and descendants are absent, then remove only the retained progress marker before another `next`.
+- Treat typed `process_lifecycle` blockers as process truth: verify absence before recording a later terminal row. Never infer active residue from historical prose, and never repair a malformed lifecycle row by weakening validation.
 - Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
 - Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.
-- Continue when `continuation.shouldContinue=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
+- Continue the active session when `continuation.shouldContinue=true`, but run a packet only when `loopContract.canRunNextPacket=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
 - Let blockers, budget stops, segment changes, and finalization outrank another packet.
 - Treat `benchmark-lint` as a parser check, not proof that the benchmark represents the product.
 - Require the checks implied by the claim: accuracy, behavior, accessibility, safety, data integrity, or performance.
@@ -136,7 +139,7 @@ Report the real runway: preview, approved, branches created, locally verified, p
 
 Run `codex-goal-brief` and inspect its `completionAudit` field before the parent calls `update_goal(status="complete")`. Keep Goal state in Codex; use Autoresearch only for the evidence.
 
-When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
+When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Scout commands must match `lane-runner`'s strict Git read-only argv allowlist; do not use shell or interpreter escapes. Treat Git porcelain and write-scope checks as best-effort detection, not process/filesystem containment, and use disposable worktrees for implementation lanes. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
 
 ## Load only the documentation you need
 

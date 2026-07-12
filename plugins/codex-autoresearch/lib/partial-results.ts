@@ -172,6 +172,38 @@ export async function discoverPartialResultCandidates(
   return new PartialResultSalvager(options).discover(options.lastRunPacket);
 }
 
+export async function discoverLastRunPartialResults(
+  options: DiscoverPartialResultCandidatesOptions,
+): Promise<PartialResultDiscovery> {
+  if (!partialResultEligiblePacket(options.lastRunPacket)) {
+    return { candidates: [], skippedArtifacts: [] };
+  }
+  try {
+    return await discoverPartialResultCandidates(options);
+  } catch (error: unknown) {
+    const packet = isRecord(options.lastRunPacket) ? options.lastRunPacket : {};
+    return {
+      candidates: [],
+      skippedArtifacts: [
+        {
+          artifactName: "last-run",
+          artifactPath: stringValue(packet.lastRunPath) || "",
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
+  }
+}
+
+export function partialResultEligiblePacket(packet: unknown): boolean {
+  if (!isRecord(packet)) return false;
+  const run = isRecord(packet.run) ? packet.run : {};
+  const packetEvidence = isRecord(packet.packetEvidence) ? packet.packetEvidence : {};
+  if (packet.ok === false || run.timedOut === true || packetEvidence.timedOut === true) return true;
+  const exitCode = finiteMetric(run.exitCode ?? packetEvidence.exitStatus);
+  return exitCode != null && exitCode !== 0;
+}
+
 export function buildPartialResultEvidenceClaim(candidate: PartialResultCandidate): EvidenceClaim {
   const metric =
     candidate.metricName && candidate.metricValue != null

@@ -167,6 +167,29 @@ test("fresh packet logging outranks generic preflight repair", () => {
   assert.equal(status.strongestAction?.kind, "log-decision");
 });
 
+test("stale watchdog intervention is the shared authority over generic preflight repair", () => {
+  const envelope = buildDecisionEnvelope({
+    state: {
+      config: { bestDirection: "lower", metricName: "seconds" },
+      current: [{ run: 1, metric: 10, status: "keep" }],
+      results: [{ run: 1, metric: 10, status: "keep" }],
+      preflight: {
+        status: "blocked",
+        blockers: ["No benchmark command is configured."],
+        nextCommand: "node scripts/autoresearch.mjs setup-plan --cwd .",
+      },
+    },
+    watchdog: {
+      stale: true,
+      recommendation: "Intervene after the stale progress window.",
+    },
+  });
+
+  assert.equal(envelope.loopContract.strongestAction.kind, "preflight");
+  assert.equal(envelope.canonicalNextAction.kind, "watchdog");
+  assert.match(envelope.nextAction, /Intervene/);
+});
+
 test("probe-failed runtime provenance remains non-blocking", () => {
   const status = buildLoopContractStatus({
     runtimeProvenance: {
@@ -604,6 +627,36 @@ test("last-run freshness does not suppress independent gate or preflight blocker
   assert.equal(status.strongestAction?.kind, "preflight");
 });
 
+test("active progress stays distinct from stale packets, recovery, and setup", () => {
+  const status = buildLoopContractStatus({
+    experimentEconomics: {
+      warnings: [
+        {
+          code: "stale_progress",
+          recommendation: "Inspect the active artifact before restarting.",
+        },
+      ],
+    },
+    latestPacketFreshness: {
+      fresh: false,
+      reason: "Last-run packet is stale.",
+    },
+    salvageCandidates: [{ id: "artifact-1", status: "diagnostic" }],
+    setupState: {
+      stage: "needs-setup",
+      blockers: ["Session setup is missing."],
+    },
+  });
+
+  assert.equal(status.canRunNextPacket, false);
+  assert.deepEqual(
+    status.blockers.map((item) => item.kind),
+    ["partial-salvage", "active-progress", "stale-packet", "setup"],
+  );
+  assert.equal(status.strongestAction?.kind, "partial-salvage");
+  assert.match(status.blockers[1].reason, /active artifact/i);
+});
+
 test("packet-brake blocker actions get non-next fallback commands", () => {
   const commands = {
     doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
@@ -774,7 +827,8 @@ test("current-tree finalization acceptance requires only one issue and a finaliz
       canRunNextPacket: false,
       strongestAction: {
         kind: "current-tree-finalization",
-        command: "node scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
+        command:
+          "node C:/worktrees/ar-v27-next-action/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
       },
       blockers: [{ kind: "current-tree-finalization" }],
     },
@@ -930,9 +984,7 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
     compactState,
   });
   const action = response.action as { kind?: string };
-  const decisionEnvelope = response.decisionEnvelope as {
-    finalizationReadiness?: { available?: boolean };
-  };
+  const resolvedDecision = response.resolvedDecision;
 
   assert.equal(action.kind, "decision-capsule");
   assert.equal(
@@ -941,17 +993,24 @@ test("compact recommend-next uses compact state without dashboard-only fields", 
   );
   assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
   assert.match(response.whySafe, /compact state/);
-  assert.match(response.whySafe, /shared decision envelope/);
-  assert.equal(response.compactState, compactState);
-  assert.equal(response.decisionEnvelope, compactState.decisionEnvelope);
-  assert.equal(response.resumeAudit, compactState.resumeAudit);
-  assert.deepEqual(response.runtimeProvenance, compactState.runtimeProvenance);
-  assert.deepEqual(response.loopContract, compactState.loopContract);
-  assert.deepEqual(response.laneLifecycle, compactState.laneLifecycle);
-  assert.deepEqual(response.packetDiagnostics, compactState.packetDiagnostics);
+  assert.match(response.whySafe, /shared resolved decision/);
+  assert.notEqual(response.compactState, compactState);
+  assert.equal(Object.hasOwn(response, "decisionEnvelope"), false);
+  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
+  assert.deepEqual(resolvedDecision.runtimeProvenance, compactState.runtimeProvenance);
+  assert.deepEqual(resolvedDecision.loopContract, compactState.loopContract);
   assert.deepEqual(response.portfolioRecommendation, compactState.portfolioRecommendation);
-  assert.deepEqual(response.sessionDecisionCapsule, compactState.sessionDecisionCapsule);
-  assert.equal(decisionEnvelope.finalizationReadiness?.available, false);
+  assert.deepEqual(response.sessionDecisionCapsule, {
+    kind: null,
+    status: "active",
+    enforcement: null,
+    evidence: [],
+    nextExperiment: "",
+    wrongNextActions: [],
+    doNotRepeat: [],
+    commandBudgetWarnings: [],
+  });
+  assert.equal(resolvedDecision.finalizationPressure?.available, false);
 });
 
 test("compact recommend-next uses blocker metadata fallback instead of next", () => {

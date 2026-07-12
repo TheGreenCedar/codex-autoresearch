@@ -8,6 +8,55 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.7.0 - 2026-07-11
+
+### Highlights
+
+- Reworked Autoresearch around one canonical operator decision shared by state, doctor, terminal reports, recommendations, finalization, and the read-only dashboard.
+- Hardened packet execution, process-tree termination, Git path handling, ledger streaming, runtime replacement, installed-cache discovery, and finalization revalidation for hostile and interrupted workflows.
+- Rebuilt the dashboard evidence path for bounded long histories, decision-first desktop/mobile use, explicit payload failures, keyboard and touch navigation, cross-browser release checks, and a populated 100-run public demo.
+- Replaced the self-referential perfection gate with six portable operator tasks plus a real-browser geometry task. These checks prove named workflows and release contracts; they do not claim permanent or universal product quality.
+
+### Migration and compatibility
+
+- The plugin remains CLI/skill-only. Removed MCP launchers, MCP configuration, dashboard control-plane behavior, old dashboard/finalizer subskills, and tracked generated dashboard bundles are not restored by this release.
+- Removed compatibility commands `init`, `run`, and `integrations` fail before mutation with their exact replacement commands. Their migration aliases are scheduled for removal after 2026-10-01.
+- The dashboard is a read-only live readout or static export. Setup, packet execution, logging, and finalization stay in the CLI.
+- Source checkouts rebuild or hydrate their local runtime; installed behavior is authoritative only after canonical cache version and entrypoint-fingerprint proof.
+
+### Verification and known limits
+
+- The release candidate is gated on Node 24, full package checks, hostile workflow regressions, package/extracted-launcher smoke, Chrome geometry evidence, and sequential Chromium, Firefox, and WebKit checks on Linux, plus Ubuntu, Windows, macOS, workflow-policy, and CodeQL CI.
+- Automated keyboard, modal focus, forced-colors, reduced-motion, zoom/reflow, and emulated-touch checks are included. Manual Narrator and physical-device evidence remain follow-up proof rather than a broader accessibility certification.
+
+### Fixed
+
+- Runtime hydration and preserved research-directory restoration now stage and verify complete replacements before moving active targets, retain ownership-marked rollback directories until every rename succeeds, restore originals in reverse order on failure, and refuse unsafe stale or reparse-point cleanup.
+- Process residue decisions now fold explicit redacted `process_lifecycle` records by packet and process identity in ledger order. Active or unproven latest states block consistently in state, doctor, and dashboard; terminal states clear them, malformed typed rows fail closed, and historical residue prose is migration-warning-only.
+- Git-derived trust paths now use NUL-delimited porcelain, name-status, and tracked-file output, preserving hostile filenames and both sides of renames across protected benchmark checks, dirty/write scopes, fingerprints, source hygiene, runtime freshness, and finalization.
+- State, terminal report, `recommend-next`, and dashboard readouts now agree on one strongest next action and command; stale progress, stale packets, artifact recovery, setup, and failed-check decisions remain distinct, weaker portfolio advice is suppressed while blocked, session continuation is separated from packet permission, and absent or metricless kept evidence no longer masquerades as an incumbent.
+- Session readouts now project one validated `resolvedDecision` authority across state, doctor, terminal report, `recommend-next`, dashboard, and finalization. Default state and doctor JSON are bounded for human review, `--json-full` opts into complete machine diagnostics, legacy decision aliases remain readable as migration inputs without being repeated in bounded output, and the dashboard wire contract is validated outside React source.
+- Autoresearch and finalizer CLI parsing now rejects unknown root and command options, validates explicit boolean values, supports root and command `-h`/`--help`, preserves camel/kebab aliases plus repeated list and `--` passthrough behavior, and reports expected usage failures without stack traces unless `--debug` is explicit.
+- Dashboard exports and live readouts now reject missing, malformed, or version-incompatible payloads instead of substituting polished demo evidence. Demo data requires an explicit development/showcase marker, failure states show safe recovery guidance and provenance, and failed live refreshes visibly retain only the last validated readout.
+- Timed-out benchmark and checks commands now await bounded process-tree shutdown, escalate stubborn descendants, and verify termination before releasing packet state. Unproven cleanup is retained as a `termination_failed` trust blocker with safe PID evidence, partial output and artifacts, and no sentinel metric.
+- Windows process-tree proof now asks CIM only for process identity and parentage fields, keeping fail-closed timeout cleanup responsive on hosts with many active Codex and MCP processes.
+- Installed-runtime checks now honor `CODEX_HOME`, resolve the canonical `publisher/plugin/version` cache from plugin metadata, report the selected path and provenance, distinguish source-shaped packages from hydrated runtimes, and fail closed when multiple cache versions lack active-launcher proof. The obsolete combined marketplace namespace remains a labelled fallback only.
+- Finalization now revalidates accepted-current evidence immediately before review-branch creation, uses validated Git hash prefixes consistently, ignores same-commit audit-only rows, and rejects stale plans when kept membership, exclusions, evidence status, ledger ordering, or product-claim inputs change.
+- Read-only scout lanes now parse commands without a shell and execute only a strict Git read-only argv allowlist. Interpreters, shells, mutation-capable Git forms, network/process-spawning surfaces, and the old `--allow-non-git-command` escape are refused before execution; Git porcelain is reported only as best-effort post-run detection, not containment.
+- Finalization now preserves pre-existing review and verification branches during rollback, deletes only branches created by the current invocation, and fails visibly when branch restoration or cleanup cannot complete.
+- Serialized and coalesced active packet progress writes so terminal cleanup cannot be undone by a delayed older snapshot; progress generations remain ordered across interrupted runs, cleanup also runs after writer or packet failures, and non-missing deletion errors are reported.
+- Every Autoresearch ledger reader now rejects valid JSON values that are not object records, reports the file, physical line, observed JSON kind, and `ledger-doctor` recovery command, and keeps invalid rows diagnostic-only across state, finalization, export, and live dashboard reads.
+- Static dashboard exports and live refreshes now share one streaming ledger fold with fixed 5,000-row retention. Full-ledger counts, status totals, baseline, best, governing config, invalid-row diagnostics, and typed process-lifecycle blockers remain visible with explicit truncation provenance without loading the whole ledger or repeatedly shifting the retained tail; lifecycle projection overflow fails closed.
+- CLI, dashboard, finalizer, and full-product regressions now live in domain-owned test files scheduled by Node's native file runner with explicit two-minute test bounds. The custom range discovery, polling, retry, and shard environment protocol has been removed; package checks also reject any authored or compiled test leakage generically.
+- CLI and tool command identity, argument schemas, safety policy, help, handler bindings, dashboard dry-run rules, and compatibility metadata now come from one typed command table. Arguments are normalized and allowlisted once before dispatch, implementation-source regex drift checks and hundreds of manual forwarding lines are gone, and the retained `init`, `run`, and `integrations` names fail before locks, handlers, or mutation with exact migrations and removal after 2026-10-01.
+- The dashboard now opens in a focused operate view with the canonical status, blocker, action, and safe command visible before charts on desktop and mobile. Audit keeps the same decision with deeper evidence, live refresh exposes busy, last-valid, failure, and restored-focus state, static exports never offer `file://` URLs for copying, readiness details work without hover, and ledger columns have overlap-tested geometry.
+- Long dashboard histories now use a width-bounded chart with one keyboard/touch range control, preserve baseline, best, latest, selected, failure, and transition anchors, and page the single semantic ledger at 20 runs. Mobile ledger rows stack without hidden horizontal content, while 5,000-run DOM, payload, readiness, and interaction budgets are executable browser checks.
+- Chromium, Firefox, and WebKit now run a sequential release dashboard gate across live and static modes, keyboard/modal focus, forced colors, computed reduced-motion styles, 200%/400% equivalent reflow, long ledgers, and emulated touch taps and target geometry. CI retains current-run screenshots; manual screen-reader and physical-device evidence remains required before making broader accessibility claims.
+- Removed the stale checked-in demo dashboard export and review SVG. Portable dashboard review exports now stay in the ignored `examples/demo-session/tmp/` path, while the maintained public showcase image remains tracked.
+- Replaced the self-referential `scripts/perfection-benchmark.mjs` product gate with externally exercised operator-task evidence. Six portable cases now emit machine-readable `EVIDENCE` and `EVIDENCE_SUMMARY` records during `npm run check`, the required Chrome gate supplies a seventh dashboard-geometry case, and product-gate failures use the bounded `operator_task_failures` metric instead of misusing `quality_gap`. Ordinary qualitative research still uses round-local `quality_gap`; the new gate does not claim perfection or broad product quality.
+- Doctor now preserves the canonical next-action reason already resolved by State, keeping State, Recommend Next, Doctor, and Dashboard decision wording aligned.
+- The public dashboard image now comes from the bundled 100-run showcase instead of the synthetic 5,001-run stress fixture, with populated chart points and selected-run metric, evidence, and next-action details captured by the real-browser gate.
+
 ## 2.6.0 - 2026-07-09
 
 ### Changed

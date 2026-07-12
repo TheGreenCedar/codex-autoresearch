@@ -364,7 +364,7 @@ test("terminal report blocked fallbacks skip process-starting commands", () => {
   assert.doesNotMatch(report.json.nextCommand, /--check-benchmark|benchmark-lint/);
 });
 
-test("terminal report distinguishes ready-with-warnings from blocked next", () => {
+test("terminal report preserves ready status while exposing warning posture separately", () => {
   const report = buildTerminalReport({
     ok: true,
     workDir: "C:/work/project",
@@ -394,13 +394,34 @@ test("terminal report distinguishes ready-with-warnings from blocked next", () =
     },
   });
 
-  assert.equal(report.json.status, "ready-with-warnings");
+  assert.equal(report.json.status, "ready");
+  assert.equal(report.json.warningPosture, "warnings");
   assert.equal(report.json.blocker, "");
   assert.equal(
     report.json.nextCommand,
     "node scripts/autoresearch.mjs next --cwd C:/work/project --compact",
   );
-  assert.match(report.text, /Status: ready-with-warnings/);
+  assert.match(report.text, /Status: ready/);
+});
+
+test("terminal report projects resolved ready and complete status without command inference", () => {
+  for (const status of ["ready", "complete"] as const) {
+    const report = buildTerminalReport({
+      resolvedDecision: {
+        version: 1,
+        status,
+        strongestBlocker: null,
+        nextAction: status === "complete" ? "Review completed evidence." : "Review readiness.",
+        command: "",
+        canonicalNextAction: null,
+        loopContract: null,
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
+    });
+    assert.equal(report.json.status, status);
+  }
 });
 
 test("hard terminal blockers do not fall back to next", () => {
@@ -455,6 +476,10 @@ test("terminal report distinguishes session-artifact dirtiness from source drift
     },
     commands: {
       next: "node scripts/autoresearch.mjs next --cwd C:/work/project --compact",
+    },
+    decisionEnvelope: {
+      canonicalNextAction: { kind: "next-packet", reason: "Run the next packet." },
+      loopContract: { canRunNextPacket: true, blockers: [] },
     },
     canonicalNextAction: {
       kind: "next-packet",
@@ -518,12 +543,19 @@ test("terminal report shows source-checkout runtime authority as advisory", () =
     commands: {
       next: "node scripts/autoresearch.mjs next --cwd C:/work/project --compact",
     },
+    decisionEnvelope: {
+      canonicalNextAction: { kind: "next-packet", reason: "Run the next packet." },
+      loopContract: { canRunNextPacket: true, blockers: [] },
+    },
   });
   const report = buildTerminalReport(compactState);
-  const compactAuthority = compactState.runtimeAuthority as { trustScope?: string } | null;
+  const compactAuthority = compactState.resolvedDecision as {
+    runtimeAuthority?: { trustScope?: string };
+  } | null;
 
-  assert.equal(compactAuthority?.trustScope, "source-checkout");
-  assert.equal(report.json.status, "ready-with-warnings");
+  assert.equal(compactAuthority?.runtimeAuthority?.trustScope, "source-checkout");
+  assert.equal(report.json.status, "ready");
+  assert.equal(report.json.warningPosture, "warnings");
   assert.equal(report.json.blocker, "");
   assert.equal(report.json.runtimeAuthority.trustScope, "source-checkout");
   assert.equal(report.json.runtimeAuthority.blocking, false);

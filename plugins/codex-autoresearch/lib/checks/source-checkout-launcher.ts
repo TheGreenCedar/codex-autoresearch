@@ -1,10 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { displayGitPath, parseNulPathList } from "../git-paths.js";
 import { indent, REPO_ROOT, ROOT, runCommand } from "./check-common.js";
 
 const sourceCheckoutLauncherPaths = [
   "plugins/codex-autoresearch/scripts/bootstrap-runtime.mjs",
+  "plugins/codex-autoresearch/scripts/directory-swap.mjs",
   "plugins/codex-autoresearch/scripts/autoresearch.mjs",
+  "plugins/codex-autoresearch/scripts/operator-task-benchmark.mjs",
   "plugins/codex-autoresearch/scripts/release-integrity.mjs",
 ];
 
@@ -43,6 +46,7 @@ export async function runSourceCheckoutLauncherCheck() {
       "-C",
       REPO_ROOT,
       "ls-files",
+      "-z",
       "--cached",
       "--others",
       "--exclude-standard",
@@ -57,7 +61,7 @@ export async function runSourceCheckoutLauncherCheck() {
     if (output) console.log(indent(output));
     return false;
   }
-  const committablePaths = new Set(committable.stdout.split(/\r?\n/).filter(Boolean));
+  const committablePaths = new Set(parseNulPathList(committable.stdout));
   const ignoredOrInvisible = sourceCheckoutLauncherPaths.filter(
     (file) => !committablePaths.has(file),
   );
@@ -75,7 +79,7 @@ export async function runSourceCheckoutLauncherCheck() {
   const trackedDist = await runCommand([
     "source-dist-untracked",
     "git",
-    ["-C", REPO_ROOT, "ls-files", "--", "plugins/codex-autoresearch/dist"],
+    ["-C", REPO_ROOT, "ls-files", "-z", "--", "plugins/codex-autoresearch/dist"],
   ]);
   if (trackedDist.code !== 0) {
     console.log("ok source-launcher-files");
@@ -85,11 +89,16 @@ export async function runSourceCheckoutLauncherCheck() {
     if (output) console.log(indent(output));
     return false;
   }
-  if (trackedDist.stdout.trim()) {
+  const trackedDistPaths = parseNulPathList(trackedDist.stdout);
+  if (trackedDistPaths.length) {
     console.log("ok source-launcher-files");
     console.log("ok source-launcher-committable");
     console.log("fail source-dist-untracked");
-    console.log(indent(`Generated dist files are still tracked:\n${trackedDist.stdout.trim()}`));
+    console.log(
+      indent(
+        `Generated dist files are still tracked:\n${trackedDistPaths.map(displayGitPath).join("\n")}`,
+      ),
+    );
     return false;
   }
 

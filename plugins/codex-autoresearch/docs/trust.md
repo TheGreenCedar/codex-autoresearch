@@ -8,6 +8,8 @@ Setup and configuration write session files. `next` runs the benchmark and check
 
 Check `git status --short --branch` before setup, logging, failure cleanup, or finalization. Unrelated work in the same tree is not merely untidy; it can fall inside configured experiment paths and makes it harder to prove which change produced the result.
 
+`lane-runner` scout commands have a deliberately narrow boundary. Before execution, the CLI parses the command without a shell and accepts only documented Git read subcommands and options. Interpreters, shells, redirection, chaining, Git config/ref mutation, network commands, pagers, external diff/textconv, hooks, and lazy fetch are refused. Git porcelain still runs before and after the command when a worktree is available, but that is best-effort detection, not filesystem or process containment. The old `--allow-non-git-command` escape was removed; use an implementation lane with a separate worktree or declared write scope for anything outside the allowlist.
+
 ## A parsed metric is only the beginning
 
 The benchmark must print the configured primary metric:
@@ -42,7 +44,7 @@ A speed improvement without the required accuracy, recall, accessibility, safety
 
 ## Keep the evidence fresh
 
-`log --from-last` works only while the packet still matches the current segment, benchmark and checks commands, checks policy, protected paths, fixed control, secondary constraints, packet environment mode, commit scope, working directory, recipe provenance, and Git fingerprint. If any of those changed after `next`, run a fresh packet. A raw `run` probe should be logged explicitly as a measurement rather than dressed up as a reusable packet.
+`log --from-last` works only while the packet still matches the current segment, benchmark and checks commands, checks policy, protected paths, fixed control, secondary constraints, packet environment mode, commit scope, working directory, recipe provenance, and Git fingerprint. If any of those changed after `next`, run a fresh packet. Use `benchmark-inspect` for bounded diagnostic probes; the legacy `run` name fails fast with that migration.
 
 Source and installed plugin behavior can drift too. A change in the repository is not proof about the installed marketplace copy until the active version and built-entrypoint fingerprint match. It is fine to keep working from the source checkout; just describe the result as source-checkout evidence until the installed runtime has been refreshed.
 
@@ -78,4 +80,10 @@ Keep secrets out of commands, output, descriptions, experiment notes, and artifa
 
 The live dashboard serves current local state over loopback. An export is a portable snapshot. Neither should be treated as fresh evidence after the underlying session has changed.
 
-The ledger is append-only. If it is corrupt, report the file and line and use `ledger-doctor`; do not continue from a silently truncated history.
+If dashboard data or metadata injection is missing, malformed, or declares an incompatible payload version, the readout shows a payload-unavailable screen instead of session evidence. Regenerate the static export or restart `serve` using the recovery command on that screen. Demo data appears only in an explicit `--showcase` export or the development server with `?showcase=1`, and the dashboard labels that provenance. A rejected live refresh leaves the last validated readout visible with a failure label; it never replaces that evidence with demo data.
+
+The ledger is append-only. Every non-empty line must be a JSON object record; primitives and arrays are corrupt even when their JSON syntax is valid. Autoresearch reports the file, physical line, observed JSON kind, and `ledger-doctor --cwd <project> --json` recovery command. Diagnostic reads may preserve the remaining valid rows for inspection, but invalid rows block accepted-state and finalization trust instead of silently truncating history.
+
+Dashboard export and live refresh parse that ledger once as a stream. They retain at most 5,000 newest rows plus the governing config while accumulating full-ledger counts, status totals, baseline, best accepted result, invalid-row samples, and the latest blocking typed process-lifecycle state. Lifecycle identity retention is bounded; overflow emits an explicit incomplete projection and blocks process clearance instead of silently evicting evidence. The readout labels omitted rows and full-stream summary provenance; confidence and detailed evidence lists remain bounded to retained rows when history is truncated, and full run-number health requires `ledger-doctor`.
+
+`ledger-doctor` currently materializes the remaining valid records while building its tolerant diagnostic report. This known local-recovery limitation does not make those records accepted evidence while any line is invalid.

@@ -107,7 +107,13 @@ export function createDashboardHarness() {
   const runDashboard = async (entries, meta = {}, options = {}) => {
     const template = await readFile(dashboardTemplatePath, "utf8");
     const { app, css } = await readDashboardAssets();
-    const html = template
+    const source = options.omitPayloadGlobals
+      ? template.replace(
+          /<script>\s*window\.__AUTORESEARCH_DATA__ = __AUTORESEARCH_DATA_PAYLOAD__;\s*window\.__AUTORESEARCH_META__ = __AUTORESEARCH_META_PAYLOAD__;\s*<\/script>/,
+          "",
+        )
+      : template;
+    const html = source
       .replace("__AUTORESEARCH_DATA_PAYLOAD__", () =>
         JSON.stringify(entries).replace(/</g, "\\u003c"),
       )

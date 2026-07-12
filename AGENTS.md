@@ -64,13 +64,13 @@ node scripts/autoresearch.mjs state --cwd . --report
 
 - Public launchers live in `scripts/*.mjs`. Keep them tiny bootstrap shims where intended; `scripts/bootstrap-runtime.mjs` hydrates the packaged `dist/` runtime for source-shaped plugin installs.
 - Authored Node/CLI code is TypeScript under `scripts/*.ts` and `lib/**/*.ts`. Keep tracked `.mjs` surfaces synchronized when the product gate expects them.
-- CLI dispatch and command behavior live in `scripts/autoresearch.ts`, `lib/cli-handlers.ts`, `lib/commands/*`, `lib/tool-schemas.ts`, `lib/tool-registry.ts`, and `lib/action-metadata.ts`.
+- Command identity, argument schemas, safety policy, help, handler bindings, and compatibility lifecycle live in `lib/command-table.ts`; `lib/tool-schemas.ts` and `lib/tool-registry.ts` are derived compatibility facades. CLI dispatch and command behavior live in `scripts/autoresearch.ts`, `lib/cli-handlers.ts`, `lib/commands/*`, and `lib/action-metadata.ts`.
 - Session state, metrics, packet evidence, runner behavior, recipes, research gaps, and source hygiene live in `lib/session-core.ts`, `lib/runner.ts`, `lib/recipes.ts`, `lib/research-gaps.ts`, `lib/evidence-*`, `lib/task-artifact-indexer.ts`, and `lib/cli/source-hygiene.ts`.
 - Decision guidance lives in `lib/decision-guidance.ts`, `lib/loop-governance.ts`, `lib/operator-checklist.ts`, `lib/session-decision-capsule.ts`, `lib/gate-quality.ts`, `lib/preflight-audit.ts`, `lib/packet-diagnostics.ts`, `lib/runtime-drift-doctor.ts`, `lib/source-cleanliness.ts`, `lib/portfolio-advisor.ts`, and `lib/lane-lifecycle.ts`.
 - Finalization behavior lives in `scripts/finalize-autoresearch.ts`, `scripts/finalize-autoresearch.mjs`, `lib/finalize-preview.ts`, `lib/finalization-plan.ts`, and `lib/finalization-acceptance.ts`.
 - Dashboard data shaping and live-readout behavior live in `lib/dashboard-view-model.ts`, `lib/live-server.ts`, `lib/dashboard-health.ts`, `lib/dashboard-server-registry.ts`, and `lib/dashboard-command-safety.ts`.
 - Dashboard UI source lives in `dashboard/src/`; `assets/dashboard-build/` is generated/ignored output built by dashboard, package, and check flows.
-- Product-quality gates live in `scripts/check.ts`, `scripts/check.mjs`, `scripts/perfection-benchmark.ts`, and `scripts/perfection-benchmark.mjs`.
+- Product-quality gates live in `scripts/check.ts`, `scripts/check.mjs`, `scripts/operator-task-benchmark.ts`, and `scripts/operator-task-benchmark.mjs`.
 
 ## Dashboard Rules
 
@@ -96,7 +96,7 @@ When behavior, architecture, command surfaces, dashboard behavior, safety rules,
 - root `CHANGELOG.md` for user-facing changes and migration notes
 - `skills/codex-autoresearch/SKILL.md` for Codex operator behavior
 - the closest topic doc under `plugins/codex-autoresearch/docs/`
-- CLI help, schemas, tests, and `scripts/perfection-benchmark.mjs` when command contracts or product expectations change
+- CLI help, schemas, tests, and `scripts/operator-task-benchmark.mjs` when command contracts or bounded operator-task expectations change
 
 Keep root-relative links valid. Prefer rewriting stale guidance over appending duplicates.
 Removed invocation surfaces need migration notes.

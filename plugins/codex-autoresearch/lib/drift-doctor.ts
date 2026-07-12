@@ -1,10 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PLUGIN_VERSION } from "./plugin-version.js";
+import { resolvePackageRoot, resolveRepoRoot } from "./runtime-paths.js";
 
 type LooseObject = Record<string, any>;
 type Warning = string;
 type VersionSurfaces = Record<string, string>;
+const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+const REPO_ROOT = resolveRepoRoot(import.meta.url);
 type RoutingResult = {
   ok: boolean;
   available: boolean;
@@ -106,6 +109,63 @@ export async function buildDriftReport({
   }
   report.ok = report.warnings.length === 0;
   return report;
+}
+
+export function runtimeProvenance(drift: LooseObject | null = null): LooseObject {
+  const unavailable = runtimeDriftUnavailable(drift);
+  const drifted = confirmedRuntimeDrift(drift);
+  return {
+    pluginVersion: PLUGIN_VERSION,
+    sourceRoot: PLUGIN_ROOT,
+    repoRoot: REPO_ROOT,
+    localVersion: PLUGIN_VERSION,
+    installedVersion:
+      drift?.installed?.version || drift?.installed?.pluginVersion || drift?.routing?.version || "",
+    installedCachePath:
+      drift?.installed?.cachePath || drift?.installed?.path || drift?.routing?.cachePath || "",
+    drifted,
+    status: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "unavailable",
+    driftConfidence: drift
+      ? unavailable
+        ? "unavailable"
+        : drifted
+          ? "drift-detected"
+          : "checked"
+      : "source-only",
+    reason: drifted
+      ? "Source and installed runtime drift needs inspection before public claims."
+      : "",
+    inspectCommand: "",
+  };
+}
+
+function runtimeDriftUnavailable(drift: LooseObject | null): boolean {
+  if (!drift) return true;
+  if (drift.probeFailed === true || drift.unavailable === true) return true;
+  const status = String(drift.status || drift.driftStatus || "").toLowerCase();
+  return ["unavailable", "probe-failed", "probe_failed", "error", "unknown"].includes(status);
+}
+
+function confirmedRuntimeDrift(drift: LooseObject | null): boolean {
+  if (!drift || runtimeDriftUnavailable(drift)) return false;
+  if (
+    drift.drifted === true ||
+    drift.mismatched === true ||
+    drift.stale === true ||
+    drift.needsInspection === true
+  ) {
+    return true;
+  }
+  const warnings = Array.isArray(drift.warnings) ? drift.warnings.map(String) : [];
+  return warnings.some((warning) =>
+    /version_surface_mismatch|runtime.*drift|source.*differs/i.test(warning),
+  );
 }
 
 async function readJsonVersion(filePath: string): Promise<string> {

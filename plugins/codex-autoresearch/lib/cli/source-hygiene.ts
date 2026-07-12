@@ -31,7 +31,6 @@ const LOOSE_OBJECT_COMPATIBILITY_ALLOWLIST = new Set(
     "plugins/codex-autoresearch/lib/experiment-memory.ts",
     "plugins/codex-autoresearch/lib/finalization-plan.ts",
     "plugins/codex-autoresearch/lib/finalize-preview.ts",
-    "plugins/codex-autoresearch/lib/integrations.ts",
     "plugins/codex-autoresearch/lib/recipes.ts",
     "plugins/codex-autoresearch/lib/research-gaps.ts",
     "plugins/codex-autoresearch/lib/runner-progress.ts",
@@ -43,7 +42,6 @@ const LOOSE_OBJECT_COMPATIBILITY_ALLOWLIST = new Set(
     "plugins/codex-autoresearch/lib/workflow-friction.ts",
     "plugins/codex-autoresearch/scripts/autoresearch.ts",
     "plugins/codex-autoresearch/scripts/finalize-autoresearch.ts",
-    "plugins/codex-autoresearch/scripts/perfection-benchmark.ts",
   ].map(normalizeTrackedPath),
 );
 
@@ -87,7 +85,6 @@ const SESSION_ARTIFACT_DIRS = new Map([
 
 const DEMO_SESSION_PREFIX = "examples/demo-session/";
 const ALLOWED_PACKAGE_SESSION_ARTIFACTS = new Set([
-  "examples/demo-session/autoresearch-dashboard.html",
   "examples/demo-session/autoresearch.checks.ps1",
   "examples/demo-session/autoresearch.config.json",
   "examples/demo-session/autoresearch.ideas.md",

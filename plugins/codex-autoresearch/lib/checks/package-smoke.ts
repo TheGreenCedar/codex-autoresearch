@@ -33,7 +33,9 @@ const ALLOWED_PACKAGED_SOURCE_SCRIPTS = new Set([
   "scripts/autoresearch.mjs",
   "scripts/bootstrap-runtime.mjs",
   "scripts/check.mjs",
+  "scripts/directory-swap.mjs",
   "scripts/finalize-autoresearch.mjs",
+  "scripts/operator-task-benchmark.mjs",
   "scripts/release-integrity.mjs",
 ]);
 
@@ -42,6 +44,7 @@ const ALLOWED_PACKAGED_DIST_SCRIPTS = new Set([
   "dist/scripts/check.mjs",
   "dist/scripts/check-runner.mjs",
   "dist/scripts/finalize-autoresearch.mjs",
+  "dist/scripts/operator-task-benchmark.mjs",
 ]);
 
 export async function runPackageArtifactCheck() {
@@ -95,6 +98,7 @@ export async function runPackageArtifactCheck() {
       "dist/scripts/check.mjs",
       "dist/scripts/check-runner.mjs",
       "dist/scripts/finalize-autoresearch.mjs",
+      "dist/scripts/operator-task-benchmark.mjs",
       "dist/lib/checks/check-common.mjs",
       "dist/lib/checks/demo-trust.mjs",
       "dist/lib/checks/npm-command.mjs",
@@ -105,8 +109,10 @@ export async function runPackageArtifactCheck() {
       "scripts/bootstrap-runtime.mjs",
       "scripts/autoresearch.mjs",
       "scripts/check.mjs",
+      "scripts/directory-swap.mjs",
       "scripts/release-integrity.mjs",
       "scripts/finalize-autoresearch.mjs",
+      "scripts/operator-task-benchmark.mjs",
       "skills/codex-autoresearch/SKILL.md",
     ];
     const forbiddenPackagePaths = [
@@ -122,7 +128,6 @@ export async function runPackageArtifactCheck() {
       "dashboard/src/Dashboard.tsx",
       "lib/session-core.ts",
       "scripts/autoresearch.ts",
-      "tests/autoresearch-cli.test.ts",
     ];
 
     const missing = requiredPaths.filter((file) => !packedPaths.has(file));
@@ -130,6 +135,14 @@ export async function runPackageArtifactCheck() {
       packedPaths.has(file),
     );
     const leakedExamples = Array.from(packedPaths).filter((file) => file.startsWith("examples/"));
+    const leakedTestPaths = Array.from(packedPaths).filter(
+      (file) => file.startsWith("tests/") || file.startsWith("dist/tests/"),
+    );
+    const leakedAuthoredSourcePaths = Array.from(packedPaths).filter(
+      (file) =>
+        file.startsWith("dashboard/src/") ||
+        (/^(?:lib|scripts)\/.+\.ts$/.test(file) && !file.endsWith(".d.ts")),
+    );
     const leakedScriptPaths = packageScriptLeaks(packedPaths);
     const wrapperProblems = await packageWrapperProblems(packedEntries);
 
@@ -137,6 +150,8 @@ export async function runPackageArtifactCheck() {
       missing.length ||
       unexpected.length ||
       leakedExamples.length ||
+      leakedTestPaths.length ||
+      leakedAuthoredSourcePaths.length ||
       leakedScriptPaths.length ||
       wrapperProblems.length
     ) {
@@ -149,6 +164,16 @@ export async function runPackageArtifactCheck() {
       }
       if (leakedExamples.length) {
         console.log(indent(`Leaked examples files in package:\n${leakedExamples.join("\n")}`));
+      }
+      if (leakedTestPaths.length) {
+        console.log(indent(`Leaked test files in package:\n${leakedTestPaths.join("\n")}`));
+      }
+      if (leakedAuthoredSourcePaths.length) {
+        console.log(
+          indent(
+            `Leaked authored source files in package:\n${leakedAuthoredSourcePaths.join("\n")}`,
+          ),
+        );
       }
       if (leakedScriptPaths.length) {
         console.log(
@@ -352,6 +377,7 @@ async function packageWrapperProblems(packedEntries: Map<string, PackageEntry>) 
     ["scripts/autoresearch.mjs", 'ensureRuntime("autoresearch.mjs"'],
     ["scripts/check.mjs", 'ensureRuntime("check.mjs"'],
     ["scripts/finalize-autoresearch.mjs", 'ensureRuntime("finalize-autoresearch.mjs"'],
+    ["scripts/operator-task-benchmark.mjs", 'ensureRuntime("operator-task-benchmark.mjs"'],
   ];
   const problems: string[] = [];
 

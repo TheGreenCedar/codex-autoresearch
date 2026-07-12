@@ -52,10 +52,14 @@ Outside Git, the three transient records fall back to `autoresearch.last-run.jso
 
 | Term | What it tells you |
 | --- | --- |
-| **Trust blocker** | A condition that makes another packet or final claim unsafe: stale packet, dirty Git scope, benchmark drift, corrupt ledger, or runtime mismatch. |
+| **Trust blocker** | A condition that makes another packet or final claim unsafe: stale packet, unproven process-tree termination, dirty Git scope, benchmark drift, corrupt ledger, or runtime mismatch. |
 | **Protected benchmark path** | A benchmark or fixture path that must not change silently while results are compared. |
 | **Runtime provenance** | Whether the command ran from the source checkout or an installed plugin, and whether those builds match. |
 | **Packet diagnostics** | Evidence loss such as missing citations, failed synthesis, or a benchmark failure hidden behind an optimistic summary. |
+
+Timeout proof uses native containment available without a runtime dependency: POSIX commands start in a detached process group and merge bounded recursive `ps` snapshots before graceful and forced signals; Windows merges bounded CIM descendant snapshots around `taskkill /T`. Every tracked PID must disappear before cleanup is reported as proven. Enumeration failure, an oversized tree, changed process identity, or a surviving tracked PID fails closed as `termination_failed`; deliberately reparented descendants that escape before either native snapshot remain an operating-system boundary and must not be treated as safely stopped without separate verification.
+
+Logged packet processes use redacted `process_lifecycle` rows keyed by packet and logical process identity. The resource governor folds rows in ledger order and trusts only the latest state per identity: `started`, `observed-live`, and `termination-failed` block; a later `terminated` row clears the identity. The Git-private progress snapshot supplies the same typed state while a packet is running, so `next` does not dirty a clean tracked ledger before `log`. Old prose about stale PIDs remains readable but produces only a migration warning, never active process state.
 | **Claim coverage** | The checks and measurements required to support the exact claim you want to make. |
 | **Promotion evidence** | Repeat, holdout, breadth, or explicit gate evidence that supports more than a local exploratory result. |
 
@@ -69,9 +73,9 @@ Most sessions need only the blocker and next command printed by `state --report`
 | --- | --- |
 | `goalFrame`, `goalContract` | Are the durable goal, current prompt, benchmark, and final claim still aligned? |
 | `operatorHandoff`, `operatorChecklist` | What is the shortest safe continuation after a pause or handoff? |
-| `loopContract` | Is another packet allowed? |
+| `resolvedDecision.loopContract` | Is another packet allowed? |
 | `sessionDecisionCapsule` | Did imported session evidence constrain the next action? |
-| `decisionEnvelope`, `resumeAudit` | Do segment, drift, and readiness checks agree on one action? |
+| `resolvedDecision` | Do segment, drift, readiness, finalization pressure, and the safe command agree on one action? |
 | `runtimeProvenance`, `runtimeDriftSummary` | Did this proof come from the runtime you think it did? |
 | `gateQuality`, `preflight`, `resourcePreflight` | Are benchmark, Git, runtime, process, and budget checks healthy? |
 | `sourceCleanliness` | Are source files dirty, or only session artifacts? |
@@ -86,3 +90,5 @@ Most sessions need only the blocker and next command printed by `state --report`
 | `qualityRound` | Is the current checklist closed, and should discovery start another round? |
 
 Cross-surface ownership is documented in [Control plane](control-plane.md).
+
+In 2.7, bounded state, doctor, and recommendation output emits `resolvedDecision` instead of repeating `resumeAudit`, top-level `canonicalNextAction`, and top-level `loopContract`. The terminal report projects the same authority into scalar status, blocker, action, and command fields. Readers still accept the older `decisionEnvelope` and `resumeAudit` shapes as migration inputs. Use `state --json-full` or `doctor --json-full` only when the complete machine diagnostic is necessary.

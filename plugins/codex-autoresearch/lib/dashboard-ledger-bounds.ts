@@ -1,8 +1,25 @@
+export const DASHBOARD_LEDGER_MAX_ENTRIES = 5000;
+
 export interface DashboardLedgerBounds {
   maxEntries: number;
   omittedEntries: number;
   truncated: boolean;
+  totalEntries?: number;
+  validEntries?: number;
+  retainedEntries?: number;
+  summarySource?: "full-ledger-stream";
+  retention?: "newest-rows-plus-governing-config";
+  processLifecycleProjectionIncomplete?: boolean;
+  processLifecycleTrackedIdentities?: number;
+  processLifecycleOverflowCount?: number;
   invalidLedgerEntryCount?: number;
+  invalidLedgerEntries?: Array<{
+    file: string;
+    line: number;
+    kind: string;
+    message: string;
+    command: string;
+  }>;
 }
 
 export interface BoundedDashboardLedgerEntries<T> extends DashboardLedgerBounds {

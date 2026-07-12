@@ -1,13 +1,13 @@
 const NAV_ITEMS = [
-  ["#trend-panel", "1", "Metric"],
-  ["#decision-rail", "2", "Move"],
+  ["#decision-rail", "1", "Move"],
+  ["#trend-panel", "2", "Metric"],
   ["#codex-brief", "3", "Brief"],
   ["#ledger", "4", "Ledger"],
 ] as const;
 
 export function SideRail({ live, showcase }: { live: boolean; showcase: boolean }) {
   const status = showcase ? "Demo" : live ? "Live" : "Static";
-  const detail = showcase ? "Snapshot" : live ? "Readout" : "Snapshot";
+  const detail = showcase ? "Showcase Data" : live ? "Readout" : "Snapshot";
   const markerClassName = live ? "live-dot" : "status-dot";
   return (
     <aside className="side-rail" aria-label="Dashboard sections">

@@ -191,7 +191,7 @@ function normalizeEvidenceEntry(value: LooseObject): EvidenceRegistryEntry {
   };
 }
 
-function evidenceStatusForRun(run: LooseObject): EvidenceStatus {
+export function evidenceStatusForRun(run: LooseObject): EvidenceStatus {
   const evidenceStatus = normalizeEvidenceStatus(
     run.evidenceStatus,
     defaultEvidenceStatusForRun(run),

@@ -10,7 +10,7 @@ Preview checklist changes with `gap-candidates`. Closing `quality_gap` ends one 
 
 ## Keep lanes bounded
 
-Run `research-fanout --dry-run` before recording a fanout plan. Start with read-only scouts. Give implementation lanes a worktree or explicit write scope. Keep big-idea lanes as advice until the user approves a bounded implementation attempt.
+Run `research-fanout --dry-run` before recording a fanout plan. Scout commands must parse as strict allowlisted Git read argv; interpreters, shells, network/process-spawning surfaces, and mutation-capable Git forms are refused before execution. Git porcelain is best-effort post-run detection, not containment. Give implementation lanes a disposable worktree or explicit write scope, while treating both as write boundaries rather than process/filesystem containment. Keep big-idea lanes as advice until the user approves a bounded implementation attempt.
 
 Keep the benchmark, accepted evidence, keep/discard decisions, integration, and finalization in the parent session.
 

@@ -13,6 +13,13 @@ export interface ActionMetadata {
 }
 
 export const ACTION_METADATA: Record<string, ActionMetadata> = {
+  "termination-failed": actionMetadata({
+    label: "Verify process termination",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "doctor"],
+    packetBrake: true,
+  }),
   "gate-quality": actionMetadata({
     label: "Repair gate quality",
     commandLabel: "Doctor",
@@ -153,6 +160,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "setup-plan",
     fallbackKeys: ["replaceLast", "setup", "setupPlan", "state"],
   }),
+  "active-progress": actionMetadata({
+    label: "Inspect active progress",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["stateCompact", "state", "partialResults"],
+  }),
   "partial-salvage": actionMetadata({
     label: "Review partial results",
     commandLabel: "Partial",
@@ -269,6 +282,35 @@ export function actionSafeActionForKind(kind: unknown, fallback = ""): string {
   return actionMetadataForKind(kind)?.safeAction || fallback;
 }
 
+export function actionToolNameForKind(kind: unknown): string {
+  const value = String(kind || "");
+  if (value === "setup" || value === "benchmark-command") return "setup_session";
+  if (value === "decision-capsule") return "recommend_next";
+  if (value === "partial-salvage" || value === "packet-diagnostic") return "partial_results";
+  if (value === "segment-transition") return "new_segment";
+  if (value === "finalization" || value === "finalize-preview") return "finalize_preview";
+  if (value === "context-distillation") return "session_forensics";
+  return actionSafeActionForKind(value, value).replace(/-/g, "_");
+}
+
+export function withCanonicalActionCommand(
+  envelope: Record<string, unknown>,
+  commands: unknown,
+): Record<string, unknown> {
+  const action = record(envelope.canonicalNextAction);
+  if (!Object.keys(action).length) return envelope;
+  const kind = String(action.kind || "");
+  return {
+    ...envelope,
+    canonicalNextAction: {
+      ...action,
+      command: resolveActionCommand(kind, commands, { explicitCommand: action.command }),
+      safeAction: action.safeAction || actionSafeActionForKind(kind, kind),
+      toolName: action.toolName || actionToolNameForKind(kind),
+    },
+  };
+}
+
 export function isPacketBrakeKind(kind: unknown): boolean {
   return actionMetadataForKind(kind)?.packetBrake === true;
 }
@@ -291,6 +333,12 @@ export function resolveActionCommand(
     return fallbackCommandForPolicy(kind, lookup, ["next", "nextRun"]);
   }
   return "";
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export function fallbackCommandForKind(

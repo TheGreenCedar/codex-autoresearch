@@ -47,7 +47,7 @@ Because `commitPaths` is configured, Autoresearch can commit only the permitted 
 
 ## Decide whether to continue
 
-The log result says whether another loop action is expected. `continuation.shouldContinue` means the session is still active; `continuation.forbidFinalAnswer` means Codex must not call the goal complete yet.
+The log result says whether another loop action is expected. `continuation.shouldContinue` means the session is still active, not that another packet is authorized; check `loopContract.canRunNextPacket` or compact state's `canRunNextPacket` before running one. `continuation.forbidFinalAnswer` means Codex must not call the goal complete yet.
 
 Before spending another packet, ask for the current recommendation:
 

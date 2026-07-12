@@ -2,8 +2,10 @@ import fs from "node:fs";
 import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 import { isPathInside } from "./path-containment.js";
+import { resolvePackageRoot } from "./runtime-paths.js";
 
 type WriteData = string | Uint8Array;
 
@@ -135,28 +137,33 @@ export async function checkedReplaceDirectory(
   root: string,
   target: string,
   source: string,
+  options: DirectorySwapOptions = {},
 ): Promise<void> {
-  const safeTarget = await assertSafeDirectoryTree(root, target);
+  await assertSafeDirectoryTree(root, target);
   await assertTreeContainsNoLinks(source);
-  const parent = path.dirname(safeTarget);
-  const staging = path.join(parent, `.${path.basename(safeTarget)}.${randomUUID()}.tmp`);
-  let committed = false;
-  try {
-    await fsp.cp(source, staging, {
-      recursive: true,
-      dereference: false,
-      errorOnExist: true,
-      force: false,
-    });
-    if ((await assertSafeDirectoryTree(root, target)) !== safeTarget) {
-      throw new Error(`Session root changed while replacing directory: ${root}`);
-    }
-    await fsp.rm(safeTarget, { recursive: true, force: true });
-    await fsp.rename(staging, safeTarget);
-    committed = true;
-  } finally {
-    if (!committed) await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
-  }
+  const helperUrl = pathToFileURL(
+    path.join(resolvePackageRoot(import.meta.url), "scripts", "directory-swap.mjs"),
+  ).href;
+  const { replaceDirectoriesRollbackSafe } = (await import(helperUrl)) as DirectorySwapModule;
+  await replaceDirectoriesRollbackSafe(root, [{ source, target }], options);
+}
+
+export interface DirectorySwapOptions {
+  onPhase?: (phase: string, details: Record<string, unknown>) => Promise<void> | void;
+  operations?: {
+    copy?: typeof fsp.cp;
+    readDirectory?: typeof fsp.readdir;
+    remove?: typeof fsp.rm;
+    rename?: typeof fsp.rename;
+  };
+}
+
+interface DirectorySwapModule {
+  replaceDirectoriesRollbackSafe: (
+    root: string,
+    replacements: Array<{ source: string; target: string }>,
+    options?: DirectorySwapOptions,
+  ) => Promise<void>;
 }
 
 export async function checkedEnsureDirectory(root: string, target: string): Promise<void> {

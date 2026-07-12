@@ -19,7 +19,7 @@ The important facts must survive any rewrite:
 - benchmarks print `METRIC name=value`
 - the primary metric decides movement, while checks and constraints protect correctness
 - `measure` is not a keep and cannot become finalization evidence
-- `next` writes the reusable packet; `run` is a raw probe
+- `next` writes the reusable packet; `benchmark-inspect` is the bounded diagnostic probe
 - keep and cleanup automation stays inside configured or explicitly supplied paths unless broad scope is explicitly allowed
 - the dashboard is read-only
 - `quality_gap=0` closes one accepted checklist round

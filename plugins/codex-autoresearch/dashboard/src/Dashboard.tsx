@@ -26,8 +26,8 @@ import {
 import { Ledger } from "./components/Ledger";
 
 interface DashboardProps {
-  initialEntries?: DashboardEntry[];
-  initialMeta?: DashboardMeta;
+  initialEntries: DashboardEntry[];
+  initialMeta: DashboardMeta;
 }
 
 export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
@@ -50,26 +50,14 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     () => buildReadout(session, viewModel, invalidLedgerEntryCount),
     [invalidLedgerEntryCount, session, viewModel],
   );
-  const { liveEnabled, liveStatus, refreshLiveData, setLiveEnabled } = useLiveDashboard({
-    meta,
-    mode,
-    setEntries,
-    setMeta,
-    setViewModel,
-    viewModel,
-  });
+  const { lastGoodAt, liveEnabled, liveStatus, refreshLiveData, refreshState, setLiveEnabled } =
+    useLiveDashboard({ meta, mode, setEntries, setMeta, setViewModel });
 
   const { theme, setTheme } = useDashboardTheme();
   const { dismissToast, toast } = useRunToast(activeSegment, session.runs);
   const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
   const view = viewParam as DashboardView;
   const auditView = view === "audit";
-
-  const decisionRail = (
-    <section className="decision-layout" aria-label="Current operator decision">
-      <DecisionRail readout={readout} viewModel={viewModel} mode={mode} />
-    </section>
-  );
 
   return (
     <div
@@ -78,15 +66,15 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
       }`}
     >
       <nav className="skip-links" aria-label="Skip links">
-        <a href="#trend-panel">Packet trend</a>
         <a href="#decision-rail">Next action</a>
+        <a href="#trend-panel">Packet trend</a>
         <a href="#codex-brief">Codex brief</a>
         {auditView ? <a href="#strategy-memory">Strategy lanes</a> : null}
         <a href="#ledger">Ledger</a>
       </nav>
       <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
 
-      <main className="wrap">
+      <main className="wrap" aria-busy={refreshState === "refreshing"}>
         <Header
           session={session}
           normalized={normalized}
@@ -95,6 +83,8 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           mode={mode}
           meta={meta}
           liveStatus={liveStatus}
+          refreshState={refreshState}
+          lastGoodAt={lastGoodAt}
           liveEnabled={liveEnabled}
           setLiveEnabled={setLiveEnabled}
           refreshLiveData={refreshLiveData}
@@ -104,6 +94,10 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           view={view}
           setView={setViewParam}
         />
+
+        <section className="decision-layout" aria-label="Current operator decision">
+          <DecisionRail readout={readout} viewModel={viewModel} mode={mode} auditView={auditView} />
+        </section>
 
         <section
           className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
@@ -116,16 +110,29 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
               detailsDefaultOpen={false}
               chartHeight={auditView ? 350 : 420}
             />
-            <div className="post-chart-runway" aria-label="Post-chart action runway">
-              {decisionRail}
+            <div className="post-chart-runway" aria-label="Readout context">
               {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
               <SignalStrip view={view} viewModel={viewModel} />
             </div>
           </div>
-          {auditView ? <ScoreStrip session={session} readout={readout} layout="stack" /> : null}
+          {auditView ? (
+            <ScoreStrip
+              session={session}
+              readout={readout}
+              summary={viewModel.summary}
+              layout="stack"
+            />
+          ) : null}
         </section>
 
-        {!auditView ? <ScoreStrip session={session} readout={readout} layout="compact" /> : null}
+        {!auditView ? (
+          <ScoreStrip
+            session={session}
+            readout={readout}
+            summary={viewModel.summary}
+            layout="compact"
+          />
+        ) : null}
 
         <section className="brief-layout" aria-label="Codex session context">
           <CodexBrief session={session} viewModel={viewModel} />

@@ -28,8 +28,9 @@ The skill does not own another database. The CLI and dashboard rebuild their ans
 
 | Area | Main owner |
 | --- | --- |
+| Command identity, schema, policy, help, and handler binding | `lib/command-table.ts` |
 | Public command dispatch | `scripts/autoresearch.ts`, `lib/cli-handlers.ts`, `lib/commands/*` |
-| Command help and tool contracts | `lib/cli/help.ts`, `lib/tool-schemas.ts`, `lib/tool-registry.ts` |
+| Tool contracts and compatibility facades | `lib/tool-schemas.ts`, `lib/tool-registry.ts` |
 | JSONL parsing | `lib/session-records.ts` |
 | Session state and packet decisions | `lib/session-core.ts`, `lib/session-read-model.ts` |
 | Benchmark execution | `lib/runner.ts`, `scripts/autoresearch.ts` |
@@ -40,7 +41,7 @@ The skill does not own another database. The CLI and dashboard rebuild their ans
 | Dashboard projection and server | `lib/dashboard-view-model.ts`, `lib/live-server.ts`, `lib/dashboard-health.ts` |
 | Finalization | `lib/finalize-preview.ts`, `lib/finalization-plan.ts`, `scripts/finalize-autoresearch.ts` |
 
-`scripts/autoresearch.ts` still owns the heavy `run`, `next`, and much of `log` because those paths share process execution, redaction, Git receipts, packet persistence, and structured experiment notes. New read-only projection logic belongs in focused command and read-model modules.
+`lib/command-table.ts` is the one-edit authority for a command's CLI/tool names, arguments, mutation policy, help, handler binding, and compatibility lifecycle. CLI parsing, tool schemas, dashboard safety, dispatch, and surface parity derive from it. `scripts/autoresearch.ts` still owns packet execution and much of `log` because those paths share process execution, redaction, Git receipts, packet persistence, and structured experiment notes. New read-only projection logic belongs in focused command and read-model modules.
 
 ## Packet write path
 
@@ -88,13 +89,15 @@ Codex owns task-level Goal state. Autoresearch owns its benchmark contract, ledg
 flowchart TD
   Parent["Parent session"] --> Fanout["Segment-scoped fanout plan"]
   Fanout --> Scout["Read-only scouts"]
-  Fanout --> Impl["Isolated implementation lanes"]
+  Fanout --> Impl["Implementation lanes with declared write boundaries"]
   Scout --> Evidence["Evidence and recommendation"]
   Impl --> Packets["Measured packet candidates"]
   Evidence --> Parent
   Packets --> Parent
   Parent --> Decision["One benchmark and keep/discard authority"]
 ```
+
+Scout command safety is a pre-execution Git argv allowlist. Porcelain and write-scope checks are best-effort mutation detection, not filesystem or process containment; implementation lanes therefore use disposable worktrees when possible.
 
 Lanes do not get independent finalization authority. The parent session owns the benchmark, accepted evidence, and branch plan.
 

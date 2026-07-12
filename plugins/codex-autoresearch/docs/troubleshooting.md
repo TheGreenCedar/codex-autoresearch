@@ -7,7 +7,8 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Symptom | Failing layer | What to do |
 | --- | --- | --- |
 | Source checkout missing `dist/` | Source launcher hydration | Install `gh`, confirm GitHub network access, then run `node scripts/autoresearch.mjs --help` from the plugin directory. Hydration stops if checksum, release attestation, or archive validation fails. |
-| Source behavior differs from Codex | Installed runtime drift | Inspect or refresh the active plugin cache before changing source again. |
+| Hydration reports a retained rollback directory | Runtime replacement recovery | Inspect the named active and rollback directories. Do not delete an unmarked or linked path; retry only after restoring the marked rollback when the active target is missing, or removing the obsolete marked rollback after verifying the active target. |
+| Source behavior differs from Codex | Installed runtime drift | Run `doctor --check-installed --explain`. Read `installedRuntimePath`, `installedRuntimeShape`, and `installedRuntimeProvenance`; hydrate a source-shaped package, refresh a stale cache, or remove ambiguity between multiple canonical versions before changing source again. |
 | Setup wrapper calls itself | Scaffold health | Replace the recursive wrapper or rerun setup with the real `--benchmark-command`. |
 
 ## Benchmark and checks
@@ -21,6 +22,8 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Current result is much worse than the historical best | Benchmark or environment drift | Treat the old best as history; run doctor and start a new segment if the phase changed. |
 | `benchmark-lint` times out | Broken or too-large benchmark probe | Repair the wrapper, warm the cache, or use a bounded task slice. This is benchmark repair, not product progress. |
 | Packet timed out after writing artifacts | Partial results exist | Run `partial-results --cwd <project> --from-last` before rerunning; recorded rows remain diagnostic `measure` evidence. |
+| State reports `termination_failed` | Process-tree cleanup could not be proven | Treat the reported PID as possibly alive. Verify that PID and its descendants are absent before removing only `.git/autoresearch/progress.json` (Git) or `autoresearch.progress.json` (non-Git); do not start another packet first. |
+| State reports an invalid or active process lifecycle | Typed lifecycle ledger state is malformed or has no later terminal row | Preserve the ledger. Repair the malformed `process_lifecycle` row or append a valid `terminated` row for the same packet/process identity only after verifying the process is absent. Historical descriptive prose needs no repair. |
 | Checks failed | Correctness boundary | Run `checks-inspect --cwd <project> --command "<checks>"`, then fix or reject the packet. Logging `checks_failed` may clean configured or explicit experiment paths. |
 
 ## Git and logging
@@ -28,7 +31,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Symptom | Failing layer | What to do |
 | --- | --- | --- |
 | Duplicate run numbers or edited ledger entries | Ledger integrity | Run `ledger-doctor --cwd <project> --json`. |
-| `log --from-last` refuses the packet | Stale packet or raw `run` probe | Run a fresh `next`, or log the raw number explicitly as `measure`. |
+| `log --from-last` refuses the packet | Stale packet or legacy `run` probe | Run a fresh `next`, or log the raw number explicitly as `measure`; use `benchmark-inspect` for future diagnostic probes. |
 | Successful work was committed outside Autoresearch | Keep receipt lacks commit evidence | Verify the hash, then log the keep with `--commit <hash>`. |
 | Keep refuses to commit | Missing Git scope | Configure `commitPaths`, pass `--commit-paths`, or deliberately use `--allow-add-all`. |
 | Failure cleanup refuses to run | Missing cleanup scope | Pass explicit `--revert-paths`; do not broaden cleanup in a dirty tree. |
@@ -55,7 +58,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | An older Codex task contains a bounded decision | Session evidence has not been imported | Run `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run`. |
 | Loop keeps running without learning | Repeated idea family or stale phase | Stop packets; inspect the saved experiment notes, run `research-fanout --dry-run`, rescope, or start a new segment. |
 | Watchdog fires | No meaningful progress in the quiet window | Inspect active work, finalize useful keeps, or rescope. |
-| `lane-runner` rejects a non-Git command | Lane isolation | Use a worktree, keep the lane read-only, or deliberately pass `--allow-non-git-command`. |
+| `lane-runner` rejects a scout command | Pre-execution command policy | Scout commands must match the strict Git read-only argv allowlist. There is no non-Git override; use an implementation lane with a separate worktree or declared write scope, and remember that neither provides process/filesystem containment. |
 | Primary metric must change | Session semantics changed | Use `new-segment`; do not edit the ledger by hand. |
 
 ## Repair a ledger

@@ -11,6 +11,8 @@ import {
 } from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
 import { registryPathForWorkDir } from "../lib/dashboard-server-registry.js";
+import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -21,11 +23,31 @@ import { buildGoalContract } from "../lib/goal-frame.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
 import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
-import { buildResourcePreflight } from "../lib/process-governor.js";
+import { buildProcessLifecycleRecord, buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
-import { appendJsonl, jsonlPath, readJsonl } from "../lib/session-records.js";
+import {
+  COMPACT_STATE_MAX_BYTES,
+  COMPACT_STATE_MAX_LINES,
+  COMPACT_STATE_MAX_TOKENS,
+  DEFAULT_DOCTOR_MAX_BYTES,
+  DEFAULT_DOCTOR_MAX_LINES,
+  DEFAULT_DOCTOR_MAX_TOKENS,
+  DEFAULT_STATE_MAX_BYTES,
+  DEFAULT_STATE_MAX_LINES,
+  DEFAULT_STATE_MAX_TOKENS,
+  projectDashboardDecision,
+  projectDoctorReadModel,
+  projectFinalizationDecision,
+  projectionBudget,
+  projectStateReadModel,
+  resolveSessionDecision,
+  resolveFinalizationDecision,
+} from "../lib/session-read-model.js";
+import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { resolveSessionPaths } from "../lib/session-paths.js";
+import { buildTerminalReport } from "../lib/terminal-report.js";
+import { parseDashboardContext } from "../lib/types/dashboard-wire.js";
 import {
   codeStoryLanguageSupportFrictionFixtureEntries,
   fixtureJsonl,
@@ -74,6 +96,79 @@ test("session record ledger helpers use the repo-local resolver path", async () 
     assert.deepEqual(readJsonl(dir), [
       { type: "config", metricName: "score", bestDirection: "higher" },
     ]);
+  });
+});
+
+test("session record boundary rejects every JSON primitive with physical line evidence", async () => {
+  const invalidValues = [
+    { value: "null", kind: "null", position: 0 },
+    { value: "[]", kind: "array", position: 1 },
+    { value: '"text"', kind: "string", position: 2 },
+    { value: "42", kind: "number", position: 0 },
+    { value: "true", kind: "boolean", position: 1 },
+    { value: "false", kind: "boolean", position: 2 },
+  ];
+  await withTempDir("session-record-shapes", async (dir) => {
+    const ledgerPath = jsonlPath(dir);
+    const valid = JSON.stringify({ type: "config", metricName: "score" });
+    for (const invalid of invalidValues) {
+      const lines = [valid, valid, valid];
+      lines[invalid.position] = invalid.value;
+      if (invalid.kind === "string") lines.splice(2, 0, "");
+      await writeFile(ledgerPath, `${lines.join("\n")}\n`);
+      const expectedLine = invalid.position + 1 + (invalid.kind === "string" ? 1 : 0);
+      assert.throws(
+        () => readJsonl(dir),
+        (error) => {
+          const issue = ledgerRecordIssue(error);
+          assert.ok(issue);
+          assert.equal(issue.file, ledgerPath);
+          assert.equal(issue.line, expectedLine);
+          assert.equal(issue.kind, invalid.kind);
+          assert.match(issue.message, /Expected a non-array JSON object ledger record/);
+          assert.match(issue.command, /ledger-doctor --cwd <project> --json/);
+          return true;
+        },
+      );
+    }
+
+    await writeFile(ledgerPath, `${valid}\n\n{malformed\n`);
+    assert.throws(
+      () => readJsonl(dir),
+      (error) => {
+        const issue = ledgerRecordIssue(error);
+        assert.ok(issue);
+        assert.equal(issue.file, ledgerPath);
+        assert.equal(issue.line, 3);
+        assert.equal(issue.kind, "invalid-json");
+        assert.match(issue.message, /Invalid JSON syntax/);
+        assert.equal(
+          issue.command,
+          "node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json",
+        );
+        return true;
+      },
+    );
+  });
+});
+
+test("session record boundary accepts legacy objects and validates declared schema versions", async () => {
+  await withTempDir("session-record-schema", async (dir) => {
+    await writeFile(
+      jsonlPath(dir),
+      [
+        JSON.stringify({ type: "config", metricName: "score" }),
+        JSON.stringify({ type: "run", run: 1, schemaVersion: 1 }),
+        "",
+      ].join("\n"),
+    );
+    assert.equal(readJsonl(dir).length, 2);
+
+    await writeFile(jsonlPath(dir), `${JSON.stringify({ type: "run", schemaVersion: 2 })}\n`);
+    assert.throws(
+      () => readJsonl(dir),
+      /Unsupported schemaVersion; expected 1.*Observed JSON kind: object.*ledger-doctor/,
+    );
   });
 });
 
@@ -243,7 +338,7 @@ test("approval ledger requires exact unexpired scoped approvals", () => {
   assert.match(status.blockers[0], /lane-c/);
 });
 
-test("resource preflight catches stale process residue, repeated commands, and output budgets", () => {
+test("resource preflight catches typed active processes, repeated commands, and output budgets", () => {
   const preflight = buildResourcePreflight({
     command: "rg -n needle src tests",
     entries: [
@@ -252,7 +347,12 @@ test("resource preflight catches stale process residue, repeated commands, and o
       { command: "rg -n needle src tests" },
       { command: "rg -n needle src tests" },
       { command: "rg -n needle src tests" },
-      { type: "process_manager", status: "stale", pid: 1234, reason: "reboot residue" },
+      buildProcessLifecycleRecord({
+        packetId: "packet-6-active",
+        processId: "benchmark",
+        event: "observed-live",
+        at: "2026-06-13T12:00:00.000Z",
+      }),
       { packetEvidence: { outputTokens: 30000, outputLines: 1500 } },
     ],
     budgets: {
@@ -263,7 +363,7 @@ test("resource preflight catches stale process residue, repeated commands, and o
   });
 
   assert.equal(preflight.canStart, false);
-  assert.match(preflight.blockers.join(" "), /Command head repeated|Stale process-manager/);
+  assert.match(preflight.blockers.join(" "), /Typed process lifecycle/);
   assert.match(preflight.warnings.join(" "), /bounded summaries|compact forensics/);
 });
 
@@ -285,7 +385,7 @@ test("resource preflight treats repeated benchmark command heads as warnings", (
   assert.match(preflight.warnings.join(" "), /Command head repeated 5 times/);
 });
 
-test("resource preflight residue does not echo raw ledger bodies", () => {
+test("historical process prose is warning-only and never creates trust state", () => {
   const preflight = buildResourcePreflight({
     entries: [
       {
@@ -298,79 +398,250 @@ test("resource preflight residue does not echo raw ledger bodies", () => {
     ],
   });
 
-  assert.equal(preflight.canStart, false);
-  assert.equal(preflight.residue.length, 1);
-  assert.deepEqual(preflight.residue[0], {
-    type: "response_item",
-    status: "stale-process-residue",
-    timestamp: "2026-06-13T12:00:00.000Z",
-    reason: "ledger entry matched process residue keywords",
-  });
-  assert.doesNotMatch(JSON.stringify(preflight.residue), /SECRET_TOKEN|private\.env|abc123/);
+  assert.equal(preflight.canStart, true);
+  assert.equal(preflight.status, "warning");
+  assert.deepEqual(preflight.residue, []);
+  assert.match(preflight.warnings.join(" "), /warning-only.*typed process_lifecycle/i);
+  assert.doesNotMatch(JSON.stringify(preflight), /SECRET_TOKEN|private\.env|abc123/);
 });
 
-test("resource preflight residue redacts unsafe ledger metadata", () => {
+test("typed process lifecycle blocks unclosed state and redacts identity metadata", () => {
   const preflight = buildResourcePreflight({
     entries: [
       {
-        type: "response_item SECRET_TOKEN=abc123",
-        timestamp: "C:/Users/alber/private.env",
-        payload: {
-          output: "pid 4321 stale reboot residue",
+        type: "process_lifecycle",
+        identity: {
+          packetId: "SECRET_TOKEN=abc123",
+          processId: "C:/Users/alber/private.env",
         },
+        event: "started",
+        at: "2026-06-13T12:00:00.000Z",
       },
     ],
   });
 
   assert.equal(preflight.canStart, false);
-  assert.deepEqual(preflight.residue, [
-    {
-      type: "ledger-entry",
-      status: "stale-process-residue",
-      timestamp: "",
-      reason: "ledger entry matched process residue keywords",
-    },
-  ]);
+  assert.equal(preflight.residue.length, 1);
+  assert.equal(preflight.residue[0].type, "process_lifecycle");
+  assert.equal(preflight.residue[0].status, "invalid-lifecycle");
+  assert.match(preflight.residue[0].identity, /^process-[a-f0-9]{12}$/);
   assert.doesNotMatch(
     JSON.stringify(preflight.residue),
     /SECRET_TOKEN|abc123|C:\/Users\/alber\/private\.env/,
   );
+  assert.throws(
+    () =>
+      buildProcessLifecycleRecord({
+        packetId: "SECRET_TOKEN=abc123",
+        processId: "C:/Users/alber/private.env",
+        event: "started",
+      }),
+    /identity is invalid/,
+  );
 });
 
-test("resource preflight residue maps token-shaped ledger types to generic entries", () => {
+test("latest terminal event clears active and termination-failed state in ledger order", () => {
   const preflight = buildResourcePreflight({
     entries: [
-      {
-        type: "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
-        status: "stale-process-residue",
-        timestamp: "2026-06-13T12:00:00Z",
-        reason: "ledger entry matched process residue keywords",
-        payload: {
-          output: "process_manager stale reboot residue",
-        },
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "observed-live",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "termination-failed",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-1",
+        processId: "benchmark",
+        event: "terminated",
+      }),
+    ],
+  });
+
+  assert.equal(preflight.canStart, true);
+  assert.deepEqual(preflight.residue, []);
+});
+
+test("lifecycle fold keeps only latest state per duplicate identity", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "started",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-b",
+        processId: "checks",
+        event: "termination-failed",
+      }),
+      buildProcessLifecycleRecord({
+        packetId: "packet-a",
+        processId: "benchmark",
+        event: "terminated",
+      }),
+    ],
+  });
+
+  assert.equal(preflight.canStart, false);
+  assert.equal(preflight.residue.length, 1);
+  assert.equal(preflight.residue[0].status, "termination-failed");
+});
+
+test("structured #292 progress outcomes feed the same lifecycle fold", () => {
+  const baseProgress = {
+    packetId: "packet-7-active",
+    commandClass: "node script",
+    startedAt: "2026-06-13T12:00:00.000Z",
+  };
+  const failedEntry = {
+    packetEvidence: {
+      progressSnapshot: {
+        ...baseProgress,
+        exitState: "termination_failed",
+        terminationFailed: true,
+        termination: { proven: false, reason: "remaining_processes_alive" },
       },
+    },
+  };
+  const failed = buildResourcePreflight({
+    entries: [failedEntry],
+  });
+  const cleared = buildResourcePreflight({
+    entries: [
+      failedEntry,
       {
-        type: "AKIAIOSFODNN7EXAMPLE",
-        status: "stale-process-residue",
-        timestamp: "",
-        reason: "ledger entry matched process residue keywords",
-        payload: {
-          output: "process_manager stale reboot residue",
+        packetEvidence: {
+          progressSnapshot: {
+            ...baseProgress,
+            exitState: "timed_out",
+            terminationFailed: false,
+            termination: { proven: true, reason: "terminated" },
+          },
         },
       },
     ],
   });
 
-  const serializedResidue = JSON.stringify(preflight.residue);
+  assert.equal(failed.canStart, false);
+  assert.equal(failed.residue[0].status, "termination-failed");
+  assert.equal(cleared.canStart, true);
+  assert.deepEqual(cleared.residue, []);
+});
+
+test("next-command orchestration progress is not mistaken for a child process", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      {
+        packetEvidence: {
+          progressSnapshot: {
+            packetId: "packet-1-active",
+            commandClass: "autoresearch preflight",
+            startedAt: "2026-07-10T12:00:00.000Z",
+            exitState: "running",
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(preflight.canStart, true);
+  assert.deepEqual(preflight.residue, []);
+});
+
+test("lifecycle writer drops sensitive termination metadata", () => {
+  const record = buildProcessLifecycleRecord({
+    packetId: "packet-safe",
+    processId: "benchmark",
+    event: "termination-failed",
+    termination: {
+      proven: false,
+      reason: "C:/Users/alber/private.env SECRET_TOKEN=abc123",
+      command: "node secret.js --token abc123",
+      trackedPids: [1234],
+    },
+  });
+
+  assert.deepEqual(record.termination, { proven: false, reason: "" });
+  assert.doesNotMatch(JSON.stringify(record), /private\.env|SECRET_TOKEN|secret\.js|abc123|1234/);
+});
+
+test("malformed typed lifecycle rows block instead of bypassing process trust", () => {
+  for (const entry of [
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "started",
+      at: "not-a-timestamp",
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "started",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: false, reason: "remaining_processes_alive" },
+    },
+    {
+      type: "process_lifecycle",
+      identity: { packetId: "packet-malformed", processId: "benchmark" },
+      event: "termination-failed",
+      at: "2026-07-10T12:00:00.000Z",
+      termination: { proven: true, reason: "terminated" },
+    },
+  ]) {
+    const preflight = buildResourcePreflight({ entries: [entry] });
+    assert.equal(preflight.canStart, false);
+    assert.equal(preflight.residue[0].status, "invalid-lifecycle");
+    assert.doesNotMatch(JSON.stringify(preflight.residue), /packet-malformed|not-a-timestamp/);
+  }
+});
+
+test("unproven terminated event cannot clear an active lifecycle identity", () => {
+  const preflight = buildResourcePreflight({
+    entries: [
+      buildProcessLifecycleRecord({
+        packetId: "packet-unproven",
+        processId: "benchmark",
+        event: "started",
+      }),
+      {
+        type: "process_lifecycle",
+        identity: { packetId: "packet-unproven", processId: "benchmark" },
+        event: "terminated",
+        at: "2026-07-10T12:00:00.000Z",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      },
+    ],
+  });
 
   assert.equal(preflight.canStart, false);
   assert.deepEqual(
-    preflight.residue.map((fact) => fact.type),
-    ["ledger-entry", "ledger-entry"],
+    new Set(preflight.residue.map((record) => record.status)),
+    new Set(["process-active", "invalid-lifecycle"]),
   );
-  assert.doesNotMatch(
-    serializedResidue,
-    /ghp_abcdefghijklmnopqrstuvwxyz1234567890|AKIAIOSFODNN7EXAMPLE/,
+  assert.throws(
+    () =>
+      buildProcessLifecycleRecord({
+        packetId: "packet-unproven",
+        processId: "benchmark",
+        event: "terminated",
+        termination: { proven: false, reason: "remaining_processes_alive" },
+      }),
+    /cannot carry unproven termination evidence/,
   );
 });
 
@@ -687,3 +958,530 @@ test("session forensics detects update_goal complete function calls", async () =
     assert.equal(parsed.goal.status, "complete");
   });
 });
+
+test("resolved decision fails closed when a ready action contradicts a stronger blocker", () => {
+  const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
+  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: {
+          canRunNextPacket: true,
+          blockers: ["Ledger order is invalid."],
+          strongestAction: {
+            kind: "ledger-integrity",
+            reason: "Repair ledger order before packet work.",
+          },
+        },
+        runtimeProvenance,
+        finalizationReadiness: finalizationPressure,
+      },
+    },
+    commands: { ledgerDoctor: "node scripts/autoresearch.mjs ledger-doctor --cwd . --json" },
+  });
+
+  assert.equal(resolved.status, "blocked");
+  assert.equal(resolved.strongestBlocker, "Ledger order is invalid.");
+  assert.equal(resolved.canonicalNextAction?.kind, "ledger-integrity");
+  assert.equal(resolved.nextAction, "Repair ledger order before packet work.");
+  assert.match(resolved.command, /ledger-doctor/);
+  assert.deepEqual(resolved.runtimeProvenance, runtimeProvenance);
+  assert.deepEqual(resolved.finalizationPressure, finalizationPressure);
+});
+
+test("resolved decision rejects unsafe commands and legacy aliases cannot override authority", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      resolvedDecision: {
+        version: 1,
+        status: "complete",
+        strongestBlocker: null,
+        nextAction: "Review the completed evidence.",
+        command: "node -e \"require('child_process').execSync('whoami')\"",
+        canonicalNextAction: {
+          kind: "complete",
+          reason: "Review the completed evidence.",
+          command: "<unsafe-placeholder>",
+        },
+        loopContract: { complete: true, blockers: [] },
+        runtimeProvenance: null,
+        runtimeAuthority: null,
+        finalizationPressure: null,
+      },
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Legacy alias says run another packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.status, "complete");
+  assert.equal(resolved.canonicalNextAction?.kind, "complete");
+  assert.equal(resolved.command, "");
+});
+
+test("blocked decisions without a repair action never retain a ready packet command", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      blockers: ["The ledger is inconsistent and must be repaired before any packet can run."],
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "next-packet",
+          reason: "Run the next packet.",
+          command: "node scripts/autoresearch.mjs next --cwd .",
+        },
+        loopContract: { canRunNextPacket: false, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.status, "blocked");
+  assert.equal(resolved.canonicalNextAction?.kind, "blocked");
+  assert.equal(resolved.command, "");
+});
+
+test("resolved operational commands reject nested shell operators", () => {
+  for (const command of [
+    "node scripts/autoresearch.mjs next --cwd . && node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd . | node payload.mjs",
+    "node scripts/autoresearch.mjs next --cwd .\nnode payload.mjs",
+  ]) {
+    const resolved = resolveSessionDecision({
+      state: {
+        decisionEnvelope: {
+          canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+          loopContract: { canRunNextPacket: true, blockers: [] },
+        },
+      },
+    });
+    assert.equal(resolved.command, "", command);
+    assert.equal(resolved.canonicalNextAction?.command, "", command);
+  }
+});
+
+test("resolved operational commands reject interpreter evaluation modes", () => {
+  for (const command of [
+    'node -e "process.exit(1)"',
+    'node --eval="process.exit(1)"',
+    'node -p "process.version"',
+    'node --print "process.version"',
+    'node --no-warnings -pe "process.version"',
+    'node --require ./hook.mjs -e "process.exit(1)"',
+    'node "-e" "process.exit(1)"',
+    "python3 -c \"print('payload')\"",
+    "python -I -c \"print('payload')\"",
+    "python -W ignore -c \"print('payload')\"",
+    'powershell -Command "Get-Process"',
+    "pwsh -EncodedCommand ZQB4AGkAdAA=",
+    "pwsh -NoProfile -EncodedCommand ZQB4AGkAdAA=",
+    "pwsh -ExecutionPolicy Bypass -EncodedCommand ZQB4AGkAdAA=",
+    "cmd /k whoami",
+    "cmd /d /c whoami",
+    "bash -lc whoami",
+    "bash --noprofile -lc whoami",
+  ]) {
+    const resolved = resolveSessionDecision({
+      state: {
+        decisionEnvelope: {
+          canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
+          loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
+        },
+      },
+    });
+    assert.equal(resolved.command, "", command);
+    assert.equal(resolved.canonicalNextAction?.command, "", command);
+  }
+});
+
+test("resolved operational commands allow evaluator text as a trusted CLI argument", () => {
+  const command =
+    "node scripts/autoresearch.mjs next --cwd . --command 'node -e \"console.log(1)\"'";
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.command, command);
+});
+
+test("resolved operational command parsing is linear and fails closed on unterminated quotes", () => {
+  const command = `node "${"\\!".repeat(20_000)}`;
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
+        loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
+      },
+    },
+  });
+  assert.equal(resolved.command, "");
+});
+
+test("resolved operational commands accept only the trusted generated PowerShell wrapper", () => {
+  const command = renderShellCommand(
+    ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "next", "--cwd", "."],
+    "powershell",
+  );
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
+        loopContract: { canRunNextPacket: true, blockers: [] },
+      },
+    },
+  });
+  assert.equal(resolved.command, command);
+
+  for (const unsafeBody of [
+    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
+    "'C:\\Program Files\\nodejs\\node.exe' -e 'process.exit(1)'",
+    "'C:\\Program Files\\nodejs\\node.exe' --print 'process.version'",
+    "pwsh.exe -EncodedCommand ZQB4AGkAdAA=",
+  ]) {
+    const unsafe = `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${unsafeBody} }`;
+    assert.equal(
+      resolveSessionDecision({
+        state: {
+          decisionEnvelope: {
+            canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command: unsafe },
+            loopContract: { canRunNextPacket: true, blockers: [] },
+          },
+        },
+      }).command,
+      "",
+    );
+  }
+});
+
+test("resolved watchdog authority stays canonical over a generic preflight blocker", () => {
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "watchdog",
+          reason: "Intervene after the stale progress window.",
+        },
+        loopContract: {
+          canRunNextPacket: false,
+          blockers: ["No benchmark command is configured."],
+          strongestAction: {
+            kind: "preflight",
+            reason: "No benchmark command is configured.",
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(resolved.canonicalNextAction?.kind, "watchdog");
+  assert.match(resolved.nextAction, /Intervene/);
+  assert.equal(resolved.status, "blocked");
+});
+
+test("decision capsules replace placeholder hints with a safe canonical fallback command", () => {
+  const commands = buildContinuationCommands({
+    scriptPath: path.join(process.cwd(), "scripts", "autoresearch.mjs"),
+    shellQuote: (value) => quoteShellArg(value, "powershell"),
+    workDir: "C:\\work",
+  });
+  const resolved = resolveSessionDecision({
+    state: {
+      decisionEnvelope: {
+        canonicalNextAction: {
+          kind: "decision-capsule",
+          reason: "Repair the benchmark contract.",
+          command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+        },
+        loopContract: {
+          canRunNextPacket: false,
+          blockers: ["Repair the benchmark contract."],
+          strongestAction: {
+            kind: "decision-capsule",
+            reason: "Repair the benchmark contract.",
+            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          },
+        },
+      },
+    },
+    commands,
+  });
+
+  assert.equal(resolved.command, commands.recommendNext);
+  assert.equal(resolved.canonicalNextAction?.command, commands.recommendNext);
+
+  const reread = resolveSessionDecision({
+    state: {
+      resolvedDecision: resolved,
+      decisionEnvelope: {
+        canonicalNextAction: resolved.canonicalNextAction,
+        loopContract: {
+          ...resolved.loopContract,
+          strongestAction: {
+            kind: "decision-capsule",
+            reason: "Repair the benchmark contract.",
+            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+          },
+        },
+      },
+    },
+    commands: { primary: resolved.command },
+  });
+  assert.equal(reread.command, commands.recommendNext);
+  assert.equal(reread.canonicalNextAction?.command, commands.recommendNext);
+});
+
+test("bounded projection preserves enough blocker provenance to re-resolve watchdog authority", () => {
+  const source = readModelFixture(2);
+  source.decisionEnvelope = {
+    canonicalNextAction: {
+      kind: "watchdog",
+      reason: "Intervene after the stale progress window.",
+    },
+    loopContract: {
+      canRunNextPacket: false,
+      blockers: ["No benchmark command is configured."],
+      strongestAction: {
+        kind: "preflight",
+        reason: "No benchmark command is configured.",
+      },
+    },
+  };
+
+  const compact = projectStateReadModel(source, "compact");
+  const reread = resolveSessionDecision({ state: compact });
+  assert.equal(reread.canonicalNextAction?.kind, "watchdog");
+  assert.equal(reread.nextAction, "Intervene after the stale progress window.");
+});
+
+test("finalization results resolve blocked and ready status explicitly", () => {
+  const blocked = resolveFinalizationDecision({
+    ready: false,
+    warnings: ["Working directory is not a Git repository."],
+    nextAction: "Run finalization preview from a Git-backed branch.",
+  });
+  const ready = resolveFinalizationDecision({
+    ready: true,
+    nextAction: "Review the finalization preview.",
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.match(blocked.strongestBlocker || "", /Git-backed branch/);
+  assert.equal(ready.status, "ready");
+});
+
+test("state, doctor, report, dashboard, and finalization share one resolved authority", () => {
+  const source = readModelFixture(12);
+  const defaultState = projectStateReadModel(source, "default");
+  const compactState = projectStateReadModel(source, "compact");
+  const doctor = projectDoctorReadModel({
+    ok: false,
+    workDir: source.workDir,
+    state: source,
+    decisionEnvelope: source.decisionEnvelope,
+    issues: ["Ledger order is invalid."],
+  });
+  const dashboard = projectDashboardDecision(source);
+  const finalization = projectFinalizationDecision(source);
+  const report = buildTerminalReport(defaultState).json;
+  const authorities = [
+    defaultState.resolvedDecision,
+    compactState.resolvedDecision,
+    doctor.resolvedDecision,
+    dashboard,
+  ] as Array<Record<string, unknown>>;
+
+  for (const authority of authorities) {
+    assert.equal(authority.status, "blocked");
+    assert.match(String(authority.strongestBlocker), /Ledger order is invalid/);
+    assert.equal(authority.nextAction, "Repair ledger order before packet work.");
+    assert.match(String(authority.command), /ledger-doctor/);
+    assert.deepEqual(authority.runtimeProvenance, source.runtimeProvenance);
+    assert.deepEqual(authority.finalizationPressure, source.finalizationPressure);
+  }
+  assert.equal(report.status, "blocked");
+  assert.match(report.blocker, /Ledger order is invalid/);
+  assert.equal(report.nextAction, "Repair ledger order before packet work.");
+  assert.match(report.nextCommand, /ledger-doctor/);
+  assert.equal(finalization.status, "blocked");
+  assert.match(String(finalization.strongestBlocker), /Ledger order is invalid/);
+  assert.deepEqual(finalization.runtimeProvenance, source.runtimeProvenance);
+  assert.deepEqual(finalization.finalizationPressure, source.finalizationPressure);
+});
+
+test("100-run state and doctor projections enforce reviewed byte and line budgets", () => {
+  const source = readModelFixture(100);
+  const defaultState = projectStateReadModel(source, "default");
+  const compactState = projectStateReadModel(source, "compact");
+  const doctor = projectDoctorReadModel({
+    ok: false,
+    workDir: source.workDir,
+    state: source,
+    decisionEnvelope: source.decisionEnvelope,
+    issues: Array.from({ length: 40 }, (_, index) => `Issue ${index}: ${"x".repeat(200)}`),
+    warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}: ${"y".repeat(200)}`),
+  });
+  const defaultBudget = projectionBudget(defaultState);
+  const compactBudget = projectionBudget(compactState);
+  const doctorBudget = projectionBudget(doctor);
+
+  assert.ok(defaultBudget.bytes <= DEFAULT_STATE_MAX_BYTES, JSON.stringify(defaultBudget));
+  assert.ok(defaultBudget.lines <= DEFAULT_STATE_MAX_LINES, JSON.stringify(defaultBudget));
+  assert.ok(defaultBudget.tokens <= DEFAULT_STATE_MAX_TOKENS, JSON.stringify(defaultBudget));
+  assert.ok(compactBudget.bytes <= COMPACT_STATE_MAX_BYTES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.lines <= COMPACT_STATE_MAX_LINES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.tokens <= COMPACT_STATE_MAX_TOKENS, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.bytes < defaultBudget.bytes, "compact must be smaller than default");
+  assert.ok(doctorBudget.bytes <= DEFAULT_DOCTOR_MAX_BYTES, JSON.stringify(doctorBudget));
+  assert.ok(doctorBudget.lines <= DEFAULT_DOCTOR_MAX_LINES, JSON.stringify(doctorBudget));
+  assert.ok(doctorBudget.tokens <= DEFAULT_DOCTOR_MAX_TOKENS, JSON.stringify(doctorBudget));
+  assert.deepEqual(exactDuplicateSubtrees(compactState), []);
+  assert.equal(Object.hasOwn(compactState, "resumeAudit"), false);
+  assert.equal(Object.hasOwn(compactState, "decisionEnvelope"), false);
+});
+
+test("bounded continuation keeps only operator authority within its own byte and line budget", () => {
+  const source = readModelFixture(100);
+  source.continuation = {
+    mode: "owner-autonomous",
+    stage: "needs-log-decision",
+    activeBudget: true,
+    shouldContinue: true,
+    forbidFinalAnswer: true,
+    requiresLogDecision: true,
+    stopReason: "s".repeat(4_000),
+    finalAnswerPolicy: "p".repeat(4_000),
+    plateau: { history: Array.from({ length: 100 }, (_, index) => ({ index })) },
+    commands: Object.fromEntries(
+      Array.from({ length: 100 }, (_, index) => [`command${index}`, "x".repeat(500)]),
+    ),
+  };
+
+  const compact = projectStateReadModel(source, "compact");
+  const continuation = compact.continuation as Record<string, unknown>;
+  const budget = projectionBudget(continuation);
+  assert.ok(budget.bytes <= 1_200, JSON.stringify(budget));
+  assert.ok(budget.lines <= 20, JSON.stringify(budget));
+  assert.equal(Object.hasOwn(continuation, "commands"), false);
+  assert.equal(Object.hasOwn(continuation, "plateau"), false);
+});
+
+test("mandatory Unicode state fields truncate deterministically within every reviewed budget", () => {
+  const source = readModelFixture(100);
+  source.workDir = `C:/${"😀".repeat(12_000)}`;
+  source.config.goal = `Improve ${"界".repeat(20_000)}`;
+  source.commands = {
+    state: `node scripts/autoresearch.mjs state --cwd "${"😀".repeat(10_000)}"`,
+  };
+  const compact = projectStateReadModel(source, "compact");
+  const normal = projectStateReadModel(source, "default");
+  const compactBudget = projectionBudget(compact);
+  const normalBudget = projectionBudget(normal);
+  assert.ok(compactBudget.bytes <= COMPACT_STATE_MAX_BYTES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.lines <= COMPACT_STATE_MAX_LINES, JSON.stringify(compactBudget));
+  assert.ok(compactBudget.tokens <= COMPACT_STATE_MAX_TOKENS, JSON.stringify(compactBudget));
+  assert.ok(normalBudget.bytes <= DEFAULT_STATE_MAX_BYTES, JSON.stringify(normalBudget));
+  assert.match(String(compact.goal), /truncated/);
+  assert.match(String(compact.workDir), /truncated/);
+});
+
+test("dashboard wire context validates backend input outside the React source tree", () => {
+  assert.throws(() => parseDashboardContext([]), /must be an object/);
+  assert.throws(
+    () => parseDashboardContext({ state: { config: {}, current: "not-an-array" } }),
+    /state\.current must be an array/,
+  );
+  assert.throws(() => parseDashboardContext({ state: {} }), /state\.config must be an object/);
+  assert.throws(
+    () => parseDashboardContext({ state: { config: {}, current: [{ run: "one" }] } }),
+    /current\[0\]\.run must be a finite number/,
+  );
+  const parsed = parseDashboardContext({
+    state: { config: { metricName: "latency" }, current: [{ run: 1, status: "keep" }] },
+    warnings: [],
+  });
+  assert.equal(parsed.state.config.metricName, "latency");
+  assert.equal(parsed.state.current?.[0].run, 1);
+});
+
+function readModelFixture(runCount: number): Record<string, any> {
+  const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
+  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
+  const decisionEnvelope = {
+    canonicalNextAction: { kind: "next-packet", reason: "Run the next packet." },
+    loopContract: {
+      canRunNextPacket: false,
+      blockers: [
+        "Ledger order is invalid because a duplicate physical run number breaks the accepted evidence sequence and must be repaired before another packet.",
+      ],
+      strongestAction: {
+        kind: "ledger-integrity",
+        reason: "Repair ledger order before packet work.",
+      },
+    },
+    runtimeProvenance,
+    finalizationReadiness: finalizationPressure,
+  };
+  return {
+    ok: false,
+    workDir: "C:/fixture",
+    config: {
+      name: "Budget fixture",
+      goal: "Keep latency low",
+      metricName: "latency_ms",
+      bestDirection: "lower",
+    },
+    segment: 1,
+    runs: runCount,
+    kept: Math.floor(runCount / 2),
+    discarded: Math.ceil(runCount / 2),
+    measured: 0,
+    current: Array.from({ length: runCount }, (_, index) => ({
+      run: index + 1,
+      metric: runCount - index,
+      status: index % 2 ? "discard" : "keep",
+      description: `Run ${index + 1}`,
+    })),
+    decisionEnvelope,
+    runtimeProvenance,
+    finalizationPressure,
+    blockers: [
+      "Ledger order is invalid because a duplicate physical run number breaks the accepted evidence sequence and must be repaired before another packet.",
+    ],
+    commands: {
+      ledgerDoctor: "node scripts/autoresearch.mjs ledger-doctor --cwd C:/fixture --json",
+      state: "node scripts/autoresearch.mjs state --cwd C:/fixture",
+    },
+    researchIntegrity: {
+      notPromotableBecause: ["Missing repeat evidence."],
+      warnings: ["Missing repeat evidence."],
+    },
+    preflight: { status: "blocked", blockers: ["Ledger order is invalid."] },
+  };
+}
+
+function exactDuplicateSubtrees(value: unknown): string[] {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  const visit = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const serialized = JSON.stringify(item);
+    if (serialized.length >= 64) {
+      if (seen.has(serialized)) duplicates.push(serialized);
+      else seen.add(serialized);
+    }
+    if (Array.isArray(item)) item.forEach(visit);
+    else Object.values(item as Record<string, unknown>).forEach(visit);
+  };
+  visit(value);
+  return duplicates;
+}

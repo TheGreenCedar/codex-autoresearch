@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { isAcceptedCurrentRun, isRejectedRun } from "./evidence-registry.js";
+import { parsePorcelainV1Z } from "./git-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { finiteMetric, isPromotionGradeRun, promotionGradeValue } from "./session-core.js";
 
@@ -369,14 +371,13 @@ async function gitIndexLockHealth(workDir: string) {
 }
 
 async function classifyDirtyFiles(workDir: string, config: LooseObject = {}) {
-  const status = await gitOk(["status", "--porcelain=v1", "-uall"], workDir);
+  const status = await gitOk(["status", "--porcelain=v1", "-z", "-uall"], workDir);
   if (!status.ok) return null;
   const commitPaths = listOption(config.commitPaths ?? config.commit_paths).map(slashPath);
   const sessionArtifacts: string[] = [];
   const scopedExperimentFiles: string[] = [];
   const unrelatedFiles: string[] = [];
-  for (const line of status.stdout.split(/\r?\n/).filter(Boolean)) {
-    const file = slashPath(line.slice(3).replace(/^"|"$/g, ""));
+  for (const file of parsePorcelainV1Z(status.stdout).flatMap((entry) => entry.paths)) {
     if (isAutoresearchSessionArtifact(file, "dirty-tree")) sessionArtifacts.push(file);
     else if (commitPaths.some((scope) => file === scope || file.startsWith(`${scope}/`))) {
       scopedExperimentFiles.push(file);
@@ -484,16 +485,22 @@ async function gitOk(args: string[], cwd: string) {
     const child = spawn("git", args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
     });
     child.on("error", (error) =>
       resolve({ code: -1, ok: false, stdout, stderr: String(error.message || error) }),
     );
-    child.on("close", (code) => resolve({ code, ok: code === 0, stdout, stderr }));
+    child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
+      resolve({ code, ok: code === 0, stdout, stderr });
+    });
   });
 }
 

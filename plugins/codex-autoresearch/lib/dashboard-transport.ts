@@ -2,16 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { stripDashboardExportCommandFields } from "./dashboard-command-safety.js";
-import { boundDashboardLedgerEntries } from "./dashboard-ledger-bounds.js";
+import {
+  boundDashboardLedgerEntries,
+  DASHBOARD_LEDGER_MAX_ENTRIES,
+} from "./dashboard-ledger-bounds.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { resolvePackageRoot, resolveRepoRoot } from "./runtime-paths.js";
-import { type UnknownRecord, unknownRecordOrNull } from "./types/json.js";
+import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "./types/json.js";
+import { DASHBOARD_PAYLOAD_VERSION } from "../dashboard/src/types.js";
 
 type LooseObject = UnknownRecord;
 
 export const DASHBOARD_TRANSPORT_MEMORY_LIST_LIMIT = 100;
 export const DASHBOARD_TRANSPORT_ARRAY_LIMIT = 100;
-const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = 5000;
+const DASHBOARD_STATIC_EXPORT_LEDGER_MAX_ENTRIES = DASHBOARD_LEDGER_MAX_ENTRIES;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const REPO_ROOT = resolveRepoRoot(import.meta.url);
 const DASHBOARD_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "assets", "template.html");
@@ -52,7 +56,7 @@ export function compactDashboardTransportViewModel(value: LooseObject): LooseObj
 }
 
 export function dashboardHtml(entries: LooseObject[], meta: LooseObject = {}) {
-  const settings = unknownRecordOrNull(meta.settings);
+  const settings = recordOrNull(meta.settings);
   const offlineExport = ["static-export", "showcase"].includes(
     String(meta.deliveryMode || settings?.deliveryMode || ""),
   );
@@ -61,14 +65,19 @@ export function dashboardHtml(entries: LooseObject[], meta: LooseObject = {}) {
     meta.publicExport || meta.showcaseMode || settings?.publicExport || settings?.showcaseMode,
   );
   const entriesForClient = offlineExport ? stripDashboardCommandFields(entries) : entries;
-  const boundedEntries = offlineExport
-    ? boundDashboardStaticExportEntries(entriesForClient)
-    : {
-        entries: entriesForClient,
-        truncated: false,
-        omittedEntries: 0,
-        maxEntries: Array.isArray(entriesForClient) ? entriesForClient.length : 0,
-      };
+  const suppliedLedgerBounds = recordOrNull(meta.ledgerBounds);
+  const boundedEntries =
+    offlineExport && !suppliedLedgerBounds
+      ? boundDashboardStaticExportEntries(entriesForClient)
+      : {
+          entries: entriesForClient,
+          truncated: suppliedLedgerBounds?.truncated === true,
+          omittedEntries: Number(suppliedLedgerBounds?.omittedEntries || 0),
+          maxEntries: Number(
+            suppliedLedgerBounds?.maxEntries ??
+              (Array.isArray(entriesForClient) ? entriesForClient.length : 0),
+          ),
+        };
   const dataForClient = redactEvidenceObject(
     publicExport ? scrubDashboardPublicExport(boundedEntries.entries) : boundedEntries.entries,
     dashboardContext,
@@ -76,8 +85,9 @@ export function dashboardHtml(entries: LooseObject[], meta: LooseObject = {}) {
   const data = JSON.stringify(dataForClient).replace(/</g, "\\u003c");
   const metaForClient = stripDashboardCommandFields({
     ...meta,
+    payloadVersion: DASHBOARD_PAYLOAD_VERSION,
     ledgerBounds: offlineExport
-      ? {
+      ? suppliedLedgerBounds || {
           truncated: boundedEntries.truncated,
           omittedEntries: boundedEntries.omittedEntries,
           maxEntries: boundedEntries.maxEntries,
@@ -286,10 +296,4 @@ function transportArraySlice(value: unknown[], key: string, limit: number): unkn
 function isRunLikeRecord(value: unknown): boolean {
   const record = recordOrNull(value);
   return Boolean(record && ("run" in record || "metric" in record || "status" in record));
-}
-
-function recordOrNull(value: unknown): LooseObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as LooseObject)
-    : null;
 }

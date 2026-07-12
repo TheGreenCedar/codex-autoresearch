@@ -28,16 +28,16 @@ export function SignalStrip({ view, viewModel }: SignalStripProps) {
       data-view={view}
     >
       {signals.map((signal) => (
-        <article
-          className={`signal-item ${signal.tone}`}
-          key={signal.id}
-          title={`${signal.label}: ${signal.value}. ${signal.detail}`}
-          aria-label={`${signal.label}: ${signal.value}. ${signal.detail}`}
-        >
-          <span className="signal-label">{signal.label}</span>
-          <strong title={signal.value}>{truncate(signal.value, 34)}</strong>
-          <em title={signal.detail}>{truncate(signal.detail, 58)}</em>
-        </article>
+        <details className={`signal-item ${signal.tone}`} key={signal.id}>
+          <summary>
+            <span className="signal-label">{signal.label}</span>
+            <strong>{signal.value}</strong>
+          </summary>
+          <p>{signal.detail}</p>
+          {view === "audit" && signal.id === "watchdog" ? (
+            <small>Canonical term: watchdog</small>
+          ) : null}
+        </details>
       ))}
       {trustItems.length ? (
         <details className="trust-detail-strip">
@@ -278,9 +278,4 @@ function toList(value: unknown) {
     })
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function truncate(value: string, max: number) {
-  if (value.length <= max) return value;
-  return `${value.slice(0, Math.max(0, max - 3)).trim()}...`;
 }

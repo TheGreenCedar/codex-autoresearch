@@ -10,6 +10,7 @@ import {
   improvementPercent,
 } from "../../model";
 import { formatAsiValue } from "../../model/asi";
+import { sampleTimeline } from "../../model/timeline-sampling";
 import type { ChartModel, DashboardReadout, RunMetricBreakdown } from "../../types";
 
 export const VALUE_MODES = ["value", "percent"] as const;
@@ -20,6 +21,10 @@ export type AxisMode = "iteration" | "timestamp";
 export type SegmentedControlOption<T extends string> = readonly [T, string];
 export type MetricConstructionItem = { label: string; value: string; detail: string; id: string };
 export type TrendChartState = ReturnType<typeof buildTrendChartState>;
+
+export const MOBILE_CHART_MAX_POINTS = 10;
+export const DESKTOP_CHART_MAX_POINTS = 48;
+const CHART_POINT_MIN_GAP = 56;
 
 export const STATUS_COLORS: Record<string, string> = {
   keep: "#2BA8A2",
@@ -45,10 +50,10 @@ export interface ChartDatum {
   rollbackReason: string;
   nextActionHint: string;
   timestamp?: string | number;
+  baseline: boolean;
   best: boolean;
   latest: boolean;
   heldMetric: boolean;
-  label: string;
   breakdown: RunMetricBreakdown | null;
 }
 
@@ -111,12 +116,38 @@ export function buildChartData(chart: ChartModel, readout: DashboardReadout): Ch
         formatAsiValue(point.run.asi?.next_action_hint) ||
         formatAsiValue(point.run.asi?.nextAction),
       timestamp: point.run.timestamp,
+      baseline: readout.baselineRun?.run === point.run.run,
       best: point.best,
       latest: point.latest,
       heldMetric: point.heldMetric,
-      label: `#${point.run.run} ${metricDisplay} ${point.run.status}`,
       breakdown,
     };
+  });
+}
+
+export function chartPointBudget(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) return MOBILE_CHART_MAX_POINTS;
+  return Math.min(
+    DESKTOP_CHART_MAX_POINTS,
+    Math.max(MOBILE_CHART_MAX_POINTS, Math.floor(width / CHART_POINT_MIN_GAP)),
+  );
+}
+
+export function sampleTrendChartData(
+  chartData: ChartDatum[],
+  maxItems: number,
+  selectedRunNumber: number | null,
+): ChartDatum[] {
+  return sampleTimeline(chartData, {
+    anchors: [
+      chartData.find((point) => point.baseline),
+      chartData.find((point) => point.best),
+      chartData.find((point) => point.latest),
+    ],
+    key: (point) => point.runNumber,
+    maxItems,
+    selectedKey: selectedRunNumber,
+    status: (point) => point.status,
   });
 }
 

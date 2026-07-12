@@ -17,5 +17,3 @@ These commands are for a source checkout opened at `plugins/codex-autoresearch`.
 node scripts/autoresearch.mjs serve --cwd examples/demo-session
 node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/autoresearch-dashboard.review.html --showcase
 ```
-
-The committed `demo-session/autoresearch-dashboard.html` is a legacy fixture, not the current dashboard runboard or product-gate parity target.

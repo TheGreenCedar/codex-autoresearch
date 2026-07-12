@@ -25,6 +25,7 @@ const LOOP_PRIORITY = {
   approvalGate: 1.5,
   laneOrchestration: 1.75,
   laneCleanup: 2,
+  earlyWorkflowBlocker: 2.25,
   pendingPacket: 2.5,
   validationGate: 3,
   setupOrDecision: 4,
@@ -59,6 +60,22 @@ function loopAction(
 export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContractStatus {
   const blockers: LoopAction[] = [];
   const warnings: LoopAction[] = [];
+  const progress = objectValue(objectValue(envelope.experimentEconomics)?.progress);
+  if (progress?.terminationFailed === true || progress?.exitState === "termination_failed") {
+    const termination = objectValue(progress.termination);
+    const pid = Number.isSafeInteger(Number(termination?.pid))
+      ? ` PID ${Number(termination?.pid)}`
+      : "";
+    blockers.push(
+      loopAction(
+        "termination-failed",
+        LOOP_PRIORITY.essentialSafety,
+        `Process-tree termination${pid} could not be proven. Verify the process and descendants are absent before clearing retained progress.`,
+        "",
+        ["experimentEconomics", "progress", "terminationFailed"],
+      ),
+    );
+  }
   const goalContract = objectValue(envelope.goalContract);
   if (goalContract?.blocksPacket === true || goalContract?.blocksFinalization === true) {
     const goalBlockers = stringList(goalContract.blockers, []);
@@ -265,6 +282,39 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
         )} before rerunning an expensive packet.`,
         salvageCandidate.command,
         ["partialResults"],
+      ),
+    );
+  }
+
+  const economicsWarnings = arrayValue(objectValue(envelope.experimentEconomics)?.warnings).map(
+    objectValue,
+  );
+  const timeoutMismatch = economicsWarnings.find(
+    (warning) => warning?.code === "outer_timeout_shorter_than_inner",
+  );
+  if (timeoutMismatch) {
+    blockers.push(
+      loopAction(
+        "benchmark-mismatch",
+        LOOP_PRIORITY.earlyWorkflowBlocker,
+        timeoutMismatch.recommendation || timeoutMismatch.message,
+        timeoutMismatch.command,
+        ["experimentEconomics", "outer_timeout_shorter_than_inner"],
+      ),
+    );
+  }
+
+  const staleProgress = economicsWarnings.find((warning) => warning?.code === "stale_progress");
+  if (staleProgress) {
+    blockers.push(
+      loopAction(
+        "active-progress",
+        LOOP_PRIORITY.pendingPacket,
+        staleProgress.recommendation ||
+          staleProgress.message ||
+          "Inspect active packet progress before restarting the packet.",
+        staleProgress.command,
+        ["experimentEconomics", "progress"],
       ),
     );
   }

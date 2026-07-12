@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   access,
   mkdir,
@@ -29,7 +30,16 @@ import {
   statusHash,
 } from "../lib/session-core.js";
 import { buildCheapFinalizationPressure } from "../lib/session-read-model.js";
-import { parseMetricLines, runProcess, runShell } from "../lib/runner.js";
+import {
+  authoritativeWindowsIdentityVerification,
+  parseMetricLines,
+  runProcess,
+  runShell,
+  terminateAfterTimeout,
+  terminateProcessTree,
+  verifyWindowsProcessIdentities,
+} from "../lib/runner.js";
+import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { isPublicCatalogAddress } from "../lib/recipes.js";
 import {
   isMetricEligibleStatus,
@@ -66,7 +76,11 @@ import {
   progressSnapshotFromRun,
   staleProgressReason,
 } from "../lib/runner-progress.js";
-import { assertSafeWriteTarget, checkedAtomicWriteFile } from "../lib/checked-write.js";
+import {
+  assertSafeWriteTarget,
+  checkedAtomicWriteFile,
+  checkedReplaceDirectory,
+} from "../lib/checked-write.js";
 import {
   sessionMutationLockLocation,
   sessionRecoveryLockPath,
@@ -154,6 +168,238 @@ test("runner minimal env mode keeps explicit env without inheriting unrelated pa
   });
 });
 
+test("runner proves a stubborn child and grandchild are gone before timeout resolves", async () => {
+  await withTempDir("stubborn-process-tree", async (dir) => {
+    const fixture = path.join(process.cwd(), "tests", "fixtures", "stubborn-process-tree.mjs");
+    const marker = path.join(dir, "heartbeat.txt");
+    const command = `${quoteForShell(process.execPath)} ${quoteForShell(fixture)} root ${quoteForShell(marker)}`;
+    let result: Awaited<ReturnType<typeof runShell>> | null = null;
+    let fixturePids: number[] = [];
+    try {
+      result = await runShell(command, dir, 1);
+      fixturePids = processTreeFixturePids(result.fullOutput);
+
+      assert.equal(result.timedOut, true);
+      assert.equal(result.terminationFailed, false, JSON.stringify(result.termination));
+      assert.equal(result.termination?.proven, true);
+      assert.equal(result.termination?.escalated, true);
+      assert.match(result.output, /partial-output-before-timeout/);
+      assert.match(result.fullOutput, /ARTIFACT heartbeat=/);
+      assert.equal(fixturePids.length, 3, result.fullOutput);
+      for (const pid of fixturePids) assert.equal(processIsAlive(pid), false, `PID ${pid}`);
+      for (const pid of fixturePids) {
+        assert.equal(result.termination?.trackedPids.includes(pid), true, `untracked PID ${pid}`);
+      }
+
+      const before = await readFile(marker, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(await readFile(marker, "utf8"), before);
+    } finally {
+      await forceCleanupPids(
+        result?.termination?.pid ?? null,
+        [
+          ...fixturePids,
+          ...(result?.termination?.trackedPids || []),
+          ...(result?.termination?.remainingPids || []),
+        ],
+        true,
+      );
+    }
+  });
+});
+
+test(
+  "runner proves concurrent stubborn Windows process trees are gone after their roots exit",
+  { skip: process.platform !== "win32" },
+  async () => {
+    await withTempDir("concurrent-stubborn-process-trees", async (dir) => {
+      const fixture = path.join(process.cwd(), "tests", "fixtures", "stubborn-process-tree.mjs");
+      let results: Awaited<ReturnType<typeof runShell>>[] = [];
+      try {
+        results = await Promise.all(
+          Array.from({ length: 8 }, (_, index) => {
+            const marker = path.join(dir, `heartbeat-${index}.txt`);
+            const command = `${quoteForShell(process.execPath)} ${quoteForShell(fixture)} root ${quoteForShell(marker)}`;
+            return runShell(command, dir, 1);
+          }),
+        );
+
+        for (const result of results) {
+          const fixturePids = processTreeFixturePids(result.fullOutput);
+          assert.equal(result.timedOut, true);
+          assert.equal(result.terminationFailed, false, JSON.stringify(result.termination));
+          assert.equal(result.termination?.proven, true);
+          assert.equal(fixturePids.length, 3, result.fullOutput);
+          for (const pid of fixturePids) {
+            assert.equal(
+              result.termination?.trackedPids.includes(pid),
+              true,
+              `untracked PID ${pid}`,
+            );
+            assert.equal(isStubbornFixtureProcess(pid), false, `fixture PID ${pid}`);
+          }
+        }
+      } finally {
+        await Promise.all(
+          results.map((result) =>
+            forceCleanupPids(
+              result.termination?.pid ?? null,
+              [
+                ...processTreeFixturePids(result.fullOutput),
+                ...(result.termination?.trackedPids || []),
+                ...(result.termination?.remainingPids || []),
+              ],
+              true,
+            ),
+          ),
+        );
+      }
+    });
+  },
+);
+
+test("a non-resolving terminator is bounded and remains an explicit loop-contract blocker", async () => {
+  let result: Awaited<ReturnType<typeof runProcess>> | null = null;
+  try {
+    result = await runProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: process.cwd(),
+      timeoutSeconds: 1,
+      terminationTimeoutMs: 50,
+      terminateProcessTree: async () => await new Promise(() => {}),
+    });
+
+    assert.equal(result.terminationFailed, true);
+    assert.equal(result.termination?.reason, "termination_handler_timeout");
+    const progress = progressSnapshotFromRun({ run: result });
+    assert.equal(progress.exitState, "termination_failed");
+    const contract = buildLoopContractStatus({ experimentEconomics: { progress } });
+    assert.equal(contract.canRunNextPacket, false);
+    assert.equal(contract.blockers[0]?.kind, "termination-failed");
+    assert.match(contract.blockers[0]?.reason || "", new RegExp(String(result.termination?.pid)));
+  } finally {
+    await forceCleanupPids(
+      result?.termination?.pid ?? null,
+      result?.termination?.trackedPids || [],
+    );
+  }
+});
+
+test("termination wrapper rejects an invalid hook result", async () => {
+  const result = await terminateAfterTimeout(4242, async () => null as never, 50);
+  assert.equal(result.proven, false);
+  assert.equal(result.reason, "termination_handler_invalid");
+  assert.deepEqual(result.remainingPids, [4242]);
+});
+
+test("termination wrapper aborts a timed-out hook before it can mutate later", async () => {
+  let observedAbort = false;
+  let mutatedAfterTimeout = false;
+  const result = await terminateAfterTimeout(
+    4242,
+    async (pid, signal) => {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          observedAbort = true;
+          resolve();
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      if (!signal?.aborted) mutatedAfterTimeout = true;
+      return {
+        attempted: true,
+        escalated: false,
+        method: "none",
+        pid: pid ?? null,
+        platform: process.platform,
+        proven: false,
+        reason: "hook_finished",
+        remainingPids: pid ? [pid] : [],
+        trackedPids: pid ? [pid] : [],
+      };
+    },
+    10,
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(result.reason, "termination_handler_timeout");
+  assert.equal(observedAbort, true);
+  assert.equal(mutatedAfterTimeout, false);
+});
+
+test("Windows identity-query failure keeps every candidate PID unproven", async () => {
+  const requested: number[][] = [];
+  const result = await verifyWindowsProcessIdentities(
+    [
+      { pid: 41, started: "first" },
+      { pid: 42, started: "second" },
+    ],
+    [41, 42],
+    async (pids) => {
+      requested.push(pids);
+      return {
+        identities: new Map(),
+        proven: false,
+        reason: "windows_process_identity_enumeration_failed",
+      };
+    },
+  );
+
+  assert.deepEqual(requested, [[41, 42]]);
+  assert.equal(result.proven, false);
+  assert.equal(result.reason, "windows_process_identity_enumeration_failed");
+  assert.deepEqual(result.pids, [41, 42]);
+});
+
+test("transient pre-force identity-query failure yields to final absence proof", async () => {
+  const entries = [
+    { pid: 41, started: "first" },
+    { pid: 42, started: "second" },
+  ];
+  const preForceFailure = await verifyWindowsProcessIdentities(entries, [41, 42], async () => ({
+    identities: new Map(),
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  }));
+  const finalAbsence = await verifyWindowsProcessIdentities(entries, [41, 42], async () => ({
+    identities: new Map(),
+    proven: true,
+    reason: "windows_process_identities_enumerated",
+  }));
+
+  assert.equal(preForceFailure.proven, false);
+  assert.deepEqual(authoritativeWindowsIdentityVerification([41, 42], finalAbsence), {
+    pids: [],
+    proven: true,
+    reason: "windows_process_identities_enumerated",
+  });
+  assert.deepEqual(authoritativeWindowsIdentityVerification([], null), {
+    pids: [],
+    proven: true,
+    reason: "windows_process_identities_absent",
+  });
+});
+
+test("final Windows identity-query failure remains fail closed", () => {
+  const finalFailure = {
+    pids: [41, 42],
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  };
+  assert.deepEqual(authoritativeWindowsIdentityVerification([41, 42], finalFailure), {
+    pids: [41, 42],
+    proven: false,
+    reason: "windows_process_identity_enumeration_failed",
+  });
+});
+
 test("remote catalog address validation accepts only globally routable IPs", () => {
   for (const address of [
     "127.0.0.1",
@@ -163,10 +409,14 @@ test("remote catalog address validation accepts only globally routable IPs", () 
     "203.0.113.1",
     "::1",
     "::ffff:7f00:1",
+    "::ffff:127.0.0.1",
+    "::ffff:8.8.8.8",
     "2001:db8::1",
     "fc00::1",
     "fe80::1",
+    "fe80::1%eth0",
     "ff02::1",
+    "not-an-ip",
   ]) {
     assert.equal(isPublicCatalogAddress(address), false, address);
   }
@@ -240,6 +490,63 @@ test("checked atomic writes remove temporary files after write failure", async (
     assert.deepEqual(
       (await readdir(dir)).filter((entry) => entry.endsWith(".tmp")),
       [],
+    );
+  });
+});
+
+test("research directory replacement restores the original after a post-backup failure", async () => {
+  await withTempDir("checked-directory-rollback", async (dir) => {
+    const target = path.join(dir, "autoresearch.research");
+    const source = path.join(dir, "preserved-research");
+    await mkdir(target);
+    await mkdir(source);
+    await writeFile(path.join(target, "notes.md"), "original\n");
+    await writeFile(path.join(source, "notes.md"), "replacement\n");
+
+    await assert.rejects(
+      checkedReplaceDirectory(dir, target, source, {
+        onPhase: async (phase) => {
+          if (phase === "after-all-backups") throw new Error("injected research swap failure");
+        },
+      }),
+      /injected research swap failure/,
+    );
+    assert.equal(await readFile(path.join(target, "notes.md"), "utf8"), "original\n");
+    assert.deepEqual(
+      (await readdir(dir)).filter((entry) => entry.includes(".codex-autoresearch-")),
+      [],
+    );
+
+    await checkedReplaceDirectory(dir, target, source);
+    assert.equal(await readFile(path.join(target, "notes.md"), "utf8"), "replacement\n");
+  });
+});
+
+test("research directory replacement canonicalizes an aliased root and target together", async (t) => {
+  await withTempDir("checked-directory-aliased-root", async (dir) => {
+    const realParent = path.join(dir, "real-parent");
+    const aliasParent = path.join(dir, "alias-parent");
+    const realRoot = path.join(realParent, "session");
+    const source = path.join(dir, "preserved-research");
+    await mkdir(path.join(realRoot, "autoresearch.research"), { recursive: true });
+    await mkdir(source);
+    try {
+      await symlink(realParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      t.skip(`directory aliases are unavailable: ${String(error)}`);
+      return;
+    }
+    const aliasedRoot = path.join(aliasParent, "session");
+    const aliasedTarget = path.join(aliasedRoot, "autoresearch.research");
+    await writeFile(path.join(aliasedTarget, "notes.md"), "original\n");
+    await writeFile(path.join(source, "notes.md"), "replacement\n");
+
+    await checkedReplaceDirectory(aliasedRoot, aliasedTarget, source);
+
+    assert.equal(await readFile(path.join(aliasedTarget, "notes.md"), "utf8"), "replacement\n");
+    assert.equal(
+      await readFile(path.join(realRoot, "autoresearch.research", "notes.md"), "utf8"),
+      "replacement\n",
     );
   });
 });
@@ -354,6 +661,8 @@ test("core metric helpers do not coerce invalid values to numeric zero", async (
   assert.equal(finiteMetric("0"), 0);
   assert.equal(finiteMetric(" 0 "), 0);
   assert.equal(finiteMetric("-1.5e+2"), -150);
+  assert.equal(finiteMetric(null), null);
+  assert.equal(finiteMetric(undefined), null);
   assert.equal(finiteMetric(""), null);
   assert.equal(finiteMetric("   "), null);
   assert.equal(finiteMetric(false), null);
@@ -1753,3 +2062,73 @@ test("analyzeExperimentEconomics converts dashed test-timeout millisecond values
   );
   assert.equal(secondsWarning?.details?.innerTimeout, 5);
 });
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      String(error.code) === "ESRCH"
+    );
+  }
+}
+
+function processTreeFixturePids(output: string): number[] {
+  return ["ROOT_PID", "SPAWNED_CHILD_PID", "CHILD_PID", "SPAWNED_GRANDCHILD_PID", "GRANDCHILD_PID"]
+    .map((name) => Number(output.match(new RegExp(`(?:^|\\n)${name}=(\\d+)`))?.[1]))
+    .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+    .filter((pid, index, values) => values.indexOf(pid) === index);
+}
+
+async function forceCleanupPids(
+  rootPid: number | null,
+  pids: number[],
+  fixtureOnly = false,
+): Promise<void> {
+  if (rootPid) await terminateProcessTree(rootPid).catch(() => null);
+  for (const pid of [...new Set(pids)].reverse()) {
+    if (!processIsAlive(pid)) continue;
+    if (fixtureOnly && !isStubbornFixtureProcess(pid)) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  if (fixtureOnly) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const pid of new Set(pids)) {
+      assert.equal(isStubbornFixtureProcess(pid), false, `fixture PID ${pid} survived cleanup`);
+    }
+  }
+}
+
+function isStubbornFixtureProcess(pid: number): boolean {
+  if (!processIsAlive(pid)) return false;
+  try {
+    const command =
+      process.platform === "win32"
+        ? execFileSync(
+            "powershell.exe",
+            [
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`,
+            ],
+            { encoding: "utf8", timeout: 2000, windowsHide: true },
+          )
+        : execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+            encoding: "utf8",
+            timeout: 2000,
+          });
+    return command.includes("stubborn-process-tree.mjs");
+  } catch {
+    return false;
+  }
+}

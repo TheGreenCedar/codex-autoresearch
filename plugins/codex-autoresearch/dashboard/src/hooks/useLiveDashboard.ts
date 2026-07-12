@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { validateLiveDashboardPayload } from "../bootstrap";
 import { formatDisplayTime } from "../model";
 import type { DashboardEntry, DashboardMeta, DashboardMode, DashboardViewModel } from "../types";
 
@@ -51,7 +52,6 @@ interface UseLiveDashboardArgs {
   setEntries: Dispatch<SetStateAction<DashboardEntry[]>>;
   setMeta: Dispatch<SetStateAction<DashboardMeta>>;
   setViewModel: Dispatch<SetStateAction<DashboardViewModel>>;
-  viewModel: DashboardViewModel;
 }
 
 export function useLiveDashboard({
@@ -65,31 +65,32 @@ export function useLiveDashboard({
   const [liveStatus, setLiveStatus] = useState<LiveStatus>(() => liveStatusFor(mode, meta));
   const [liveEnabled, setLiveEnabled] = useState(liveRefresh);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "error">("idle");
-  const [lastError, setLastError] = useState<string | null>(null);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const latestRefreshId = useRef(0);
+  const [lastGoodAt, setLastGoodAt] = useState<string | null>(() => meta.generatedAt || null);
+  const lastGoodAtRef = useRef<string | null>(meta.generatedAt || null);
   const activeAbortController = useRef<AbortController | null>(null);
   const lastAutoAnnouncementAt = useRef(0);
 
   const refreshLiveData = useCallback(
     async (source: "auto" | "manual" = "manual") => {
       if (typeof fetch !== "function") {
+        setRefreshState("error");
         setLiveStatus(refreshUnavailableStatus());
         return;
       }
-      const refreshId = latestRefreshId.current + 1;
-      latestRefreshId.current = refreshId;
-      activeAbortController.current?.abort();
+      if (activeAbortController.current) return;
       const controller = typeof AbortController === "function" ? new AbortController() : null;
       activeAbortController.current = controller;
-      const isLatestRefresh = () => refreshId === latestRefreshId.current;
+      let settledState: "idle" | "error" = "idle";
       try {
         setRefreshState("refreshing");
-        setLastError(null);
+        if (source === "manual") {
+          setLiveStatus(refreshingStatus(lastGoodAtRef.current));
+        }
         const snapshot = await fetchLiveDashboardSnapshot(controller?.signal ?? null);
-        if (!isLatestRefresh()) return;
         setEntries(snapshot.entries);
         setViewModel(snapshot.viewModel);
+        lastGoodAtRef.current = snapshot.generatedAt;
+        setLastGoodAt(snapshot.generatedAt);
         setMeta((current) => ({
           ...current,
           viewModel: snapshot.viewModel,
@@ -100,18 +101,17 @@ export function useLiveDashboard({
           if (source === "auto") lastAutoAnnouncementAt.current = Date.now();
           setLiveStatus(refreshSuccessStatus(refreshDone, snapshot.generatedAt));
         }
-        setRefreshState("idle");
-        setRefreshGeneration((value) => value + 1);
       } catch (error) {
-        if (!isLatestRefresh() || isAbortError(error)) return;
-        const message = error instanceof Error ? error.message : String(error);
-        setLiveStatus(refreshFailureStatus(liveRefresh, message));
-        setRefreshState("error");
-        setLastError(message);
+        if (!isAbortError(error)) {
+          const message = error instanceof Error ? error.message : String(error);
+          setLiveStatus(refreshFailureStatus(liveRefresh, message, lastGoodAtRef.current));
+          settledState = "error";
+        }
       } finally {
         if (activeAbortController.current === controller) {
           activeAbortController.current = null;
         }
+        setRefreshState(settledState);
       }
     },
     [liveRefresh, refreshDone, setEntries, setMeta, setViewModel],
@@ -129,13 +129,21 @@ export function useLiveDashboard({
   }, [liveEnabled, meta.refreshMs, liveRefresh, refreshLiveData]);
 
   return {
+    lastGoodAt,
     liveEnabled,
     liveStatus,
     refreshState,
-    lastError,
-    refreshGeneration,
     refreshLiveData,
     setLiveEnabled,
+  };
+}
+
+function refreshingStatus(lastGoodAt: string | null): LiveStatus {
+  return {
+    title: "Refreshing readout…",
+    detail: lastGoodAt
+      ? `Current evidence stays visible. Last validated ${formatDisplayTime(lastGoodAt)}.`
+      : "Current evidence stays visible until the refresh is validated.",
   };
 }
 
@@ -161,12 +169,18 @@ async function fetchLiveDashboardSnapshot(
       throw failure;
     }
 
-    const payload = (await viewModelResponse.json()) as DashboardViewModel;
-    const embeddedEntries = entriesFromViewModel(payload);
+    let rawPayload: unknown;
+    try {
+      rawPayload = await viewModelResponse.json();
+    } catch {
+      throw new Error("Live readout payload is not valid JSON.");
+    }
+    const payload = validateLiveDashboardPayload(rawPayload);
+    if (!payload.ok) throw new Error(payload.reason);
     return {
-      entries: embeddedEntries ?? [],
+      entries: payload.entries,
       generatedAt: new Date().toISOString(),
-      viewModel: payload || {},
+      viewModel: payload.viewModel,
     };
   }
 
@@ -177,21 +191,6 @@ function noStoreRequest(signal: AbortSignal | null): RequestInit {
   return signal ? { cache: "no-store", signal } : { cache: "no-store" };
 }
 
-function entriesFromViewModel(
-  payload: DashboardViewModel | null | undefined,
-): DashboardEntry[] | null {
-  if (!payload) return null;
-  for (const key of ["ledgerEntries", "entries", "dashboardEntries"]) {
-    const value = payload[key];
-    if (Array.isArray(value)) return value.filter(isDashboardEntry);
-  }
-  return null;
-}
-
-function isDashboardEntry(value: unknown): value is DashboardEntry {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveStatus {
   return {
     title: refreshDone,
@@ -199,17 +198,24 @@ function refreshSuccessStatus(refreshDone: string, generatedAt: string): LiveSta
   };
 }
 
-function refreshFailureStatus(liveRefresh: boolean, message: string): LiveStatus {
+function refreshFailureStatus(
+  liveRefresh: boolean,
+  message: string,
+  lastGoodAt: string | null,
+): LiveStatus {
+  const retained = lastGoodAt
+    ? `Showing the last known valid readout, validated ${formatDisplayTime(lastGoodAt)}.`
+    : "Showing the initial validated readout as the last known valid readout.";
   return {
     title: liveRefresh ? "Live refresh failed" : "Snapshot refresh failed",
-    detail: message,
+    detail: `${retained} ${message} Restart the Autoresearch CLI: serve --cwd <project>. Then reload.`,
   };
 }
 
 function refreshUnavailableStatus(): LiveStatus {
   return {
     title: "Snapshot refresh unavailable",
-    detail: "This browser context does not expose fetch.",
+    detail: "Showing the last known valid readout. This browser context does not expose fetch.",
   };
 }
 

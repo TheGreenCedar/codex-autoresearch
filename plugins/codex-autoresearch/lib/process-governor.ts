@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
 
 export interface ResourceBudgets {
@@ -21,10 +22,31 @@ export interface ResourcePreflightStatus {
 }
 
 export interface ResourceResidueFact {
+  identity: string;
   reason: string;
-  status: "stale-process-residue";
+  status: "invalid-lifecycle" | "process-active" | "termination-failed";
   timestamp: string;
-  type: ResourceResidueType;
+  type: "process_lifecycle";
+}
+
+export type ProcessLifecycleEvent =
+  | "started"
+  | "observed-live"
+  | "terminated"
+  | "termination-failed";
+
+export interface ProcessLifecycleRecord extends UnknownRecord {
+  at: string;
+  event: ProcessLifecycleEvent;
+  identity: {
+    packetId: string;
+    processId: string;
+  };
+  termination?: {
+    proven: boolean;
+    reason: string;
+  };
+  type: "process_lifecycle";
 }
 
 const DEFAULT_BUDGETS: ResourceBudgets = {
@@ -36,24 +58,107 @@ const DEFAULT_BUDGETS: ResourceBudgets = {
   pollBudget: 80,
 };
 
-const SAFE_LEDGER_TYPES = [
-  "approval",
-  "autoresearch.log.pending",
-  "compacted",
-  "config",
-  "event_msg",
-  "lane_result",
-  "process_manager",
-  "research_fanout",
-  "response_item",
-  "run",
-  "session_meta",
-  "turn_context",
-] as const;
-type SafeLedgerEntryType = (typeof SAFE_LEDGER_TYPES)[number];
-type ResourceResidueType = SafeLedgerEntryType | "ledger-entry";
-const SAFE_LEDGER_TYPE_SET: ReadonlySet<string> = new Set(SAFE_LEDGER_TYPES);
 const ISO_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+const PROCESS_IDENTITY_MAX_LENGTH = 160;
+const PROCESS_IDENTITY_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const PROCESS_LIFECYCLE_EVENTS = new Set<ProcessLifecycleEvent>([
+  "started",
+  "observed-live",
+  "terminated",
+  "termination-failed",
+]);
+export const PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT = 256;
+const PROCESS_LIFECYCLE_PROJECTION_INVALID_LIMIT = 5;
+
+export interface ProcessLifecycleProjection {
+  records: UnknownRecord[];
+  trackedIdentityCount: number;
+  invalidRecordCount: number;
+  overflowCount: number;
+  incomplete: boolean;
+  maxTrackedIdentities: number;
+}
+
+export interface ProcessLifecycleAccumulator {
+  add(entry: unknown): void;
+  snapshot(): ProcessLifecycleProjection;
+}
+
+export function createProcessLifecycleAccumulator({
+  maxTrackedIdentities = PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+}: {
+  maxTrackedIdentities?: number;
+} = {}): ProcessLifecycleAccumulator {
+  const requestedLimit = Math.floor(Number(maxTrackedIdentities) || 0);
+  const limit = Math.max(
+    1,
+    Math.min(
+      PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+      requestedLimit || PROCESS_LIFECYCLE_PROJECTION_IDENTITY_LIMIT,
+    ),
+  );
+  const blockingByIdentity = new Map<string, ParsedProcessLifecycleRecord>();
+  const invalidRecords: UnknownRecord[] = [];
+  let invalidRecordCount = 0;
+  let overflowCount = 0;
+  let overflowAt = "";
+
+  const accept = (lifecycle: ParsedProcessLifecycleRecord) => {
+    if (lifecycle.event === "terminated") {
+      blockingByIdentity.delete(lifecycle.identityKey);
+      return;
+    }
+    if (blockingByIdentity.has(lifecycle.identityKey)) {
+      blockingByIdentity.set(lifecycle.identityKey, lifecycle);
+      return;
+    }
+    if (blockingByIdentity.size >= limit) {
+      overflowCount += 1;
+      overflowAt ||= lifecycle.timestamp;
+      return;
+    }
+    blockingByIdentity.set(lifecycle.identityKey, lifecycle);
+  };
+
+  return {
+    add(entry: unknown) {
+      if (isUnknownRecord(entry) && entry.type === "process_lifecycle") {
+        const parsed = parseProcessLifecycleRecord(entry);
+        if (parsed) accept(parsed);
+        else {
+          invalidRecordCount += 1;
+          if (invalidRecords.length < PROCESS_LIFECYCLE_PROJECTION_INVALID_LIMIT) {
+            invalidRecords.push(
+              processLifecycleProjectionInvalidRecord(
+                safeLedgerTimestamp(entry.at),
+                invalidRecordCount,
+              ),
+            );
+          }
+        }
+        return;
+      }
+      for (const lifecycle of processLifecycleRecordsFromEntry(entry)) accept(lifecycle);
+    },
+    snapshot() {
+      const incomplete = overflowCount > 0;
+      return {
+        records: [
+          ...invalidRecords,
+          ...(incomplete
+            ? [processLifecycleProjectionIncompleteRecord(overflowCount, overflowAt)]
+            : []),
+          ...[...blockingByIdentity.values()].map((record) => record.projectionRecord),
+        ],
+        trackedIdentityCount: blockingByIdentity.size,
+        invalidRecordCount,
+        overflowCount,
+        incomplete,
+        maxTrackedIdentities: limit,
+      };
+    },
+  };
+}
 
 export function buildResourcePreflight({
   activeProcesses = 0,
@@ -109,9 +214,14 @@ export function buildResourcePreflight({
       `Shell polling reached ${polls} polls; inspect progress instead of repeating polls.`,
     );
   }
+  if (hasLegacyProcessResidueProse(entries)) {
+    warnings.push(
+      "Legacy process-residue prose was found and is warning-only; record typed process_lifecycle events for process trust decisions.",
+    );
+  }
   if (residue.length > 0) {
     blockers.push(
-      "Stale process-manager or reboot residue is present; reconcile active process state before another packet.",
+      "Typed process lifecycle state reports an active or unproven process; reconcile it before another packet.",
     );
   }
 
@@ -131,23 +241,304 @@ export function buildResourcePreflight({
 }
 
 export function classifyProcessResidue(entries: unknown[]): ResourceResidueFact[] {
-  const residue: ResourceResidueFact[] = [];
-  for (const entry of entries) {
-    const text = safeStringify(entry).toLowerCase();
-    if (
-      /\b(process[-_ ]?manager|active_process|pid)\b/.test(text) &&
-      /\b(stale|orphan|reboot|residue|zombie|unreconciled)\b/.test(text)
-    ) {
-      const record = isUnknownRecord(entry) ? entry : {};
-      residue.push({
-        type: safeLedgerType(record.type),
-        status: "stale-process-residue",
-        timestamp: safeLedgerTimestamp(record.timestamp),
-        reason: "ledger entry matched process residue keywords",
-      });
+  const latestByIdentity = new Map<string, ParsedProcessLifecycleRecord>();
+  const invalid: ResourceResidueFact[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (isUnknownRecord(entry) && entry.type === "process_lifecycle") {
+      if (entry.projectionInvalid === true) {
+        invalid.push({
+          type: "process_lifecycle",
+          identity: publicProcessIdentity(`invalid-bounded-process-lifecycle-${index}`),
+          status: "invalid-lifecycle",
+          timestamp: safeLedgerTimestamp(entry.at),
+          reason: "typed process lifecycle entry is malformed or contradicts termination proof",
+        });
+        continue;
+      }
+      if (entry.projectionIncomplete === true) {
+        invalid.push({
+          type: "process_lifecycle",
+          identity: publicProcessIdentity("bounded-process-lifecycle-projection"),
+          status: "invalid-lifecycle",
+          timestamp: safeLedgerTimestamp(entry.at),
+          reason:
+            "bounded process lifecycle projection is incomplete; inspect full state or ledger-doctor before trusting process clearance",
+        });
+        continue;
+      }
+      const parsed = parseProcessLifecycleRecord(entry);
+      if (!parsed) {
+        invalid.push({
+          type: "process_lifecycle",
+          identity: publicProcessIdentity(`invalid-ledger-entry\0${index}`),
+          status: "invalid-lifecycle",
+          timestamp: safeLedgerTimestamp(entry.at),
+          reason: "typed process lifecycle entry is malformed or contradicts termination proof",
+        });
+        continue;
+      }
+      latestByIdentity.set(parsed.identityKey, parsed);
+      continue;
+    }
+    for (const lifecycle of processLifecycleRecordsFromEntry(entry)) {
+      latestByIdentity.set(lifecycle.identityKey, lifecycle);
     }
   }
-  return uniqueResidue(residue).slice(0, 5);
+  return [
+    ...invalid,
+    ...[...latestByIdentity.values()]
+      .filter(
+        (record) =>
+          record.event === "started" ||
+          record.event === "observed-live" ||
+          record.event === "termination-failed",
+      )
+      .map((record) => ({
+        type: "process_lifecycle" as const,
+        identity: publicProcessIdentity(record.identityKey),
+        status:
+          record.event === "termination-failed"
+            ? ("termination-failed" as const)
+            : ("process-active" as const),
+        timestamp: record.timestamp,
+        reason:
+          record.event === "termination-failed"
+            ? "latest typed lifecycle event reports unproven termination"
+            : "latest typed lifecycle event reports an active process",
+      })),
+  ].slice(0, 5);
+}
+
+export function buildProcessLifecycleRecord({
+  packetId,
+  processId,
+  event,
+  at = new Date().toISOString(),
+  termination,
+}: {
+  packetId: string;
+  processId: string;
+  event: ProcessLifecycleEvent;
+  at?: string;
+  termination?: unknown;
+}): ProcessLifecycleRecord {
+  const identity = processIdentity(packetId, processId);
+  if (!identity) throw new Error("Process lifecycle identity is invalid.");
+  if (!PROCESS_LIFECYCLE_EVENTS.has(event)) throw new Error("Process lifecycle event is invalid.");
+  if (!ISO_UTC_TIMESTAMP_PATTERN.test(at))
+    throw new Error("Process lifecycle timestamp is invalid.");
+  if (termination !== undefined) {
+    if (
+      !isUnknownRecord(termination) ||
+      typeof termination.proven !== "boolean" ||
+      typeof termination.reason !== "string"
+    ) {
+      throw new Error("Process lifecycle termination evidence is invalid.");
+    }
+    if (event !== "terminated" && event !== "termination-failed") {
+      throw new Error("Only terminal lifecycle events may carry termination evidence.");
+    }
+  }
+  const record: ProcessLifecycleRecord = {
+    type: "process_lifecycle",
+    identity: { packetId, processId },
+    event,
+    at,
+  };
+  const safeTermination = redactedTerminationSummary(termination);
+  if (event === "terminated" && safeTermination?.proven === false) {
+    throw new Error("A terminated lifecycle event cannot carry unproven termination evidence.");
+  }
+  if (event === "termination-failed" && safeTermination?.proven === true) {
+    throw new Error(
+      "A termination-failed lifecycle event cannot carry proven termination evidence.",
+    );
+  }
+  if (safeTermination) record.termination = safeTermination;
+  return record;
+}
+
+export function rekeyProcessLifecycleRecords(
+  value: unknown,
+  packetId: string,
+): ProcessLifecycleRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const source = isUnknownRecord(item) ? item : {};
+    const identity = isUnknownRecord(source.identity) ? source.identity : {};
+    return buildProcessLifecycleRecord({
+      packetId,
+      processId: String(identity.processId || ""),
+      event: String(source.event || "") as ProcessLifecycleEvent,
+      at: String(source.at || ""),
+      ...(source.termination ? { termination: source.termination } : {}),
+    });
+  });
+}
+
+interface ParsedProcessLifecycleRecord {
+  event: ProcessLifecycleEvent;
+  identityKey: string;
+  projectionRecord: ProcessLifecycleRecord;
+  timestamp: string;
+}
+
+function processLifecycleRecordsFromEntry(entry: unknown): ParsedProcessLifecycleRecord[] {
+  if (!isUnknownRecord(entry)) return [];
+  const packetEvidence = isUnknownRecord(entry.packetEvidence) ? entry.packetEvidence : {};
+  const progressSnapshot = isUnknownRecord(packetEvidence.progressSnapshot)
+    ? packetEvidence.progressSnapshot
+    : null;
+  if (!progressSnapshot) return [];
+  const packetId = stringValue(progressSnapshot.packetId);
+  const processId = "packet";
+  const identityKey = processIdentity(packetId, processId);
+  const event = progressLifecycleEvent(progressSnapshot);
+  if (!identityKey || !event) return [];
+  const timestamp = safeLedgerTimestamp(entry.timestamp || progressSnapshot.startedAt);
+  return [
+    {
+      identityKey,
+      event,
+      projectionRecord: {
+        type: "process_lifecycle",
+        identity: { packetId, processId },
+        event,
+        at: timestamp || "1970-01-01T00:00:00.000Z",
+      },
+      timestamp,
+    },
+  ];
+}
+
+function parseProcessLifecycleRecord(entry: unknown): ParsedProcessLifecycleRecord | null {
+  if (!isUnknownRecord(entry) || entry.type !== "process_lifecycle") return null;
+  const identity = isUnknownRecord(entry.identity) ? entry.identity : {};
+  const identityKey = processIdentity(identity.packetId, identity.processId);
+  const event = processLifecycleEvent(entry.event);
+  const timestamp = safeLedgerTimestamp(entry.at);
+  if (!identityKey || !event || !timestamp) return null;
+  const terminationPresent = Object.hasOwn(entry, "termination");
+  const termination = terminationPresent ? entry.termination : null;
+  if (
+    terminationPresent &&
+    (!isUnknownRecord(termination) ||
+      typeof termination.proven !== "boolean" ||
+      typeof termination.reason !== "string" ||
+      !/^[a-z0-9_]{0,160}$/.test(termination.reason))
+  ) {
+    return null;
+  }
+  if (terminationPresent && event !== "terminated" && event !== "termination-failed") return null;
+  if (event === "terminated" && isUnknownRecord(termination) && termination.proven === false) {
+    return null;
+  }
+  if (
+    event === "termination-failed" &&
+    isUnknownRecord(termination) &&
+    termination.proven === true
+  ) {
+    return null;
+  }
+  return {
+    identityKey,
+    event,
+    projectionRecord: {
+      type: "process_lifecycle",
+      identity: {
+        packetId: stringValue(identity.packetId),
+        processId: stringValue(identity.processId),
+      },
+      event,
+      at: timestamp,
+      ...(terminationPresent && isUnknownRecord(termination)
+        ? { termination: redactedTerminationSummary(termination) || undefined }
+        : {}),
+    },
+    timestamp,
+  };
+}
+
+function processLifecycleProjectionInvalidRecord(
+  at: string,
+  invalidOrdinal: number,
+): UnknownRecord {
+  return {
+    type: "process_lifecycle",
+    projectionInvalid: true,
+    invalidOrdinal,
+    at,
+  };
+}
+
+function processLifecycleProjectionIncompleteRecord(
+  overflowCount: number,
+  at: string,
+): UnknownRecord {
+  return {
+    type: "process_lifecycle",
+    projectionIncomplete: true,
+    overflowCount,
+    at: at || "1970-01-01T00:00:00.000Z",
+  };
+}
+
+function progressLifecycleEvent(progress: UnknownRecord): ProcessLifecycleEvent | null {
+  if (progress.commandClass === "autoresearch preflight") return null;
+  if (progress.terminationFailed === true || progress.exitState === "termination_failed") {
+    return "termination-failed";
+  }
+  if (progress.exitState === "running") return "observed-live";
+  if (["completed", "failed", "timed_out", "crashed"].includes(stringValue(progress.exitState))) {
+    return "terminated";
+  }
+  return null;
+}
+
+function processLifecycleEvent(value: unknown): ProcessLifecycleEvent | null {
+  const event = stringValue(value) as ProcessLifecycleEvent;
+  return PROCESS_LIFECYCLE_EVENTS.has(event) ? event : null;
+}
+
+function processIdentity(packetIdValue: unknown, processIdValue: unknown): string {
+  const packetId = stringValue(packetIdValue);
+  const processId = stringValue(processIdValue);
+  if (
+    !packetId ||
+    !processId ||
+    packetId.length > PROCESS_IDENTITY_MAX_LENGTH ||
+    processId.length > PROCESS_IDENTITY_MAX_LENGTH ||
+    !PROCESS_IDENTITY_PATTERN.test(packetId) ||
+    !PROCESS_IDENTITY_PATTERN.test(processId)
+  ) {
+    return "";
+  }
+  return `${packetId}\0${processId}`;
+}
+
+function publicProcessIdentity(identityKey: string): string {
+  return `process-${createHash("sha256").update(identityKey, "utf8").digest("hex").slice(0, 12)}`;
+}
+
+function redactedTerminationSummary(value: unknown): ProcessLifecycleRecord["termination"] | null {
+  if (!isUnknownRecord(value)) return null;
+  const reason = stringValue(value.reason);
+  return {
+    proven: value.proven === true,
+    reason: /^[a-z0-9_]{1,160}$/.test(reason) ? reason : "",
+  };
+}
+
+function hasLegacyProcessResidueProse(entries: unknown[]): boolean {
+  return entries.some((entry) => {
+    if (isUnknownRecord(entry) && entry.type === "process_lifecycle") return false;
+    const text = safeStringify(entry).toLowerCase();
+    return (
+      /\b(process[-_ ]?manager|active_process|pid)\b/.test(text) &&
+      /\b(stale|orphan|reboot|residue|zombie|unreconciled)\b/.test(text)
+    );
+  });
 }
 
 function repeatedCommandHeadCount(entries: unknown[], targetHead: string): number {
@@ -210,26 +601,9 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function safeLedgerType(value: unknown): ResourceResidueType {
-  const type = stringValue(value);
-  return SAFE_LEDGER_TYPE_SET.has(type) ? (type as SafeLedgerEntryType) : "ledger-entry";
-}
-
 function safeLedgerTimestamp(value: unknown): string {
   const timestamp = stringValue(value);
   return ISO_UTC_TIMESTAMP_PATTERN.test(timestamp) ? timestamp : "";
-}
-
-function uniqueResidue(items: ResourceResidueFact[]): ResourceResidueFact[] {
-  const seen = new Set<string>();
-  const out: ResourceResidueFact[] = [];
-  for (const item of items) {
-    const key = `${item.type}\0${item.status}\0${item.timestamp}\0${item.reason}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-  return out;
 }
 
 export function resourceBudgetFromConfig(config: UnknownRecord = {}): Partial<ResourceBudgets> {

@@ -7,6 +7,42 @@ import { checkedAppendFileSync } from "./checked-write.js";
 import type { UnknownRecord } from "./types/json.js";
 
 export type SessionRecord = UnknownRecord & Record<string, any>;
+export type JsonlValueKind =
+  | "array"
+  | "boolean"
+  | "invalid-json"
+  | "null"
+  | "number"
+  | "object"
+  | "string";
+
+export interface LedgerRecordIssue {
+  file: string;
+  line: number;
+  kind: JsonlValueKind;
+  message: string;
+  command: string;
+}
+
+export const LEDGER_DOCTOR_RECOVERY_COMMAND =
+  "node scripts/autoresearch.mjs ledger-doctor --cwd <project> --json";
+
+export class LedgerRecordError extends Error {
+  readonly issue: LedgerRecordIssue;
+
+  constructor(issue: Omit<LedgerRecordIssue, "message" | "command"> & { reason: string }) {
+    const message = `Corrupt autoresearch.jsonl at line ${issue.line} in ${issue.file}: ${issue.reason} Observed JSON kind: ${issue.kind}. Recovery: ${LEDGER_DOCTOR_RECOVERY_COMMAND}`;
+    super(message);
+    this.name = "LedgerRecordError";
+    this.issue = {
+      file: issue.file,
+      line: issue.line,
+      kind: issue.kind,
+      message,
+      command: LEDGER_DOCTOR_RECOVERY_COMMAND,
+    };
+  }
+}
 
 export interface SessionReadCache {
   recordsByCwd: Map<string, SessionRecord[]>;
@@ -38,7 +74,7 @@ export function appendJsonl(workDir: string, entry: UnknownRecord): void {
 export function readJsonl(workDir: string): SessionRecord[] {
   const filePath = jsonlPath(workDir);
   if (!fs.existsSync(filePath)) return [];
-  return parseJsonlLines(fs.readFileSync(filePath, "utf8"), filePath);
+  return parseJsonlRecords(fs.readFileSync(filePath, "utf8"), filePath);
 }
 
 export async function* streamJsonl(workDir: string): AsyncGenerator<SessionRecord> {
@@ -52,7 +88,7 @@ export async function* streamJsonl(workDir: string): AsyncGenerator<SessionRecor
       index += 1;
       const line = String(rawLine).trim();
       if (!line) continue;
-      yield parseJsonlLine(line, filePath, index);
+      yield parseJsonlRecord(line, filePath, index);
     }
   } finally {
     stream.destroy();
@@ -117,19 +153,62 @@ function isFileNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function parseJsonlLines(text: string, filePath: string): SessionRecord[] {
-  return String(text)
+export function parseJsonlRecords(text: string, filePath: string): SessionRecord[] {
+  const records: SessionRecord[] = [];
+  String(text)
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => parseJsonlLine(line, filePath, index + 1));
+    .forEach((rawLine, index) => {
+      const line = rawLine.trim();
+      if (line) records.push(parseJsonlRecord(line, filePath, index + 1));
+    });
+  return records;
 }
 
-function parseJsonlLine(line: string, filePath: string, index: number): SessionRecord {
+export function parseJsonlRecord(
+  line: string,
+  filePath: string,
+  lineNumber: number,
+): SessionRecord {
+  let value: unknown;
   try {
-    return JSON.parse(line);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSONL in ${filePath} at line ${index}: ${message}`);
+    value = JSON.parse(line);
+  } catch {
+    throw new LedgerRecordError({
+      file: filePath,
+      line: lineNumber,
+      kind: "invalid-json",
+      reason: "Invalid JSON syntax.",
+    });
   }
+  const kind = jsonValueKind(value);
+  if (kind !== "object") {
+    throw new LedgerRecordError({
+      file: filePath,
+      line: lineNumber,
+      kind,
+      reason: "Expected a non-array JSON object ledger record.",
+    });
+  }
+  const record = value as SessionRecord;
+  for (const field of ["schemaVersion", "schema_version"] as const) {
+    if (Object.hasOwn(record, field) && record[field] !== 1) {
+      throw new LedgerRecordError({
+        file: filePath,
+        line: lineNumber,
+        kind,
+        reason: `Unsupported ${field}; expected 1.`,
+      });
+    }
+  }
+  return record;
+}
+
+export function ledgerRecordIssue(error: unknown): LedgerRecordIssue | null {
+  return error instanceof LedgerRecordError ? error.issue : null;
+}
+
+function jsonValueKind(value: unknown): Exclude<JsonlValueKind, "invalid-json"> {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value as Exclude<JsonlValueKind, "invalid-json">;
 }

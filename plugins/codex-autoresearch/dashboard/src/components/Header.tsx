@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
   DashboardMeta,
@@ -19,6 +19,8 @@ interface HeaderProps {
   mode: DashboardMode;
   meta: DashboardMeta;
   liveStatus: { title?: string; detail?: string };
+  refreshState: "idle" | "refreshing" | "error";
+  lastGoodAt: string | null;
   liveEnabled: boolean;
   setLiveEnabled: Dispatch<SetStateAction<boolean>>;
   refreshLiveData: () => Promise<void> | void;
@@ -37,6 +39,8 @@ export function Header({
   mode,
   meta,
   liveStatus,
+  refreshState,
+  lastGoodAt,
   liveEnabled,
   setLiveEnabled,
   refreshLiveData,
@@ -50,13 +54,21 @@ export function Header({
   const hasMultipleSegments = normalized.segments.length > 1;
   const generated = meta.generatedAt ? formatDisplayTime(meta.generatedAt) : "Snapshot";
   const metricLabel = readout.metricDefinition.metricName || session.config.metricName || "metric";
-  const dashboardUrl = useMemo(() => dashboardUrlFrom(meta), [meta]);
+  const dashboardUrl = useMemo(() => dashboardUrlFrom(meta, mode), [meta, mode]);
   const attentionStatus = statusFor(liveStatus, mode);
   const liveReceipt = liveReceiptFor({ dashboardUrl, liveStatus, mode });
+  const staticGuidance = !mode.liveRefresh && !mode.showcase;
   const copyDashboardUrl = async () => {
     if (!dashboardUrl) return;
     await copyDashboardUrlText(dashboardUrl);
   };
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreRefreshFocus = useRef(false);
+  useEffect(() => {
+    if (refreshState === "refreshing" || !restoreRefreshFocus.current) return;
+    restoreRefreshFocus.current = false;
+    refreshButtonRef.current?.focus();
+  }, [refreshState]);
   return (
     <header id="dashboard-toolbar" className="dashboard-toolbar" aria-label="Dashboard controls">
       <h1 className="sr-only">Autoresearch dashboard</h1>
@@ -87,12 +99,18 @@ export function Header({
             </button>
             <button
               id="refresh-now"
+              ref={refreshButtonRef}
               type="button"
               className="tool-button"
               hidden={!mode.liveRefresh}
-              onClick={() => refreshLiveData()}
+              onClick={() => {
+                restoreRefreshFocus.current = true;
+                void refreshLiveData();
+              }}
+              disabled={refreshState === "refreshing"}
+              aria-describedby="live-region"
             >
-              Refresh Readout
+              {refreshState === "refreshing" ? "Refreshing…" : "Refresh Readout"}
             </button>
             <button
               id="live-toggle"
@@ -150,7 +168,7 @@ export function Header({
           </em>
         </div>
       </div>
-      {liveReceipt || attentionStatus || hasMultipleSegments ? (
+      {liveReceipt || attentionStatus || staticGuidance || hasMultipleSegments ? (
         <div className="toolbar-controls">
           {liveReceipt ? (
             <p className={`toolbar-live-receipt ${liveReceipt.tone}`} id="live-handoff-receipt">
@@ -160,9 +178,30 @@ export function Header({
             </p>
           ) : null}
           {attentionStatus ? (
-            <p className="toolbar-status" id="live-region" aria-live="polite">
+            <p
+              className="toolbar-status"
+              id="live-region"
+              role={refreshState === "error" ? "alert" : "status"}
+              aria-live={refreshState === "error" ? "assertive" : "polite"}
+              aria-atomic="true"
+            >
               <span id="live-title">{attentionStatus.title}</span>
               <strong id="live-detail">{attentionStatus.detail}</strong>
+            </p>
+          ) : null}
+          {mode.liveRefresh ? (
+            <p className="last-good-status" id="last-good-status">
+              <span>Last validated</span>
+              <strong>{lastGoodAt ? formatDisplayTime(lastGoodAt) : "Initial snapshot"}</strong>
+            </p>
+          ) : null}
+          {staticGuidance ? (
+            <p className="static-share-guidance" id="static-share-guidance">
+              <strong>Static export</strong>
+              <span>
+                Share this HTML file, or run <code translate="no">serve --cwd &lt;project&gt;</code>{" "}
+                for a refreshable HTTP URL.
+              </span>
             </p>
           ) : null}
           {hasMultipleSegments ? (
@@ -299,7 +338,7 @@ function segmentStatusLabel(segment: SessionSegment, normalized: NormalizedEntri
 }
 
 function statusFor(liveStatus: { title?: string; detail?: string }, mode: DashboardMode) {
-  if (mode.liveRefresh || isAttentionStatus(liveStatus.title)) {
+  if (mode.liveRefresh || mode.showcase || isAttentionStatus(liveStatus.title)) {
     return {
       title: liveStatus.title || "Dashboard notice",
       detail: liveStatus.detail || "Review the latest dashboard status.",
@@ -317,21 +356,19 @@ function liveReceiptFor({
   liveStatus: { title?: string; detail?: string };
   mode: DashboardMode;
 }) {
-  if (!dashboardUrl && !mode.liveRefresh) return null;
+  if (!mode.liveRefresh || !dashboardUrl) return null;
   const staleOrDead = /(failed|unavailable|error|stale|dead)/i.test(
     `${liveStatus.title || ""} ${liveStatus.detail || ""}`,
   );
   const port = portFromUrl(dashboardUrl);
   return {
-    label: mode.liveRefresh ? "Live handoff" : "Dashboard handoff",
+    label: "Live handoff",
     value: [dashboardUrl || "No readout URL", port ? `port ${port}` : ""]
       .filter(Boolean)
       .join(" / "),
     detail: staleOrDead
       ? liveStatus.detail || "Live readout is stale or unavailable."
-      : mode.liveRefresh
-        ? "Live readout is refreshable; copy only shares the URL."
-        : "Static readout; copy only shares the URL.",
+      : "Live readout is refreshable; copy only shares the URL.",
     tone: staleOrDead ? "warn" : "good",
   };
 }
@@ -349,9 +386,10 @@ function isAttentionStatus(title: unknown) {
   return typeof title === "string" && /(failed|unavailable|error|running)/i.test(title);
 }
 
-function dashboardUrlFrom(meta: DashboardMeta) {
+function dashboardUrlFrom(meta: DashboardMeta, mode: DashboardMode) {
+  if (!mode.liveRefresh) return "";
   const settings = recordFrom(meta.settings);
-  return firstString(
+  return firstHttpUrl(
     meta.liveUrl,
     meta.dashboardUrl,
     meta.url,
@@ -362,9 +400,15 @@ function dashboardUrlFrom(meta: DashboardMeta) {
   );
 }
 
-function firstString(...values: unknown[]) {
+function firstHttpUrl(...values: unknown[]) {
   for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value !== "string" || !value.trim()) continue;
+    try {
+      const parsed = new URL(value.trim());
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") return value.trim();
+    } catch {
+      // Ignore malformed or non-shareable URL candidates.
+    }
   }
   return "";
 }
