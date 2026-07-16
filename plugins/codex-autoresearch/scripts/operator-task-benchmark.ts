@@ -566,11 +566,11 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
   const rawGaps = await fsp.readFile(gapsPath, "utf8");
   await fsp.writeFile(gapsPath, rawGaps.replaceAll("- [ ]", "- [x]"));
 
-  const results = await Promise.all([
-    runNode(cli, ["state", "--cwd", cwd, "--json-full"], pluginRoot, env),
-    runNode(cli, ["recommend-next", "--cwd", cwd, "--compact"], pluginRoot, env),
-    runNode(cli, ["doctor", "--cwd", cwd, "--json-full"], pluginRoot, env),
-  ]);
+  const results = [
+    await runNode(cli, ["state", "--cwd", cwd, "--json-full"], pluginRoot, env),
+    await runNode(cli, ["recommend-next", "--cwd", cwd, "--compact"], pluginRoot, env),
+    await runNode(cli, ["doctor", "--cwd", cwd, "--json-full"], pluginRoot, env),
+  ];
   const payloads = results.map(expectJsonSuccess);
   const actions = payloads.map((payload) =>
     nestedRecord(payload, "resolvedDecision", "canonicalNextAction"),
@@ -599,6 +599,7 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
     runs: Number(state.runs || 0),
     zeroRunActionKinds: actions.map((action) => String(action.kind || "")),
     zeroRunActionCommands: actions.map((action) => normalizePublicText(action.command, cwd)),
+    zeroRunActionReasons: actions.map((action) => normalizePublicText(action.reason, cwd)),
     canMarkCodexGoalComplete: nestedRecord(goal, "completionAudit").canMarkCodexGoalComplete,
     rawChecklistAccepted:
       qualityRound.accepted === true || qualityRound.evidenceStatus === "accepted",
