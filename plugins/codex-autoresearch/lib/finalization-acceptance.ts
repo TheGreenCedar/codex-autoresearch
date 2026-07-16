@@ -22,7 +22,9 @@ export function acceptedCurrentTreeFinalizationIssue(payload: LooseObject): stri
     hasCurrentTreeFinalizationCode(payload) ||
     /finalize-current-tree|current non-session branch diff/i.test(String(issues[0] || ""));
   if (!currentTreeSignal) return null;
-  const loopContract = objectValue(payload?.loopContract) || {};
+  const resolvedDecision = resolvedDecisionValue(payload);
+  const loopContract =
+    objectValue(payload?.loopContract) || objectValue(resolvedDecision?.loopContract) || {};
   const strongestAction = objectValue(loopContract.strongestAction) || {};
   const strongestKind = String(strongestAction.kind || "");
   const blockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
@@ -32,6 +34,8 @@ export function acceptedCurrentTreeFinalizationIssue(payload: LooseObject): stri
     objectValue(objectValue(payload?.decisionEnvelope)?.canonicalNextAction)?.command,
     objectValue(objectValue(objectValue(payload?.decisionEnvelope)?.loopContract)?.strongestAction)
       ?.command,
+    resolvedDecision?.command,
+    objectValue(resolvedDecision?.canonicalNextAction)?.command,
   ];
   const actionableCommands = candidateCommands
     .map(concreteCommand)
@@ -54,13 +58,23 @@ function hasCurrentTreeFinalizationCode(payload: LooseObject): boolean {
   const decisionEnvelope = objectValue(payload?.decisionEnvelope);
   const state = objectValue(payload?.state);
   const stateDecisionEnvelope = objectValue(state?.decisionEnvelope);
+  const resolvedDecision = resolvedDecisionValue(payload);
   const candidates = [
     payload?.actionCode,
     objectValue(payload?.finalizationReadiness)?.actionCode,
     objectValue(decisionEnvelope?.finalizationReadiness)?.actionCode,
     objectValue(stateDecisionEnvelope?.finalizationReadiness)?.actionCode,
+    objectValue(resolvedDecision?.finalizationReadiness)?.actionCode,
+    objectValue(resolvedDecision?.finalizationPressure)?.actionCode,
   ];
   return candidates.some((candidate) => candidate === "current-tree-finalization");
+}
+
+function resolvedDecisionValue(payload: LooseObject): LooseObject | null {
+  return (
+    objectValue(payload?.resolvedDecision) ||
+    objectValue(objectValue(payload?.state)?.resolvedDecision)
+  );
 }
 
 function objectValue(value: unknown): LooseObject | null {

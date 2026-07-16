@@ -837,6 +837,34 @@ test("current-tree finalization acceptance requires only one issue and a finaliz
   assert.equal(acceptedCurrentTreeFinalizationIssue(payload), payload.issues[0]);
   assert.equal(
     acceptedCurrentTreeFinalizationIssue({
+      issues: [
+        "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff.",
+      ],
+      resolvedDecision: {
+        command:
+          "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo --exclude-session-artifacts",
+        canonicalNextAction: {
+          kind: "current-tree-finalization",
+          command:
+            "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo --exclude-session-artifacts",
+        },
+        finalizationPressure: {
+          actionCode: "current-tree-finalization",
+        },
+        loopContract: {
+          canRunNextPacket: false,
+          strongestAction: {
+            kind: "current-tree-finalization",
+            command: "",
+          },
+          blockers: [{ kind: "current-tree-finalization" }],
+        },
+      },
+    }),
+    "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff.",
+  );
+  assert.equal(
+    acceptedCurrentTreeFinalizationIssue({
       ...payload,
       finalizationReadiness: {},
       issues: ["An unrelated issue should not be accepted by structure alone."],

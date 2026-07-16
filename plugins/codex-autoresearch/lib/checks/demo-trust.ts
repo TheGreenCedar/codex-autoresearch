@@ -23,6 +23,7 @@ export async function runDemoTrustCheck() {
       "examples/demo-session",
       "--check-benchmark",
       "--explain",
+      "--json-full",
     ],
   ]);
   if (doctor.code !== 0) {
