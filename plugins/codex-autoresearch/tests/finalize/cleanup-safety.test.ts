@@ -21,7 +21,7 @@ testWithTempRoot(
     const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     await git(["switch", "-c", "codex/pathspec-plan"], repo);
-    await writeFile(path.join(repo, "*.txt"), "literal wildcard filename\n");
+    await writeFile(path.join(repo, "[ab].txt"), "literal wildcard filename\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "keep literal wildcard filename"], repo);
     const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
@@ -41,7 +41,7 @@ testWithTempRoot(
               body: "Should never expand wildcard characters as a pathspec.",
               last_commit: finalTree,
               slug: "pathspec-plan",
-              files: ["*.txt"],
+              files: ["[ab].txt"],
             },
           ],
         },
@@ -57,7 +57,7 @@ testWithTempRoot(
     const files = (await git(["diff", "--name-only", "-z", base, branch], repo)).stdout
       .split("\0")
       .filter(Boolean);
-    assert.deepEqual(files, ["*.txt"]);
+    assert.deepEqual(files, ["[ab].txt"]);
     assert.equal((await git(["show", `${branch}:b.txt`], repo)).stdout, "base\n");
     assert.equal(
       (await git(["branch", "--show-current"], repo)).stdout.trim(),
