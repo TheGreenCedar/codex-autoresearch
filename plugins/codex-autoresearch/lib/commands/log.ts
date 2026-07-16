@@ -37,20 +37,24 @@ import {
   gitIndexLockMessage,
   gitOutput,
   gitPrivatePath,
-  gitPrivateRoot,
   gitStatusShort,
   hasStagedChanges,
   hasStagedChangesInPaths,
   insideGitRepo,
+  privateStateCandidatePaths,
   resolveCommitRef,
+  resolvePrivateStateTarget,
   runGit,
   shortHead,
+  writePrivateStateFile,
+  PrivateStateConflictError,
+  type PrivateStateSpec,
 } from "../git-private-state.js";
 import { normalizeRelativePaths } from "../literal-paths.js";
 import {
   assertFreshLastRunPacket,
+  lastRunCandidatePaths,
   readLastRunPacket,
-  resolveLastRunPath,
 } from "../last-run-store.js";
 import { parsePorcelainV1Z } from "../git-paths.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
@@ -455,7 +459,7 @@ export async function applyLogMutation({
       }
       if (commitPaths.length > 0) await assertCommitPathsExist(workDir, commitPaths);
       await assertNoGitIndexLock(workDir, "git add");
-      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
+      pendingLogReceiptPath = await writePendingLogTransaction(workDir, {
         run: nextRun,
         status,
         description,
@@ -510,7 +514,7 @@ export async function applyLogMutation({
   } else if (status !== "keep" && status !== "measure") {
     const discardPlan = inGit ? await discardCleanupPlan(workDir, args, config) : null;
     if (discardPlan && discardCleanupWillMutate(discardPlan, args)) {
-      pendingLogReceiptPath = await writePendingLogTransaction(workDir, inGit, {
+      pendingLogReceiptPath = await writePendingLogTransaction(workDir, {
         run: nextRun,
         status,
         description,
@@ -573,56 +577,66 @@ function fallbackPendingLogTransactionPath(workDir: string): string {
   return resolveSessionPaths({ workDir }).pendingLogTransactionFallbackPath;
 }
 
-async function pendingLogTransactionPath(workDir: string, inGit?: boolean): Promise<string> {
-  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
-  return gitRepo
-    ? await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH)
-    : fallbackPendingLogTransactionPath(workDir);
+function pendingLogTransactionSpec(workDir: string): PrivateStateSpec {
+  return {
+    fallbackPath: fallbackPendingLogTransactionPath(workDir),
+    gitRelativePath: PENDING_LOG_TRANSACTION_GIT_PATH,
+    label: "pending log receipt",
+  };
 }
 
 async function pendingLogTransactionCandidatePaths(
   workDir: string,
-  inGit?: boolean,
+  _inGit?: boolean,
 ): Promise<string[]> {
-  const candidates = [fallbackPendingLogTransactionPath(workDir)];
-  const gitRepo = inGit ?? (await insideGitRepo(workDir).catch(() => false));
-  if (gitRepo) {
-    try {
-      candidates.unshift(await gitPrivatePath(workDir, PENDING_LOG_TRANSACTION_GIT_PATH));
-    } catch {
-      // Preserve fallback recovery when Git cannot resolve its private path.
-    }
-  }
-  return [...new Set(candidates)];
+  return await privateStateCandidatePaths(workDir, pendingLogTransactionSpec(workDir));
 }
 
 async function writePendingLogTransaction(
   workDir: string,
-  inGit: boolean,
   receipt: UnknownRecord,
 ): Promise<string> {
-  const receiptPath = await pendingLogTransactionPath(workDir, inGit);
-  await checkedAtomicWriteFile(
-    inGit ? await gitPrivateRoot(workDir) : workDir,
-    receiptPath,
-    `${JSON.stringify(
-      {
-        type: "autoresearch.log.pending",
-        version: 1,
-        createdAt: new Date().toISOString(),
-        workDir,
-        ledgerPath: resolveSessionPaths({ workDir }).ledgerPath,
-        ...receipt,
-      },
-      null,
-      2,
-    )}\n`,
+  const stored = await writePrivateStateFile(
+    workDir,
+    pendingLogTransactionSpec(workDir),
+    (stateTarget) =>
+      `${JSON.stringify(
+        {
+          type: "autoresearch.log.pending",
+          version: 1,
+          createdAt: new Date().toISOString(),
+          workDir,
+          ledgerPath: resolveSessionPaths({ workDir }).ledgerPath,
+          stateStorage: {
+            storageMode: stateTarget.storageMode,
+            path: stateTarget.path,
+            warning: stateTarget.warning,
+          },
+          ...receipt,
+        },
+        null,
+        2,
+      )}\n`,
     { mode: 0o600 },
   );
-  return receiptPath;
+  return stored.path;
 }
 
 export async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
+  try {
+    await resolvePrivateStateTarget(workDir, pendingLogTransactionSpec(workDir));
+  } catch (error) {
+    if (!(error instanceof PrivateStateConflictError)) throw error;
+    return [
+      {
+        code: error.code,
+        severity: "blocker",
+        message: error.message,
+        action: "Reconcile the two pending receipt copies before another packet or log mutation.",
+        paths: await pendingLogTransactionCandidatePaths(workDir, inGit),
+      },
+    ];
+  }
   const warnings: UnknownRecord[] = [];
   for (const receiptPath of await pendingLogTransactionCandidatePaths(workDir, inGit)) {
     if (!(await pathExists(receiptPath))) continue;
@@ -840,9 +854,9 @@ function quote(value: string): string {
 }
 
 export async function deleteLastRunPacket(workDir: string): Promise<CleanupWarning[]> {
-  const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  return await clearFilesWithWarnings([filePath, legacyPath], undefined, { workDir });
+  return await clearFilesWithWarnings(await lastRunCandidatePaths(workDir), undefined, {
+    workDir,
+  });
 }
 
 function processLifecycleRecordsFromPacket(packet: UnknownRecord | null): UnknownRecord[] {

@@ -1,16 +1,34 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { runShell as runBoundedShell } from "./runner.js";
-import { parseQualityGapItems, parseQualityGaps, safeSlug } from "./session-core.js";
+import { safeSlug } from "./session-core.js";
 import { resolveSessionPaths } from "./session-paths.js";
-import { checkedAtomicWriteFile, checkedEnsureDirectory } from "./checked-write.js";
+import {
+  checkedAppendFile,
+  checkedAtomicWriteFile,
+  checkedEnsureDirectory,
+} from "./checked-write.js";
 import { resolveSafeResearchPath } from "./research-path-guard.js";
 
 const MAX_MODEL_CANDIDATES = 100;
 const MAX_CANDIDATE_TEXT_LENGTH = 1000;
+export const QUALITY_GAP_DECISIONS_FILE = "quality-gap-decisions.jsonl";
+const GAP_ID_MARKER = /<!--\s*codex-autoresearch:gap-id=(gap-[a-f0-9]{12})\s*-->/i;
+const RESEARCH_READINESS_ITEMS = new Set(
+  [
+    "Project essence is accurate and source-backed.",
+    "Sources are logged with dates, claims, and confidence.",
+    "Synthesis separates high-impact changes from small QoL fixes.",
+    "Each high-impact recommendation is implemented or rejected with evidence.",
+    "Correctness checks pass after kept changes.",
+    "Final handoff includes dashboard or state evidence.",
+  ].map(normalizeGapIdentity),
+);
 type LooseObject = Record<string, any>;
 type GapCandidate = {
+  id: string;
   text: string;
   source: string;
   confidence: string;
@@ -22,8 +40,45 @@ type SlugCandidate = {
   slug: string;
   researchDir: string;
   qualityGapsPath: string;
+  decisionsPath: string;
 };
-type QualityGap = { open: number; closed: number; total: number };
+export type QualityGapDecisionKind = "implemented" | "rejected";
+export interface QualityGapDecision {
+  schemaVersion: 1;
+  gapId: string;
+  decision: QualityGapDecisionKind;
+  evidence: string;
+  validation: string;
+  at?: string;
+}
+export interface QualityGapSummary {
+  open: number | null;
+  closed: number;
+  total: number;
+  openItems: string[];
+  closedItems: string[];
+  gaps: Array<{
+    id: string;
+    text: string;
+    checked: boolean;
+    status: "open" | "legacy-provisional" | "decided";
+    decision: QualityGapDecision | null;
+  }>;
+  legacyProvisionalClosed: string[];
+  decisionIssues: string[];
+  researchReadiness: {
+    open: number;
+    closed: number;
+    total: number;
+    openItems: string[];
+    closedItems: string[];
+  };
+  roundDecision: {
+    accepted: boolean;
+    status: "needs-candidates" | "needs-evidence" | "accepted";
+    reason: string;
+  };
+}
 
 export async function gapCandidates(args: LooseObject) {
   const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
@@ -43,6 +98,7 @@ export async function gapCandidates(args: LooseObject) {
     )),
   ];
   const gapsPath = path.join(researchDir, "quality-gaps.md");
+  const decisionsText = await readIfExists(path.join(researchDir, QUALITY_GAP_DECISIONS_FILE));
   const existingText = await readIfExists(gapsPath);
   const manualExistingText = stripGeneratedCandidateSection(existingText);
   const existing = new Set(
@@ -58,11 +114,11 @@ export async function gapCandidates(args: LooseObject) {
   }
 
   let applied = false;
-  let qualityGap = existingText ? parseQualityGaps(existingText) : { open: 0, closed: 0, total: 0 };
+  let qualityGap = summarizeQualityGaps(existingText, decisionsText);
   if (args.apply) {
     await appendCandidates(workDir, gapsPath, deduped);
     applied = true;
-    qualityGap = parseQualityGaps(await readIfExists(gapsPath));
+    qualityGap = summarizeQualityGaps(await readIfExists(gapsPath), decisionsText);
   }
 
   const stopStatus = candidateStopStatus({
@@ -142,6 +198,7 @@ export function activeQualityGapSlugCandidatesSync(workDir = process.cwd()): Slu
         slug,
         researchDir,
         qualityGapsPath: path.join(researchDir, "quality-gaps.md"),
+        decisionsPath: path.join(researchDir, QUALITY_GAP_DECISIONS_FILE),
       };
     })
     .filter((candidate) => fs.existsSync(candidate.qualityGapsPath))
@@ -152,7 +209,7 @@ export function researchRoundGuidance() {
   return {
     unit: "research-round",
     metricScope:
-      "quality_gap counts accepted checklist gaps in quality-gaps.md; it does not discover fresh recommendations by itself.",
+      "quality_gap counts outcome candidates in quality-gaps.md; research-readiness checks are reported separately, raw checked boxes remain provisional, and the metric does not discover fresh recommendations by itself.",
     requiredRefresh:
       "Before declaring completion or starting another implementation round, rerun the project-study prompt, update sources.md and synthesis.md, then preview gap-candidates.",
     hallucinationFilter: [
@@ -161,7 +218,7 @@ export function researchRoundGuidance() {
       "Keep small QoL and bug-fix ideas separate unless they materially advance the round goal.",
     ],
     stopRule:
-      "Stop only after a fresh research round yields no credible high-impact candidates, all accepted gaps are closed or explicitly rejected, and checks pass.",
+      "Stop only after a fresh research round yields no credible high-impact candidates, every candidate has an evidence-bearing implemented/rejected decision, and checks pass.",
   };
 }
 
@@ -169,16 +226,198 @@ export async function currentQualityGapSummary(workDir: string) {
   const candidate = activeQualityGapSlugCandidatesSync(workDir)[0];
   if (!candidate) return null;
   const text = await readIfExists(candidate.qualityGapsPath);
-  const counts = parseQualityGaps(text);
-  const items = parseQualityGapItems(text);
+  const decisionsText = await readIfExists(candidate.decisionsPath);
+  const summary = summarizeQualityGaps(text, decisionsText);
   return {
     slug: candidate.slug,
     path: candidate.qualityGapsPath,
-    ...counts,
-    openItems: items.open,
-    closedItems: items.closed,
+    decisionsPath: candidate.decisionsPath,
+    ...summary,
     roundGuidance: researchRoundGuidance(),
   };
+}
+
+export function qualityGapId(value: unknown): string {
+  const normalized = normalizeGapIdentity(value);
+  return `gap-${createHash("sha256").update(normalized, "utf8").digest("hex").slice(0, 12)}`;
+}
+
+export function validateQualityGapDecision(value: unknown): QualityGapDecision {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const gapId = printableText(String((record as LooseObject).gapId || "")).trim();
+  const decision = String((record as LooseObject).decision || "").toLowerCase();
+  const evidence = printableText(String((record as LooseObject).evidence || "")).trim();
+  const validation = printableText(
+    String(
+      (record as LooseObject).validation ||
+        (record as LooseObject).validationResult ||
+        (record as LooseObject).validationHint ||
+        "",
+    ),
+  ).trim();
+  if (!/^gap-[a-f0-9]{12}$/.test(gapId)) {
+    throw new Error("Gap decision requires a stable gapId from quality-gaps.md.");
+  }
+  if (decision !== "implemented" && decision !== "rejected") {
+    throw new Error("Gap decision must be 'implemented' or 'rejected'.");
+  }
+  if (!evidence) throw new Error("Gap decision requires a non-empty evidence reference.");
+  if (!validation) throw new Error("Gap decision requires a validation hint or result.");
+  const at = printableText(String((record as LooseObject).at || "")).trim();
+  return {
+    schemaVersion: 1,
+    gapId,
+    decision,
+    evidence,
+    validation,
+    ...(at ? { at } : {}),
+  };
+}
+
+export async function recordQualityGapDecision(args: LooseObject): Promise<LooseObject> {
+  const workDir = path.resolve(args.working_dir || args.cwd || process.cwd());
+  const slugResolution = resolveResearchSlugForQualityGapSync(args, workDir);
+  const slug = slugResolution.slug;
+  const researchDir = (await resolveSafeResearchPath(workDir, slug)).outputDir;
+  const qualityGapsPath = path.join(researchDir, "quality-gaps.md");
+  const decisionsPath = path.join(researchDir, QUALITY_GAP_DECISIONS_FILE);
+  const markdown = await readIfExists(qualityGapsPath);
+  if (!markdown.trim()) {
+    throw new Error(`No quality-gaps.md found for research slug '${slug}'.`);
+  }
+  const decision = validateQualityGapDecision({
+    ...args,
+    gapId: args.gap_id ?? args.gapId,
+    validation:
+      args.validation ??
+      args.validation_result ??
+      args.validationResult ??
+      args.validation_hint ??
+      args.validationHint,
+    at: args.at || new Date().toISOString(),
+  });
+  const before = summarizeQualityGaps(markdown, await readIfExists(decisionsPath));
+  const gap = before.gaps.find((candidate) => candidate.id === decision.gapId);
+  if (!gap) {
+    const error = new Error(
+      `Gap decision references unknown gap '${decision.gapId}' in ${qualityGapsPath}.`,
+    ) as Error & { code?: string; knownGapIds?: string[] };
+    error.code = "unknown_quality_gap";
+    error.knownGapIds = before.gaps.map((candidate) => candidate.id);
+    throw error;
+  }
+  await checkedAppendFile(workDir, decisionsPath, `${JSON.stringify(decision)}\n`);
+  const summary = summarizeQualityGaps(markdown, await readIfExists(decisionsPath));
+  return {
+    ok: true,
+    workDir,
+    slug,
+    slugInferred: slugResolution.inferred,
+    researchDir,
+    qualityGapsPath,
+    decisionsPath,
+    gap: { id: gap.id, text: gap.text },
+    decision,
+    qualityGap: summary,
+  };
+}
+
+export function summarizeQualityGaps(markdown: string, decisionsJsonl = ""): QualityGapSummary {
+  const parsedDecisions = parseQualityGapDecisions(decisionsJsonl);
+  const decisionsByGap = new Map<string, QualityGapDecision>();
+  for (const decision of parsedDecisions.decisions) decisionsByGap.set(decision.gapId, decision);
+
+  const readinessOpen: string[] = [];
+  const readinessClosed: string[] = [];
+  const productGaps: QualityGapSummary["gaps"] = [];
+  let inCandidateSection = false;
+  for (const line of String(markdown || "").split(/\r?\n/)) {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (heading) {
+      inCandidateSection = /^candidate gaps$/i.test(heading[1].trim());
+      continue;
+    }
+    const match = line.match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
+    if (!match) continue;
+    const checked = match[1].toLowerCase() === "x";
+    const rawText = match[2].trim();
+    const text = displayGapText(rawText);
+    const readiness =
+      !inCandidateSection && RESEARCH_READINESS_ITEMS.has(normalizeGapIdentity(text));
+    if (readiness) {
+      (checked ? readinessClosed : readinessOpen).push(text);
+      continue;
+    }
+    const id = rawText.match(GAP_ID_MARKER)?.[1]?.toLowerCase() || qualityGapId(text);
+    const decision = decisionsByGap.get(id) || null;
+    productGaps.push({
+      id,
+      text,
+      checked,
+      status: decision ? "decided" : checked ? "legacy-provisional" : "open",
+      decision,
+    });
+  }
+
+  const knownGapIds = new Set(productGaps.map((gap) => gap.id));
+  const unknownDecisionIssues = parsedDecisions.decisions
+    .filter((decision) => !knownGapIds.has(decision.gapId))
+    .map((decision) => `Decision references unknown gap '${decision.gapId}'.`);
+  const openGaps = productGaps.filter((gap) => !gap.decision);
+  const closedGaps = productGaps.filter((gap) => gap.decision);
+  const legacyProvisionalClosed = openGaps.filter((gap) => gap.checked).map((gap) => gap.text);
+  const decisionIssues = [...parsedDecisions.issues, ...unknownDecisionIssues];
+  const accepted = productGaps.length > 0 && openGaps.length === 0 && decisionIssues.length === 0;
+  const status = accepted
+    ? "accepted"
+    : productGaps.length === 0
+      ? "needs-candidates"
+      : "needs-evidence";
+  const reason = accepted
+    ? "Every outcome candidate has an evidence-bearing implemented/rejected decision."
+    : decisionIssues[0] ||
+      (productGaps.length === 0
+        ? "No outcome candidates are recorded; research-readiness checks cannot close the round."
+        : `${openGaps.length} outcome candidate${openGaps.length === 1 ? " needs" : "s need"} an evidence-bearing decision.`);
+  return {
+    open: productGaps.length === 0 ? null : openGaps.length,
+    closed: closedGaps.length,
+    total: productGaps.length,
+    openItems: openGaps.map((gap) => gap.text),
+    closedItems: closedGaps.map((gap) => gap.text),
+    gaps: productGaps,
+    legacyProvisionalClosed,
+    decisionIssues,
+    researchReadiness: {
+      open: readinessOpen.length,
+      closed: readinessClosed.length,
+      total: readinessOpen.length + readinessClosed.length,
+      openItems: readinessOpen,
+      closedItems: readinessClosed,
+    },
+    roundDecision: { accepted, status, reason },
+  };
+}
+
+function parseQualityGapDecisions(text: string): {
+  decisions: QualityGapDecision[];
+  issues: string[];
+} {
+  const decisions: QualityGapDecision[] = [];
+  const issues: string[] = [];
+  for (const [index, line] of String(text || "")
+    .split(/\r?\n/)
+    .entries()) {
+    if (!line.trim()) continue;
+    try {
+      decisions.push(validateQualityGapDecision(JSON.parse(line)));
+    } catch (error) {
+      issues.push(
+        `Decision line ${index + 1} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return { decisions, issues };
 }
 
 async function candidatesFromSynthesis(researchDir: string): Promise<LooseObject[]> {
@@ -271,6 +510,7 @@ function validateCandidate(candidate: LooseObject): GapCandidate {
   if (text.length > MAX_CANDIDATE_TEXT_LENGTH)
     throw new Error(`Gap candidate text exceeds ${MAX_CANDIDATE_TEXT_LENGTH} characters.`);
   return {
+    id: qualityGapId(text),
     text: printableText(text),
     source: printableText(String(candidate.source || "")).slice(0, 300),
     confidence: String(candidate.confidence || "medium"),
@@ -308,7 +548,7 @@ async function appendCandidates(
       "",
       ...candidates.map(
         (candidate) =>
-          `- [ ] ${candidate.text} (source: ${candidate.source || "unknown"}; confidence: ${candidate.confidence}; impact: ${candidate.impact}; validation: ${candidate.validationHint})`,
+          `- [ ] ${candidate.text} (source: ${candidate.source || "unknown"}; confidence: ${candidate.confidence}; impact: ${candidate.impact}; validation: ${candidate.validationHint}) <!-- codex-autoresearch:gap-id=${candidate.id} -->`,
       ),
       "",
       "<!-- /codex-autoresearch:generated-candidates -->",
@@ -352,6 +592,7 @@ async function readIfExists(file: string): Promise<string> {
 function normalizeCandidateText(text: string): string {
   return String(text || "")
     .replace(/^\s*-\s*\[[ xX]\]\s*/, "")
+    .replace(GAP_ID_MARKER, "")
     .replace(/(?:[.;]\s+|\s+-\s+)Evidence:\s+.*$/i, "")
     .replace(/\s*\(source:.*$/, "")
     .toLowerCase()
@@ -365,13 +606,14 @@ function candidateStopStatus({
   applied,
 }: {
   candidates: GapCandidate[];
-  qualityGap: QualityGap;
+  qualityGap: QualityGapSummary;
   applied: boolean;
 }) {
   const candidateCount = Array.isArray(candidates) ? candidates.length : 0;
-  const open = Number(qualityGap?.open ?? 0);
+  const open = qualityGap?.open == null ? 0 : Number(qualityGap.open);
   const total = Number(qualityGap?.total ?? 0);
-  const researchExhausted = candidateCount === 0 && open === 0 && total > 0;
+  const researchExhausted =
+    candidateCount === 0 && open === 0 && total > 0 && qualityGap.roundDecision.accepted === true;
   let reason = "No accepted quality-gap checklist exists yet.";
   if (candidateCount > 0) {
     reason = `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} survived filtering.`;
@@ -388,4 +630,19 @@ function candidateStopStatus({
     checksKnown: false,
     reason,
   };
+}
+
+function displayGapText(value: string): string {
+  return String(value || "")
+    .replace(GAP_ID_MARKER, "")
+    .replace(/\s*\(source:.*?;\s*confidence:.*?;\s*impact:.*?;\s*validation:.*?\)\s*$/i, "")
+    .trim();
+}
+
+function normalizeGapIdentity(value: unknown): string {
+  return String(value || "")
+    .replace(GAP_ID_MARKER, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }

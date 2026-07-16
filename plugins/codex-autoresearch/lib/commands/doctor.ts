@@ -136,11 +136,15 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     }
   }
   for (const warning of guidanceWarnings(guidance)) pushUniqueMessage(warnings, warning);
+  const sessionState =
+    state.code === "ledger_jsonl_invalid"
+      ? { current: [], allRecords: [], ...state }
+      : currentState(workDir);
   const loopAuthority = doctorLoopContractAuthority(
     withCanonicalActionCommand(
       buildDecisionEnvelope({
         state: {
-          ...state,
+          ...sessionState,
           gateQuality: guidance.gateQuality,
           preflight: publicPreflight,
           portfolioRecommendation: null,
@@ -285,10 +289,7 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   const contractDiagnostics = benchmarkContractDiagnostics({
     state,
   });
-  const continuationState =
-    state.code === "ledger_jsonl_invalid"
-      ? { current: [], allRecords: [], ...state }
-      : currentState(workDir);
+  const continuationState = sessionState;
   const benchmarkContractChanged = warningDetails.some(
     (detail) => detail.code === "benchmark_contract_changed",
   );

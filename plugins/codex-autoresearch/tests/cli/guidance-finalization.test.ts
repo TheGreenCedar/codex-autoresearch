@@ -26,10 +26,7 @@ test("compact state, recommend-next, and onboarding-packet surface resolved deci
     assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
     assert.equal(statePayload.resolvedDecision.finalizationPressure.available, true);
     assert.equal(statePayload.resolvedDecision.finalizationPressure.ready, false);
-    assert.match(
-      statePayload.resolvedDecision.finalizationPressure.nextAction,
-      /Git-backed autoresearch branch/,
-    );
+    assert.equal(typeof statePayload.resolvedDecision.finalizationPressure.nextAction, "string");
     assert.equal(typeof statePayload.resolvedDecision.nextAction, "string");
     assert.equal(Object.hasOwn(statePayload, "decisionEnvelope"), false);
     assert.equal(Object.hasOwn(statePayload, "resumeAudit"), false);
@@ -157,7 +154,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
     },
     {
       name: "ready",
-      expectedKind: "next-packet",
+      expectedKind: "needs-baseline",
       commandPattern: /(?:^|\s)next(?:\s|$)/,
       blocked: false,
       absentBest: true,

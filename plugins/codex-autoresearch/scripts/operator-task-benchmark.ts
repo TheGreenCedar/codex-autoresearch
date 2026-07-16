@@ -15,6 +15,7 @@ export const OPERATOR_TASK_CASES = [
   "invalid-cli",
   "installed-cache-discovery",
   "hostile-finalization",
+  "session-friction-journey",
   "output-budgets",
   "long-history",
 ] as const;
@@ -32,6 +33,11 @@ export const OPERATOR_TASK_OUTPUT_CEILINGS = {
   compact: { bytes: 10_240, lines: 200 },
   state: { bytes: 20_480, lines: 260 },
   doctor: { bytes: 8_192, lines: 100 },
+  onboarding: { bytes: 12_288, lines: 180 },
+  researchStart: { bytes: 16_384, lines: 220 },
+  log: { bytes: 16_384, lines: 220 },
+  finalizePreview: { bytes: 16_384, lines: 260 },
+  finalizeCurrentTree: { bytes: 16_384, lines: 260 },
 } as const;
 
 export const OPERATOR_TASK_FAILURE_CODES: Record<OperatorTaskCase, string> = {
@@ -39,6 +45,7 @@ export const OPERATOR_TASK_FAILURE_CODES: Record<OperatorTaskCase, string> = {
   "invalid-cli": "V27_INVALID_CLI_ACCEPTED",
   "installed-cache-discovery": "V27_CACHE_DISCOVERY_UNSAFE",
   "hostile-finalization": "V27_FINALIZER_MUTATED_REPO",
+  "session-friction-journey": "V27_SESSION_FRICTION_REGRESSION",
   "output-budgets": "V27_OUTPUT_BUDGET_EXCEEDED",
   "long-history": "V27_LONG_HISTORY_ANCHOR_MISSING",
 };
@@ -162,14 +169,7 @@ const observationValidators: Record<
     if (
       terminalActions.length !== 3 ||
       terminalActions.some(
-        (action) =>
-          !string(action.kind) ||
-          !string(action.reason) ||
-          !string(action.command) ||
-          !string(action.safeAction) ||
-          !string(action.toolName) ||
-          !nonNegativeInteger(action.priority) ||
-          stringArray(action.triggeredBy, "decision triggers").length === 0,
+        (action) => !string(action.kind) || !string(action.reason) || !string(action.command),
       ) ||
       new Set(terminalActions.map((action) => JSON.stringify(action))).size !== 1 ||
       JSON.stringify(dashboardAction) !== JSON.stringify(dashboardComparable) ||
@@ -211,6 +211,10 @@ const observationValidators: Record<
     if (
       expectedPaths.length !== 2 ||
       expectedPaths.some((file) => !plannedPaths.includes(file)) ||
+      stringArray(observations.generatedBranches, "generated finalization branches").some(
+        (branch) => !branch || branch.endsWith(".") || branch.endsWith(".lock"),
+      ) ||
+      stringArray(observations.invalidBranches, "invalid finalization branches").length > 0 ||
       observations.staleExitCode === 0 ||
       !/stale finalization plan|fingerprint does not match/i.test(
         String(observations.staleDiagnostic || ""),
@@ -218,6 +222,31 @@ const observationValidators: Record<
       JSON.stringify(observations.before) !== JSON.stringify(observations.after)
     ) {
       failCase("hostile-finalization", "Rejected finalization changed repository state.");
+    }
+  },
+  "session-friction-journey": (observations) => {
+    const actionKinds = stringArray(observations.zeroRunActionKinds, "zero-run action kinds");
+    const actionCommands = stringArray(
+      observations.zeroRunActionCommands,
+      "zero-run action commands",
+    );
+    const forbidden = /finaliz|saturat|segment-transition/i;
+    if (
+      observations.runs !== 0 ||
+      actionKinds.length !== 3 ||
+      actionKinds.some((kind) => !kind || forbidden.test(kind)) ||
+      new Set(actionKinds).size !== 1 ||
+      actionCommands.length !== 3 ||
+      actionCommands.some((command) => !/\bnext\b/.test(command)) ||
+      new Set(actionCommands).size !== 1 ||
+      observations.canMarkCodexGoalComplete !== false ||
+      observations.rawChecklistAccepted === true ||
+      observations.generatedGitAttributes === true
+    ) {
+      failCase(
+        "session-friction-journey",
+        "The zero-run qualitative journey still permits premature completion or setup-artifact leakage.",
+      );
     }
   },
   "output-budgets": (observations) => {
@@ -267,6 +296,7 @@ export async function runOperatorTaskSuite(): Promise<number> {
       ["invalid-cli", invalidCli],
       ["installed-cache-discovery", () => installedCacheDiscovery(tempRoot)],
       ["hostile-finalization", () => hostileFinalization(tempRoot)],
+      ["session-friction-journey", () => sessionFrictionJourney(tempRoot)],
       ["output-budgets", () => outputBudgets(tempRoot)],
       ["long-history", () => longHistory(tempRoot)],
     ];
@@ -387,10 +417,6 @@ function publicActionFacts(
     kind: action.kind,
     reason: normalizePublicText(action.reason, cwd),
     ...(includeCommand ? { command: normalizePublicText(action.command, cwd) } : {}),
-    safeAction: action.safeAction,
-    toolName: action.toolName,
-    priority: action.priority,
-    triggeredBy: stringArray(action.triggeredBy, "decision triggers"),
   };
 }
 
@@ -444,9 +470,10 @@ async function installedCacheDiscovery(root: string): Promise<Record<string, unk
 
 async function hostileFinalization(root: string): Promise<Record<string, unknown>> {
   const repo = path.join(root, "finalization");
-  const original = "src/old space 雪.txt";
-  const current = "src/new space 雪.txt";
-  await fsp.mkdir(path.join(repo, "src"), { recursive: true });
+  const original = "src/app/(frontend)/old space 雪.txt";
+  const current = "src/app/(frontend)/[...slug]/page.tsx";
+  await fsp.mkdir(path.join(repo, path.dirname(original)), { recursive: true });
+  await fsp.mkdir(path.join(repo, path.dirname(current)), { recursive: true });
   await git(repo, ["init", "-b", "main"]);
   await git(repo, ["config", "user.email", "codex@example.invalid"]);
   await git(repo, ["config", "user.name", "Codex Test"]);
@@ -468,9 +495,16 @@ async function hostileFinalization(root: string): Promise<Record<string, unknown
   const preview = expectJsonSuccess(
     await runNode(cli, ["finalize-preview", "--cwd", repo], pluginRoot),
   );
-  const files = asRecordArray(preview.groups, "finalization groups").flatMap((group) =>
+  const groups = asRecordArray(preview.groups, "finalization groups");
+  const files = groups.flatMap((group) =>
     Array.isArray(group.files) ? group.files.map(String) : [],
   );
+  const generatedBranches = groups.map((group) => String(group.branch || "")).filter(Boolean);
+  const invalidBranches: string[] = [];
+  for (const branch of generatedBranches) {
+    const validation = await runProcess("git", ["check-ref-format", "--branch", branch], repo);
+    if (validation.code !== 0) invalidBranches.push(branch);
+  }
   const planPath = path.join(repo, ".git", "autoresearch", "operator-evidence-groups.json");
   await fsp.mkdir(path.dirname(planPath), { recursive: true });
   expectSuccess(
@@ -485,10 +519,93 @@ async function hostileFinalization(root: string): Promise<Record<string, unknown
   return {
     expectedPaths: [original, current].sort(),
     plannedPaths: files.sort(),
+    generatedBranches,
+    invalidBranches,
     staleExitCode: stale.code,
     staleDiagnostic: normalizePublicText(stale.stderr, repo).slice(0, 1000),
     before,
     after,
+  };
+}
+
+async function sessionFrictionJourney(root: string): Promise<Record<string, unknown>> {
+  const cwd = path.join(root, "session-friction-journey");
+  const env = isolatedCodexHome(root, "session-friction-codex-home");
+  await fsp.mkdir(cwd, { recursive: true });
+  await git(cwd, ["init", "-b", "main"]);
+  await git(cwd, ["config", "user.email", "codex@example.invalid"]);
+  await git(cwd, ["config", "user.name", "Codex Test"]);
+  await fsp.writeFile(path.join(cwd, "README.md"), "# Fixture\n");
+  await git(cwd, ["add", "README.md"]);
+  await git(cwd, ["commit", "-m", "base"]);
+
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "research-start",
+        "--cwd",
+        cwd,
+        "--slug",
+        "lighthouse-diagnostics",
+        "--goal",
+        "Resolve site-owned Lighthouse diagnostics",
+        "--no-baseline-log",
+        "--json",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const gapsPath = path.join(
+    cwd,
+    "autoresearch.research",
+    "lighthouse-diagnostics",
+    "quality-gaps.md",
+  );
+  const rawGaps = await fsp.readFile(gapsPath, "utf8");
+  await fsp.writeFile(gapsPath, rawGaps.replaceAll("- [ ]", "- [x]"));
+
+  const results = [
+    await runNode(cli, ["state", "--cwd", cwd, "--json-full"], pluginRoot, env),
+    await runNode(cli, ["recommend-next", "--cwd", cwd, "--compact"], pluginRoot, env),
+    await runNode(cli, ["doctor", "--cwd", cwd, "--json-full"], pluginRoot, env),
+  ];
+  const payloads = results.map(expectJsonSuccess);
+  const actions = payloads.map((payload) =>
+    nestedRecord(payload, "resolvedDecision", "canonicalNextAction"),
+  );
+  const goal = expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "codex-goal-brief",
+        "--cwd",
+        cwd,
+        "--codex-goal-status",
+        "active",
+        "--completion-confirmed",
+        "--completion-evidence",
+        "All visible Markdown boxes are checked",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const state = payloads[0];
+  const qualityRound = asRecord(state.qualityRound || {}, "quality round");
+  const status = await git(cwd, ["status", "--porcelain=v1"]);
+  return {
+    runs: Number(state.runs || 0),
+    zeroRunActionKinds: actions.map((action) => String(action.kind || "")),
+    zeroRunActionCommands: actions.map((action) => normalizePublicText(action.command, cwd)),
+    zeroRunActionReasons: actions.map((action) => normalizePublicText(action.reason, cwd)),
+    canMarkCodexGoalComplete: nestedRecord(goal, "completionAudit").canMarkCodexGoalComplete,
+    rawChecklistAccepted:
+      qualityRound.accepted === true || qualityRound.evidenceStatus === "accepted",
+    generatedGitAttributes: status.stdout
+      .split(/\r?\n/)
+      .some((line) => line.trim().endsWith(".gitattributes")),
   };
 }
 
@@ -506,12 +623,111 @@ async function outputBudgets(root: string): Promise<Record<string, unknown>> {
   const compact = await runNode(cli, ["state", "--cwd", cwd, "--compact"], pluginRoot, env);
   const state = await runNode(cli, ["state", "--cwd", cwd], pluginRoot, env);
   const doctor = await runNode(cli, ["doctor", "--cwd", cwd], pluginRoot, env);
-  for (const result of [compact, state, doctor]) expectJsonSuccess(result);
+  const onboarding = await runNode(
+    cli,
+    ["onboarding-packet", "--cwd", cwd, "--compact"],
+    pluginRoot,
+    env,
+  );
+
+  const mutationCwd = path.join(root, "mutation-output-budgets");
+  await fsp.mkdir(mutationCwd, { recursive: true });
+  const researchStart = await runNode(
+    cli,
+    [
+      "research-start",
+      "--cwd",
+      mutationCwd,
+      "--slug",
+      "bounded-output",
+      "--goal",
+      "Keep mutation responses bounded",
+      "--no-baseline-log",
+      "--json",
+    ],
+    pluginRoot,
+    env,
+  );
+  const log = await runNode(
+    cli,
+    [
+      "log",
+      "--cwd",
+      mutationCwd,
+      "--metric",
+      "6",
+      "--status",
+      "measure",
+      "--description",
+      "Bounded manual baseline",
+    ],
+    pluginRoot,
+    env,
+  );
+
+  const finalizeCwd = path.join(root, "finalize-output-budgets");
+  await fsp.mkdir(finalizeCwd, { recursive: true });
+  await git(finalizeCwd, ["init", "-b", "main"]);
+  await git(finalizeCwd, ["config", "user.email", "codex@example.invalid"]);
+  await git(finalizeCwd, ["config", "user.name", "Codex Test"]);
+  await fsp.writeFile(path.join(finalizeCwd, "app.txt"), "base\n");
+  await git(finalizeCwd, ["add", "app.txt"]);
+  await git(finalizeCwd, ["commit", "-m", "base"]);
+  await git(finalizeCwd, ["switch", "-c", "codex/output-budgets"]);
+  await fsp.writeFile(path.join(finalizeCwd, "app.txt"), "improved\n");
+  await git(finalizeCwd, ["add", "app.txt"]);
+  await git(finalizeCwd, ["commit", "-m", "improve app"]);
+  const acceptedCommit = (await git(finalizeCwd, ["rev-parse", "HEAD"])).stdout.trim();
+  await writeLedger(finalizeCwd, [
+    configRecord("finalization output budgets"),
+    { ...runRecord(1, 1, "keep"), commit: acceptedCommit.slice(0, 12) },
+  ]);
+  await git(finalizeCwd, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
+  await git(finalizeCwd, ["commit", "-m", "record accepted evidence"]);
+  const finalizePreview = await runNode(
+    cli,
+    ["finalize-preview", "--cwd", finalizeCwd],
+    pluginRoot,
+    env,
+  );
+  const finalizeCurrentTree = await runNode(
+    cli,
+    ["finalize-current-tree", "--cwd", finalizeCwd, "--exclude-session-artifacts"],
+    pluginRoot,
+    env,
+  );
+  for (const result of [
+    compact,
+    state,
+    doctor,
+    onboarding,
+    researchStart,
+    log,
+    finalizePreview,
+    finalizeCurrentTree,
+  ])
+    expectJsonSuccess(result);
   const compactSize = outputSize(`${compact.stdout}${compact.stderr}`);
   const stateSize = outputSize(`${state.stdout}${state.stderr}`);
   const doctorSize = outputSize(`${doctor.stdout}${doctor.stderr}`);
+  const onboardingSize = outputSize(`${onboarding.stdout}${onboarding.stderr}`);
+  const researchStartSize = outputSize(`${researchStart.stdout}${researchStart.stderr}`);
+  const logSize = outputSize(`${log.stdout}${log.stderr}`);
+  const finalizePreviewSize = outputSize(`${finalizePreview.stdout}${finalizePreview.stderr}`);
+  const finalizeCurrentTreeSize = outputSize(
+    `${finalizeCurrentTree.stdout}${finalizeCurrentTree.stderr}`,
+  );
   return {
-    outputs: { compact: compactSize, state: stateSize, doctor: doctorSize },
+    outputs: {
+      compact: compactSize,
+      state: stateSize,
+      doctor: doctorSize,
+      onboarding: onboardingSize,
+      researchStart: researchStartSize,
+      log: logSize,
+      finalizePreview: finalizePreviewSize,
+      finalizeCurrentTree: finalizeCurrentTreeSize,
+    },
   };
 }
 

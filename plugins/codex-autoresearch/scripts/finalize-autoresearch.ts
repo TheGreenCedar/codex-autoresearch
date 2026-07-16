@@ -8,6 +8,7 @@ import { StringDecoder } from "node:string_decoder";
 import { isAcceptedCurrentRun } from "../lib/evidence-registry.js";
 import { productGradeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
+import { gitRefComponent } from "../lib/git-ref.js";
 import { parseNameStatusZ } from "../lib/git-paths.js";
 import {
   FINALIZATION_EVIDENCE_COMPONENT_KEYS,
@@ -35,7 +36,25 @@ import {
 
 type LooseObject = Record<string, any>;
 type LocalProcessResult = { code: number | null; stderr: string; stdout: string };
-type FinalizePhaseError = Error & { cause?: unknown; finalizePhase?: string };
+type FinalizeErrorCode =
+  | "FINALIZE_BRANCH_CREATION_FAILED"
+  | "FINALIZE_CONFIGURATION_INVALID"
+  | "FINALIZE_EVIDENCE_STALE"
+  | "FINALIZE_GROUP_ANALYSIS_FAILED"
+  | "FINALIZE_INVALID_GENERATED_REF"
+  | "FINALIZE_INVALID_LITERAL_PATH"
+  | "FINALIZE_OPERATION_FAILED"
+  | "FINALIZE_PLAN_GENERATION_FAILED"
+  | "FINALIZE_PREFLIGHT_FAILED"
+  | "FINALIZE_RECOVERY_FAILED"
+  | "FINALIZE_SESSION_ARTIFACT_FAILED"
+  | "FINALIZE_UNION_VERIFICATION_FAILED";
+type FinalizePhaseError = Error & {
+  cause?: unknown;
+  finalizeCode?: FinalizeErrorCode;
+  finalizePhase?: string;
+  nextAction?: string;
+};
 type CliArgs = ParsedAutoresearchArgs & LooseObject;
 type RunEntry = LooseObject & {
   commit?: string;
@@ -204,41 +223,80 @@ function cleanLines(text: string): string[] {
     .filter(Boolean);
 }
 
+const PHASE_ERROR_CODES: Record<string, FinalizeErrorCode> = {
+  "branch creation": "FINALIZE_BRANCH_CREATION_FAILED",
+  configuration: "FINALIZE_CONFIGURATION_INVALID",
+  "evidence revalidation": "FINALIZE_EVIDENCE_STALE",
+  "group analysis": "FINALIZE_GROUP_ANALYSIS_FAILED",
+  "plan generation": "FINALIZE_PLAN_GENERATION_FAILED",
+  preflight: "FINALIZE_PREFLIGHT_FAILED",
+  "session artifact verification": "FINALIZE_SESSION_ARTIFACT_FAILED",
+  "union verification": "FINALIZE_UNION_VERIFICATION_FAILED",
+};
+
+function finalizeError(
+  code: FinalizeErrorCode,
+  detail: string,
+  nextAction: string,
+  options: { cause?: unknown; phase?: string } = {},
+): FinalizePhaseError {
+  const message = [
+    options.phase ? `Finalize failed during ${options.phase}.` : "Finalize failed.",
+    `Error code: ${code}`,
+    `Next step: ${nextAction}`,
+    "",
+    detail,
+  ].join("\n");
+  const error = new Error(
+    message,
+    options.cause === undefined ? undefined : { cause: options.cause },
+  );
+  const typed = error as FinalizePhaseError;
+  typed.finalizeCode = code;
+  typed.finalizePhase = options.phase;
+  typed.nextAction = nextAction;
+  return typed;
+}
+
+function unsafeLiteralPath(detail: string): FinalizePhaseError {
+  return finalizeError(
+    "FINALIZE_INVALID_LITERAL_PATH",
+    detail,
+    "Fix the unsafe file path in groups.json, regenerate the plan if it was generated, and retry.",
+  );
+}
+
+function isFinalizeError(error: unknown): error is FinalizePhaseError {
+  return Boolean((error as FinalizePhaseError | null)?.finalizeCode);
+}
+
 function validateRepoRelativePath(file: unknown, cwd: string): string {
   const value = String(file ?? "");
   const normalized = process.platform === "win32" ? value.replace(/\\/g, "/") : value;
-  if (!normalized) throw new Error("Unsafe finalizer file path: empty path.");
+  if (!normalized) throw unsafeLiteralPath("Unsafe finalizer file path: empty path.");
   if (normalized.includes("\0"))
-    throw new Error(`Unsafe finalizer file path contains NUL: ${file}`);
+    throw unsafeLiteralPath(`Unsafe finalizer file path contains NUL: ${file}`);
   if (
     path.posix.isAbsolute(normalized) ||
     /^[A-Za-z]:/.test(normalized) ||
     normalized.startsWith("//")
   ) {
-    throw new Error(`Unsafe finalizer file path must be repo-relative: ${file}`);
-  }
-  if (normalized.startsWith(":")) {
-    throw new Error(`Unsafe finalizer file path must not use Git pathspec magic: ${file}`);
-  }
-  if (/[*?[\]]/.test(normalized)) {
-    throw new Error(
-      `Unsafe finalizer file path must be literal and contain no wildcard pathspec characters: ${file}`,
-    );
+    throw unsafeLiteralPath(`Unsafe finalizer file path must be repo-relative: ${file}`);
   }
   const parts = normalized.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error(
+    throw unsafeLiteralPath(
       `Unsafe finalizer file path must not contain empty, dot, or parent segments: ${file}`,
     );
   }
   if (parts.some((part) => part.toLowerCase() === ".git")) {
-    throw new Error(`Unsafe finalizer file path must not target Git metadata: ${file}`);
+    throw unsafeLiteralPath(`Unsafe finalizer file path must not target Git metadata: ${file}`);
   }
   const root = path.resolve(cwd);
   const resolved = path.resolve(root, ...parts);
   const relative = path.relative(root, resolved);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Unsafe finalizer file path resolves outside the repo: ${file}`);
+    throw unsafeLiteralPath(`Unsafe finalizer file path resolves outside the repo: ${file}`);
   }
   return parts.join("/");
 }
@@ -268,7 +326,7 @@ async function resolveRepoRemovalTarget(cwd: string, safeFile: string): Promise<
   const root = path.resolve(cwd);
   const target = path.resolve(root, safeFile);
   if (!pathInside(root, target)) {
-    throw new Error(`Unsafe finalizer file path resolves outside the repo: ${safeFile}`);
+    throw unsafeLiteralPath(`Unsafe finalizer file path resolves outside the repo: ${safeFile}`);
   }
   const nearestParent = await nearestExistingParent(path.dirname(target));
   let realRoot: string;
@@ -277,14 +335,14 @@ async function resolveRepoRemovalTarget(cwd: string, safeFile: string): Promise<
     realRoot = await fsp.realpath(root);
     realParent = await fsp.realpath(nearestParent);
   } catch (error) {
-    throw new Error(
+    throw unsafeLiteralPath(
       `Unsafe finalizer file path could not be resolved safely: ${safeFile}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
   }
   if (!pathInside(realRoot, realParent)) {
-    throw new Error(
+    throw unsafeLiteralPath(
       `Unsafe finalizer file path escapes outside the working directory through a linked parent: ${safeFile}`,
     );
   }
@@ -331,9 +389,12 @@ function withRecoveryFailures(error: unknown, failures: RecoveryFailure[]): Erro
   const recovery = failures
     .map((failure) => `${failure.label}: ${errorMessage(failure.error)}`)
     .join("\n");
-  return new Error(`${original.message}\nFinalizer recovery failed:\n${recovery}`, {
-    cause: original,
-  });
+  return finalizeError(
+    "FINALIZE_RECOVERY_FAILED",
+    `${original.message}\nFinalizer recovery failed:\n${recovery}`,
+    "Restore the source branch and remove only the temporary branches named above, then retry the original finalization step.",
+    { cause: original, phase: "recovery" },
+  );
 }
 
 async function restoreSourceBranchIfNeeded(sourceBranch: string, cwd: string): Promise<void> {
@@ -356,7 +417,7 @@ function planExcludesSessionArtifacts(config: FinalizePlan): boolean {
 }
 
 async function pathExistsAt(ref: string, file: string, cwd: string): Promise<boolean> {
-  const result = await git(["cat-file", "-e", `${ref}:${file}`], cwd, true);
+  const result = await git(["--literal-pathspecs", "cat-file", "-e", `${ref}:${file}`], cwd, true);
   return result.code === 0;
 }
 
@@ -492,16 +553,6 @@ async function assertNoExcludedFileConflicts(
   );
 }
 
-function safeSlug(value: unknown): string {
-  return (
-    String(value || "autoresearch")
-      .toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "autoresearch"
-  );
-}
-
 function shortHash(hash: string): string {
   return String(hash || "").slice(0, 12);
 }
@@ -601,7 +652,17 @@ function draftBodyForCommit(run: RunEntry | null): string {
 
 function branchName(config: FinalizePlan, group: PlanGroup, index: number): string {
   const number = String(index + 1).padStart(2, "0");
-  return `autoresearch-review/${safeSlug(config.goal)}/${number}-${safeSlug(group.slug || group.title || "change")}`;
+  return `autoresearch-review/${gitRefComponent(config.goal)}/${number}-${gitRefComponent(group.slug || group.title || "change")}`;
+}
+
+async function assertValidGeneratedBranch(branch: string, cwd: string): Promise<void> {
+  const result = await git(["check-ref-format", "--branch", branch], cwd, true);
+  if (result.code === 0) return;
+  throw finalizeError(
+    "FINALIZE_INVALID_GENERATED_REF",
+    `Generated review branch is not a valid Git branch: ${branch}\n${result.stderr || result.stdout}`.trim(),
+    "Regenerate the plan with a shorter plain-text goal or group label; if this name was generated automatically, report this finalizer error code.",
+  );
 }
 
 async function branchStat(branch: string, cwd: string): Promise<string> {
@@ -617,7 +678,7 @@ async function reviewSummaryPath(config: FinalizePlan, cwd: string): Promise<str
   const dir = path.join(await gitCommonDir(cwd), REPORT_DIRNAME);
   await fsp.mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return path.join(dir, `${stamp}-${safeSlug(config.goal)}.md`);
+  return path.join(dir, `${stamp}-${gitRefComponent(config.goal)}.md`);
 }
 
 function renderReviewSummaryHeader({
@@ -707,7 +768,7 @@ function renderSuggestedPrBlocks(
       "",
       "```bash",
       `git show --stat ${posixQuote(result.branch)}`,
-      `git diff ${shortHash(config.base)}..${posixQuote(result.branch)} -- ${quotePathspecs(files)}`,
+      `git --literal-pathspecs diff ${shortHash(config.base)}..${posixQuote(result.branch)} -- ${quotePathspecs(files)}`,
       "```",
       "",
     );
@@ -822,25 +883,19 @@ async function writeReviewSummary(file: string, context: ReviewSummaryContext): 
 
 function phaseError(phase: string, error: unknown, hint: string): FinalizePhaseError {
   const original = error instanceof Error ? error : new Error(String(error));
-  const message = [
-    `Finalize failed during ${phase}.`,
-    hint ? `Next step: ${hint}` : "",
-    "",
+  return finalizeError(
+    PHASE_ERROR_CODES[phase] || "FINALIZE_OPERATION_FAILED",
     original.message || String(original),
-  ]
-    .filter((line: string) => line !== "")
-    .join("\n");
-  const wrapped = new Error(message) as FinalizePhaseError;
-  wrapped.cause = original;
-  wrapped.finalizePhase = phase;
-  return wrapped;
+    hint || "Inspect the error and rerun with --debug after correcting the reported cause.",
+    { cause: original, phase },
+  );
 }
 
 async function withPhase<T>(phase: string, hint: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
-    if ((error as FinalizePhaseError)?.finalizePhase) throw error;
+    if (isFinalizeError(error)) throw error;
     throw phaseError(phase, error, hint);
   }
 }
@@ -852,6 +907,7 @@ async function createBranchForGroup(
   cwd: string,
 ): Promise<BranchResult> {
   const branch = branchName(config, group, index);
+  await assertValidGeneratedBranch(branch, cwd);
   if (!group.files.length)
     return { branch, createdThisRun: false, skipped: true, deleted: true, stat: "" };
   if (await branchExists(branch, cwd)) {
@@ -958,7 +1014,7 @@ async function existingBranchMatchesPlannedGroup(
   return await withTemporaryVerificationBranch(
     config,
     cwd,
-    `verify-${safeSlug(group.slug || group.title || "group")}`,
+    `verify-${gitRefComponent(group.slug || group.title || "group")}`,
     async (verifyBranch) => {
       await applyGroupSources(group, cwd);
       await git(["add", "-A"], cwd);
@@ -1017,7 +1073,8 @@ async function withTemporaryVerificationBranch<T>(
   runOnBranch: (verifyBranch: string) => Promise<T>,
   restoreAfter: () => Promise<void>,
 ): Promise<T> {
-  const verifyBranch = `autoresearch-review/${safeSlug(config.goal)}/${suffix}-${randomUUID()}`;
+  const verifyBranch = `autoresearch-review/${gitRefComponent(config.goal)}/${gitRefComponent(`${suffix}-${randomUUID()}`, { maxLength: 160 })}`;
+  await assertValidGeneratedBranch(verifyBranch, cwd);
   const failures: RecoveryFailure[] = [];
   let createdThisRun = false;
   let result!: T;
@@ -1081,7 +1138,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
     throw new Error("Detached HEAD. Switch to the autoresearch branch before planning.");
   const base = (await git(["merge-base", trunk, "HEAD"], cwd)).stdout.trim();
   const finalTree = await fullHash("HEAD", cwd);
-  const goal = safeSlug(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
+  const goal = gitRefComponent(args.goal || sourceBranch.replace(/^.*\//, "") || "autoresearch");
   const history = await commitHistory(base, cwd);
   const entries = await readAutoresearchJsonl(cwd);
   const evidenceState = buildFinalizationEvidenceState(
@@ -1112,7 +1169,9 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
       title: item.subject || selectedRun.description || `Autoresearch change ${groups.length + 1}`,
       body: draftBodyForCommit(selectedRun),
       last_commit: item.hash,
-      slug: safeSlug(item.subject || selectedRun.description || `change-${groups.length + 1}`),
+      slug: gitRefComponent(
+        item.subject || selectedRun.description || `change-${groups.length + 1}`,
+      ),
       parent_commit: parent,
       files,
     });
@@ -1186,7 +1245,7 @@ async function collapseOverlappingDraftGroups(
         parent_commit: plan.base,
         files,
         source_groups: sourceGroups,
-        slug: safeSlug(`${plan.goal}-changes`),
+        slug: gitRefComponent(`${plan.goal}-changes`),
         collapsed: true,
       },
     ],
@@ -1201,7 +1260,11 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   plan = { ...plan, plan_fingerprint: planFingerprint(plan) };
   const output = args.output
     ? resolveCliPath(args.output, cwd)
-    : path.join(await gitCommonDir(cwd), REPORT_DIRNAME, `${safeSlug(plan.goal)}.groups.json`);
+    : path.join(
+        await gitCommonDir(cwd),
+        REPORT_DIRNAME,
+        `${gitRefComponent(plan.goal)}.groups.json`,
+      );
   await fsp.mkdir(path.dirname(output), { recursive: true });
   await fsp.writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   console.log(`Wrote draft groups: ${output}`);
@@ -1247,7 +1310,7 @@ async function main(argv: string[]) {
     return;
   }
   const configPath = resolveCliPath(file, cwd);
-  let config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
+  const config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
     const parsed = JSON.parse(await fsp.readFile(configPath, "utf8"));
     if (!parsed.base || !parsed.final_tree || !parsed.goal || !Array.isArray(parsed.groups)) {
       throw new Error("groups.json is missing base, final_tree, goal, or groups.");
@@ -1255,9 +1318,8 @@ async function main(argv: string[]) {
     parsed.trunk = parsed.trunk || "main";
     parsed.base = await fullHash(parsed.base, cwd);
     parsed.final_tree = await fullHash(parsed.final_tree, cwd);
-    return parsed as FinalizePlan;
+    return await hydratePlanProductClaimCoverage(parsed as FinalizePlan, cwd);
   });
-  config = await hydratePlanProductClaimCoverage(config, cwd);
 
   const sourceBranch = await withPhase(
     "preflight",
@@ -1574,7 +1636,15 @@ try {
   debug = cliDebugRequested(argv, true);
   await main(argv);
 } catch (error: unknown) {
-  const failure = error as FinalizePhaseError;
+  const failure =
+    error instanceof CliUsageError || isFinalizeError(error)
+      ? (error as FinalizePhaseError)
+      : finalizeError(
+          "FINALIZE_OPERATION_FAILED",
+          errorMessage(error),
+          "Inspect the error and rerun with --debug after correcting the reported cause.",
+          { cause: error },
+        );
   const message = debug && failure.stack ? failure.stack : failure.message || String(failure);
   console.error(error instanceof CliUsageError ? `${message}\n\n${usage()}` : message);
   process.exitCode = 1;

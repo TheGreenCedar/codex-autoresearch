@@ -282,16 +282,11 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "onboardingPacket",
-    outputFields: [
-      "ok",
-      "workDir",
-      "protocol",
-      "missingEssentials",
-      "nextAction",
-      "nextStep",
-      "templates",
+    outputFields: ["ok", "workDir", "operatorSnapshot", "nextAction", "nextStep", "templates"],
+    help: [
+      "node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact] [--json-full]",
     ],
-    help: ["node scripts/autoresearch.mjs onboarding-packet --cwd <project> [--compact]"],
+    cliOptions: [{ name: "json-full", key: "jsonFull", kind: "boolean" }],
     description:
       "Return a compact human-and-agent onboarding packet with state, hazards, report templates, and next commands.",
     inputSchema: {
@@ -299,6 +294,7 @@ export const commandTable = [
       properties: {
         working_dir: { type: "string" },
         compact: { type: "boolean" },
+        json_full: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -358,7 +354,16 @@ export const commandTable = [
     category: "integration",
     audience: "advanced",
     handler: "codexGoalBrief",
-    outputFields: ["ok", "workDir", "boundary", "objectiveDraft", "completionAudit", "commands"],
+    outputFields: [
+      "ok",
+      "workDir",
+      "canMarkCodexGoalComplete",
+      "completionBlocker",
+      "boundary",
+      "objectiveDraft",
+      "completionAudit",
+      "commands",
+    ],
     outputSchemaOverrides: defineOutputSchemaOverrides({
       commands: {
         type: "object",
@@ -367,8 +372,9 @@ export const commandTable = [
       },
     }),
     help: [
-      "node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete]",
+      "node scripts/autoresearch.mjs codex-goal-brief --cwd <project> [--codex-goal-objective <text>] [--codex-goal-status active|paused|budget_limited|complete] [--enforce-completion]",
     ],
+    cliOptions: [{ name: "enforce-completion", key: "enforceCompletion", kind: "boolean" }],
     description:
       "Return a Codex Goal objective draft and evidence audit from Autoresearch state without mutating Codex Goal state.",
     inputSchema: {
@@ -385,6 +391,7 @@ export const commandTable = [
         codex_goal_time_used_seconds: { type: "integer" },
         completion_evidence: { type: "string" },
         completion_confirmed: { type: "boolean" },
+        enforce_completion: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -564,8 +571,9 @@ export const commandTable = [
       },
     }),
     help: [
-      "node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--dry-run] [--skip-init] [--no-baseline-log]",
+      "node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--dry-run] [--skip-init] [--no-baseline-log] [--json-full]",
     ],
+    cliOptions: [{ name: "json-full", key: "jsonFull", kind: "boolean" }],
     description: "Start a quality_gap scratchpad with validation and optional baseline.",
     inputSchema: {
       type: "object",
@@ -574,6 +582,7 @@ export const commandTable = [
         dry_run: { type: "boolean" },
         baseline_log: { type: "boolean" },
         no_baseline_log: { type: "boolean" },
+        json_full: { type: "boolean" },
       },
       required: ["working_dir", "slug", "goal"],
     },
@@ -1018,6 +1027,32 @@ export const commandTable = [
         allow_unsafe_command: { type: "boolean" },
       },
       required: ["working_dir"],
+    },
+  },
+  {
+    name: "decide_quality_gap",
+    cliCommand: "gap-decide",
+    actionPolicy: "state_mutation",
+    category: "happy_path",
+    audience: "default",
+    handler: "recordQualityGapDecision",
+    outputFields: ["ok", "workDir", "slug", "gap", "decision", "qualityGap"],
+    help: [
+      "node scripts/autoresearch.mjs gap-decide --cwd <project> --research-slug <slug> --gap-id <gap-id> --decision implemented|rejected --evidence <reference> --validation <result>",
+    ],
+    description:
+      "Record an evidence-bearing implemented or rejected decision for one stable qualitative gap id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        research_slug: { type: "string" },
+        gap_id: { type: "string" },
+        decision: { type: "string", enum: ["implemented", "rejected"] },
+        evidence: { type: "string" },
+        validation: { type: "string" },
+      },
+      required: ["working_dir", "gap_id", "decision", "evidence", "validation"],
     },
   },
   {

@@ -62,7 +62,7 @@ async function exerciseBrowser(browserName, browserType, fixture) {
       );
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
-      assert.equal(await range.evaluate((node) => node === document.activeElement), true);
+      await page.waitForFunction(() => document.activeElement?.id === "trend-chart-range");
 
       await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
       assert.equal(await page.evaluate(() => matchMedia("(forced-colors: active)").matches), true);

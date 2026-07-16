@@ -73,10 +73,10 @@ Docs, UX, architecture, and product research do not always have a natural perfor
 node scripts/autoresearch.mjs research-start --cwd <project> --slug docs-pass --goal "Make the setup docs clear to a first-time user."
 ```
 
-`research-start` creates a scratchpad under `autoresearch.research/<slug>/`, configures the `quality_gap` benchmark, validates it, and normally records the first baseline as `measure`. Pass `--no-baseline-log` if you want to inspect that first checklist before it enters the ledger.
+`research-start` creates a scratchpad under `autoresearch.research/<slug>/`, validates the benchmark, and normally records the first baseline as `measure`. When no executable metric exists, `quality_gap` is primary. When the project already has an executable outcome metric, that metric stays primary and `quality_gap` becomes secondary acceptance evidence. Pass `--no-baseline-log` if you want to inspect the first checklist before it enters the ledger.
 
 When the correctness command or edit scope is already known, pass `--checks-command` and `--commit-paths` to `research-start`. Otherwise configure them before the first keep.
 
-The scratchpad keeps sources, judgment, accepted gaps, and deliverables separate. When the metric reaches zero, the accepted checklist for that round is closed. It does not mean the subject has been exhausted.
+The scratchpad keeps sources, judgment, gap candidates, decisions, and deliverables separate. Checking a box does not accept it. Use `gap-decide` with the gap ID, an implemented or rejected decision, evidence, and validation. When the accepted metric reaches zero, that round is closed; the subject may still need another discovery round.
 
 Setup creates several local files and, in Git repositories, transient state under `.git/autoresearch/`. [Concepts](concepts.md#session-files) lists them. The [Walkthrough](walkthrough.md) continues from here with a full measured change.

@@ -9,8 +9,10 @@ import {
   gitStatusShort,
   insideGitRepo,
   shortHead,
-  gitPrivatePath,
+  privateStateCandidatePaths,
+  resolvePrivateStateTarget,
   runGit,
+  type PrivateStateSpec,
 } from "./git-private-state.js";
 import { parseNulPathList, parsePorcelainV1Z } from "./git-paths.js";
 import { normalizeRelativePaths } from "./literal-paths.js";
@@ -59,17 +61,24 @@ export async function replacementNextCommandForLastRun(
 }
 
 export async function resolveLastRunPath(workDir: string): Promise<string> {
-  if (await insideGitRepo(workDir)) {
-    return await gitPrivatePath(workDir, "autoresearch/last-run.json");
-  }
-  return resolveSessionPaths({ workDir }).lastRunFallbackPath;
+  return (await resolvePrivateStateTarget(workDir, lastRunStateSpec(workDir))).path;
+}
+
+export function lastRunStateSpec(workDir: string): PrivateStateSpec {
+  return {
+    fallbackPath: resolveSessionPaths({ workDir }).lastRunFallbackPath,
+    gitRelativePath: "autoresearch/last-run.json",
+    label: "last-run packet",
+  };
+}
+
+export async function lastRunCandidatePaths(workDir: string): Promise<string[]> {
+  return await privateStateCandidatePaths(workDir, lastRunStateSpec(workDir));
 }
 
 export async function readLastRunPacket(workDir: string): Promise<LastRunPacket> {
   const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
-  if (!fs.existsSync(readablePath)) {
+  if (!fs.existsSync(filePath)) {
     throw new Error(
       [
         `No last-run packet found for ${workDir}.`,
@@ -78,15 +87,13 @@ export async function readLastRunPacket(workDir: string): Promise<LastRunPacket>
       ].join(" "),
     );
   }
-  return JSON.parse(fs.readFileSync(readablePath, "utf8")) as LastRunPacket;
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as LastRunPacket;
 }
 
 export async function lastRunPacketFingerprint(workDir: string): Promise<string> {
   const filePath = await resolveLastRunPath(workDir);
-  const legacyPath = resolveSessionPaths({ workDir }).lastRunFallbackPath;
-  const readablePath = fs.existsSync(filePath) ? filePath : legacyPath;
-  if (!fs.existsSync(readablePath)) return "";
-  return createHash("sha256").update(fs.readFileSync(readablePath, "utf8")).digest("hex");
+  if (!fs.existsSync(filePath)) return "";
+  return createHash("sha256").update(fs.readFileSync(filePath, "utf8")).digest("hex");
 }
 
 export async function assertFreshLastRunPacket(
